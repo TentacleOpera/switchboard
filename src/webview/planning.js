@@ -15,6 +15,7 @@
         activeFileType: null,  // 'json' | 'yaml' | 'markdown' | 'css' | 'xml' | 'text' | 'image' | null
         activeContainers: new Map(),
         importedDocs: new Map(), // slugPrefix -> { sourceId, docId, docName }
+        _lastImportedDocs: null, // raw docs array from last importedDocsReady message
         previewRequestId: 0,
         docPagesRequestId: 0,
         selectedEl: null,
@@ -2634,6 +2635,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 treePane.appendChild(headerContainer);
             });
         }
+
+        // Render imported docs section (online docs that have been imported to local store)
+        if (state._lastImportedDocs) {
+            renderImportedDocsSection(state._lastImportedDocs);
+        }
         
         if (filterSet.has('antigravity') && state._lastLocalDocsMsg) {
             renderAntigravitySessions(state._lastLocalDocsMsg.antigravitySessions || [], state._lastLocalDocsMsg.antigravityEnabled || false);
@@ -3424,10 +3430,38 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         state.importedDocs.clear();
 
-        const importedDocsContainer = document.getElementById('imported-docs-list');
-        if (!importedDocsContainer) return;
+        // Store the raw docs payload so renderUnifiedDocs can re-render
+        // the imported-docs section on every unified re-render cycle.
+        state._lastImportedDocs = docs || [];
 
-        importedDocsContainer.innerHTML = '';
+        // Pre-populate the dedup Map so renderUnifiedDocs uses fresh data
+        if (docs && docs.length > 0) {
+            docs.forEach(doc => {
+                if (doc.sourceId === 'local-folder') return; // Skip local-folder
+                state.importedDocs.set(doc.docName, { sourceId: doc.sourceId, docId: doc.docId, docName: doc.docName, slugPrefix: doc.slugPrefix, canSync: doc.canSync });
+                state.importedDocs.set(doc.slugPrefix, { sourceId: doc.sourceId, docId: doc.docId, docName: doc.docName, slugPrefix: doc.slugPrefix, canSync: doc.canSync });
+                if (doc.docId) {
+                    state.importedDocs.set(doc.docId, { sourceId: doc.sourceId, docId: doc.docId, docName: doc.docName, slugPrefix: doc.slugPrefix, canSync: doc.canSync });
+                }
+            });
+        }
+
+        // Trigger a unified re-render, which will call renderImportedDocsSection()
+        // as part of the render cycle (same pattern as renderAntigravitySessions).
+        rerenderUnifiedDocs();
+    }
+
+    function renderImportedDocsSection(docs) {
+        if (!treePane) return;
+
+        // Remove existing section if present (same pattern as renderAntigravitySessions)
+        const existing = document.getElementById('imported-docs-list');
+        if (existing) { existing.remove(); }
+
+        const importedDocsContainer = document.createElement('div');
+        importedDocsContainer.id = 'imported-docs-list';
+        importedDocsContainer.className = 'imported-docs-section';
+        treePane.appendChild(importedDocsContainer);
 
         if (!docs || docs.length === 0) {
             importedDocsContainer.innerHTML = '<div class="empty-state">No imported documents</div>';
@@ -3494,33 +3528,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
 
                 groupDocs.forEach(doc => {
-                    state.importedDocs.set(doc.docName, {
-                        sourceId: doc.sourceId,
-                        docId: doc.docId,
-                        docName: doc.docName,
-                        slugPrefix: doc.slugPrefix,
-                        canSync: doc.canSync
-                    });
-                    state.importedDocs.set(doc.slugPrefix, {
-                        sourceId: doc.sourceId,
-                        docId: doc.docId,
-                        docName: doc.docName,
-                        slugPrefix: doc.slugPrefix,
-                        canSync: doc.canSync
-                    });
-                    // Online docs are selected from the online tree by their remote
-                    // docId (state.activeDocId === remote id), so key by docId too —
-                    // otherwise the inline Edit gate and slugPrefix resolution miss.
-                    if (doc.docId) {
-                        state.importedDocs.set(doc.docId, {
-                            sourceId: doc.sourceId,
-                            docId: doc.docId,
-                            docName: doc.docName,
-                            slugPrefix: doc.slugPrefix,
-                            canSync: doc.canSync
-                        });
-                    }
-
                     let displayLabel = doc.docName;
                     
                     // Deduplicate parent title if it prefixes the subpage title or if they are exactly identical

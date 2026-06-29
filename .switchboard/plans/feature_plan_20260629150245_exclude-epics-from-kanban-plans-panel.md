@@ -12,18 +12,22 @@ The project.html webview has two tabs that display plans from the same `_kanbanP
 
 2. **Epics tab** — should show epics only. Its `renderEpicsList()` function (`project.js:1592-1605`) correctly filters: `_kanbanPlansCache.filter(plan => plan.isEpic)` (line 1597). This is the correct pattern.
 
-The backend (`PlanningPanelProvider._getKanbanPlans`, `PlanningPanelProvider.ts:8546-8598`) returns ALL plans from the kanban database — both regular plans and epics — and includes the `isEpic` flag in each record. The backend intentionally sends everything and expects the frontend to filter. The epics tab does this correctly; the kanban tab does not.
+The backend (`PlanningPanelProvider._getKanbanPlans`, `src/services/PlanningPanelProvider.ts:8596-8648`) returns ALL plans from the kanban database — both regular plans and epics — and includes the `isEpic` flag in each record (line 8642: `isEpic: r.isEpic`). The backend intentionally sends everything and expects the frontend to filter. The epics tab does this correctly; the kanban tab does not.
 
 ### Root cause
 
 A missing `isEpic` exclusion filter in `getFilteredKanbanPlans()` (`project.js:1173-1200`). The function filters by column, workspace, project, search, and complexity, but never checks `plan.isEpic`. The fix is a one-line addition: `if (plan.isEpic) return false;` at the top of the filter callback, before the other filter checks.
 
-This is the same pattern used in `planning.js` (the other webview), where the kanban view filters by `plan.isEpic` when in epics mode (`planning.js:5781-5782`) and excludes epics from the subtask-add dropdown (`planning.js:5825`: `_kanbanPlansCache.filter(p => !p.isEpic ...)`).
+This is the same pattern used in `planning.js` (the other webview), where the kanban view filters by `plan.isEpic` when in epics mode (`planning.js:5784-5785`) and excludes epics from the subtask-add dropdown (`planning.js:5828`: `_kanbanPlansCache.filter(p => !p.isEpic ...)`).
 
 ## Metadata
 
-- **Tags:** [frontend, bug, kanban, epics, filtering]
+- **Tags:** [frontend, bugfix]
 - **Complexity:** 1
+
+## User Review Required
+
+No — this is a one-line filter fix with no side effects. The `isEpic` flag is already present in the cache data and already used by the epics tab.
 
 ## Complexity Audit
 
@@ -38,9 +42,17 @@ This is the same pattern used in `planning.js` (the other webview), where the ka
 - **Standalone epic documents (not in DB):** The epics tab merges DB epics (`_kanbanPlansCache.filter(plan => plan.isEpic)`) with standalone epic documents from `_epicDocumentsCache` (`project.js:1596-1598`). Standalone epic documents are NOT in `_kanbanPlansCache`, so they would never appear in the kanban panel regardless. The fix only affects DB-backed epics that are already in the cache. No change needed for standalone documents.
 - **Epic with subtasks:** An epic card in the kanban panel might have subtask counts displayed. After the fix, epics won't appear in the kanban panel at all, so their subtask counts are only visible in the epics tab — which is the correct behavior.
 - **Epics tab still works:** The fix does not touch `renderEpicsList()` or the epics tab in any way. Epics continue to appear in the epics tab as before.
-- **planning.js parity:** The `planning.js` kanban view has a `_kanbanViewMode` toggle that switches between 'epics' and regular plans. In 'epics' mode it filters `plan.isEpic` to show only epics (`planning.js:5782`). In the default (non-epics) mode, it does NOT explicitly filter out epics — so `planning.js` may have the same bug. However, the user's issue is specifically about `project.html`, and `planning.js` may handle the separation differently via its view-mode toggle. This plan addresses only `project.js`; a separate plan can address `planning.js` if needed.
+- **planning.js parity:** The `planning.js` kanban view has a `_kanbanViewMode` toggle (`planning.js:5485`) that switches between 'all' and 'epics'. In 'epics' mode it filters `plan.isEpic` to show only epics (`planning.js:5784-5785`). In the default 'all' mode, it does NOT explicitly filter out epics — so `planning.js` may have the same bug. However, the user's issue is specifically about `project.html`, and `planning.js` may handle the separation differently via its view-mode toggle. This plan addresses only `project.js`; a separate plan can address `planning.js` if needed.
 - **No confirmation dialogs** (house rule, `CLAUDE.md`): No confirm gates involved.
 - **Dependencies:** None. No other plan blocks or is blocked by this.
+
+## Dependencies
+
+None.
+
+## Adversarial Synthesis
+
+Key risks: none of substance. The one-line filter is provably correct — `isEpic` is set by the backend (`PlanningPanelProvider.ts:8642`), already used by the epics tab (`project.js:1597`), and the filter runs before all other checks so it short-circuits cleanly. The only residual concern is `planning.js` parity (same bug may exist in the other webview's 'all' mode), but that is out of scope for this plan.
 
 ## Proposed Changes
 
@@ -66,6 +78,12 @@ function getFilteredKanbanPlans() {
 This single line ensures that any plan with `isEpic: true` is excluded from the kanban plans list. The epics tab (`renderEpicsList`) already filters for `plan.isEpic` separately, so epics remain visible there.
 
 ## Verification Plan
+
+### Automated Tests
+
+Automated tests are skipped per session directive. The test suite will be run separately by the user.
+
+### Manual Verification
 
 1. Open the project panel in VS Code (Switchboard extension).
 2. Ensure the workspace has at least one epic file (in `.switchboard/epics/`) and one regular plan file (in `.switchboard/plans/`).

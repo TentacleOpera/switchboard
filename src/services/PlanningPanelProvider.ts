@@ -3096,14 +3096,15 @@ export class PlanningPanelProvider {
                             const content = await nfs.promises.readFile(absPlanFile, 'utf8');
                             const updated = applyManualComplexityOverride(content, normalizedComplexity);
                             if (updated !== content) {
-                                await nfs.promises.writeFile(absPlanFile, updated, 'utf8');
+                                  await nfs.promises.writeFile(absPlanFile, updated, 'utf8');
                             }
                         }
                     } catch (fileErr) {
                         console.warn('[PlanningPanelProvider] Failed to persist complexity override to plan file:', fileErr);
                     }
                     const allPlans = await this._getKanbanPlans(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: true });
                 } catch (err) {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: false, error: String(err) });
@@ -3215,7 +3216,8 @@ export class PlanningPanelProvider {
                     }
                     await db.updateEpicStatus(subtask.planId, 0, epic.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] addSubtaskToEpic failed:', err);
                 }
@@ -3231,7 +3233,8 @@ export class PlanningPanelProvider {
                     if (!subtask) break;
                     await db.updateEpicStatus(subtask.planId, 0, '');
                     const allPlans = await this._getKanbanPlans(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] removeSubtaskFromEpic failed:', err);
                 }
@@ -3256,7 +3259,8 @@ export class PlanningPanelProvider {
                     }
                     await db.tombstonePlan(epic.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId: Date.now() });
+                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
+                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] deleteEpic failed:', err);
                 }

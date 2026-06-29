@@ -8560,13 +8560,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
     private async _regenerateEpicFile(workspaceRoot: string, epicPlanId: string, db: KanbanDatabase): Promise<void> {
         const epic = await db.getPlanByPlanId(epicPlanId);
-        console.log(`[KanbanProvider] _regenerateEpicFile: epicPlanId=${epicPlanId}, found=${!!epic}, isEpic=${epic?.isEpic}, planFile=${epic?.planFile}`);
-        if (!epic || !epic.isEpic) {
-            console.log(`[KanbanProvider] _regenerateEpicFile: BAILING — epic=${epic ? 'found' : 'null'}, isEpic=${epic?.isEpic}`);
-            return;
-        }
+        if (!epic || !epic.isEpic) return;
         const subtasks = await db.getSubtasksByEpicId(epicPlanId);
-        console.log(`[KanbanProvider] _regenerateEpicFile: found ${subtasks.length} subtasks`);
         const epicAbsPath = path.resolve(workspaceRoot, epic.planFile);
         let existingContent = '';
         try {
@@ -8591,6 +8586,28 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         }
         GlobalPlanWatcherService.registerPendingCreation(epicAbsPath);
         await fs.promises.writeFile(epicAbsPath, newContent, 'utf8');
+    }
+
+    /**
+     * Self-heal pass: regenerate every epic file in the workspace so the subtask
+     * list stays in sync with the DB. Called once on startup after the board is
+     * first activated. This catches epic files that got out of sync due to bugs,
+     * manual edits, watcher races, or extension upgrades — none of which trigger
+     * the per-subtask-mutation path that normally keeps epic files current.
+     */
+    public async regenerateAllEpicFiles(workspaceRoot: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return;
+        const workspaceId = await db.getWorkspaceId();
+        if (!workspaceId) return;
+        const epics = await db.getEpicPlans(workspaceId);
+        for (const epic of epics) {
+            try {
+                await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
+            } catch (err) {
+                console.warn(`[KanbanProvider] regenerateAllEpicFiles: failed for ${epic.planId} (${epic.topic}):`, err);
+            }
+        }
     }
 
     /**
@@ -8841,13 +8858,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '   To add more plans to an epic later, use assign-to-epic.js with the epic planId from the create-epic.js output.',
             '',
             '6. BACKLOG (optional, after execution)',
-            '   Re-read the board snapshot to get current BACKLOG state:',
-            `     cat ${workspaceRoot}/.switchboard/kanban-board.md`,
-            '   Check whether the BACKLOG column contains any ungrouped plans',
-            '   (i.e. lines that are NOT tagged `epic` or `subtask-of:...`).',
-            '   If yes, ask: "BACKLOG also has ungrouped plans. Would you like me to analyse those for epic groupings too?"',
-            '   If the user says yes, repeat steps 2-5 for the BACKLOG plans.',
-            '   If no ungrouped backlog plans exist, skip this step silently.',
+            '   Ask the user: "Would you like me to analyse the BACKLOG for epic groupings too?"',
+            '   Do NOT re-read the board or inspect the BACKLOG column yourself.',
+            '   If the user says yes, repeat steps 1-5 scoped to the BACKLOG column.',
+            '   If the user says no or does not respond, stop.',
             '',
             'Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. It does NOT sync to Linear/ClickUp.',
         ].join('\n');

@@ -607,8 +607,17 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                         // movePlanByPlanFile validates the column against VALID_KANBAN_COLUMNS + SAFE_COLUMN_NAME_RE
                         // at KanbanDatabase.ts:1531 — if the column was removed since the delete, the move is
                         // silently rejected and the plan stays at CREATED (status quo fallback).
-                        await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
-                        newRecord.kanbanColumn = tomb.column; // update in-memory record for ClickUp sync at :664
+                        const moved = await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
+                        if (moved) {
+                            newRecord.kanbanColumn = tomb.column; // update in-memory record for ClickUp sync at :664
+                            this._outputChannel?.appendLine(
+                                `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for: ${relativePath}`
+                            );
+                        } else {
+                            this._outputChannel?.appendLine(
+                                `[GlobalPlanWatcher] Tombstone column '${tomb.column}' rejected by movePlanByPlanFile (invalid/removed), plan stays at CREATED: ${relativePath}`
+                            );
+                        }
                     }
                     this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
                 }
@@ -732,6 +741,9 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     const tombKey = `${relativePath}|${plan.workspaceId}`;
                     this._recentlyDeletedColumns.set(tombKey, { column: plan.kanbanColumn, ts: Date.now() });
                     setTimeout(() => this._recentlyDeletedColumns.delete(tombKey), 5000);
+                    this._outputChannel?.appendLine(
+                        `[GlobalPlanWatcher] Tombstoned column '${plan.kanbanColumn}' for ${relativePath} before hard delete`
+                    );
                     await db.deletePlanByPlanFile(plan.planFile, plan.workspaceId);
                     this._outputChannel?.appendLine(`[GlobalPlanWatcher] Deleted plan: ${plan.planFile}`);
                     this._onPlanDiscovered.fire({ uri, workspaceRoot });

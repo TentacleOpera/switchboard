@@ -12,20 +12,41 @@ This is purely a layout/placement concern — the badge is informational (`point
 
 ## Metadata
 
-- **Tags**: `tickets-tab`, `ui`, `sidebar-cards`, `css`, `planning-html`
-- **Complexity**: 2/10
+- **Tags:** frontend, ui, refactor
+- **Complexity:** 2/10
+
+## User Review Required
+
+**No.** This is a self-contained, low-risk layout relocation with no data, event, or provider-API impact. The badge remains non-interactive. Proceed directly.
 
 ## Complexity Audit
 
-**Routine.** This is a self-contained HTML template + CSS adjustment in two render functions and one stylesheet block. No data model, state, event handling, or provider API changes are involved. The badge remains non-interactive. Both Linear and ClickUp card templates need the same edit.
+### Routine
+- Adding a `ticket-status-row` class to the status `tickets-issue-meta` div in two card templates (Linear line 8327, ClickUp line 8856).
+- Moving `${syncBadge}` from the `card-actions` div into the status meta line in both templates.
+- Adding one CSS rule (`.ticket-status-row` flex layout) and removing the obsolete `card-actions` pin rule (lines 2788–2793).
+- The badge is `pointer-events: none` (line 2785) — no click-handler impact.
+
+### Complex / Risky
+- None.
 
 ## Edge-Case & Dependency Audit
 
-- **Three badge states**: `synced`, `modified`, `local` — all three must render correctly in the new position. The `_ticketSyncBadge()` helper already returns the correct class for each; only its placement in the template changes.
-- **Long status names**: Placing the badge inline with the status label means the row must not overflow. The status meta line should use a flex layout so the badge wraps or truncates gracefully on narrow sidebars.
-- **`margin-right: auto` removal**: Once the badge leaves `card-actions`, the existing pin rule (`.ticket-node .card-actions .ticket-sync-badge`) no longer applies. The action buttons row already has `justify-content: flex-end`, so buttons stay right-aligned without the badge.
-- **No event-handler impact**: The badge has `pointer-events: none`, so the delegated click handler in `tickets-issues-container` (line 7617) is unaffected — it matches on `data-*` attributes of buttons, not the badge.
-- **Theme variants**: The `.ticket-sync-synced` / `.ticket-sync-modified` / `.ticket-sync-local` color rules (planning.html 2794–2804) are class-based and position-independent, so they continue to work in the new location.
+- **Race Conditions:** None. The badge is rendered synchronously from `issue.syncStatus`/`task.syncStatus` already in memory at render time.
+- **Security:** None. Pure layout change; no new data flows or attributes.
+- **Side Effects:** Removing the `card-actions` pin rule (lines 2788–2793) is safe — `card-actions` already has `justify-content: flex-end` (line 2753), so the three action buttons stay right-aligned without the badge pushing them.
+- **Dependencies & Conflicts:**
+  - No dependency on any other plan.
+  - Orthogonal to Plan 1 (Open button): Plan 1 adds a button to `card-actions`; Plan 2 removes the badge from `card-actions`. Both can land independently or together without conflict (they touch different rows of the same template).
+  - **CSS specificity note (Clarification):** The base `.ticket-sync-badge` rule (line 2784) sets `align-self: flex-start`. When the badge moves into the new `.ticket-status-row` flex container (which uses `align-items: center`), the child's `align-self: flex-start` **overrides** the parent's `align-items: center`, causing the badge to top-align rather than vertically center with the status text. The new `.ticket-status-row .ticket-sync-badge` rule MUST reset `align-self: center` (see Proposed Changes §1).
+
+## Dependencies
+
+- None.
+
+## Adversarial Synthesis
+
+Key risks: (1) the base `.ticket-sync-badge` `align-self: flex-start` (line 2784) overrides the new status row's `align-items: center`, leaving the badge top-aligned next to the status text — fixed by explicitly setting `align-self: center` on `.ticket-status-row .ticket-sync-badge`; (2) long status names could crowd the badge on narrow sidebars — mitigated by `flex-shrink: 0` on the badge plus the row's `gap`. No event, data, or provider impact. Mitigations are pure CSS and self-contained.
 
 ## Proposed Changes
 
@@ -50,8 +71,11 @@ Replace the status-meta block styling so the first meta line (status) becomes a 
 }
 .ticket-node .tickets-issue-meta.ticket-status-row .ticket-sync-badge {
     flex-shrink: 0;
+    align-self: center; /* overrides base .ticket-sync-badge align-self: flex-start (line 2784) */
 }
 ```
+
+> **Clarification (added during review):** The `align-self: center` line above is required. Without it, the base `.ticket-sync-badge { align-self: flex-start; }` (line 2784) wins over the parent's `align-items: center` and the badge hugs the top of the row.
 
 **Remove the obsolete pin rule** (lines 2788–2793):
 
@@ -145,9 +169,19 @@ return `
 
 ## Verification Plan
 
-1. **Build**: `npm run compile` — confirm no webpack errors.
-2. **Visual check (Linear)**: Open the Tickets tab with a loaded Linear project. Confirm each sidebar card shows the sync badge (`synced`/`modified`/`local`) inline to the right of the status name on the status meta row, and that the `card-actions` row now contains only the three action buttons right-aligned.
-3. **Visual check (ClickUp)**: Repeat with a loaded ClickUp project — same expected layout.
-4. **Badge states**: Verify a `modified` ticket (edit a local field without pushing) shows the amber `modified` badge in the new position; a `local`-only ticket shows the muted `local` badge.
-5. **Narrow sidebar**: Collapse the sidebar to a narrow width and confirm the status row + badge does not overflow or push the badge off-card (flex `gap` + `flex-shrink: 0` should keep it tidy).
-6. **Click behavior**: Confirm clicking the badge area does not trigger card selection or any action (badge remains `pointer-events: none`), and that the three action buttons still fire their respective handlers.
+> Per session directives: skip compilation (`npm run compile`) and skip automated tests. The user runs those separately. Verification here is manual/visual.
+
+### Automated Tests
+- None run in this session.
+
+### Manual Verification
+1. **Visual check (Linear)**: Open the Tickets tab with a loaded Linear project. Confirm each sidebar card shows the sync badge (`synced`/`modified`/`local`) inline to the right of the status name on the status meta row, vertically centered with the status text (confirm the `align-self: center` fix holds — badge is NOT top-aligned). Confirm the `card-actions` row now contains only the three action buttons, right-aligned.
+2. **Visual check (ClickUp)**: Repeat with a loaded ClickUp project — same expected layout.
+3. **Badge states**: Verify a `modified` ticket (edit a local field without pushing) shows the amber `modified` badge in the new position; a `local`-only ticket shows the muted `local` badge.
+4. **Narrow sidebar**: Collapse the sidebar to a narrow width and confirm the status row + badge does not overflow or push the badge off-card (flex `gap` + `flex-shrink: 0` should keep it tidy).
+5. **Click behavior**: Confirm clicking the badge area does not trigger card selection or any action (badge remains `pointer-events: none`), and that the three action buttons still fire their respective handlers.
+6. **Removed CSS rule**: Confirm no other element relied on the deleted `.ticket-node .card-actions .ticket-sync-badge` pin rule (grep should show no remaining references to it).
+
+## Recommendation
+
+Complexity 2 → **Send to Intern.** Self-contained HTML/CSS relocation in two templates and one stylesheet block; the only care point (the `align-self` override) is now explicitly documented in the CSS.

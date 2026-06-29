@@ -26,11 +26,17 @@ The fix is to:
 2. When a subtask is clicked, look up the subtask's plan in `_kanbanPlansCache` by `planFile`
 3. Render a subtask-specific meta bar (complexity dropdown, edit, delete) targeting the subtask
 4. When the user clicks back on the epic card, `selectEpic` already calls `renderEpicMetaBar` with the epic, restoring epic controls
+5. Guard `selectEpic` to exit edit mode first — prevents data loss if the user was editing a subtask and switches back to an epic
+6. Fix the `saveFileContentResult` handler so saving a subtask doesn't bounce the user back to the epic view
 
 ## Metadata
 
-- **Tags:** [frontend, ui, epics, controls, meta-bar]
-- **Complexity:** 3
+- **Tags:** [frontend, ui, feature]
+- **Complexity:** 4
+
+## User Review Required
+
+Yes — review the `saveFileContentResult` handler change (Proposed Change #6) and the `selectEpic` edit-mode guard (Proposed Change #4). Both address data-loss risks discovered during adversarial review that were not in the original plan.
 
 ## Complexity Audit
 
@@ -40,11 +46,14 @@ The fix is to:
 - Writing `renderEpicSubtaskMetaBar(plan)` — a slimmed-down version of `renderKanbanMetaBar` that renders only complexity, edit, and delete, but into `#epic-preview-meta-bar` and wired to the epics editor (`epicsEditor`).
 - Mirroring the complexity dropdown toggle pattern from `renderKanbanMetaBar` (`project.js:1485-1498`).
 - Mirroring the delete button pattern from `renderKanbanMetaBar` (`project.js:1504-1506`).
+- Adding `exitEditMode('epics')` guard at the top of `selectEpic` to prevent data loss when switching from subtask edit mode to an epic.
 
 ### Complex / Risky
 - **Edit/Save targeting the subtask file, not the epic file:** The existing `renderEpicMetaBar` save handler (`project.js:1846-1859`) saves to `_epicSelectedPlan.planFile`. When a subtask is being previewed, save must target `_epicPreviewFilePath` instead. The new `renderEpicSubtaskMetaBar` must wire its Save button to use `_epicPreviewFilePath`.
+- **Save result handler bounces back to epic view:** The `saveFileContentResult` handler for `tab === 'epics'` (`project.js:860-867`) calls `selectEpic(_epicSelectedPlan)` after a successful save. When saving a subtask, this would replace the subtask preview with the epic's preview and swap the subtask meta bar for epic controls — disorienting the user. The handler must check `_epicSubtaskPreview` and re-fetch the subtask preview instead of calling `selectEpic`.
+- **Data loss when switching epics during subtask edit mode:** If the user clicks Edit on a subtask (entering edit mode with subtask content in the editor), then clicks an epic card, `selectEpic` re-renders the meta bar with epic controls (Save targeting the epic file) but the editor still contains subtask content. Clicking Save would overwrite the epic file with subtask content. The `exitEditMode('epics')` guard in `selectEpic` prevents this.
 - **Preview content routing:** The `kanbanPlanPreviewReady` handler (`project.js:459-468`) already routes content to the epics pane when `_epicPreviewFilePath === msg.filePath`. This works for both epic and subtask previews — no change needed.
-- **Restoring epic controls:** When the user clicks back on the epic card in the list, `selectEpic(plan)` (`project.js:1776-1792`) already calls `renderEpicMetaBar(plan)`, which will overwrite the subtask meta bar with epic controls. No additional restore logic is needed.
+- **Restoring epic controls:** When the user clicks back on the epic card in the list, `selectEpic(plan)` (`project.js:1776-1792`) already calls `renderEpicMetaBar(plan)`, which will overwrite the subtask meta bar with epic controls. With the added `exitEditMode` guard, this also safely discards any in-progress subtask edit.
 - **Subtask not in kanban cache:** If the subtask's plan file isn't in `_kanbanPlansCache` (e.g., it was never imported into kanban), we can't look up its `planId` or `complexity`. In this case, render the meta bar with Edit only (complexity and delete require a planId). The preview content still loads correctly from the file path.
 
 ## Edge-Case & Dependency Audit
@@ -52,11 +61,21 @@ The fix is to:
 - **Subtask has no plan file:** The current handler already checks for this (`project.js:1882-1885`) and shows a toast. This check must be preserved.
 - **Subtask plan not in cache:** Fall back to showing Edit only (no complexity dropdown, no delete button). The preview content still renders from the file. This is a graceful degradation — the user can still read and edit the subtask.
 - **Edit mode active when subtask is clicked:** The current handler exits edit mode before previewing (`project.js:1886`). This must be preserved — entering subtask preview should exit epic edit mode first.
-- **Save while subtask is being previewed:** Save must target `_epicPreviewFilePath` (the subtask file), not `_epicSelectedPlan.planFile` (the epic file). The new `renderEpicSubtaskMetaBar` wires its own Save handler to use `_epicPreviewFilePath`.
+- **Save while subtask is being previewed:** Save must target `_epicPreviewFilePath` (the subtask file), not `_epicSelectedPlan.planFile` (the epic file). The new `renderEpicSubtaskMetaBar` wires its own Save handler to use `_epicPreviewFilePath`. After save, the `saveFileContentResult` handler must detect `_epicSubtaskPreview` is non-null and re-fetch the subtask preview (not bounce to the epic).
+- **Switching to an epic while editing a subtask:** `selectEpic` must call `exitEditMode('epics')` first to discard the subtask edit and prevent the editor content (subtask) from being saved to the epic file via the epic's Save button.
 - **Delete subtask from epics panel:** Delete sends `deleteKanbanPlan` (same message type as the kanban panel, `project.js:1504-1506`). After delete, clear the preview pane and reset the meta bar. The epic's subtask list should refresh — the backend's `deleteKanbanPlan` handler already triggers a kanban refresh, which sends `kanbanPlansReady`, which calls `renderEpicsList()` (`project.js:407`), which re-renders the subtask list without the deleted subtask.
+- **Complexity change does not live-refresh the subtask meta bar:** After changing complexity via the dropdown, the backend triggers a kanban refresh (`kanbanPlansReady` → `renderEpicsList()`), but the subtask meta bar is not re-rendered. The complexity dot/label in the meta bar will be stale until the user clicks the subtask again. This is a minor cosmetic issue — the actual complexity is updated in the DB and will be correct on next render. No fix needed for this plan; a follow-up could re-render the meta bar on `kanbanPlansReady` if `_epicSubtaskPreview` is non-null.
 - **Markdown link interceptor in epic content:** There is a second click handler at `project.js:234-306` that intercepts `<a>` clicks within `epicsPreviewContent` (cross-references inside the epic's markdown body). This handler also previews in the epics pane but is for inline links, not subtask list links. The scope of this plan is limited to the **subtask list links** (`.epic-subtask-link`). The markdown body links should continue to preview in-place without the subtask meta bar — they are content cross-references, not managed subtasks. If desired, a follow-up plan can extend the subtask meta bar to markdown body links that resolve to known plan files.
 - **No confirmation dialogs** (house rule, `CLAUDE.md`): Delete executes immediately, same as the kanban panel's delete button. No `confirm()` gate.
 - **Dependencies:** None. No other plan blocks or is blocked by this.
+
+## Dependencies
+
+None.
+
+## Adversarial Synthesis
+
+Key risks: (1) the `saveFileContentResult` handler for `tab: 'epics'` calls `selectEpic()` after save, which would bounce the user from subtask view back to the epic — fixed by checking `_epicSubtaskPreview`; (2) switching to an epic while editing a subtask leaves the editor with subtask content but the Save button targeting the epic file — fixed by adding `exitEditMode('epics')` guard in `selectEpic`. Both are data-loss/UX risks that the original plan missed. Mitigations are frontend-only, single-file changes following existing patterns.
 
 ## Proposed Changes
 
@@ -214,9 +233,9 @@ subtasksDiv.querySelectorAll('.epic-subtask-link').forEach(link => {
 });
 ```
 
-### 4. `src/webview/project.js` — reset subtask preview when epic is reselected
+### 4. `src/webview/project.js` — reset subtask preview and exit edit mode when epic is reselected
 
-In `selectEpic` (`project.js:1776-1792`), add a line to clear the subtask preview state. This is already handled implicitly because `selectEpic` calls `renderEpicMetaBar(plan)` which overwrites the meta bar, but we should also clear `_epicSubtaskPreview`:
+In `selectEpic` (`project.js:1776-1792`), add an edit-mode guard and clear the subtask preview state. The `exitEditMode` guard prevents data loss: if the user was editing a subtask (editor contains subtask content) and clicks an epic, the epic's Save button would otherwise save subtask content to the epic file.
 
 **Current code** (`project.js:1776-1778`):
 ```javascript
@@ -225,16 +244,72 @@ function selectEpic(plan) {
     _epicPreviewFilePath = plan.planFile || null;
 ```
 
-**Add after line 1778:**
+**Replace with:**
 ```javascript
+function selectEpic(plan) {
+    if (state.editMode.epics) exitEditMode('epics');
+    _epicSelectedPlan = plan;
+    _epicPreviewFilePath = plan.planFile || null;
     _epicSubtaskPreview = null;
 ```
 
 ### 5. No backend changes required
 
-All message types used by the new subtask meta bar (`fetchKanbanPlanPreview`, `saveFileContent`, `setKanbanPlanComplexity`, `deleteKanbanPlan`) already exist and are handled by `PlanningPanelProvider.ts`. The backend doesn't know or care whether the request originates from the kanban tab or the epics tab — it operates on `planId` / `planFile` / `workspaceRoot`.
+All message types used by the new subtask meta bar (`fetchKanbanPlanPreview`, `saveFileContent`, `setKanbanPlanComplexity`, `deleteKanbanPlan`) already exist and are handled by `PlanningPanelProvider.ts` (`src/services/PlanningPanelProvider.ts:2975`, `:3066`, `:3113`, `:3928`). The backend doesn't know or care whether the request originates from the kanban tab or the epics tab — it operates on `planId` / `planFile` / `workspaceRoot`.
+
+### 6. `src/webview/project.js` — fix `saveFileContentResult` handler for subtask saves
+
+The existing `saveFileContentResult` handler for `tab === 'epics'` (`project.js:860-867`) calls `selectEpic(_epicSelectedPlan)` after a successful save. When the user saved a **subtask** (not the epic), this bounces them back to the epic view — replacing the subtask preview with the epic's preview and swapping the subtask meta bar for epic controls. The handler must check `_epicSubtaskPreview` and re-fetch the subtask preview instead.
+
+**Current code** (`project.js:860-867`):
+```javascript
+} else if (msg.tab === 'epics') {
+    exitEditMode('epics');
+    if (msg.renamedFilePath && _epicSelectedPlan) {
+        _epicSelectedPlan.planFile = msg.renamedFilePath;
+    }
+    if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
+    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+    vscode.postMessage({ type: 'fetchEpicDocuments' });
+}
+```
+
+**Replace with:**
+```javascript
+} else if (msg.tab === 'epics') {
+    exitEditMode('epics');
+    if (msg.renamedFilePath && _epicSelectedPlan) {
+        _epicSelectedPlan.planFile = msg.renamedFilePath;
+    }
+    if (_epicSubtaskPreview) {
+        // Saved a subtask from the epics panel — re-fetch the subtask preview,
+        // don't bounce back to the epic view.
+        if (msg.renamedFilePath) {
+            _epicPreviewFilePath = msg.renamedFilePath;
+            _epicSubtaskPreview.planFile = msg.renamedFilePath;
+        }
+        if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+        vscode.postMessage({
+            type: 'fetchKanbanPlanPreview',
+            filePath: _epicPreviewFilePath,
+            requestId: ++_kanbanPreviewRequestId
+        });
+        renderEpicSubtaskMetaBar(_epicSubtaskPreview);
+    } else {
+        if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
+    }
+    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+    vscode.postMessage({ type: 'fetchEpicDocuments' });
+}
+```
 
 ## Verification Plan
+
+### Automated Tests
+
+Automated tests are skipped per session directive. The test suite will be run separately by the user.
+
+### Manual Verification
 
 1. Open the project panel in VS Code (Switchboard extension).
 2. Navigate to the Epics tab.
@@ -244,9 +319,9 @@ All message types used by the new subtask meta bar (`fetchKanbanPlanPreview`, `s
 6. **Verify:** The subtask's markdown content loads in the preview pane.
 7. **Verify:** The meta bar updates to show "Subtask" label, Complexity dropdown, Edit, and Delete — not the epic controls.
 8. Click the complexity value, change it in the dropdown.
-9. **Verify:** The complexity change is sent (the complexity dot/label updates after the next kanban refresh).
+9. **Verify:** The complexity change is sent (the complexity dot/label updates after the next kanban refresh; the meta bar may show stale value until re-click — see Edge-Case note).
 10. Click Edit, modify the content, click Save.
-11. **Verify:** The save targets the subtask file (not the epic file). Reopen the subtask to confirm changes persisted.
+11. **Verify:** The save targets the subtask file (not the epic file). The preview reloads with the updated subtask content (not the epic). The subtask meta bar remains visible (not replaced by epic controls).
 12. Click Delete.
 13. **Verify:** The subtask is deleted, the preview pane clears, and the epic's subtask list refreshes without the deleted subtask.
 14. Click back on the epic card in the list.
@@ -255,3 +330,5 @@ All message types used by the new subtask meta bar (`fetchKanbanPlanPreview`, `s
 17. **Verify:** A toast error appears and no preview/meta-bar change occurs.
 18. Click a subtask whose plan is not in the kanban DB (planFile exists but no planId).
 19. **Verify:** The meta bar shows Edit only (no complexity dropdown, no delete button). The preview content still loads.
+20. **Data loss guard:** Click a subtask, click Edit, modify content, then click back on the epic card (without saving).
+21. **Verify:** Edit mode is exited, the epic loads cleanly, and the editor does NOT contain subtask content. The epic's Save button targets the epic file (not the subtask file).

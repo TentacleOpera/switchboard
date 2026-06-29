@@ -132,3 +132,45 @@ if (!relativePath.startsWith('.switchboard/epics/')) {
 2. Repeat for an epic that's been advanced → still preserved (via the existing epic self-heal).
 3. Genuinely delete a plan file → card disappears and does **not** reappear (tombstone expires unused).
 4. Ordinary in-place edit of an advanced plan → column preserved (layer #1, unchanged).
+
+## Review Pass (2026-06-29)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **MAJOR** | `GlobalPlanWatcherService.ts:610-611` | `newRecord.kanbanColumn = tomb.column` runs unconditionally after `await db.movePlanByPlanFile(...)`, even when the move returns `false` (invalid/removed column). This poisons the in-memory record and ClickUp sync with a column that doesn't match the DB (which stays at `CREATED`). Three-way desync: DB=CREATED, in-memory=tomb.column, ClickUp=tomb.column. The plan's own edge-case audit (line 61) documented the DB fallback but missed the in-memory poisoning. |
+| 2 | NIT | `GlobalPlanWatcherService.ts:593,603` | `if`/`else` written as two independent `if` statements with mutually exclusive conditions. Stylistic, not a bug. |
+| 3 | NIT | `GlobalPlanWatcherService.ts:743` | Orphan tombstone `setTimeout` not cleared in `dispose()`. Pre-existing pattern matching `_recentRenames`. Not a regression. |
+| 4 | NIT | `GlobalPlanWatcherService.ts:741-746,606-621` | Zero logging on tombstone capture or restore. Race-critical code with no diagnostic trail. |
+
+### Stage 2: Balanced Synthesis
+
+- **Finding 1 (MAJOR): FIX NOW.** Guard `newRecord.kanbanColumn` update on `movePlanByPlanFile` return value. One-line check prevents three-way DB/in-memory/ClickUp desync.
+- **Finding 2 (NIT): DEFER.** Stylistic `if`/`else` refactor — not worth diff churn in committed race-critical code.
+- **Finding 3 (NIT): DEFER.** Pre-existing pattern, not a regression. Flagged in original plan.
+- **Finding 4 (NIT): FIX NOW (minimal).** Add log lines on capture and restore for field diagnosability.
+
+### Fixes Applied
+
+1. **MAJOR fix — `GlobalPlanWatcherService.ts:610-620`:** Captured the return value of `movePlanByPlanFile` into `const moved`. Only update `newRecord.kanbanColumn = tomb.column` inside `if (moved)`. Added an `else` branch that logs the rejection. This ensures the in-memory record and ClickUp sync stay consistent with the DB when the move is rejected (invalid/removed column).
+2. **NIT fix — `GlobalPlanWatcherService.ts:744-746`:** Added `appendLine` log on tombstone capture: `"Tombstoned column '<col>' for <path> before hard delete"`.
+3. **NIT fix — `GlobalPlanWatcherService.ts:613-619`:** Added `appendLine` log on successful restore and on rejection, so the race fix is diagnosable in the field.
+
+### Verification Results
+
+- **Key symmetry:** CONFIRMED — both capture (`:726`) and restore (`:473`) use `path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/')` for `relativePath`, and both use the same `workspaceId` source (DB record's `workspaceId` in capture = `db.getWorkspaceId()` in restore, since the plan was fetched with that ID).
+- **TTL consistency:** CONFIRMED — capture `setTimeout(..., 5000)` and restore check `Date.now() - tomb.ts < 5000` both use 5000ms.
+- **Capture placement:** CONFIRMED — after completed-plan skip (`:737-740`), before `deletePlanByPlanFile` (`:747`).
+- **Restore placement:** CONFIRMED — in new-plan branch only (inside `if (!plan)` at `:536`), after epic re-assert block (`:593-602`), before `plan = newRecord` (`:624`). Update branch (`:627+`) does NOT have tombstone restore.
+- **Epic exclusion:** CONFIRMED — restore block guarded by `if (!relativePath.startsWith('.switchboard/epics/'))` at `:603`.
+- **Tombstone consumption:** CONFIRMED — `this._recentlyDeletedColumns.delete(tombKey)` at `:622` runs regardless of restore (outside the inner `if`).
+- **Compilation:** Skipped per instructions.
+- **Tests:** Skipped per instructions.
+
+### Remaining Risks
+
+1. **`_pendingCreations` suppression shadow** (pre-existing, acknowledged in original plan line 63): if a tool deletes and recreates a file within the 3000ms `_pendingCreations` window, the create event is skipped entirely — tombstone is set but never consumed, and the row was already deleted. The plan is lost. Pre-existing bug, not introduced by this change.
+2. **Orphan timers on dispose** (pre-existing, acknowledged in original plan line 64): tombstone `setTimeout` timers are not tracked or cleared in `dispose()`. Matches `_recentRenames` pattern. A tracked-timer `Map` cleared in `dispose()` would be the correct fix.
+3. **Other fields reset by the same race** (out of scope, acknowledged in original plan line 65): `repo_scope`, `routed_to`, `dispatched_agent`, `dispatched_ide` are also defaulted on fresh re-INSERT. This plan restores column only.
+4. **`updated_at` side effect** (acknowledged in original plan line 62): `movePlanByPlanFile` sets `updated_at = now`, which may cause a spurious mtime-skip on the next watcher event. Harmless in practice.

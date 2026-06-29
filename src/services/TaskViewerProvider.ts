@@ -2521,6 +2521,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 setTimeout(() => {
                     void this._checkOrphanedDatabase(effectiveWorkspaceRootForOrphanCheck);
                 }, 5000);
+
+                // Self-heal: regenerate all epic files so subtask lists stay in sync
+                // with the DB. Catches files that got out of sync due to bugs, manual
+                // edits, watcher races, or extension upgrades. Deferred so it doesn't
+                // block startup.
+                setTimeout(() => {
+                    void this._kanbanProvider?.regenerateAllEpicFiles(effectiveWorkspaceRootForOrphanCheck);
+                }, 3000);
             } catch (e) {
                 console.error(`[TaskViewerProvider] Failed to initialize Kanban DB on startup for ${workspaceRoot}:`, e);
             }

@@ -386,7 +386,14 @@
                     console.error('Kanban fetch error:', msg.error);
                     return;
                 }
-                _kanbanPlansCache = msg.plans || [];
+                if (msg.workspaceRoot) {
+                    _kanbanPlansCache = [
+                        ..._kanbanPlansCache.filter(p => p.workspaceRoot !== msg.workspaceRoot),
+                        ...(msg.plans || [])
+                    ];
+                } else {
+                    _kanbanPlansCache = msg.plans || [];
+                }
                 // Proactive "plans changed" pushes (e.g. after a complexity edit / move) carry
                 // only `plans` — they must NOT wipe the workspace/project/column lists, which a
                 // bare `|| {}` would. Overwrite these only when the full payload includes them.
@@ -1172,6 +1179,7 @@
     // =========================================================================
     function getFilteredKanbanPlans() {
         return _kanbanPlansCache.filter(plan => {
+            if (plan.isEpic) return false;
             if (kanbanFilters.column && plan.column !== kanbanFilters.column) return false;
             if (kanbanFilters.workspaceRoot && plan.workspaceRoot !== kanbanFilters.workspaceRoot) return false;
             if (kanbanFilters.project) {
