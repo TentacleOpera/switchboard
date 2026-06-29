@@ -4921,6 +4921,7 @@ Please format the updated output document strictly as follows:
                         success: result.success,
                         successCount: result.successCount,
                         failCount: result.failCount,
+                        deletedCount: result.deletedCount,
                         errors: result.errors,
                         importMode: 'document',
                         workspaceRoot,
@@ -8533,13 +8534,18 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 if (result?.success) {
                     this._ticketsAutoSyncFailures.set(workspaceRoot, 0);
                     this._ticketsAutoSyncNextEligible.set(workspaceRoot, 0);
-                    // If any tickets were updated, refresh the sidebar silently.
-                    if ((result.successCount || 0) > 0) {
+                    // If any tickets were updated OR deleted, refresh the sidebar
+                    // silently. Without the deletedCount check, a tick where only
+                    // deletions occurred (no updates) would not refresh the sidebar
+                    // and the deleted ticket's card would linger until the next
+                    // update-bearing tick.
+                    if ((result.successCount || 0) > 0 || (result.deletedCount || 0) > 0) {
                         this._panel?.webview.postMessage({
                             type: 'importAllTicketsComplete',
                             success: true,
                             successCount: result.successCount,
                             failCount: result.failCount,
+                            deletedCount: result.deletedCount,
                             errors: result.errors,
                             importMode: 'document',
                             workspaceRoot,

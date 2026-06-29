@@ -836,6 +836,53 @@ export class LinearSyncService {
     return filteredIssues;
   }
 
+  /**
+   * Fetch ALL issue IDs for a project, paginating through the complete set
+   * without the 100-issue limit cap that queryIssues enforces. Used by the
+   * deletion sweep to get the full remote ID set — a naive queryIssues call
+   * with limit:100 would return an incomplete set for projects with >100
+   * issues, causing the sweep to delete local files for issues 101+ that
+   * still exist remotely (a data-loss bug). Returns only IDs to minimize
+   * payload size. Bypasses the cache (the sweep needs current live state,
+   * not a potentially stale snapshot).
+   */
+  public async fetchAllIssueIds(projectId: string): Promise<Set<string>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || projectId);
+
+    const ids = new Set<string>();
+    let cursor: string | null = null;
+    const query = this._buildIssueListQuery();
+    let pageCount = 0;
+    const maxPages = 50; // Safety cap: 50 pages × 50/page = 2500 issues max
+
+    while (pageCount < maxPages) {
+      const result = await this.graphqlRequest(query, {
+        filter,
+        after: cursor,
+        first: 50
+      });
+      const page = result.data?.issues;
+      const nodes = Array.isArray(page?.nodes) ? page.nodes : [];
+      for (const node of nodes) {
+        if (node.id) ids.add(String(node.id));
+      }
+      if (!page?.pageInfo?.hasNextPage) break;
+      cursor = String(page.pageInfo.endCursor || '').trim() || null;
+      if (!cursor) break;
+      pageCount++;
+      await this.delay(200);
+    }
+    if (pageCount >= maxPages) {
+      console.warn(`[LinearSync] fetchAllIssueIds reached page cap (${maxPages}). Some issues may be omitted.`);
+    }
+    return ids;
+  }
+
   public async getIssue(issueIdOrIdentifier: string): Promise<LinearIssue | null> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || !config.teamId) {

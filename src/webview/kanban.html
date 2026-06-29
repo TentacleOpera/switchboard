@@ -4352,6 +4352,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // stale updateBoard (same columns, only lastActivity differs) does not
             // trigger a spurious re-render that reverts the move.
             lastBoardSignature = buildBoardSignature(currentCards);
+
+            // Arm the render guard HERE, in the shared primitive — not at each call site.
+            // Every button-triggered optimistic move (per-card Copy Prompt, column
+            // moveSelected/moveAll/promptSelected/promptAll) funnels through this function.
+            // The backend round-trip (promptSelected → generate prompt → moveCardToColumn →
+            // dispatch) is async and slow; a routine updateBoard refresh that lands before it
+            // finishes carries the PRE-move positions, and without this guard the updateBoard
+            // handler re-renders and snaps the card back — the "waiting for the backend" lag.
+            // DO NOT move this back out to individual call sites: arming per-path is exactly
+            // what keeps regressing, because new/edited button paths forget to re-add it.
+            // (Drag paths arm their own guard since they do bespoke DOM work without this helper.)
+            optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;
         }
 
         /** Get all selected session IDs within a specific column. */

@@ -15,6 +15,6 @@ Make the Tickets Tab local file layer faithfully reflect remote provider state �
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Project Picker Change Triggers File-Backed Import](../plans/feature_plan_20260629130647_linear-project-picker-triggers-import.md) — **PLAN REVIEWED**
-- [ ] [Respect Remote Deletions in Delta Pull](../plans/feature_plan_20260629130652_respect-remote-deletions-in-delta-pull.md) — **PLAN REVIEWED**
+- [ ] [Linear Project Picker Change Triggers File-Backed Import](../plans/feature_plan_20260629130647_linear-project-picker-triggers-import.md) — **CODER CODED**
+- [ ] [Respect Remote Deletions in Delta Pull](../plans/feature_plan_20260629130652_respect-remote-deletions-in-delta-pull.md) — **CODER CODED**
 <!-- END SUBTASKS -->

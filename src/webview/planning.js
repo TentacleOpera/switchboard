@@ -7639,6 +7639,20 @@ Instructions:
             linearProjectPickerValue = e.target.value;
             renderTicketsLinearList();
             saveTicketsState();
+            // Wire the picker change to the same delta-aware import path that
+            // the Refresh button and the initial linearProjectLoaded handler use.
+            // The picker value is a project name; send it directly as projectId
+            // to match the existing convention (Refresh button :7661, linearProjectLoaded
+            // handler :4922). The backend uses it as a cursor key label, not a
+            // server-side filter — queryIssues filters via config.includeProjectNames.
+            if (linearProjectPickerValue) {
+                vscode.postMessage({
+                    type: 'refreshTicketsDelta',
+                    provider: 'linear',
+                    projectId: linearProjectPickerValue,
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+            }
         });
 
         // State filter (Linear)

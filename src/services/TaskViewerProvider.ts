@@ -19232,7 +19232,7 @@ What would you like to find?`;
             deltaSinceIso?: string;    // Linear: ISO 8601 for updatedAt gt filter
             includeClosed?: boolean;   // when true, also import done/closed (Linear: completed/canceled) tickets
         }
-    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number; pruned?: number }> {
+    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number; pruned?: number; deletedCount?: number }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
@@ -19243,6 +19243,7 @@ What would you like to find?`;
         let successCount = 0;
         let failCount = 0;
         let skippedModified = 0;
+        let deletedCount = 0;
         const errors: { id: string; error: string }[] = [];
 
         // Fast path: bulk document import from already-fetched list data (no N+1 API calls)
@@ -19424,7 +19425,102 @@ What would you like to find?`;
                 }
             }
 
-            return { success: true, successCount, failCount, errors, ...(skippedModified > 0 ? { skippedModified } : {}), ...(pruned > 0 ? { pruned } : {}) };
+            // ── Deletion sweep (full imports) ──────────────────────────────
+            // For full imports, the items array IS the complete remote task set
+            // (top-level + open, plus closed when includeClosed). Any local file
+            // whose sourceId is not in this set has been deleted/archived/trashed
+            // remotely — remove the file + cache entry. Unlike the prune above,
+            // this sweep does NOT preserve locally-modified files: the user
+            // deleted the ticket remotely, so the local ghost (including any
+            // unpushed edits to a deleted ticket) is clutter, not a feature.
+            if (!isDelta) {
+                const remoteIds = new Set(items.map((t: any) => String(t.id)));
+                try {
+                    const cacheService = this._getCacheService(resolvedRoot);
+                    const dbTicketsSweep = await cacheService.getImportedTickets();
+                    // Scope to the current list/project directory only — don't
+                    // touch files belonging to other lists/projects. Use exact
+                    // path.dirname match (loose includes() can match coincidentally).
+                    const scopedDbTickets = targetDir
+                        ? dbTicketsSweep.filter(t => t.filePath && path.dirname(t.filePath) === targetDir)
+                        : dbTicketsSweep;
+                    for (const dbT of scopedDbTickets) {
+                        // Use sourceId (clean remote ID) instead of parsing slugPrefix.
+                        const remoteId = String(dbT.sourceId || '');
+                        if (remoteId && !remoteIds.has(remoteId)) {
+                            try { await fs.promises.unlink(dbT.filePath); } catch (e: any) {
+                                if (e.code !== 'ENOENT') console.warn('[TaskViewerProvider] Deletion sweep: could not unlink', dbT.filePath, e);
+                            }
+                            try { await cacheService.deleteImportedTicket(dbT.slugPrefix); } catch (e) {
+                                console.warn('[TaskViewerProvider] Deletion sweep: could not delete cache entry', dbT.slugPrefix, e);
+                            }
+                            deletedCount++;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[TaskViewerProvider] Deletion sweep failed:', e);
+                }
+            }
+
+            // ── Deletion sweep (delta pulls) ───────────────────────────────
+            // For delta pulls, the items array only contains *changed* tasks —
+            // it's not the full remote set. To detect deletions, fetch the full
+            // ID set separately. One extra paginated API call per Refresh/tick
+            // — acceptable for a manual action or a 45s auto-sync interval.
+            // Critically, the ClickUp task cache must be invalidated first so
+            // we get live data, not a stale 5-min snapshot that would miss
+            // recently-deleted tasks. Never delete based on a failed/partial
+            // fetch — the fetchSucceeded flag gates the sweep.
+            if (isDelta) {
+                let fetchSucceeded = false;
+                let fullRemoteIds = new Set<string>();
+                try {
+                    if (provider === 'clickup' && listId) {
+                        this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
+                        const clickup = this._getClickUpService(resolvedRoot);
+                        const allTasks = await clickup.getListTasks(listId);
+                        fullRemoteIds = new Set(allTasks.map((t: any) => String(t.id)));
+                        fetchSucceeded = true;
+                    } else if (provider === 'linear' && projectId) {
+                        // Use fetchAllIssueIds (uncapped) — NOT queryIssues (capped at 100).
+                        const linear = this._getLinearService(resolvedRoot);
+                        fullRemoteIds = await linear.fetchAllIssueIds(projectId);
+                        fetchSucceeded = true;
+                    }
+                } catch (e) {
+                    console.warn('[TaskViewerProvider] Deletion sweep (delta): full ID-set fetch failed, skipping sweep:', e);
+                    fetchSucceeded = false;
+                }
+                // Only sweep if the fetch succeeded — never delete based on a
+                // failed/partial fetch. An empty set with fetchSucceeded=true
+                // means the list is intentionally empty (all tasks deleted
+                // remotely) → sweep deletes all local files for this list.
+                if (fetchSucceeded) {
+                    try {
+                        const cacheService = this._getCacheService(resolvedRoot);
+                        const dbTicketsSweep = await cacheService.getImportedTickets();
+                        const scopedDbTickets = targetDir
+                            ? dbTicketsSweep.filter(t => t.filePath && path.dirname(t.filePath) === targetDir)
+                            : dbTicketsSweep;
+                        for (const dbT of scopedDbTickets) {
+                            const remoteId = String(dbT.sourceId || '');
+                            if (remoteId && !fullRemoteIds.has(remoteId)) {
+                                try { await fs.promises.unlink(dbT.filePath); } catch (e: any) {
+                                    if (e.code !== 'ENOENT') console.warn('[TaskViewerProvider] Deletion sweep (delta): could not unlink', dbT.filePath, e);
+                                }
+                                try { await cacheService.deleteImportedTicket(dbT.slugPrefix); } catch (e) {
+                                    console.warn('[TaskViewerProvider] Deletion sweep (delta): could not delete cache entry', dbT.slugPrefix, e);
+                                }
+                                deletedCount++;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[TaskViewerProvider] Deletion sweep (delta) failed:', e);
+                    }
+                }
+            }
+
+            return { success: true, successCount, failCount, errors, deletedCount, ...(skippedModified > 0 ? { skippedModified } : {}), ...(pruned > 0 ? { pruned } : {}) };
         }
 
         // Slow path: explicit IDs or plan mode (per-item API calls)

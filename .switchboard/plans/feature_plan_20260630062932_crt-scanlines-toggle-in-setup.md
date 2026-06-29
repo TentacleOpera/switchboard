@@ -362,3 +362,71 @@ case 'cyberScanlinesSetting':
 ## Recommendation
 
 Complexity 4/10 → **Send to Coder**
+
+---
+
+## Code Review Results
+
+**Review date:** 2026-06-30
+**Commit reviewed:** `016f93d` (auto-commit before code review)
+
+### Stage 1 — Grumpy Principal Engineer Review
+
+> *Alright, let me see what the intern cooked up. Twelve files. Twelve. That's a lot of surface area for a checkbox. Let's see if they actually hit all of them or if we're going to find a panel that flashes scanlines like a bad CRT monitor at a garage sale.*
+
+**NIT — Commit hygiene: cross-plan contamination.** The commit `016f93d` is titled "Add CRT Scanlines Toggle" but it also contains the `.shared-tab-btn` transition timing changes from the *other* plan (kanban nav tab animation). Those changes to `kanban.html`, `project.html`, and `design.html` belong to a different plan. Sloppy staging. Not a code defect, but if anyone bisects this commit expecting only scanline changes, they'll get a surprise.
+
+**NIT — Unrelated whitespace removal in `project.js`.** A blank line was deleted around line 2259 (`closeEpicAddSubtaskOverlay()` → `if (epicsWorkspaceFilter)`). Not part of this plan. Not harmful. But it doesn't belong here.
+
+> *Now let me actually check the code...*
+
+**All 12 files verified present and correct:**
+- `package.json` line 684: setting `switchboard.theme.disableCyberScanlines` added with correct type/default/scope. ✓
+- `themeBodyClass.ts` line 48-49: one-liner return preserved, `cyber-scanlines-disabled` injected at first paint. No flash. ✓
+- `TaskViewerProvider.ts`: `handleGetCyberScanlinesDisabledSetting()` + `handleSetCyberScanlinesDisabledSetting()` added (line 4143/4148), config-change listener at line 493, `postSetupPanelState()` post at line 4560. ✓
+- `SetupPanelProvider.ts` line 711: `getCyberScanlinesDisabledSetting` + `setCyberScanlinesDisabledSetting` cases added, mirrors animation pattern exactly. ✓
+- `PlanningPanelProvider.ts`: 3 config-change listeners (lines 371, 526, 653) + 3 initial-state posts (lines 382, 632, 7146). All present. ✓
+- `DesignPanelProvider.ts`: 2 config-change listeners (lines 175, 274) + 1 initial-state post (line 1420). All present. ✓
+- `setup.html`: checkbox HTML at line 1253, change handler at line 3951, hydration post at line 1855, both message handlers (`cyberScanlinesSetting` + `cyberScanlinesDisabledSetting`) at lines 4663/4669. ✓
+- `planning.html` line 2065: CSS suppression rule `.cyber-theme-enabled.cyber-scanlines-disabled .cyber-scanlines { display: none !important; }`. Specificity (0,3,0)+`!important` beats show rule (0,2,0). ✓
+- `planning.js` line 3833: `cyberScanlinesSetting` case added. ✓
+- `project.html` line 716: CSS suppression rule added, same specificity. ✓
+- `project.js` line 395: `cyberScanlinesSetting` case added. ✓
+- `design.js` line 3504: `cyberScanlinesSetting` case added. Body class harmless (no scanline elements in design.html — verified via grep, zero matches). ✓
+
+> *Fine. The intern actually did the work. All 12 files, every location, the pattern is a faithful copy of `disableCyberAnimation`. The semantics are correct: checkbox label says "Enable CRT scanlines", unchecked = disabled = `disableCyberScanlines: true`, body class `cyber-scanlines-disabled` added. The `!important` + higher specificity wins over the show rule. First-paint flash is prevented by `themeBodyClass.ts`. I have no code complaints. Just clean up your git staging next time.*
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** All code changes. The implementation is correct, complete, and faithfully mirrors the established `disableCyberAnimation` pattern. No material code issues found.
+
+**Fix now:** Nothing. Both NITs are commit hygiene issues, not code defects. The code is correct.
+
+**Defer:** Commit staging hygiene — the cross-plan bundling and unrelated whitespace change can't be fixed without rewriting git history (forbidden by policy). Noted for future awareness only.
+
+### Verification Results
+
+**Grep verification (from plan):**
+- `cyberScanlinesSetting` handlers confirmed in: `setup.html` (line 4663), `planning.js` (line 3833), `project.js` (line 395), `design.js` (line 3504). ✓
+- `cyber-scanlines-disabled` CSS rules confirmed in: `planning.html` (line 2065), `project.html` (line 716). Body class toggling confirmed in all JS files: `setup.html` (lines 3954, 4665, 4673), `planning.js` (line 3834), `project.js` (line 396), `design.js` (line 3505), `themeBodyClass.ts` (line 49). ✓
+- `disableCyberScanlines` setting confirmed in `package.json` (line 684). ✓
+
+**Compilation/tests:** Skipped per review instructions (pre-compiled state assumed; test suite run separately).
+
+### Files Changed (in commit `016f93d`)
+- `package.json` — new setting
+- `src/services/themeBodyClass.ts` — first-paint body class injection
+- `src/services/TaskViewerProvider.ts` — backend handlers + config listener + state post
+- `src/services/SetupPanelProvider.ts` — message handler cases
+- `src/services/PlanningPanelProvider.ts` — 3 listeners + 3 initial-state posts
+- `src/services/DesignPanelProvider.ts` — 2 listeners + 1 initial-state post
+- `src/webview/setup.html` — checkbox UI + JS handler + hydration + message handlers
+- `src/webview/planning.html` — CSS suppression rule
+- `src/webview/planning.js` — message handler
+- `src/webview/project.html` — CSS suppression rule
+- `src/webview/project.js` — message handler (+ unrelated blank line removal)
+- `src/webview/design.js` — message handler
+
+### Remaining Risks
+- **Commit hygiene:** The scanlines commit also contains kanban nav tab animation changes from the other plan. If bisecting, be aware this commit touches both features.
+- **No automated tests:** Per plan design — follows existing UI toggle pattern with no testable business logic. Manual verification steps in the plan's Verification Plan section remain the primary validation path.
