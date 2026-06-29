@@ -110,13 +110,18 @@ export class LocalApiServer {
             });
         });
 
+        let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutPromise = new Promise<never>((_resolve, reject) => {
-            setTimeout(() => {
+            timeoutHandle = setTimeout(() => {
                 reject(new Error(`[LocalApiServer] start() timed out after ${START_TIMEOUT_MS}ms (extension host starved — listen callback did not fire)`));
             }, START_TIMEOUT_MS);
         });
 
-        return Promise.race([listenPromise, timeoutPromise]);
+        // Clear the timeout timer once the race settles so a successful listen doesn't
+        // leave a dangling 5s timer that fires a no-op reject on an already-settled promise.
+        return Promise.race([listenPromise, timeoutPromise]).finally(() => {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+        });
     }
 
     /**

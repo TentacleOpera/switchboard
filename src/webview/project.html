@@ -1504,7 +1504,6 @@
                 </select>
                 <!-- "Set as Active Planning Context" removed: PRDs are now per-project (Projects tab + PROJECT CONTEXT toggle), decoupled from epics. The legacy planner.designDocLink setter remains wired for back-compat. -->
                 <button id="btn-new-epic" class="strip-btn">+ New Epic</button>
-                <button id="btn-epic-modes-help" class="strip-btn" title="How to run an epic (3 ways)" style="font-weight: bold; min-width: 28px; padding: 2px 8px;">?</button>
             </div>
             <div class="content-row">
                 <div id="epics-list-pane">
@@ -1657,22 +1656,6 @@
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
                 <button id="btn-new-epic-cancel" class="strip-btn">Cancel</button>
                 <button id="btn-new-epic-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Epic Modes Help Modal -->
-    <div id="epic-modes-help-overlay" class="kanban-log-overlay" style="display: none;">
-        <div class="kanban-log-modal" style="width: 480px; max-width: 90vw;">
-            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
-                How to Run an Epic (2 Ways)
-            </div>
-            <div style="padding: 16px; line-height: 1.6; font-size: 12px;">
-                <div style="margin-bottom: 10px;"><b>Step</b> — drag the epic column-to-column on the board; each column's agent batch-processes every subtask.</div>
-                <div><b>Split (recommended)</b> — drag the epic to the <b>Planner</b> column to improve every subtask plan, <i>then</i> dispatch the improved epic to a coder column to implement.</div>
-            </div>
-            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; padding: 12px 16px;">
-                <button id="btn-epic-modes-help-close" class="strip-btn">Close</button>
             </div>
         </div>
     </div>

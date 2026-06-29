@@ -2256,18 +2256,6 @@
         closeEpicAddSubtaskOverlay();
     });
 
-    // ---- Epic modes help modal ----
-    document.getElementById('btn-epic-modes-help')?.addEventListener('click', () => {
-        const ov = document.getElementById('epic-modes-help-overlay');
-        if (ov) ov.style.display = 'flex';
-    });
-    document.getElementById('btn-epic-modes-help-close')?.addEventListener('click', () => {
-        const ov = document.getElementById('epic-modes-help-overlay');
-        if (ov) ov.style.display = 'none';
-    });
-    document.getElementById('epic-modes-help-overlay')?.addEventListener('click', (e) => {
-        if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
-    });
 
     if (epicsWorkspaceFilter) {
         epicsWorkspaceFilter.addEventListener('change', () => {

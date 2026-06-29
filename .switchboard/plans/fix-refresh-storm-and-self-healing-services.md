@@ -169,3 +169,75 @@ The dominant `_syncFilesAndRefreshRunSheets` frame is produced by the **plan-fil
 ## Recommendation
 
 Complexity 6 → **Send to Coder.** The primary fix (content-comparison no-op in `_regenerateEpicFile`) is a small, high-confidence change that breaks the loop at its source. The TTL hardening and `_reloadIfStale` backwards-mtime fix are defense-in-depth. The single-flight guard + snapshot-skip are structural backstops. Task 2's visibility/watchdog/timeout and Task 4's Jules hardening are localized. Task 3 is verify-only (the persistence layer ships). All changes touch hot paths in a 4,000-install extension and need real manual verification.
+
+---
+
+## Code Review (Reviewer-Executor Pass, 2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You know what I see? I see a plan that actually got implemented correctly for once. But let me poke at it until it bleeds."*
+
+**CRITICAL:** None. The implementation matches the plan. The circuit-breaker (single-flight coalescing on `_refreshRunSheets` + `_syncFilesAndRefreshRunSheets`), the loop-breaker (mirror content guard ungated from `runSheetKnown`), and the watchdog are all present and structurally sound.
+
+**MAJOR:** None. The coalescing wrappers correctly resolve awaited waiters on the in-flight run's completion (not silently dropped). The `_rescanAntigravityPlanSources` re-entry guard composes correctly with the sync wrapper. The sessionId reconciliation in the dedup branch is properly wrapped in try/catch so a failure doesn't break the content guard. The `_regenerateEpicFile` no-op runs BEFORE `registerPendingCreation` exactly as specified. The `_reloadIfStale` fix uses `<=` (equivalent to "reload only when `>`") as specified.
+
+**NIT-1** — `LocalApiServer.getPort()` (`LocalApiServer.ts:131`) is dead code. Declared public, never called anywhere in `src/`. Harmless but noisy.
+
+**NIT-2** — **Dangling timeout timer in `LocalApiServer.start()`** (`LocalApiServer.ts:114`). The `setTimeout` in the timeout promise is never cleared when the listen callback fires first (the normal success path). It fires a no-op `reject` on an already-settled promise after 5s. Minor resource leak; in a VS Code extension host, an uncleared timer can delay idle. **FIXED in this review pass** — added `.finally(() => clearTimeout(timeoutHandle))` to the `Promise.race`.
+
+**NIT-3** — The watchdog (`_checkApiServerLiveness`) has no backoff on persistent failure. If the server can never start, it retries every 30s forever, logging each attempt. The plan explicitly says "let the watchdog retry" so this is by-design, but a capped exponential backoff would reduce log spam on a permanently broken environment.
+
+**NIT-4** — The `_rescanAntigravityPlanSources` defensive fallback (`TaskViewerProvider.ts:12778`) doesn't clear `_rescanNeedsTrailing` before re-entering the wrapper, leaving a stale flag. Only triggers in an inconsistent-state path (`_rescanInFlight` true but `_rescanInFlightPromise` null) that shouldn't occur in practice. The single-flight guard on `_syncFilesAndRefreshRunSheets` is the structural backstop.
+
+**NIT-5** — Dispose/watchdog race: if `dispose()` runs while `_checkApiServerLiveness` is mid-execution (awaiting `_startLocalApiServer`), the in-flight check continues after the watchdog timer is cleared and could start a new server post-dispose. Theoretical edge case (30s interval vs. 5s start timeout); the extension host process exit cleans up any zombie. No `_isDisposing` gate.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- All Task 1 fixes (Primary A single-flight, Primary B mirror content guard + sessionId reconciliation + self-mirror suppression, Secondary epic no-op + TTL hardening, Tertiary mtime fix, Backstop snapshot skip). Verified correct against the plan's edge-case audit.
+- All Task 2 fixes (output channel logging, start-promise timeout, in-process watchdog). The watchdog correctly uses in-process signals (not self-HTTP), has a double-start guard, and cleans up in `_stopLocalApiServer` + `dispose`.
+- Task 3 (verify-only — existing `_syncTerminalRegistryWithStateImpl` confirmed present at `extension.ts:1769`, called from `:718`).
+- Task 4 (`_julesCliUnavailable` flag + `clearInterval` + dispatch reset). The flag is checked at the top of `_refreshJulesStatus` (`:17529`), set on ENOENT (`:17984`), cleared on dispatch (`:18144`).
+
+**Fix now (applied):**
+- NIT-2: Dangling timeout timer in `LocalApiServer.start()` — cleared via `.finally()` on the `Promise.race`. This is the only code fix applied in this review pass.
+
+**Defer (low-risk, by-design, or cosmetic):**
+- NIT-1 (dead `getPort()`): harmless; can be removed in a future cleanup pass.
+- NIT-3 (watchdog backoff): by-design per plan; add backoff only if log spam is observed in production.
+- NIT-4 (stale `_rescanNeedsTrailing` in fallback): unreachable in practice; single-flight guard is the backstop.
+- NIT-5 (dispose race): theoretical edge case; process exit cleans up. Add a `_isDisposing` gate only if post-dispose server starts are observed.
+
+### Files Changed in This Review Pass
+
+- `src/services/LocalApiServer.ts` — `start()`: captured the timeout timer handle and added `.finally(() => clearTimeout(timeoutHandle))` to the `Promise.race` so a successful listen doesn't leave a dangling 5s timer (NIT-2 fix).
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives (project assumed pre-compiled).
+- **Automated tests:** Skipped per session directives (suite run separately by user).
+- **Manual verification (code-level, read-only):**
+  - All 11 awaited `_syncFilesAndRefreshRunSheets` call sites still `await` the coalescing wrapper — control flow preserved (verified via grep at `:5377, :5472, :8716, :8767, :8996, :9021, :9077, :11072, :11854, :12748, :14465, :14665, :15047`).
+  - `_refreshRunSheets` coalescing wrapper (`:15216`) correctly resolves waiters on the in-flight run's completion + one trailing run.
+  - `_syncFilesAndRefreshRunSheets` coalescing wrapper (`:15349`) mirrors the same pattern.
+  - `_rescanAntigravityPlanSources` re-entry guard (`:12756`) coalesces with trailing run + defensive fallback.
+  - Mirror content guard (`:13609-13615`) is ungated from `runSheetKnown` — the authoritative loop breaker.
+  - mtime fast-path (`:13555`) remains gated on `runSheetKnown` — correct split (fast-path for common case, content guard for the loop-breaker).
+  - sessionId reconciliation (`:13663-13670`) wrapped in try/catch — non-fatal, content guard still breaks the loop.
+  - Self-mirror suppression (`:13750-13752`) checks `_recentMirrorWrites` marker — defense-in-depth with content guard as backstop.
+  - `_regenerateEpicFile` no-op (`KanbanProvider.ts:8368`) runs before `registerPendingCreation` (`:8371`) — no stale pending-creation entries.
+  - `_reloadIfStale` (`KanbanDatabase.ts:4089`) uses `<=` — equal and backwards mtimes ignored.
+  - Identical-snapshot skip (`KanbanProvider.ts:1339-1353`) keyed by `(workspaceId, projectFilter, repoScope)` — context switches always re-push.
+  - Diagnostic `console.log` with `new Error().stack` (the temporary instrumentation) — confirmed removed (grep for `caller:|new Error().stack` returns no matches).
+  - TTL hardening: `_pendingCreations` 3s→10s (`GlobalPlanWatcherService.ts:44`), `_recentNativePlanCreations` 4s→10s (`TaskViewerProvider.ts:10396, :10431`).
+  - Export single-flight + crypto-random tmp suffix (`KanbanDatabase.ts:5627-5728`) — verified present.
+  - Jules gate: `_julesCliUnavailable` flag (`:295`), checked at top of `_refreshJulesStatus` (`:17529`), set on ENOENT (`:17983-17990`), cleared on dispatch (`:18143-18151`).
+  - API watchdog: double-start guard (`:1043`), in-process liveness (`isListening()`), cleanup in `_stopLocalApiServer` (`:1083-1086`) + `dispose` (`:18833-18836`).
+  - Terminal re-adoption: `_syncTerminalRegistryWithStateImpl` at `extension.ts:1769`, called from `:718` — existing, verify-only per plan.
+
+### Remaining Risks
+
+1. **`_recentMirrorWrites` 2s TTL** (`TaskViewerProvider.ts:13625`): under severe starvation, the watcher callback could be delayed past 2s, expiring the self-mirror marker before `_handlePlanCreation` checks it. The content guard (Primary B) and single-flight guard (Primary A) are the authoritative backstops — this is defense-in-depth. Not hardened because the plan didn't call for it and the backstops cover it.
+2. **Watchdog restart after late listen callback**: if `start()` times out (5s) but the listen callback fires later (e.g., at 7s), the server is actually listening but the port file was never written. The watchdog detects `serverAlive=true, portFileExists=false` on the next tick and restarts — correct but wasteful (stops a listening server and starts a new one). Edge case only under severe host starvation.
+3. **Path-resolution divergence** (the source of backwards mtime): the `_reloadIfStale` `<=` fix prevents the symptom, but the root cause (two `KanbanDatabase` instances for one file via mappings/symlinks/case divergence in `forWorkspace`'s `_instancesByDbPath` cache) was not investigated/fixed in this implementation. The plan flagged it for investigation; it remains open.
