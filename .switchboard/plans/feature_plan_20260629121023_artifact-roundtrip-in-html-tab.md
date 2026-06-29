@@ -189,3 +189,47 @@ Web research was conducted to confirm the two assumptions that were initially un
 ## Recommendation
 
 Complexity is 4 (routine wiring with small, well-scoped refinements: the CSS column override, the `state.activeDocSourceFolder` stash, and URL-type detection in the prompt builder). **Send to Coder.**
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"You know what I see? I see a plan that said exactly what to build, and code that builds exactly that. That's suspicious — it means either the plan is trivially correct or the coder robot didn't think for itself. Let me check."*
+
+**Verdict: clean.** Every spec'd artifact is present and faithful to the plan text.
+
+- **CSS column override** (`planning.html:2687-2692`): `#controls-strip-planning-html { flex-direction: column; align-items: stretch; gap: 6px; }` — exact match to the plan spec. The existing controls are correctly wrapped in a `<div class="controls-strip-row">` (`planning.html:3494-3500`), and the new round-trip row is a sibling `<div class="controls-strip-row">` (`planning.html:3501-3507`). **No layout bug.**
+- **Prompt builders** (`planning.js:6893-6928`): `ARTIFACT_DOWNLOAD_PROMPT` and `ARTIFACT_UPLOAD_PROMPT` are byte-for-byte the plan's template strings — including the share-link warning, the `/login` prerequisite, the double-wrap normalization instructions, the `switchboard-artifact-source` marker, and the ownership/permission-error fallback wording. **No drift.**
+- **`isShareLink` detection** (`planning.js:6893`): `/claude\.ai\/share\//i.test(url)` — correct regex, case-insensitive. **No miss.**
+- **`state.activeDocSourceFolder` stash** (`planning.js:6778`): `state.activeDocSourceFolder = sourceFolder;` added inside `loadPlanningHtmlPreview` alongside `state.activeDocName = docName;`. The upload button reads it at `planning.js:6969,6980`. **Gap closed.**
+- **Clipboard handler** (`PlanningPanelProvider.ts:2783-2788`): `case 'copyArtifactPrompt'` writes to clipboard and posts `artifactPromptCopied`. Mirrors `copyChatPrompt` exactly. **No fs, no path handling.** Correct.
+- **Confirmation flash** (`planning.js:4319-4331`): `case 'artifactPromptCopied'` flashes the relevant button to `Copied!` for 2s. Mirrors `kanbanPlanPromptCopied`. **No confirm dialog.** House rule respected.
+- **No-folder fallback** (`planning.js:6930-6933`): `getHtmlFolderFallback` returns `paths[0] || ''`; the prompt builder handles empty folder with the "add this folder" instruction. **No empty-path prompt.**
+- **No-selection fallback** (`planning.js:6970,6981`): `state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html')`. **No blank filename.**
+
+> *"Fine. It's correct. I hate that."*
+
+**Findings by severity:**
+- **CRITICAL:** None.
+- **MAJOR:** None.
+- **NIT:** None.
+
+### Stage 2 — Balanced Synthesis
+
+The implementation is a faithful, complete realization of the plan. Every proposed change in the plan's "Proposed Changes" section is present in the code with no material deviation. The edge-case handling (share-link detection, no-folder fallback, no-selection fallback, source-marker, double-wrap normalization) is all implemented exactly as specified. No code fixes were needed for this plan.
+
+### Files Changed (Implementation)
+- `src/webview/planning.html` — CSS column override + wrapped controls-strip-row + new round-trip row with URL input + 2 Copy buttons
+- `src/webview/planning.js` — `isShareLink`, `ARTIFACT_DOWNLOAD_PROMPT`, `ARTIFACT_UPLOAD_PROMPT`, `getHtmlFolderFallback`, `getArtifactUrlInput`, 2 Copy button listeners, `artifactPromptCopied` confirmation handler, `state.activeDocSourceFolder` stash
+- `src/services/PlanningPanelProvider.ts` — `case 'copyArtifactPrompt'` clipboard handler
+
+### Validation Results
+- **Compilation:** Skipped per session policy (project is pre-compiled).
+- **Tests:** Skipped per session policy (run separately by user).
+- **Code review:** Complete — no issues found. All plan requirements verified present in code.
+
+### Remaining Risks
+- **Manual verification deferred:** The download/upload round-trip, share-link warning, no-folder fallback, and double-wrap format normalization are all prompt-text-level features that can only be validated by pasting the generated prompts into a real Claude Code session with an active `/login` on a Team/Enterprise plan. This is inherently a manual test.
+- **Prompt quality is untestable in isolation:** The prompts are long instruction strings; their effectiveness depends on Claude Code's `WebFetch` and `Artifact` tool behavior, which may change. The plan's research findings (confirmed 29 Jun 2026) are baked into the prompt text but could drift if the platform changes.

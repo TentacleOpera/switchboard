@@ -127,3 +127,73 @@ case 'sendArtifactPromptToTerminal': {
 ## Recommendation
 
 Complexity is 6 (mixed: mostly routine wiring, with the visibility-default footgun and `/clear`-avoidance as two well-scoped risks). **Send to Coder.**
+
+---
+
+## Code Review (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"A terminal-only role with no kanban column, modeled on `analyst`. A visibility-default footgun that makes `undefined !== false` spawn a surprise terminal. A `/clear` trap that would nuke Claude's context. Three landmines, and the plan drew a map around each one. Let me see if the coder followed the map."*
+
+**Finding #1 — MAJOR: Missing `/clear`-avoidance comment.**
+
+`TaskViewerProvider.ts:2731-2739` (`sendPromptToAgentTerminal`) correctly calls `sendRobustText` directly, bypassing `_attemptDirectTerminalPush`. **But the plan explicitly required a code comment stating this reasoning** — quote: *"Add a code comment stating this reasoning so a future refactor doesn't 'consolidate' it back through the dispatch path."* The comment was absent. The codebase already has this exact pattern at `TaskViewerProvider.ts:10052` (`// NOTE: Do NOT use _attemptDirectTerminalPush here — it has clearBeforePrompt side effects...`), proving the convention exists. Without the comment, the very next "let's reduce duplication" refactor routes this through `_attemptDirectTerminalPush` and silently wipes Claude's conversation context on every artifact send. **The code works today; the comment is the load-bearing guard against tomorrow's refactor.**
+
+> *"You dodged the landmine but left the map in your pocket. Someone else is going to step on it."*
+
+**Finding #1b — MAJOR (user-identified): Original `/clear`-avoidance rationale was based on a false premise.**
+
+The plan's stated reason for avoiding `/clear` was: *"For artifact sends this would wipe Claude's conversation context mid-session."* This assumes single-session continuity — but the round-trip workflow explicitly spans multiple sessions (download → edit with Gemini for hours/days → upload). The artifact prompts are **already self-contained**: the upload prompt carries the file path (`${folder}/${filename}`), the expected source URL (`${url}`), and instructs Claude to read the `switchboard-artifact-source:` marker from the file itself. The round-trip identity lives in the file, not in conversation history. So `/clear` would NOT break round-trip correctness — the prompt works from a blank slate. The real (weaker) rationale for avoiding `/clear` is that the Claude Artifacts terminal is a general-purpose helper terminal where the user may have unrelated ongoing conversation that shouldn't be nuked before every artifact send. **Fix applied** — the comment was reworded to state the correct rationale (UX preference for not clearing unrelated conversation, not round-trip correctness).
+
+**Finding #2 — NIT: Unrelated changes bundled into the commit.**
+
+The epic commit (`9a3705b`) includes a diagnostic `console.log` in `_refreshRunSheets` (`TaskViewerProvider.ts:14925`, marked "DIAGNOSTIC (temporary)"), a Jules polling early-return (`TaskViewerProvider.ts:17175`), and a `?? undefined` type fix (`TaskViewerProvider.ts:2974`). None of these are part of either plan. They're harmless but muddy the commit scope. Not fixing — out of plan scope.
+
+**Everything else — verified correct:**
+
+- **`allBuiltInAgents` entry** (`extension.ts:2670`): `{ name: 'Claude Artifacts', role: 'claude_artifacts' }` — exact match. Gated by `visibleAgents[builtIn.role] !== false` at `:2675`. **No ghost column** — `claude_artifacts` is absent from `DEFAULT_KANBAN_COLUMNS` (`agentConfig.ts:104-115`), matching the `analyst` precedent. Verified.
+- **Visibility default** (`TaskViewerProvider.ts:3786`): `claude_artifacts: false` in the `defaults` map. Without this, `undefined !== false` at the grid gate would make the terminal visible by default. **Footgun defused.**
+- **Startup command fallback** (`TaskViewerProvider.ts:3750-3754`): `claude_artifacts` → `'claude'` when blank, mirroring `jules_monitor` → `'jules'` at `:3739`. **No missing default.**
+- **Agents tab roster row** (`kanban.html:2749-2750`): Checkbox with `data-role="claude_artifacts"`, label "Claude Artifacts", command input `id="agents-tab-cmd-claude-artifacts"` with `placeholder="e.g. claude"`. Uses the same `agents-tab-visible-toggle` class and `data-role` pattern as all other rows — automatically picked up by the save path (`kanban.html:3635-3640`) and load path (`kanban.html:6529-6534`). **No special-casing needed.**
+- **`sendPromptToAgentTerminal`** (`TaskViewerProvider.ts:2688-2740`): Resolves agent name (with `claude_artifacts` → `'Claude Artifacts'` fallback at `:2693`), finds terminal in `_registeredTerminals` (suffix-aware at `:2698`), falls back to open VS Code terminals (`:2701-2704`), spawns via `createTerminal` if not found (`:2710-2726`), delivers via `sendRobustText(terminal, text, true)` inside `withTerminalSendLock` (`:2736-2739`). Resolve step is outside the send lock, matching `_attemptDirectTerminalPush`'s pattern. **Correct architecture.**
+- **Send buttons** (`planning.html:3504,3506`): `#btn-send-artifact-download` and `#btn-send-artifact-upload`, both labeled "⇨ Send to Claude", beside their respective Copy buttons. **Augments, not replaces.**
+- **Send handlers** (`planning.js:6950-6963,6976-6990`): Build the same prompt via `ARTIFACT_DOWNLOAD_PROMPT` / `ARTIFACT_UPLOAD_PROMPT` (reused from the round-trip plan), post `{ type: 'sendArtifactPromptToTerminal', prompt, kind, workspaceRoot }`. **No prompt duplication.**
+- **Message handler** (`PlanningPanelProvider.ts:2789-2796`): `case 'sendArtifactPromptToTerminal'` calls `this._taskViewerProvider.sendPromptToAgentTerminal('claude_artifacts', msg.prompt || '', msg.workspaceRoot)` and posts `artifactPromptSent`. Uses the existing `_taskViewerProvider` reference. **No construction change.**
+- **Sent confirmation** (`planning.js:4322-4331`): `case 'artifactPromptSent'` flashes the relevant Send button to `Sent ✓` for 2s. **No confirm dialog.**
+- **No `BuiltInAgentRole` type entry needed:** `claude_artifacts` is used as a `string` role throughout (not typed to `BuiltInAgentRole`), matching the `mcp_monitor` and `jules` precedents which are also absent from the `BuiltInAgentRole` union. The role is terminal-only with no prompt customization, so absence from `BUILT_IN_AGENT_LABELS` (both TS and webview) is correct — it should not appear in the prompt-customization UI or kanban board sorting.
+
+**Findings by severity:**
+- **CRITICAL:** None.
+- **MAJOR:** #1 — Missing `/clear`-avoidance code comment in `sendPromptToAgentTerminal` (`TaskViewerProvider.ts:2731`).
+- **MAJOR:** #1b — Original `/clear`-avoidance rationale was based on a false premise (assumed single-session continuity; prompts are actually self-contained). Comment reworded with correct rationale.
+- **NIT:** #2 — Unrelated diagnostic/polling/type-fix changes bundled into the epic commit (out of plan scope).
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:** The entire implementation is architecturally sound. The `analyst`-modeled no-column role, the visibility-default footgun defusal, the startup-command fallback, the find-or-spawn terminal resolution, and the direct `sendRobustText` call (bypassing `_attemptDirectTerminalPush`) are all correct. The Send buttons augment the Copy buttons as specified. The prompts are self-contained (file path, URL, marker in file) — the round-trip correctly survives session breaks, `/clear`, reboots, and multi-day gaps.
+
+**Fix now:** Finding #1 + #1b — the missing `/clear`-avoidance comment was added, then reworded after user review identified that the original rationale ("would wipe Claude's conversation context mid-session") was based on a false premise. The corrected comment states the real rationale: the prompts are self-contained so `/clear` wouldn't break correctness, but the Claude Artifacts terminal is a general-purpose helper where clearing unrelated conversation is undesirable UX.
+
+**Defer:** Finding #2 — the bundled unrelated changes are out of plan scope and harmless to this feature's correctness. Noted for commit hygiene but not fixed here.
+
+### Files Changed (Implementation)
+- `src/extension.ts` — `{ name: 'Claude Artifacts', role: 'claude_artifacts' }` in `allBuiltInAgents`
+- `src/services/TaskViewerProvider.ts` — `sendPromptToAgentTerminal` method, `claude_artifacts: false` visibility default, `claude_artifacts` → `'claude'` startup fallback
+- `src/services/PlanningPanelProvider.ts` — `case 'sendArtifactPromptToTerminal'` message handler
+- `src/webview/kanban.html` — Agents tab roster row (checkbox + command input)
+- `src/webview/planning.html` — 2 "⇨ Send to Claude" buttons beside the Copy buttons
+- `src/webview/planning.js` — 2 Send button listeners, `artifactPromptSent` confirmation handler
+
+### Files Changed (Review Fix)
+- `src/services/TaskViewerProvider.ts:2731-2738` — Added `/clear`-avoidance code comment in `sendPromptToAgentTerminal`, then reworded after user review to correct the rationale (prompts are self-contained; `/clear` avoidance is UX preference, not correctness requirement)
+
+### Validation Results
+- **Compilation:** Skipped per session policy (project is pre-compiled).
+- **Tests:** Skipped per session policy (run separately by user).
+- **Code review:** Complete — 1 MAJOR finding fixed (missing `/clear`-avoidance comment). All other plan requirements verified present and correct.
+
+### Remaining Risks
+- **Fixed-timer readiness:** The spawn path uses fixed `setTimeout` delays (2s shell init + 3s startup command settle) rather than a true readiness protocol. On slow machines or slow shell startups, `claude` may not be ready to receive input when the prompt is sent. The plan acknowledged this ("do not invent a new readiness protocol") and deferred to `sendRobustText`'s pacing. This is a pragmatic trade-off, not a bug — but it means the first send after a cold spawn may occasionally arrive before `claude`'s input prompt is ready.
+- **Terminal closed between resolve and send:** The terminal lookup happens outside the send lock. If the terminal is closed between the lookup and the `sendRobustText` call, the send would fail. This is an inherent race in the find-then-send pattern shared with existing code (`_executeLocal`, `_attemptDirectTerminalPush`) — not a regression.
+- **No `BuiltInAgentRole` type entry:** `claude_artifacts` is absent from the `BuiltInAgentRole` union and `BUILT_IN_AGENT_LABELS`. This is consistent with `mcp_monitor`/`jules` (also absent from the type) and correct for a terminal-only role with no prompt customization. If a future feature needs `claude_artifacts` in the prompt-customization UI or kanban sorting, the type/labels entries would need to be added at that time.

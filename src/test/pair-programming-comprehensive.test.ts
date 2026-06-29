@@ -27,82 +27,16 @@ const TEST_PLANS: BatchPromptPlan[] = [TEST_PLAN];
 // can unit-test the clipboard / notification branching without instantiating
 // the full provider.  Same approach as the existing `simulateBypass()` in
 // pair-programming-routing-bypass.test.ts.
+// ---------------------------------------------------------------------------
+// Helper Functions
+// ---------------------------------------------------------------------------
+
 //
 // ⚠️  KEEP IN SYNC with production code.  If KanbanProvider's pair-flow logic
 // changes (conditions, clipboard calls, notification text), update these
 // helpers to match.  A future plan should add true integration tests via
 // @vscode/test-electron to test the real entry points.
 // ---------------------------------------------------------------------------
-
-/**
- * Mirrors the `pairProgramCard` handler (KanbanProvider.ts ≈ 2490-2552).
- * Returns the generated prompts and the backup path (if applicable).
- */
-async function simulatePairButtonFlow(params: {
-    coderUsesIde: boolean;
-    plans: BatchPromptPlan[];
-    sessionId: string;
-    workspaceRoot: string;
-    aggressivePairProgramming?: boolean;
-    accurateCodingEnabled?: boolean;
-}): Promise<{ leadPrompt: string; coderPrompt: string }> {
-    const {
-        coderUsesIde, plans, sessionId, workspaceRoot,
-        aggressivePairProgramming = false,
-        accurateCodingEnabled = false
-    } = params;
-
-    const leadPrompt = buildKanbanBatchPrompt('lead', plans, {
-        pairProgrammingEnabled: true,
-        aggressivePairProgramming
-    });
-    const coderPrompt = buildKanbanBatchPrompt('coder', plans, {
-        pairProgrammingEnabled: true,
-        accurateCodingEnabled
-    });
-
-    if (coderUsesIde) {
-        // Stage 1 — Lead prompt to clipboard
-        await vscode.env.clipboard.writeText(leadPrompt);
-
-        // Advance card
-        await vscode.commands.executeCommand(
-            'switchboard.kanbanForwardMove', [sessionId], 'LEAD CODED', workspaceRoot
-        );
-
-        // Stage 2 — notification
-        const choice = await vscode.window.showInformationMessage(
-            'Lead prompt copied. Paste to IDE chat, then click below for Coder prompt.',
-            'Copy Coder Prompt'
-        );
-
-        if (choice === 'Copy Coder Prompt') {
-            await vscode.env.clipboard.writeText(coderPrompt);
-            vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
-        } else {
-            console.log(
-                `[KanbanProvider] Pair programming: user dismissed Coder prompt notification.`
-            );
-        }
-
-        return { leadPrompt, coderPrompt };
-    } else {
-        // Hybrid — Lead to clipboard, Coder to terminal
-        await vscode.env.clipboard.writeText(leadPrompt);
-        vscode.window.showInformationMessage(
-            'Complex prompt copied to clipboard. Dispatching Routine tasks to Coder terminal...'
-        );
-        const worktreePath = plans[0]?.worktreePath;
-        await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
-
-        // Advance card
-        await vscode.commands.executeCommand(
-            'switchboard.kanbanForwardMove', [sessionId], 'LEAD CODED', workspaceRoot
-        );
-
-        return { leadPrompt, coderPrompt };
-    }
-}
 
 /**
  * Mirrors the drag-drop-to-LEAD-CODED flow:
@@ -248,138 +182,6 @@ suite('Pair programming comprehensive', () => {
     });
 
     // -----------------------------------------------------------------------
-    // Suite 2 — Hybrid Mode (Pair Button + CLI Coder)
-    // -----------------------------------------------------------------------
-    suite('Suite 2: Hybrid Mode (Pair Button + CLI)', () => {
-        test('2.1: Lead prompt to clipboard, Coder to terminal, info notification shown', async () => {
-            const result = await simulatePairButtonFlow({
-                coderUsesIde: false,
-                plans: TEST_PLANS,
-                sessionId: TEST_SESSION_ID,
-                workspaceRoot: tmpDir
-            });
-
-            // clipboard.writeText called exactly once with Lead prompt
-            assert.strictEqual(clipboardWriteStub.callCount, 1, 'clipboard.writeText should be called once');
-            assert.strictEqual(
-                clipboardWriteStub.firstCall.args[0], result.leadPrompt,
-                'clipboard should contain the Lead prompt'
-            );
-
-            // Coder dispatched to terminal
-            assert.ok(
-                executeCommandStub.calledWith('switchboard.dispatchToCoderTerminal', result.coderPrompt),
-                'Coder prompt should dispatch to terminal'
-            );
-
-            // Info notification
-            assert.ok(
-                showInfoStub.calledWithMatch(sinon.match((msg: string) =>
-                    typeof msg === 'string' && msg.toLowerCase().includes('prompt copied')
-                )),
-                'showInformationMessage should be called with message containing "prompt copied"'
-            );
-
-            // Card advanced
-            assert.ok(
-                executeCommandStub.calledWithMatch('switchboard.kanbanForwardMove'),
-                'card should advance to LEAD CODED'
-            );
-        });
-    });
-
-    // -----------------------------------------------------------------------
-    // Suite 3 — Full Clipboard Mode — Stage 1
-    // -----------------------------------------------------------------------
-    suite('Suite 3: Full Clipboard Mode — Stage 1', () => {
-        test('3.1: Lead prompt to clipboard, card advanced, Copy Coder button offered', async () => {
-            // User dismisses notification — tests Stage 1 in isolation
-            showInfoStub.resolves(undefined);
-
-            const result = await simulatePairButtonFlow({
-                coderUsesIde: true,
-                plans: TEST_PLANS,
-                sessionId: TEST_SESSION_ID,
-                workspaceRoot: tmpDir
-            });
-
-            // Stage 1 clipboard write with Lead prompt
-            assert.ok(
-                clipboardWriteStub.calledWith(result.leadPrompt),
-                'clipboard should contain the Lead prompt after Stage 1'
-            );
-
-            // showInformationMessage offered "Copy Coder Prompt" action button
-            assert.ok(
-                showInfoStub.calledWith(
-                    sinon.match.string,
-                    'Copy Coder Prompt'
-                ),
-                'notification should offer "Copy Coder Prompt" action button'
-            );
-
-            // Card advanced to LEAD CODED
-            assert.ok(
-                executeCommandStub.calledWith(
-                    'switchboard.kanbanForwardMove',
-                    [TEST_SESSION_ID], 'LEAD CODED', tmpDir
-                ),
-                'card should advance to LEAD CODED'
-            );
-        });
-    });
-
-    // -----------------------------------------------------------------------
-    // Suite 4 — Full Clipboard Mode — Stage 2
-    // -----------------------------------------------------------------------
-    suite('Suite 4: Full Clipboard Mode — Stage 2', () => {
-        test('4.1: user clicks Copy Coder Prompt → second clipboard write, success notification', async () => {
-            showInfoStub.resolves('Copy Coder Prompt');
-
-            const result = await simulatePairButtonFlow({
-                coderUsesIde: true,
-                plans: TEST_PLANS,
-                sessionId: TEST_SESSION_ID,
-                workspaceRoot: tmpDir
-            });
-
-            // clipboard.writeText called twice: Lead (Stage 1) + Coder (Stage 2)
-            assert.strictEqual(clipboardWriteStub.callCount, 2, 'clipboard.writeText should be called twice');
-            assert.strictEqual(
-                clipboardWriteStub.firstCall.args[0], result.leadPrompt,
-                'first clipboard write should be Lead prompt'
-            );
-            assert.strictEqual(
-                clipboardWriteStub.secondCall.args[0], result.coderPrompt,
-                'second clipboard write should be Coder prompt'
-            );
-
-            // Success notification
-            assert.ok(
-                showInfoStub.calledWith('Coder prompt copied to clipboard.'),
-                'success notification should be shown after Stage 2 copy'
-            );
-        });
-
-        test('4.2: user dismisses notification', async () => {
-            showInfoStub.resolves(undefined);
-
-            const result = await simulatePairButtonFlow({
-                coderUsesIde: true,
-                plans: TEST_PLANS,
-                sessionId: TEST_SESSION_ID,
-                workspaceRoot: tmpDir
-            });
-
-            // Only Stage 1 clipboard write
-            assert.strictEqual(
-                clipboardWriteStub.callCount, 1,
-                'clipboard.writeText should only be called once (Stage 1 Lead prompt)'
-            );
-        });
-    });
-
-    // -----------------------------------------------------------------------
     // Suite 5 — Clipboard Content Validation
     // -----------------------------------------------------------------------
     suite('Suite 5: Clipboard Content Validation', () => {
@@ -483,75 +285,6 @@ suite('Pair programming comprehensive', () => {
         // Test 6.1 (debouncing) — SKIPPED: no debounce logic exists on the
         // pair button handler in KanbanProvider. The _scheduleBoardRefresh
         // 100ms debounce applies to board refresh, not pair clicks.
-
-        test('6.2: mode is captured at click time (snapshot semantics)', async () => {
-            // Simulate mutable state that the real KanbanProvider holds.
-            // The handler snapshots coderUsesIde at the start — changing the
-            // backing state between Stage 1 and Stage 2 should have no effect.
-            const mutableState = { coderUsesIde: true };
-
-            // Capture snapshot (like the real handler does)
-            const snapshotCoderUsesIde = mutableState.coderUsesIde;
-
-            // Between Stage 1 and Stage 2, mutate state (simulating an
-            // external settings change while the notification is pending).
-            showInfoStub.callsFake(async () => {
-                mutableState.coderUsesIde = false; // external change!
-                return 'Copy Coder Prompt';
-            });
-
-            const leadPrompt = buildKanbanBatchPrompt('lead', TEST_PLANS, { pairProgrammingEnabled: true });
-            const coderPrompt = buildKanbanBatchPrompt('coder', TEST_PLANS, { pairProgrammingEnabled: true });
-
-            // Stage 1
-            await vscode.env.clipboard.writeText(leadPrompt);
-
-            // Stage 2 uses snapshot, not current state
-            if (snapshotCoderUsesIde) {
-                const choice = await vscode.window.showInformationMessage(
-                    'Lead prompt copied.',
-                    'Copy Coder Prompt'
-                );
-                if (choice === 'Copy Coder Prompt') {
-                    await vscode.env.clipboard.writeText(coderPrompt);
-                }
-            }
-
-            // The mutated state says coderUsesIde=false, but we used the
-            // snapshot (true), so clipboard was written twice.
-            assert.strictEqual(mutableState.coderUsesIde, false, 'mutable state should have changed');
-            assert.strictEqual(
-                clipboardWriteStub.callCount, 2,
-                'snapshot semantics: Stage 2 should use original mode, not the mutated one'
-            );
-        });
-
-        test('6.3: Stage 2 writeText succeeds regardless of intermediate clipboard content', async () => {
-            // Verify the implementation does not readText before Stage 2 write.
-            // Stub readText to return unrelated content — this shouldn't matter.
-            clipboardReadStub.resolves('UNRELATED CONTENT FROM ANOTHER APP');
-            showInfoStub.resolves('Copy Coder Prompt');
-
-            const result = await simulatePairButtonFlow({
-                coderUsesIde: true,
-                plans: TEST_PLANS,
-                sessionId: TEST_SESSION_ID,
-                workspaceRoot: tmpDir
-            });
-
-            // Stage 2 wrote the correct Coder prompt
-            assert.strictEqual(
-                clipboardWriteStub.secondCall.args[0], result.coderPrompt,
-                'Stage 2 should write correct Coder prompt regardless of intermediate clipboard state'
-            );
-
-            // readText was NOT called by the flow (only by our stub setup)
-            // The flow should never call readText — it always overwrites.
-            assert.strictEqual(
-                clipboardReadStub.callCount, 0,
-                'pair programming flow should not call clipboard.readText'
-            );
-        });
 
         test('6.4: Unknown complexity cards skip Coder pair dispatch in drag-drop', async () => {
             await simulateDragDropFlow({

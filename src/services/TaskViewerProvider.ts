@@ -2728,6 +2728,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             terminal.show();
         }
 
+        // Call sendRobustText directly rather than routing through _attemptDirectTerminalPush.
+        // That method runs a /clear before every prompt (config terminal.clearBeforePrompt, default
+        // true). The artifact prompts are self-contained (they carry the file path, URL, and marker
+        // instructions), so /clear would NOT break round-trip correctness — the prompt works from a
+        // blank slate. However, the Claude Artifacts terminal is a general-purpose helper terminal
+        // where the user may have unrelated ongoing conversation; clearing it before every artifact
+        // send would destroy that context unnecessarily. Card-driven dispatch uses /clear because
+        // each card is an independent task; artifact sends are ad-hoc prompts into a shared terminal.
         const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || agentName)) || agentName;
         await withTerminalSendLock(sendLockKey, async () => {
             await sendRobustText(terminal!, text, true);
@@ -13971,14 +13979,32 @@ What would you like to find?`;
             }
 
             const workingDir = resolveWorkingDir(resolvedWorkspaceRoot, planRecord?.repoScope || '');
-            const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute, workingDir };
+            const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute, workingDir, isEpic: !!planRecord?.isEpic };
             const copyInstruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             const { baseInstruction: resolvedInstruction } = this._getPromptInstructionOptions(role, copyInstruction);
 
+            // Epic subtask bundling (parity with _cardsToPromptPlans / _resolveKanbanDispatchPlans).
+            // Without expanding subtasks here, copying an epic's prompt emits a lone plan and
+            // generateUnifiedPrompt never enters epic mode (no EPIC MODE directive, no subtask list).
+            const plans: BatchPromptPlan[] = [plan];
+            if (planRecord?.isEpic && planRecord.planId && this._kanbanProvider) {
+                try {
+                    const subtaskPlans = await this._kanbanProvider.expandEpicSubtaskPlans(
+                        resolvedWorkspaceRoot,
+                        planRecord.planId,
+                        topic,
+                        planRecord.kanbanColumn || '',
+                        undefined
+                    );
+                    for (const sp of subtaskPlans) { plans.push(sp); }
+                } catch (err) {
+                    console.warn(`[TaskViewerProvider] epic subtask expansion failed for ${sessionId}:`, err);
+                }
+            }
 
             // Use standard prompt generation
 
-            const textToCopy = await this._kanbanProvider.generateUnifiedPrompt(role, [plan], resolvedWorkspaceRoot, {
+            const textToCopy = await this._kanbanProvider.generateUnifiedPrompt(role, plans, resolvedWorkspaceRoot, {
                 instruction: resolvedInstruction,
                 accurateCodingEnabled: false
             });
@@ -15801,6 +15827,8 @@ What would you like to find?`;
         let workingDir = '';
         let epicId: string | undefined;
         let worktreePath: string | undefined;
+        let isEpicPlan = false;
+        let epicPlanId: string | undefined;
 
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
         let previousColumn: string | undefined;
@@ -15812,6 +15840,8 @@ What would you like to find?`;
                 workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
                 previousColumn = plan.kanbanColumn;
                 epicId = plan.epicId ?? undefined;
+                isEpicPlan = !!plan.isEpic;
+                epicPlanId = plan.planId;
                 worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
                     epicId: plan.epicId,
                     project: plan.project
@@ -15928,16 +15958,38 @@ What would you like to find?`;
         const effectiveWorkingDir = options?.workingDirectory ?? workingDir;
 
         // Canonical plan object for shared builder
-        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir: effectiveWorkingDir, epicId, worktreePath };
+        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir: effectiveWorkingDir, epicId, worktreePath, isEpic: isEpicPlan };
+
+        // Epic subtask bundling (parity with the copy/board path `_cardsToPromptPlans` and
+        // the configured-dispatch path `_resolveKanbanDispatchPlans`). When an epic card is
+        // dragged to a column it dispatches through here as a single card; without expanding
+        // its subtasks, generateUnifiedPrompt sees no `isSubtask` entries, never enters epic
+        // mode, and the epic is dispatched as a lone plan — losing its EPIC MODE directive and
+        // subtask list. Expand via the shared helper so the full bundle reaches the builder.
+        const dispatchPlans: BatchPromptPlan[] = [dispatchPlan];
+        if (isEpicPlan && epicPlanId && this._kanbanProvider) {
+            try {
+                const subtaskPlans = await this._kanbanProvider.expandEpicSubtaskPlans(
+                    resolvedWorkspaceRoot,
+                    epicPlanId,
+                    sessionTopic,
+                    previousColumn || '',
+                    worktreePath
+                );
+                for (const sp of subtaskPlans) { dispatchPlans.push(sp); }
+            } catch (err) {
+                console.warn(`[TaskViewerProvider] epic subtask expansion failed for ${sessionId}:`, err);
+            }
+        }
 
         if (role === 'planner') {
             const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') ? baseInstruction : undefined;
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('planner', [dispatchPlan], effectiveWorkspaceRoot, {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('planner', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: plannerInstruction,
                 gitProhibitionEnabled
             });
         } else if (role === 'reviewer') {
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('reviewer', [dispatchPlan], effectiveWorkspaceRoot, {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('reviewer', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
                 gitProhibitionEnabled
             });
@@ -15951,30 +16003,30 @@ What would you like to find?`;
                 clearDispatchLock();
                 return false;
             }
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('tester', [dispatchPlan], effectiveWorkspaceRoot, {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('tester', dispatchPlans, effectiveWorkspaceRoot, {
                 gitProhibitionEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'tester' };
         } else if (role === 'lead') {
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('lead', [dispatchPlan], effectiveWorkspaceRoot, {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('lead', dispatchPlans, effectiveWorkspaceRoot, {
                 includeInlineChallenge,
                 gitProhibitionEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
         } else if (role === 'coder') {
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('coder', [dispatchPlan], effectiveWorkspaceRoot, {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('coder', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
                 includeInlineChallenge,
                 gitProhibitionEnabled
             });
         } else if (role === 'intern') {
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('intern', [dispatchPlan], effectiveWorkspaceRoot, {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('intern', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
                 includeInlineChallenge,
                 gitProhibitionEnabled
             });
         } else if (customAgent || role.startsWith('custom_agent_')) {
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt(role, [dispatchPlan], effectiveWorkspaceRoot);
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt(role, dispatchPlans, effectiveWorkspaceRoot);
         } else {
             clearDispatchLock();
             vscode.window.showErrorMessage(`Unknown role: ${role}`);

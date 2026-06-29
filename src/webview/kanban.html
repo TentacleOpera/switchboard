@@ -5237,14 +5237,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
             });
 
-            document.querySelectorAll('.pair-program-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const sessionId = btn.dataset.session || '';
-                    const planId = btn.dataset.planId || '';
-                    postKanbanMessage({ type: 'pairProgramCard', sessionId, planId });
-                });
-            });
-
             document.querySelectorAll('.send-to-backlog-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     postKanbanMessage({ type: 'sendToBacklog', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
@@ -5328,11 +5320,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 primaryActionBtn = `<button class="card-btn copy" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-column="${escapeAttr(card.column)}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-copy-label="${escapeAttr(copyLabel)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
             }
 
-            const numericScore = parseInt(complexityValue, 10);
-            const isHighComplexity = complexityValue === 'High' || (!isNaN(numericScore) && numericScore >= 7);
-            const pairProgramBtn = (card.column === 'PLAN REVIEWED' && isHighComplexity)
-                ? `<button class="card-btn pair-program-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Pair programming (Lead + Coder)">Pair</button>`
-                : '';
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
                 ? `<button class="card-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">→ Backlog</button>`
                 : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
@@ -5358,7 +5345,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                            ${pairProgramBtn}
                             ${primaryActionBtn}
                             ${backlogActionBtn}
                         </div>
