@@ -4878,12 +4878,30 @@ Please format the updated output document strictly as follows:
                         ? `last_delta_pull_clickup_${listId || ''}`
                         : `last_delta_pull_linear_${projectId || ''}`;
 
-                    // The user-facing select/Refresh always does a FULL import + prune:
-                    // it reconciles the on-disk files to the live list (top-level + open,
-                    // plus closed when the status filter is on a closed status). Delta
-                    // pulls are reserved for the background auto-sync timer — without a
-                    // full pass the cleanup prune can't run and stale files would linger.
+                    // Delta-aware import: read the per-list/per-project cursor. First
+                    // open (no cursor) falls back to a full import + prune. Subsequent
+                    // opens do a delta pull (only changed tasks written, prune skipped).
+                    // Stale-file cleanup for remotely-deleted tickets is handled by the
+                    // existing delta deletion sweep inside importAllTasks (lines 19482
+                    // 19541), NOT by a periodic full prune.
+                    //
+                    // Exception: when includeClosed is true (user switched the status
+                    // filter to a closed status, webview planning.js line 8916), force a
+                    // FULL import. A delta pull with includeClosed=true uses dateUpdatedGt
+                    // and would only fetch closed tickets UPDATED since the cursor,
+                    // missing tickets closed before the cursor was set. This path is
+                    // triggered only by the explicit status-filter change, not the
+                    // every-open path, so it does not reintroduce the target churn.
                     const includeClosed = !!msg.includeClosed;
+                    const forceFull = includeClosed;  // closed-status-filter needs the full set
+                    let lastPullIso: string | null = null;
+                    if (!forceFull && kanbanDb) {
+                        try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
+                    }
+                    const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
+                    const deltaSinceIso = lastPullIso || undefined;
+                    const isDeltaRefresh = lastPullIso !== null;  // false when forceFull or first-open
+
                     const result: any = await vscode.commands.executeCommand(
                         'switchboard.importAllTasks',
                         {
@@ -4892,9 +4910,16 @@ Please format the updated output document strictly as follows:
                             listId,
                             projectId,
                             importMode: 'document',
-                            includeClosed
+                            includeClosed,
+                            ...(deltaSince !== undefined ? { deltaSince } : {}),
+                            ...(deltaSinceIso ? { deltaSinceIso } : {})
                         }
                     );
+
+                    // No periodic full prune — the delta deletion sweep inside
+                    // importAllTasks (lines 19482-19541) already prunes remotely-deleted
+                    // tickets on every delta pull. Adding a periodic full import would
+                    // reintroduce the exact full-reload churn this plan eliminates.
 
                     // Refresh the cursor baseline so the background delta timer polls
                     // from "now" rather than re-pulling the whole window.
@@ -4928,7 +4953,7 @@ Please format the updated output document strictly as follows:
                         provider,
                         listId,
                         projectId,
-                        isDelta: false
+                        isDelta: isDeltaRefresh
                     });
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);

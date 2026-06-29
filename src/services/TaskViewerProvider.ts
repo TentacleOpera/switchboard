@@ -12790,7 +12790,7 @@ What would you like to find?`;
                         const root = this._rescanTrailingRoot;
                         this._rescanTrailingRoot = undefined;
                         this._rescanTrailingPromise = null;
-                        return this._rescanAntigravityPlanSources(root);
+                        return this._rescanAntigravityPlanSources(root ?? workspaceRoot);
                     })
                     // Defensive fallback: if the in-flight promise is somehow null, wait a
                     // microtask for the finally to clear _rescanInFlight, then re-enter the
@@ -19330,6 +19330,15 @@ What would you like to find?`;
             // API error, or a query mismatch), in which case we must NOT prune or we'd
             // wipe every file in the directory. Only a non-empty fetch may reconcile.
             const rawItemCount = items.length;
+            // Raw remote ID set BEFORE filtering — used by the deletion sweep to
+            // detect remotely deleted/archived/trashed tickets. This includes ALL
+            // fetched IDs (subtasks, closed tickets, etc.) because the sweep should
+            // only delete files for tickets that are truly ABSENT from the remote
+            // response, not just filtered out for display purposes. Using the filtered
+            // set would sweep closed tickets (when includeClosed=false) even though
+            // they still exist remotely — contradicting the plan's guarantee that
+            // "closed tasks ARE included in the query response and will NOT be swept."
+            const rawRemoteIds = new Set<string>(items.map((t: any) => String(t?.id || '')).filter(Boolean));
             items = items.filter(it => !_isSubtask(it) && (includeClosed || !_isClosed(it)));
 
             // Keep-set for the cleanup prune below (top-level tickets we're importing).
@@ -19426,15 +19435,21 @@ What would you like to find?`;
             }
 
             // ── Deletion sweep (full imports) ──────────────────────────────
-            // For full imports, the items array IS the complete remote task set
-            // (top-level + open, plus closed when includeClosed). Any local file
-            // whose sourceId is not in this set has been deleted/archived/trashed
+            // For full imports, the rawRemoteIds set IS the complete remote task
+            // set (all fetched IDs before subtask/closed filtering). Any local file
+            // whose remoteDocId is not in this set has been deleted/archived/trashed
             // remotely — remove the file + cache entry. Unlike the prune above,
             // this sweep does NOT preserve locally-modified files: the user
             // deleted the ticket remotely, so the local ghost (including any
             // unpushed edits to a deleted ticket) is clutter, not a feature.
-            if (!isDelta) {
-                const remoteIds = new Set(items.map((t: any) => String(t.id)));
+            //
+            // Uses rawRemoteIds (pre-filter) not the filtered items set, so closed
+            // tickets (when includeClosed=false) are NOT swept — they still exist
+            // remotely, just completed. Uses remoteDocId (the task ID) not sourceId
+            // (which stores the provider name 'linear'/'clickup', not the task ID).
+            // Gated on rawItemCount > 0 to match the prune's guard — a transient
+            // empty fetch must not wipe all local files.
+            if (!isDelta && rawItemCount > 0) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbTicketsSweep = await cacheService.getImportedTickets();
@@ -19445,9 +19460,11 @@ What would you like to find?`;
                         ? dbTicketsSweep.filter(t => t.filePath && path.dirname(t.filePath) === targetDir)
                         : dbTicketsSweep;
                     for (const dbT of scopedDbTickets) {
-                        // Use sourceId (clean remote ID) instead of parsing slugPrefix.
-                        const remoteId = String(dbT.sourceId || '');
-                        if (remoteId && !remoteIds.has(remoteId)) {
+                        // Use remoteDocId (the clean remote task ID) for comparison.
+                        // sourceId stores the provider name ('linear'/'clickup'), not
+                        // the task ID — using it would match nothing and delete everything.
+                        const remoteId = String(dbT.remoteDocId || '');
+                        if (remoteId && !rawRemoteIds.has(remoteId)) {
                             try { await fs.promises.unlink(dbT.filePath); } catch (e: any) {
                                 if (e.code !== 'ENOENT') console.warn('[TaskViewerProvider] Deletion sweep: could not unlink', dbT.filePath, e);
                             }
@@ -19503,7 +19520,10 @@ What would you like to find?`;
                             ? dbTicketsSweep.filter(t => t.filePath && path.dirname(t.filePath) === targetDir)
                             : dbTicketsSweep;
                         for (const dbT of scopedDbTickets) {
-                            const remoteId = String(dbT.sourceId || '');
+                            // Use remoteDocId (the clean remote task ID) for comparison.
+                            // sourceId stores the provider name ('linear'/'clickup'), not
+                            // the task ID — using it would match nothing and delete everything.
+                            const remoteId = String(dbT.remoteDocId || '');
                             if (remoteId && !fullRemoteIds.has(remoteId)) {
                                 try { await fs.promises.unlink(dbT.filePath); } catch (e: any) {
                                     if (e.code !== 'ENOENT') console.warn('[TaskViewerProvider] Deletion sweep (delta): could not unlink', dbT.filePath, e);

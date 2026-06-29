@@ -352,3 +352,55 @@ Key risks: (1) Linear's 100-issue query cap causing false deletions of local fil
 
 ## Recommendation
 Complexity 6/10 → **Send to Coder**. The core deletion logic is routine, but the Linear 100-issue cap fix, cache invalidation, and `fetchSucceeded` flag add moderate complexity with data-loss risk if implemented incorrectly.
+
+---
+
+## Code Review Results
+
+### Stage 1 — Grumpy Principal Engineer Review
+
+> *(theatrical grumpy voice)*
+
+**CRITICAL — `sourceId` is the PROVIDER NAME, not the task ID. You just built a nuke and wired it to the Refresh button.** The plan confidently claims: "The `ImportedDocEntry` interface includes a `sourceId` field that contains the clean remote ID directly — no string parsing needed." WRONG. `sourceId` in `ImportedDocEntry` (`KanbanDatabase.ts:66`) maps to the `source_id` DB column, which stores the PROVIDER NAME — `'linear'` or `'clickup'` — NOT the task ID. The task ID is in `remoteDocId` (maps to `remote_doc_id` column). The registration chain proves it: `_writeTaskDocument` calls `registerImportedTicket(provider, id, ...)` (`TaskViewerProvider.ts:19209`) → `upsertImportedTicket(wsId, slugPrefix, sourceId=provider, remoteDocId=id, ...)` (`KanbanDatabase.ts:2114-2118`). So `dbT.sourceId` is `'linear'`. The sweep compares `'linear'` against a set of task IDs like `{'abc123', 'def456'}`. `'linear'` is never in that set. **Every single local file gets deleted on every full import.** This is not a subtle edge case — this is "the first user to click Refresh loses all their ticket files." The plan's own Background section even documents the correct field (`remoteDocId`) in the `ImportedDocEntry` interface definition but then tells the implementation to use the wrong one. Spectacular.
+
+**MAJOR — Full-import sweep uses filtered items, not raw fetch. Closed tickets get nuked.** The plan says "closed tasks ARE included in the query response and will NOT be swept." But the implementation builds `remoteIds` from `items` AFTER the filter at `TaskViewerProvider.ts:19333` (`items.filter(it => !_isSubtask(it) && (includeClosed || !_isClosed(it)))`). When `includeClosed=false` (the default), closed tickets are filtered OUT of `items`, so their IDs are NOT in `remoteIds`, so the sweep deletes their files. The plan's own verification step 11 says "confirm the closed task's local file survives" — it wouldn't. The sweep should use the raw (pre-filter) ID set, not the filtered one.
+
+**MAJOR — Full-import sweep missing `rawItemCount > 0` guard.** The cleanup prune at `:19389` has `rawItemCount > 0` to avoid wiping all files on an empty fetch (transient API error, rate limit, query mismatch). The deletion sweep at `:19436` has NO such guard. If `getListTasks` or `queryIssues` returns an empty array without throwing (which happens on transient issues), the sweep deletes every local file in the directory. The delta path handles this correctly with `fetchSucceeded`, but the full-import path is unguarded.
+
+**NIT — `fetchAllIssueIds` page-cap warning fires after the last `delay(200)`.** The `pageCount >= maxPages` warning at `LinearSyncService.ts:881` fires after the loop exits, but the `delay(200)` at `:878` runs on every iteration including the last one before the cap check. This adds an unnecessary 200ms delay after the last page. Trivial, but it's a wasted API budget tick.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:**
+- `fetchAllIssueIds` method (`LinearSyncService.ts:849-884`) — correctly implements uncapped pagination with a 50-page safety cap. The GraphQL query, cursor handling, and `hasNextPage` break logic are all correct.
+- Delta path (Step 2B) — correctly fetches the full ID set separately, invalidates ClickUp cache before the fetch, uses `fetchSucceeded` flag to gate the sweep, and handles empty-list vs fetch-failed disambiguation.
+- `deletedCount` return value and auto-sync refresh fix (Step 4) — correctly includes `deletedCount` in the return object and posts `importAllTicketsComplete` when `deletedCount > 0`.
+- `path.dirname` scoping — correctly uses exact directory match instead of loose substring matching.
+- ENOENT guards on `unlink` — correctly swallows "file already gone" errors.
+
+**Fix now (all three applied):**
+1. **CRITICAL:** Changed `dbT.sourceId` → `dbT.remoteDocId` in BOTH sweep locations (full-import at `TaskViewerProvider.ts:19466` and delta at `:19526`). `remoteDocId` is the actual task ID; `sourceId` is the provider name.
+2. **MAJOR:** Captured `rawRemoteIds` from the unfiltered `items` array BEFORE the subtask/closed filter at `:19341`, and used `rawRemoteIds` instead of `new Set(items.map(...))` in the full-import sweep. This ensures closed tickets (when `includeClosed=false`) are NOT swept — they still exist remotely.
+3. **MAJOR:** Added `rawItemCount > 0` guard to the full-import sweep condition (`!isDelta && rawItemCount > 0`), matching the cleanup prune's guard. A transient empty fetch will not wipe all local files. The delta path already handles this via `fetchSucceeded`.
+
+**Defer:** The `fetchAllIssueIds` 200ms delay-after-last-page NIT is not worth fixing — it's one wasted delay at the end of a sweep that runs at most every 45s.
+
+### Fixes Applied
+1. **`TaskViewerProvider.ts:19341`** — Added `const rawRemoteIds = new Set<string>(items.map(...))` before the filter at `:19342`, capturing all fetched IDs (including subtasks and closed tickets).
+2. **`TaskViewerProvider.ts:19452`** — Changed full-import sweep condition from `if (!isDelta)` to `if (!isDelta && rawItemCount > 0)`.
+3. **`TaskViewerProvider.ts:19467`** — Changed full-import sweep from `new Set(items.map(...))` to `rawRemoteIds` (pre-filter set).
+4. **`TaskViewerProvider.ts:19466`** — Changed `dbT.sourceId` to `dbT.remoteDocId` in full-import sweep.
+5. **`TaskViewerProvider.ts:19526`** — Changed `dbT.sourceId` to `dbT.remoteDocId` in delta sweep.
+
+### Files Changed
+- `src/services/TaskViewerProvider.ts` — 3 fixes (sourceId→remoteDocId, rawRemoteIds, rawItemCount guard)
+
+### Validation Results
+- **Code inspection:** Verified the `ImportedDocEntry` interface (`KanbanDatabase.ts:64-66`), `listImportedTickets` mapping (`:2172-2174`), `upsertImportedTicket` parameter mapping (`:2114-2118`), and `registerImportedTicket` call chain (`PlanningPanelCacheService.ts:458-482`, `TaskViewerProvider.ts:19209`) to confirm `sourceId` = provider name and `remoteDocId` = task ID.
+- **No compilation step** (per session directives).
+- **No automated tests** (per session directives).
+
+### Remaining Risks
+- **Medium — Linear auto-archiving (Option A):** The sweep uses default queries (excluding archived issues). Linear auto-archives closed issues after 3/6/12 months. The sweep will delete local files for these auto-archived issues. This is the plan's stated behavior (Option A) but may surprise users who want to keep old completed ticket notes. The User Review decision is still pending.
+- **Low — `fetchAllIssueIds` page cap:** 50 pages × 50/page = 2500 issues max. Projects exceeding this will have incomplete ID sets, potentially causing false deletions. The warning is logged. Real projects rarely exceed 2500 issues in a single project.
+- **Low — ClickUp TIML:** A task removed from list A but existing in list B will be swept from list A's directory. This is arguably correct (the task was unlinked from that list) but the task still exists remotely. The file in list B's directory is untouched.

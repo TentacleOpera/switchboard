@@ -128,3 +128,38 @@ The handler uses `projectId` to build the cursor key (`last_delta_pull_linear_${
 4. Select project A again → confirm **delta pull** (only changed tasks, not full re-import — verify the cursor key `last_delta_pull_linear_<projectA_name>` is set and reused).
 5. **Cursor consistency check:** After selecting project A via the picker, click the Refresh button → confirm it does a **delta pull** (not a full re-import). This verifies the picker change and Refresh button use the same cursor key.
 6. **ClickUp parity check:** repeat the same flow with ClickUp (select list A, then list B) → confirm both providers now behave identically.
+
+---
+
+## Code Review Results
+
+### Stage 1 — Grumpy Principal Engineer Review
+
+> *(theatrical grumpy voice)*
+
+**NIT — Verification steps 4-5 describe delta pulls that don't happen.** The plan says "Select project A again → confirm **delta pull**" and "click the Refresh button → confirm it does a **delta pull**." But the actual `refreshTicketsDelta` handler (`PlanningPanelProvider.ts:4881-4897`) ALWAYS does a full import — it calls `switchboard.importAllTasks` with NO `deltaSince`/`deltaSinceIso` parameters. The comment at `:4881-4885` explicitly says "The user-facing select/Refresh always does a FULL import + prune... Delta pulls are reserved for the background auto-sync timer." So the verification steps are testing for behavior that doesn't exist on this path. The wiring fix itself is correct — it sends the right message — but the plan's description of what happens next is stale.
+
+**NIT — Line references in comments are off.** The code comment at `planning.js:7645` says "Refresh button :7661" but the Refresh button's `refreshTicketsDelta` call is at `:7681`. Minor, but if someone's grepping for line numbers from comments they'll be confused.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep:** The core wiring fix is correct and complete. The picker `change` handler sends `refreshTicketsDelta` with `provider: 'linear'`, `projectId: linearProjectPickerValue` (the project name), and `workspaceRoot: ticketsWorkspaceRoot` — matching the Refresh button (`:7681`) and `linearProjectLoaded` handler (`:4961`) conventions exactly. Cursor key consistency is maintained. The `if (linearProjectPickerValue)` guard correctly prevents sending a message for the "All projects" option. No code fix needed.
+
+**Fix now:** Nothing — the code is correct.
+
+**Defer (documentation):** The verification steps 4-5 should be updated to reflect that manual Refresh/picker-change does a full import (not delta pull). Delta pulls only happen via the auto-sync timer. This is a documentation discrepancy, not a code bug — the actual behavior (full import on manual action) is arguably better for correctness because it runs the prune + deletion sweep.
+
+### Fixes Applied
+- None — the code implementation matches the plan's intent.
+
+### Files Changed
+- None (code already correct as implemented).
+
+### Validation Results
+- **Code inspection:** The picker change handler (`planning.js:7638-7656`) sends the correct message with the correct fields. The backend handler (`PlanningPanelProvider.ts:4865-4932`) processes it correctly. The `linearProjectLoaded` handler (`planning.js:4936-4968`) and Refresh button (`planning.js:7675-7700`) use the same convention.
+- **No compilation step** (per session directives).
+- **No automated tests** (per session directives).
+
+### Remaining Risks
+- **Low:** Verification steps 4-5 in the plan describe delta-pull behavior that doesn't occur on the manual Refresh path (full import instead). This is a documentation issue only — the code works correctly. The auto-sync timer does use delta pulls.
+- **Low:** Comment line-number references are slightly stale due to code shifts.
