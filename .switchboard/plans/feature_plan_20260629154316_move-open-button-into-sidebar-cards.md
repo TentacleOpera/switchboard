@@ -212,3 +212,61 @@ This is the work that makes Linear sidebar cards actually show an Open button.
 
 - **Path A (chosen): Complexity 6 → Send to Coder.** The frontend card work is routine; the backend `url`-threading + cache-DB migration is the moderate, well-scoped risk. A coder can handle it with the migration guarded as idempotent.
 - **Path B (if chosen): Complexity 3 → Send to Intern.** Frontend-only, but the feature is half-delivered (Linear gets no card Open button) and the top-bar button must be retained.
+
+---
+
+## Code Review Results (Reviewer Pass — Path A verified)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"Four layers. FOUR. Cache DB, cache service, backend payload, webview mappings. Miss one and every Linear card silently loses its Open button. Let's see if you can count to four."*
+
+- **PASS — Layer 1, Cache DB schema (`KanbanDatabase.ts:264`):** V40 migration `ALTER TABLE imported_docs ADD COLUMN url TEXT`. Idempotent guard present (line 5162: catches `duplicate column` / `already exists`). Shipped-state migration, not a drop/recreate. You read CLAUDE.md. I'm genuinely surprised.
+- **PASS — Layer 1, read paths return `url`:** `listImportedTickets` (line 2183) and `getImportedDoc` (line 2107) both map `row.url`. `ImportedDocEntry.url?` (line 76). No silent drop.
+- **PASS — Layer 2, cache service (`PlanningPanelCacheService.ts:466`):** `registerImportedTicket` accepts `url?` and forwards to upsert. The upsert uses `url = COALESCE(excluded.url, imported_docs.url)` (line 2142) — so a partial update that omits `url` (e.g. the push-edits path at `TaskViewerProvider.ts:18657`) will NOT clobber an existing url. That's the kind of defensive SQL that separates engineers from script-kiddies.
+- **PASS — Layer 3, backend payload (`PlanningPanelProvider.ts:5118`):** `localTicketFilesListed` emits `url: dbT.url || ''`. The `_scanLocalTicketFiles` fallback (line 8230) emits `url: ''`. Both paths covered.
+- **PASS — Layer 4, webview mappings (`planning.js:4409` ClickUp, `4418` Linear):** Both map `url: t.url`. The file-backed arrays now carry `url` end-to-end.
+- **PASS — Import path supplies `url`:** `TaskViewerProvider.importTaskAsDocument` sets `ticketUrl = issue.url` for Linear (line 18411) and `ticketUrl = clickUpTask.url` for ClickUp (lines 18450, 18706). Bulk-write path `_writeTaskDocument` (line 18699/18706) and the register call (line 18722) both pass it. The push-edits path (line 18657) omits it — safe under COALESCE.
+- **PASS — Card templates (`planning.js:8333-8334` Linear, `8859-8860` ClickUp):** `openUrl`/`openBtn` computed before the return; `${openBtn}` appended in `card-actions`. Empty-url guard (`openUrl ? ... : ''`) means no button renders when url is absent. Matches the integrated final state.
+- **PASS — Delegated click handler (`planning.js:7659-7667`):** Placed after the `refineBtn` branch. `if (url)` guard prevents posting `openExternalUrl` on empty. `return` isolates the click from card selection. `flashIconBtn` fires for visual consistency.
+- **PASS — Top-bar removal (Path A):** `#btn-open-ticket` gone from `planning.html`. `btnOpenTicket` gone from `getTicketsTabElements()` (line 1054+). Old click listener gone. Both `if (btnOpenTicket)` detail-renderer blocks gone. `grep` for `btnOpenTicket|btn-open-ticket` → 0 matches. No dangling references.
+- **PASS — Backend `openExternalUrl` handler retained (`PlanningPanelProvider.ts:4852`):** Validates `https://`/`http://` scheme. The card button reuses the same trusted handler — no new trust surface.
+- **NIT — Pre-fetched Linear create path (`TaskViewerProvider.ts:18397-18403`):** When `preFetchedTask` is set (just-created issue), the manually-built `issue` object omits `url`, so `ticketUrl` is `undefined` for that insert. Acceptable — a freshly-created issue's url may not be in the create response, and it backfills on next sync. COALESCE protects any pre-existing row. Not a defect, just noting the edge.
+- **BONUS — Diagram-prompt handler (`planning.js:7406`):** This pre-existing feature also calls `_ticketExternalUrl(..., issue.issue.url)`. It now benefits from the url threading — Linear diagram prompts will resolve the real url instead of falling back. Positive side effect, not a concern.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| All 4 url-threading layers complete & coherent | — | Keep (correct) |
+| V40 migration idempotent-guarded | — | Keep (correct) |
+| COALESCE protects url on partial upserts | — | Keep (correct) |
+| Card templates + click handler match spec | — | Keep (correct) |
+| Top-bar fully removed, no dangling refs | — | Keep (correct) |
+| Pre-fetched Linear create path omits url | NIT | Defer — backfills on next sync; COALESCE-safe |
+| Stale `_ticketSyncBadge` comment (planning.js:8270) | NIT | Defer — belongs to badge subtask; non-functional |
+
+**No CRITICAL or MAJOR findings. No code fixes applied.**
+
+### Files Changed (verified in place)
+- `src/services/KanbanDatabase.ts` — V40 migration: `url TEXT` column on `imported_docs` (line 264, idempotent guard 5162); `ImportedDocEntry.url?` (line 76); `listImportedTickets` returns url (2183); `getImportedDoc` returns url (2107); upsert stores url with COALESCE (2142).
+- `src/services/PlanningPanelCacheService.ts` — `registerImportedTicket` accepts `url?` (line 466) and forwards to upsert (481).
+- `src/services/PlanningPanelProvider.ts` — `localTicketFilesListed` payload emits `url: dbT.url || ''` (line 5118); `_scanLocalTicketFiles` fallback emits `url: ''` (line 8230).
+- `src/services/TaskViewerProvider.ts` — import paths supply `ticketUrl`: Linear `issue.url` (18411), ClickUp `clickUpTask.url` (18450, 18706); bulk-write passes it (18722); push-edits omits safely under COALESCE (18657).
+- `src/webview/planning.js` — Linear card template: `openUrl`/`openBtn` (8333-8334), `${openBtn}` in card-actions (8346); ClickUp: same (8859-8860, 8871); delegated click handler (7659-7667); webview mappings preserve `url: t.url` (4409 ClickUp, 4418 Linear); top-bar `btnOpenTicket` refs removed (getTicketsTabElements, click listener, both detail renderers).
+- `src/webview/planning.html` — `#btn-open-ticket` top-bar button deleted.
+
+### Validation Results
+- **Grep — `btnOpenTicket|btn-open-ticket` in planning.js:** 0 matches. ✓
+- **Grep — `btn-open-ticket` in planning.html:** 0 matches. ✓
+- **Grep — `data-open-ticket-url` in planning.js:** 3 matches (handler 7659, Linear template 8334, ClickUp template 8860). ✓
+- **Grep — `openExternalUrl` backend handler:** present at `PlanningPanelProvider.ts:4852` with scheme validation. ✓
+- **Grep — `card-actions .ticket-sync-badge` (obsolete pin rule):** 0 matches. ✓
+- **Url-threading layer trace:** DB schema (264) → DB read (2183) → cache service (466/481) → backend payload (5118) → webview mapping (4409/4418) → card template (8333/8859). All 4 layers connected. ✓
+- **V40 migration idempotency:** guard at line 5162 catches `duplicate column`/`already exists`. ✓
+- **COALESCE protection:** upsert SQL line 2142 — partial updates preserve existing url. ✓
+- **Compilation/tests:** Skipped per session directives.
+
+### Remaining Risks
+- **NIT:** Pre-fetched Linear create path (`TaskViewerProvider.ts:18397-18403`) builds the issue object without `url`, so the first insert for a just-created Linear ticket stores `NULL` url. The card shows no Open button until the next sync re-imports with the real url. Acceptable per plan ("Existing rows get NULL; they backfill on the next import/sync").
+- **NIT (cross-plan):** Stale `_ticketSyncBadge` comment at `planning.js:8270` — tracked under the badge subtask; non-functional.

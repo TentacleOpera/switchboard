@@ -185,3 +185,43 @@ return `
 ## Recommendation
 
 Complexity 2 → **Send to Intern.** Self-contained HTML/CSS relocation in two templates and one stylesheet block; the only care point (the `align-self` override) is now explicitly documented in the CSS.
+
+---
+
+## Code Review Results (Reviewer Pass)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"You moved a badge. Congratulations, you didn't break the internet. Let's see if you actually read the CSS spec."*
+
+- **NIT — Stale comment, `planning.js:8270`:** The `_ticketSyncBadge` doc-comment still reads *"Builds the sync-status badge shown bottom-left on each card."* The badge is no longer bottom-left — it lives in the status meta row now. The comment lies. Not a functional defect, but a future reader will be confused about where this badge renders. (Left in place per the no-comment-edit policy; flagged as a remaining risk.)
+- **PASS — `align-self: center` override (`planning.html:2755`):** The one real trap in this plan. The base `.ticket-sync-badge { align-self: flex-start; }` (line 2794) would have won over the parent's `align-items: center` and top-aligned the badge. The override is present and correct. You read the spec. Barely.
+- **PASS — Obsolete pin rule deleted:** `grep` for `.card-actions .ticket-sync-badge` returns zero matches. The corpse is gone.
+- **PASS — `card-actions` right-alignment survives:** `justify-content: flex-end` (line 2763) keeps the three buttons right-aligned without the badge's `margin-right: auto` crutch. Confirmed.
+- **PASS — `pointer-events: none` preserved (line 2795):** The badge remains non-interactive. Clicking the status row won't fire card selection.
+- **PASS — Both templates (`planning.js:8339` Linear, `8865` ClickUp):** `${syncBadge}` is in the `ticket-status-row` div, NOT in `card-actions`. Matches the integrated final state.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| Stale `_ticketSyncBadge` comment (line 8270) | NIT | Defer — leave per no-comment-edit policy; non-functional |
+| `align-self: center` override present | — | Keep (correct) |
+| Obsolete pin rule removed | — | Keep (correct) |
+| Both templates match integrated final state | — | Keep (correct) |
+
+**No CRITICAL or MAJOR findings. No code fixes applied.**
+
+### Files Changed (verified in place)
+- `src/webview/planning.html` — CSS: `.ticket-status-row` flex rules added (lines 2748–2756); obsolete `.card-actions .ticket-sync-badge` pin rule deleted.
+- `src/webview/planning.js` — Linear card template (line 8339): `${syncBadge}` moved into `ticket-status-row` status meta div. ClickUp card template (line 8865): same.
+
+### Validation Results
+- **Grep — obsolete CSS rule:** `card-actions .ticket-sync-badge` → 0 matches. ✓
+- **Grep — `syncBadge` in `card-actions`:** 0 matches (badge fully relocated). ✓
+- **Grep — `ticket-status-row` in templates:** 2 matches (Linear 8339, ClickUp 8865). ✓
+- **CSS coherence:** base `align-self: flex-start` (2794) + override `align-self: center` (2755) + `pointer-events: none` (2795) + `justify-content: flex-end` (2763) all present. ✓
+- **Compilation/tests:** Skipped per session directives.
+
+### Remaining Risks
+- **NIT:** Stale comment at `planning.js:8270` ("shown bottom-left on each card") — now inaccurate; badge renders in the status meta row. Non-functional; deferred.

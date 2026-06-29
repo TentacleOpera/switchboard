@@ -214,6 +214,34 @@ Complexity 6 → **Send to Coder.** The frontend card work (both subtasks) is ro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Move 'synced' Badge Next to Status Label in Tickets Tab Sidebar Cards](../plans/feature_plan_20260629154315_move-synced-badge-next-to-status-label.md) — **CODER CODED**
-- [ ] [Move 'Open' Button from Ticket Top Bar into Sidebar Cards](../plans/feature_plan_20260629154316_move-open-button-into-sidebar-cards.md) — **CODER CODED**
+- [x] [Move 'synced' Badge Next to Status Label in Tickets Tab Sidebar Cards](../plans/feature_plan_20260629154315_move-synced-badge-next-to-status-label.md) — **CODE REVIEWED**
+- [x] [Move 'Open' Button from Ticket Top Bar into Sidebar Cards](../plans/feature_plan_20260629154316_move-open-button-into-sidebar-cards.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+---
+
+## Epic Code Review Results (Reviewer Pass)
+
+Both subtasks reviewed in-place against their plan files. The integrated final state (Proposed Changes §3–§4) was verified against the live code.
+
+### Integrated Findings Summary
+
+| Severity | Count | Details |
+|---|---|---|
+| CRITICAL | 0 | — |
+| MAJOR | 0 | — |
+| NIT | 2 | (1) Stale `_ticketSyncBadge` comment `planning.js:8270`; (2) Pre-fetched Linear create path omits `url` (`TaskViewerProvider.ts:18397-18403`) — backfills on next sync, COALESCE-safe |
+
+### Fixes Applied
+- None. No CRITICAL or MAJOR findings; both implementations are complete and correct.
+
+### Integrated Validation
+- **Application-order hazard resolved:** Badge subtask landed first (badge in status row, pin rule removed); Open-button subtask landed second (`${openBtn}` in `card-actions`). The integrated final template state matches Proposed Changes §3 (Linear, `planning.js:8335-8349`) and §4 (ClickUp, `planning.js:8861-8874`).
+- **`card-actions` contains ONLY the 3 original buttons + Open** (no sync badge) — confirmed via grep.
+- **Top-bar Open button fully removed** (Path A) — no dangling `btnOpenTicket` references in HTML or JS.
+- **Url threading end-to-end (Path A):** DB schema (V40) → DB read → cache service → backend payload → webview mapping → card template. All 4 layers connected; COALESCE protects partial upserts.
+- **Compilation/tests:** Skipped per session directives.
+
+### Remaining Risks
+- **NIT:** Stale comment at `planning.js:8270` (badge described as "bottom-left" — now in status row). Non-functional; deferred per no-comment-edit policy.
+- **NIT:** Just-created Linear tickets store `NULL` url until next sync. Card shows no Open button in that window. Acceptable per plan spec.
