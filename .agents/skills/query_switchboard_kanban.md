@@ -25,18 +25,37 @@ Use SQL queries only when you need filtering, aggregation, or specific plan look
 ## Get Workspace ID and Database Path
 
 ```bash
-# Read both values
-WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
-DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
+# Resolve the Switchboard control plane from the nearest ANCESTOR directory that
+# contains it — never trust the current working directory. This matters because
+# sqlite3 SILENTLY CREATES an empty database when handed a path that doesn't
+# exist; a wrong cwd would otherwise leave a stray 0-byte kanban.db behind.
+SB_ROOT="$PWD"
+while [ "$SB_ROOT" != "/" ] && [ ! -f "$SB_ROOT/.switchboard/workspace-id" ]; do
+  SB_ROOT=$(dirname "$SB_ROOT")
+done
+WSID_FILE="$SB_ROOT/.switchboard/workspace-id"
 
-# Fallback if DB_PATH is empty (old format file)
-if [ -z "$DB_PATH" ]; then
-  DB_PATH=".switchboard/kanban.db"
+WORKSPACE_ID=$(sed -n '1p' "$WSID_FILE" 2>/dev/null)
+DB_PATH=$(sed -n '2p' "$WSID_FILE" 2>/dev/null)
+
+# Fallback if line 2 (DB path) is empty — old-format workspace-id file.
+[ -z "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
+
+# Guard: refuse to continue if the DB is missing, rather than querying (and thus
+# creating) a phantom empty database somewhere it should never exist.
+if [ ! -f "$DB_PATH" ]; then
+  echo "ERROR: kanban DB not found at '$DB_PATH'" >&2
+  echo "Run this from the workspace root, or fix line 2 of .switchboard/workspace-id." >&2
+  exit 1
 fi
 ```
 
 - **Line 1**: Workspace ID (hex string like `038bffef-9842-4574-96a1-69a43a280b3c`)
 - **Line 2**: Database path (absolute path to kanban.db; empty if using default location)
+
+> **Always query with `sqlite3 -readonly "$DB_PATH" "<sql>"`.** This skill only
+> reads. `-readonly` prevents accidental writes and is a second guard against
+> sqlite3 fabricating an empty database if the path is ever wrong.
 
 ## Common SQL Queries
 
@@ -89,15 +108,19 @@ ORDER BY kanban_column, updated_at DESC;
 ### Using sqlite3 CLI
 
 ```bash
-# Read workspace ID and database path
-WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
-DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
+# Resolve the control-plane root from the nearest ancestor (see note above) so a
+# wrong cwd can't make sqlite3 fabricate an empty DB.
+SB_ROOT="$PWD"
+while [ "$SB_ROOT" != "/" ] && [ ! -f "$SB_ROOT/.switchboard/workspace-id" ]; do
+  SB_ROOT=$(dirname "$SB_ROOT")
+done
+WORKSPACE_ID=$(sed -n '1p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
+DB_PATH=$(sed -n '2p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
+[ -z "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
+[ -f "$DB_PATH" ] || { echo "ERROR: kanban DB not found at '$DB_PATH'" >&2; exit 1; }
 
-# Fallback to default path
-[ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
-
-# Get plans in BACKLOG column
-sqlite3 "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column FROM plans WHERE workspace_id = '$WORKSPACE_ID' AND status = 'active' AND kanban_column = 'BACKLOG' ORDER BY updated_at DESC;"
+# Get plans in BACKLOG column — READ-ONLY (this skill never writes).
+sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column FROM plans WHERE workspace_id = '$WORKSPACE_ID' AND status = 'active' AND kanban_column = 'BACKLOG' ORDER BY updated_at DESC;"
 
 
 ```
