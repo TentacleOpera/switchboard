@@ -1352,7 +1352,7 @@
             max-width: 100%;
             max-height: 100%;
             position: relative;
-            z-index: 7; /* Above .cyber-scanlines (z-index: 5) and sweep animation to prevent overlay distortion */
+            z-index: 7; /* Elevated so images pop above overlay layers */
             box-shadow: 0 0 6px rgba(0, 0, 0, 0.4); /* Intentional elevation so the pop-out above scanlines looks designed */
         }
 
@@ -1967,57 +1967,6 @@
         .alert-warning .markdown-alert-title { color: #ffb74d; }
         .alert-caution { border-left-color: #ff8a65; background: rgba(255, 138, 101, 0.08); }
         .alert-caution .markdown-alert-title { color: #ff8a65; }
-
-        .cyber-scanlines {
-            display: none; /* Hidden by default; shown only when .cyber-theme-enabled is on body */
-            position: absolute;
-            inset: 0;
-            pointer-events: none; /* CRITICAL: must not block interaction with content below */
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 0, 0, 0.07) 2px,
-                rgba(0, 0, 0, 0.07) 4px
-            );
-            z-index: 5;
-        }
-        .cyber-theme-enabled .cyber-scanlines { display: block; }
-
-        /* Animated CRT rolling sweep beam — only active when animation is not disabled */
-        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
-            content: " ";
-            display: block;
-            position: absolute;
-            background: linear-gradient(
-                to bottom,
-                rgba(255, 255, 255, 0) 0%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 10%,
-                color-mix(in srgb, var(--accent-primary) 7%, transparent) 50%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 90%,
-                rgba(255, 255, 255, 0) 100%
-            );
-            width: 100%;
-            height: 80px;
-            pointer-events: none;
-            z-index: 6;
-            animation: scanline-sweep 8s linear infinite;
-        }
-
-        @keyframes scanline-sweep {
-            0% { transform: translateY(-80px); }
-            100% { transform: translateY(100vh); }
-        }
-
-        /* Respect reduced-motion preference — suppress ONLY the sweep animation,
-           not the static scanline texture. Selector matches the animated rule precisely. */
-        @media (prefers-reduced-motion: reduce) {
-            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
-                animation: none;
-                display: none;
-            }
-        }
-
         /* Zoomable content wrapper */
         .zoomable-container {
             position: relative;
@@ -2060,12 +2009,6 @@
         body.space-pan-active .zoom-event-layer {
             display: block;
         }
-
-        /* Class-based scanline suppression — toggled by JS */
-        .preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
-            display: none !important;
-        }
-
         /* Floating zoom toolbar */
         .zoom-toolbar {
             position: absolute;
@@ -3633,7 +3576,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <textarea id="markdown-editor-briefs" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
                         </div>
                     </div>
-                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>
@@ -3691,7 +3633,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 </div>
                             </div>
                         </div>
-                        <div class="cyber-scanlines"></div>
                     </div>
                 </div>
             </div>
@@ -3771,7 +3712,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                         </div>
                     </div>
-                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>
@@ -3830,7 +3770,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                         </div>
                     </div>
-                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>
@@ -3876,7 +3815,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                         </div>
                     </div>
-                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>

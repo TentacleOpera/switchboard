@@ -188,10 +188,6 @@
         body.theme-claudify .plan-title {
             color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
         }
-        /* Complexity label + timestamp: grey (the only labels asked to be grey). Literal grey
-           because --text-secondary is warm again for everything else. */
-        body.theme-claudify .card-meta { color: #8a8a8a !important; }
-        /* Column titles: neutral grey chrome. */
         body.theme-claudify .column-name { color: #8a8a8a; }
         /* No warm text — card buttons and agent names fall back to the neutral greys
            (--text-secondary resting, --text-primary on hover) from the base rules. */
@@ -944,7 +940,7 @@
         .card-meta {
             font-family: var(--font-mono);
             font-size: 9px;
-            color: color-mix(in srgb, var(--text-secondary) 50%, var(--accent-teal-dim));
+            color: #8a8a8a;
             letter-spacing: 0.5px;
             display: flex;
             align-items: center;

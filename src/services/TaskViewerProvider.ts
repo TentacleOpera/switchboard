@@ -460,6 +460,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const theme = this.handleGetThemeSetting();
                     this.broadcastToWebviews({ type: 'switchboardThemeChanged', theme });
                 }
+                if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
+                    const disabled = vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('theme.disableCyberAnimation', false);
+                    this.broadcastToWebviews({ type: 'cyberAnimationSetting', disabled });
+                }
             })
         );
 

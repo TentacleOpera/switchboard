@@ -131,3 +131,47 @@ Rationale:
 ## Recommendation
 
 Complexity 2 → **Send to Intern**. This is a two-rule CSS change in a single file with no logic, no state, and no migration.
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-30)
+
+### Implementation Commit
+`104b685` — "Kanban Card Action-Button Cleanup" (auto-commit before code review). **No changes were made for this subtask** — the target CSS rules and Orchestrate button were already absent.
+
+### Superseded by Prior Commit
+
+**MAJOR finding (plan-vs-reality discrepancy):** The plan's proposed CSS replacement target (`.card-btn.orchestrate` rules, formerly at lines 1003-1009) **does not exist** in the current code. The Orchestrate button, its CSS rules, its click handler, and the backend `case 'orchestrateEpic'` handler were **entirely removed** by prior commit `403329d` ("Tickets Tab Sidebar Card Layout & Actions", 2026-06-29T11:31:40), which replaced the Epic Orchestrator with Lead-Coder Dispatch and Workflow Buttons. This commit landed ~8 hours before the epic implementation commit (`104b685`, 20:02:34).
+
+The plan was authored against a codebase state that was already obsolete by the time implementation began. The proposed CSS change is a **no-op** — there is nothing to restyle.
+
+### Stage 1 (Grumpy) Findings
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| MAJOR | Plan-vs-reality discrepancy: the `.card-btn.orchestrate` CSS rules and the Orchestrate button do not exist. Removed entirely by prior commit `403329d` (2026-06-29T11:31). The plan was written against stale code. | `src/webview/kanban.html` (target absent) |
+| NIT | The proposed `color-mix(in srgb, #7c3aed 12%, transparent)` hover tint is moot — no rule to apply it to. | N/A (moot) |
+
+No CRITICAL findings. The MAJOR finding is a plan accuracy issue, not a code defect.
+
+### Stage 2 (Balanced) — Synthesis
+
+**Keep as-is:** The current code state. The Orchestrate button and its solid-fill CSS are fully gone (removed by `403329d`). The epic's goal — eliminating the visual inconsistency where Orchestrate was a solid purple fill while every other card button used outline style — is **achieved more thoroughly** than the plan proposed: there is no button to be inconsistent. No code fix is needed or possible.
+
+**Fix now:** Nothing. The proposed CSS change is a no-op (target rules don't exist). The outcome satisfies the epic's goal.
+
+**Defer:** N/A — nothing to defer because there is nothing to implement.
+
+### Code Fixes Applied
+None required. The plan was superseded by a prior commit that achieved the goal more thoroughly (full removal vs. restyle).
+
+### Validation Results
+- **Grep verification:** Zero references to `orchestrate`, `card-btn.orchestrate`, `orchestrateEpic`, or `#6b21a8` in `src/webview/kanban.html` or `src/services/KanbanProvider.ts`.
+- **Epic identity color intact:** `#7c3aed` confirmed present in 9 places in `kanban.html` (card borders at lines 169, 181, 920; meta line at 924; selected-state at 1348-1350). No collateral damage to epic card styling.
+- **Git history:** Commit `403329d` removed the target CSS and button; commit `104b685` (epic implementation) made zero Orchestrate-related changes to `kanban.html` (14 deletions, all Pair-button removal from Subtask 1).
+- **Compilation:** Skipped per session instructions.
+- **Automated tests:** Skipped per session instructions.
+
+### Remaining Risks
+- **None (code):** The code is in the desired state — no Orchestrate button, no solid-fill inconsistency.
+- **Process note:** The plan was not re-validated against current code before implementation. The proposed changes could not be applied because the target was removed by an intervening commit. This is a process gap (plan staleness), not a code risk. The epic's goal is satisfied regardless.

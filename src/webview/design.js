@@ -1197,13 +1197,11 @@
             const iframeWrapper = document.getElementById('claude-preview-wrapper');
             const imageContainer = document.getElementById('image-preview-container-claude');
             const imageImg = document.getElementById('image-preview-img-claude');
-            const clWrapper = document.querySelector('#claude-content .preview-panel-wrapper');
 
             if (isImage && webviewUri) {
                 if (iframeWrapper) iframeWrapper.style.display = 'none';
                 if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
-                if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
                 const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
                 if (imgViewport) applyZoom('claude', imgViewport);
                 if (imageImg) {
@@ -1218,7 +1216,6 @@
                 if (imageContainer) imageContainer.style.display = 'none';
                 if (imageImg) imageImg.removeAttribute('src');
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
-                if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('srcdoc');
@@ -1232,7 +1229,6 @@
                 if (imageContainer) imageContainer.style.display = 'none';
                 if (imageImg) imageImg.removeAttribute('src');
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
-                if (clWrapper) clWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('src');
@@ -1260,13 +1256,11 @@
             const imageContainer = document.getElementById('image-preview-container');
             const imageImg = document.getElementById('image-preview-img');
             const iframeWrapper = document.getElementById('html-preview-wrapper');
-            const htmlWrapper = document.querySelector('#html-preview-content .preview-panel-wrapper');
 
             if (isImage && webviewUri) {
                 if (iframeWrapper) iframeWrapper.style.display = 'none';
                 if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
                 const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
                 if (imgViewport) applyZoom('html', imgViewport);
                 if (imageImg) {
@@ -1279,7 +1273,6 @@
                 }
             } else if (msg.iframeSrc) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('srcdoc');
@@ -1293,7 +1286,6 @@
                 if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
             } else if (htmlContent) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
-                if (htmlWrapper) htmlWrapper.classList.add('scanlines-suppressed');
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('src');
@@ -1324,11 +1316,9 @@
 
             const imageContainer = document.getElementById('image-preview-container-images');
             const imageImg = document.getElementById('image-preview-img-images');
-            const wrapper = document.querySelector('#images-content .preview-panel-wrapper');
 
             if (isImage && webviewUri) {
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
-                if (wrapper) wrapper.classList.add('scanlines-suppressed');
                 const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
                 if (imgViewport) applyZoom('images', imgViewport);
                 if (imageImg) {
@@ -1360,14 +1350,12 @@
             const imgImg = document.getElementById('image-preview-img-design');
             const jsonCont = document.getElementById('json-preview-container-design');
             const statusDesign = document.getElementById('status-design');
-            const designWrapper = document.querySelector('#design-content .preview-panel-wrapper');
 
             if (isImage && webviewUri) {
                 if (mdPrev) mdPrev.style.display = 'none';
                 if (jsonCont) jsonCont.style.display = 'none';
                 if (imgCont) imgCont.style.display = 'flex';
                 if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
-                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
                 const designImgViewport = imgCont ? imgCont.querySelector('.zoomable-viewport') : null;
                 if (designImgViewport) applyZoom('design', designImgViewport);
                 if (imgImg) {
@@ -1389,7 +1377,6 @@
                         jsonCont.innerHTML = `<div class="json-error">Failed to parse JSON: ${e.message}</div>`;
                     }
                 }
-                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
             } else if (msg.fileType === 'yaml') {
                 if (imgCont) imgCont.style.display = 'none';
                 if (mdPrev) mdPrev.style.display = 'none';
@@ -1406,7 +1393,6 @@
                         jsonCont.innerHTML = `<div class="json-error">Invalid YAML on disk — cannot render tree.</div>`;
                     }
                 }
-                if (designWrapper) designWrapper.classList.add('scanlines-suppressed');
             } else {
                 // Markdown/Text
                 if (imgCont) imgCont.style.display = 'none';
@@ -1415,7 +1401,6 @@
                     mdPrev.style.display = 'block';
                     mdPrev.innerHTML = renderMarkdown(content) || '';
                 }
-                if (designWrapper) designWrapper.classList.remove('scanlines-suppressed');
             }
 
             if (statusDesign) {
@@ -1432,13 +1417,11 @@
 
             const mdPrev = document.getElementById('markdown-preview-briefs');
             const statusBriefs = document.getElementById('status-briefs');
-            const briefsWrapper = document.querySelector('#briefs-content .preview-panel-wrapper');
 
             if (mdPrev) {
                 mdPrev.style.display = 'block';
                 mdPrev.innerHTML = renderMarkdown(content) || '';
             }
-            if (briefsWrapper) briefsWrapper.classList.remove('scanlines-suppressed');
 
             if (statusBriefs) {
                 statusBriefs.textContent = isAutoRefreshed ? 'Auto-refreshed' : 'Loaded';

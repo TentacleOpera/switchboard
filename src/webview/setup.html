@@ -439,51 +439,6 @@
             border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
         }
 
-        /* CRT scanline texture + rolling sweep (sweep frozen by cyber-animation-disabled) */
-        .cyber-scanlines {
-            display: none;
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 0, 0, 0.07) 2px,
-                rgba(0, 0, 0, 0.07) 4px
-            );
-            z-index: 5;
-        }
-        .cyber-theme-enabled .cyber-scanlines { display: block; }
-        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
-            content: " ";
-            display: block;
-            position: absolute;
-            background: linear-gradient(
-                to bottom,
-                rgba(255, 255, 255, 0) 0%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 10%,
-                color-mix(in srgb, var(--accent-primary) 7%, transparent) 50%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 90%,
-                rgba(255, 255, 255, 0) 100%
-            );
-            width: 100%;
-            height: 80px;
-            pointer-events: none;
-            z-index: 6;
-            animation: scanline-sweep 8s linear infinite;
-        }
-        @keyframes scanline-sweep {
-            0% { transform: translateY(-80px); }
-            100% { transform: translateY(100vh); }
-        }
-        @media (prefers-reduced-motion: reduce) {
-            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
-                animation: none;
-                display: none;
-            }
-        }
-
         /* Claudify: flat neutral surface + grey grid (no glass) */
         body.theme-claudify {
             background-color: #1C1C1C;
@@ -3976,6 +3931,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         document.getElementById('cyber-animation-toggle')?.addEventListener('change', (e) => {
             const isDisabled = !e.target.checked;
             vscode.postMessage({ type: 'setCyberAnimationDisabledSetting', enabled: isDisabled });
+            // Optimistically apply the body class immediately (idempotent with the inbound handlers below).
+            document.body.classList.toggle('cyber-animation-disabled', isDisabled);
             const statusEl = document.getElementById('cyber-animation-status');
             if (statusEl) {
                 statusEl.textContent = 'Saved';
@@ -4672,10 +4629,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
+                case 'cyberAnimationSetting': {
+                    runSetupHydration(() => {
+                        document.body.classList.toggle('cyber-animation-disabled', message.disabled);
+                    });
+                    break;
+                }
                 case 'cyberAnimationDisabledSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('cyber-animation-toggle');
                         if (toggle) toggle.checked = message.enabled !== true;
+                        document.body.classList.toggle('cyber-animation-disabled', message.enabled === true);
                     });
                     break;
                 }

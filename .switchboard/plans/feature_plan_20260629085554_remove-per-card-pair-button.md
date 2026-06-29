@@ -151,3 +151,45 @@ Lines 2447 and 2461 contain `.pair-program-btn` buttons in the design prototype.
 ## Recommendation
 
 Complexity 2 → **Send to Intern**. This is a pure deletion across two source files plus test pruning, with no logic changes, no migrations, and no cross-file coordination.
+
+---
+
+## Code Review (Reviewer Pass — 2026-06-30)
+
+### Implementation Commit
+`104b685` — "Kanban Card Action-Button Cleanup" (auto-commit before code review).
+
+### Files Changed
+- `src/webview/kanban.html` — 14 lines deleted (click listener, dead gating variables, markup insertion).
+- `src/services/KanbanProvider.ts` — 65 lines deleted (`case 'pairProgramCard':` handler block).
+- `src/test/pair-programming-comprehensive.test.ts` — 275 lines removed (`simulatePairButtonFlow` helper, Suites 2/3/4, tests 6.2/6.3).
+
+### Stage 1 (Grumpy) Findings
+
+| Severity | Finding | Location |
+|----------|---------|----------|
+| NIT | Optional design prototype cleanup NOT done — stale `.pair-program-btn` buttons remain. Plan explicitly marked this as optional/cosmetic. | `designs/kanban_prototype.html:2447,2461` |
+| NIT | Stale comment in test Suite 6 header references "pair button handler in KanbanProvider". Pre-existing skip note for test 6.1, not introduced by this change. | `src/test/pair-programming-comprehensive.test.ts:286-287` |
+
+No CRITICAL or MAJOR findings.
+
+### Stage 2 (Balanced) — Synthesis
+
+**Keep as-is:** All deletions verified clean — zero orphaned references to `pair-program-btn`, `pairProgramCard`, `pairProgramBtn`, `numericScore`, `isHighComplexity`, or `simulatePairButtonFlow` in production code or tests. All "must stay" items verified intact: dropdown (`pairProgrammingModeSelect`, 3 hits), auto-pair machinery (`_dispatchWithPairProgrammingIfNeeded`, 9 call sites), `pairProgrammingEnabled` derivation (3 hits). Test file structure confirmed: Suites 1, 5, 6 (only 6.4), 7, 8 retained; Suites 2, 3, 4 and tests 6.2/6.3 removed.
+
+**Fix now:** Nothing — no CRITICAL or MAJOR findings.
+
+**Defer:** NIT items are cosmetic/pre-existing and have no functional impact.
+
+### Code Fixes Applied
+None required.
+
+### Validation Results
+- **Grep verification:** Zero references to all removed identifiers in `src/`. All "must stay" items confirmed present with correct call-site counts.
+- **Test structure:** Retained suites (1, 5, 7, 8, test 6.4) present; removed suites (2, 3, 4, tests 6.2/6.3) and `simulatePairButtonFlow` helper absent; no dangling references.
+- **Compilation:** Skipped per session instructions.
+- **Automated tests:** Skipped per session instructions — user to run separately.
+
+### Remaining Risks
+- **NIT (deferred):** `designs/kanban_prototype.html` still contains stale `.pair-program-btn` buttons (lines 2447, 2461). This is a design prototype, not production code — no functional impact. Can be cleaned up opportunistically.
+- **Note:** Manual verification step 2 references "Orchestrate" button on epic cards — that button was independently removed by commit `403329d` (a prior unrelated change). The manual step's expected button list should now read "Copy coder prompt · ✎ · ✓" for epics as well. This does not affect this plan's correctness.

@@ -1,4 +1,7 @@
 ## CODER CODED
 
-_No plans_
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/crt-animation-visual-theme-polish-b0df3ed7-bfcb-40a8-958b-ae1095178aa7.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/crt-animation-visual-theme-polish-b0df3ed7-bfcb-40a8-958b-ae1095178aa7.md) — CRT Animation & Visual Theme Polish <!-- planId:b0df3ed7-bfcb-40a8-958b-ae1095178aa7 epic -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md) — Remove CRT Scanline Animation from the Design and Setup Panels <!-- planId:d6a1ace3-bc68-42ec-bd64-311fdb57f3d8 subtask-of:"CRT Animation & Visual Theme Polish" -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626124051_crt_animation_disable_not_live.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626124051_crt_animation_disable_not_live.md) — Make the "Disable CRT Animation" Toggle Take Effect Live <!-- planId:f679aeae-ea3c-4e6a-85da-f6a6fcfd264c subtask-of:"CRT Animation & Visual Theme Polish" -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md) — Unify Kanban Card Meta (Complexity + Timestamp) to Grey Across Themes <!-- planId:12f21470-318e-4085-8408-115c2d80714e subtask-of:"CRT Animation & Visual Theme Polish" -->
 

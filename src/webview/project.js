@@ -374,6 +374,9 @@
             case 'switchboardThemeChanged':
                 handleThemeChanged(msg.theme);
                 break;
+            case 'cyberAnimationSetting':
+                document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
+                break;
             case 'kanbanPlansReady':
                 if (btnCreateKanbanPlan) {
                     btnCreateKanbanPlan.disabled = false;
