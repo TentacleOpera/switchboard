@@ -156,3 +156,51 @@ No automated tests apply (per session directive, the test suite is run separatel
 ---
 
 **Recommendation:** Complexity is 3/10 → **Send to Intern**. This is a routine dead-code removal (markup + CSS + JS class toggling) confined to three files with no state, migration, or architectural risk. The only care needed is completeness — ensure all 12 JS class-toggling lines and all 5 variable declarations are removed, not just the 10 `add` calls.
+
+---
+
+## Code Review Pass (Reviewer-Executor)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> Oh, for the love of— you had ONE JOB. Delete the scanlines from two panels. TWO panels. Let me check your work.
+
+> **design.html** — five divs gone, CSS block gone, `scanlines-suppressed` rule gone, JS wrapper variables gone, class toggling gone. The stale comment at line 1355 was updated. Fine. I'll give you that. But you left the **adjacent** comment at line 1356 still whining about "pop-out above scanlines looks designed" — scanlines that YOU JUST DELETED. Sloppy. NIT.
+
+> **setup.html** — and here's where I lose my mind. You deleted the CSS block. Good. But you left the `<div class="cyber-scanlines"></div>` **sitting right there at line 532** like a forgotten coffee cup on a desk. The plan said — and I quote — "Delete the element + comment at `setup.html:576-577`". That's the MARKUP. The element. The thing that renders. You deleted the CSS and left the element. That's like removing the engine and leaving the car in the driveway. CRITICAL. It's orphaned dead markup with a misleading comment ("CRT scanline overlay (Afterburner only...)") pointing at nothing.
+
+> **design.js** — clean. All 12 class-toggling lines gone, all 5 wrapper declarations gone. The `cyber-animation-disabled` toggle at line 3502 is intact. Finally, something done right.
+
+> **Regression guard** — `project.html` (11 matches) and `planning.html` (8 matches) still have their scanlines. Good. At least you didn't nuke the intended panels.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---------|----------|---------|
+| `setup.html:531-532` — orphaned `<div class="cyber-scanlines">` + comment not removed (CSS was removed but element left behind) | CRITICAL | **Fix now** — dead markup with misleading comment; plan explicitly required deletion |
+| `design.html:1356` — `box-shadow` comment still references "scanlines" ("pop-out above scanlines looks designed") | NIT | **Fix now** — trivial, same edit pass |
+| `design.html` scanline divs/CSS/suppression rule — all removed | — | Keep (correct) |
+| `design.js` wrapper variables + class toggling — all removed; `cyber-animation-disabled` toggle intact | — | Keep (correct) |
+| `project.html` / `planning.html` scanlines — untouched | — | Keep (regression guard passes) |
+
+### Fixes Applied
+
+1. **`src/webview/setup.html:531-532`** (CRITICAL) — Removed the orphaned `<div class="cyber-scanlines"></div>` element and its now-misleading comment `<!-- CRT scanline overlay (Afterburner only; non-interactive, viewport-fixed) -->`.
+2. **`src/webview/design.html:1356`** (NIT) — Updated the `box-shadow` comment from "Intentional elevation so the pop-out above scanlines looks designed" to "Intentional elevation so images pop above overlay layers" (removed stale scanlines reference).
+
+### Validation Results
+
+- **Grep `cyber-scanlines` in `setup.html`**: 0 matches (was 1 — fixed) ✓
+- **Grep `scanlines` in `design.html`**: 0 matches (was 1 stale comment — fixed) ✓
+- **Grep `scanlines-suppressed` in `design.js`**: 0 matches ✓
+- **Grep `scanlines-suppressed` in `design.html`**: 0 matches ✓
+- **Grep wrapper vars (`clWrapper|htmlWrapper|briefsWrapper|designWrapper`) in `design.js`**: 0 matches ✓
+- **Grep `preview-panel-wrapper` in `design.js`**: 0 matches ✓
+- **Regression guard — `cyber-scanlines` in `project.html`**: 11 matches (untouched) ✓
+- **Regression guard — `cyber-scanlines` in `planning.html`**: 8 matches (untouched) ✓
+- **`cyber-animation-disabled` toggle in `design.js:3502`**: intact ✓
+- **Compilation/tests**: skipped per session directives.
+
+### Remaining Risks
+
+- None. All plan requirements now satisfied. The two fixes close the incomplete-removal gap. No state, migration, or runtime behavior risks.

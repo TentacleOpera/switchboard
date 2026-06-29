@@ -5164,6 +5164,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         planId: btn.dataset.planId || '',
                         planFile: btn.dataset.planFile || '',
                         workspaceRoot: btn.dataset.workspaceRoot,
+                        project: cardData?.project || btn.closest('.kanban-card')?.dataset.project || '',
+                        column: cardData?.column || '',
                         isEpic: cardData?.isEpic || false
                     });
                 });

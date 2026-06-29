@@ -6789,6 +6789,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         sessionId: reviewId,
                         planFile: msg.planFile || '',
                         workspaceRoot: msg.workspaceRoot || '',
+                        project: msg.project || '',
+                        column: msg.column || '',
                         isEpic: msg.isEpic === true
                     });
                 }

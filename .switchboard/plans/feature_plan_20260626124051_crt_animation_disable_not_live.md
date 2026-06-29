@@ -188,3 +188,63 @@ No automated tests are added or run as part of this session (per session directi
 ## Recommendation
 
 Complexity 4/10 → **Send to Coder**.
+
+---
+
+## Code Review Pass (Reviewer-Executor)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> Alright, let me see if you can wire a message bus without crossing the streams. This one has polarity traps galore — `disabled` vs `enabled`, two message types, four panels, three setup touch sites. One inverted boolean and the whole thing runs backwards.
+
+> **project.js:377-378** — `case 'cyberAnimationSetting': document.body.classList.toggle('cyber-animation-disabled', msg.disabled); break;` Placed right after `switchboardThemeChanged`. Mirrors `design.js:3501-3502` and `planning.js:3829-3830` exactly. `msg.disabled` is the boolean, `toggle(cls, force)` adds the class when disabled=true. Polarity correct. I'll grudgingly admit this is right.
+
+> **setup.html:3929-3941** — Optimistic toggle in the change listener. `isDisabled = !e.target.checked` (checkbox unchecked = animation disabled = class added). `classList.toggle('cyber-animation-disabled', isDisabled)`. Correct. The "Saved" status feedback is a nice touch. Didn't screw up the polarity. Fine.
+
+> **setup.html:4630-4634** — New `cyberAnimationSetting` case with `runSetupHydration` wrapper. Uses `message.disabled`. Consistent with the other panels. Good.
+
+> **setup.html:4636-4642** — Extended `cyberAnimationDisabledSetting` case. Checkbox: `toggle.checked = message.enabled !== true` (checked = animation on = not disabled). Body class: `classList.toggle('cyber-animation-disabled', message.enabled === true)` (enabled=true means disabled means class present). Both derive from the same `enabled` boolean. Polarity consistent across all three setup touch sites. I checked. It's actually correct.
+
+> **TaskViewerProvider.ts:463-468** — Central broadcast branch for `switchboard.theme.disableCyberAnimation`. Reads same config key + default (`false`) as `themeBodyClass.ts:47`. Broadcasts `cyberAnimationSetting { disabled }`. This is what covers the external-change path (VS Code Settings UI). Correct.
+
+> **SetupPanelProvider.ts:707-711** — No change. The plan said this was optional belt-and-braces and to prefer the central broadcast. The handler writes config → triggers `onDidChangeConfiguration` → central broadcast fires. The `broadcastToWebviews` at line 720 is for `colourKanbanIconsChanged`, not `cyberAnimationSetting`. Correct — no redundant broadcast added.
+
+> **First-paint parity** — `themeBodyClass.ts:47-48` uses `cfg.get<boolean>('theme.disableCyberAnimation', false)` and class name `cyber-animation-disabled`. Matches the live toggle class name exactly. No flash of animation on fresh panel open when disabled.
+
+> **Reference implementations intact** — `design.js:3501-3502`, `planning.js:3829-3830`, `DesignPanelProvider.ts:173,268,1411`, `PlanningPanelProvider.ts:369,377,518,621,639,7063` all still post `cyberAnimationSetting { disabled }`. No regressions.
+
+> ...I hate to say it, but I can't find a single thing wrong with this implementation. The polarity is consistent across all six touch sites, the two message types are kept distinct, the central broadcast + per-provider listeners are complementary, and first-paint parity is preserved. It's almost suspicious how clean this is.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---------|----------|---------|
+| `project.js:377-378` — `cyberAnimationSetting` handler added, mirrors reference panels | — | Keep (correct, primary fix) |
+| `setup.html:3929-3933` — optimistic toggle in change listener | — | Keep (correct polarity) |
+| `setup.html:4630-4634` — new `cyberAnimationSetting` case | — | Keep (correct) |
+| `setup.html:4636-4642` — extended `cyberAnimationDisabledSetting` case reconciles body class | — | Keep (correct polarity) |
+| `TaskViewerProvider.ts:463-468` — central broadcast branch | — | Keep (correct, covers external-change path) |
+| `SetupPanelProvider.ts:707-711` — no change (relies on central broadcast) | — | Keep (plan said optional, preferred central) |
+| First-paint parity (`themeBodyClass.ts:47-48`) — class name + config key match | — | Keep (verified) |
+| Reference implementations (design.js, planning.js, providers) — intact | — | Keep (no regressions) |
+
+### Fixes Applied
+
+None. The implementation is complete and correct. No CRITICAL, MAJOR, or NIT findings.
+
+### Validation Results
+
+- **`project.js` `cyberAnimationSetting` handler**: present at line 377-378, mirrors `design.js:3501-3502` and `planning.js:3829-3830` ✓
+- **`setup.html` optimistic toggle**: present at line 3933, polarity `isDisabled = !e.target.checked` ✓
+- **`setup.html` `cyberAnimationSetting` case**: present at line 4630-4634, uses `message.disabled` ✓
+- **`setup.html` `cyberAnimationDisabledSetting` case**: extended at line 4636-4642, checkbox + body class reconciled ✓
+- **`TaskViewerProvider.ts` central broadcast**: present at line 463-468, reads `theme.disableCyberAnimation` default `false` ✓
+- **Polarity consistency across all 6 touch sites**: all use `disabled=true → class added` or `enabled=true → class added` consistently ✓
+- **First-paint parity** (`themeBodyClass.ts:47-48`): class name `cyber-animation-disabled`, config key `theme.disableCyberAnimation`, default `false` — matches live toggle ✓
+- **Reference implementations intact**: `design.js:3501-3502`, `planning.js:3829-3830`, `DesignPanelProvider.ts:173/268/1411`, `PlanningPanelProvider.ts:369/377/518/621/639/7063` ✓
+- **`handleThemeChanged` in `project.js:132-156`**: deliberately does NOT touch `cyber-animation-disabled` (comment at line 135) — dedicated case required and present ✓
+- **Compilation/tests**: skipped per session directives.
+
+### Remaining Risks
+
+- None. All plan requirements satisfied. The two message types (`cyberAnimationSetting { disabled }` vs `cyberAnimationDisabledSetting { enabled }`) are kept distinct, polarity is consistent across all touch sites, and the central broadcast + per-provider listeners are complementary without duplication.

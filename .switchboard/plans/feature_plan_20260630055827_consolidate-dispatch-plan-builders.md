@@ -6,7 +6,7 @@ Collapse the extension's five separate ways of building the `BatchPromptPlan[]` 
 
 ### Background & root-cause analysis
 
-`generateUnifiedPrompt(role, plans, workspaceRoot, opts)` is the single chokepoint for all prompt **text**. It is called from **22 sites** across `KanbanProvider`, `TaskViewerProvider`, and `PlanningPanelProvider`. Epic mode is not a flag the caller sets directly — it is *inferred* inside `generateUnifiedPrompt`:
+`generateUnifiedPrompt(role, plans, workspaceRoot, opts)` is the single chokepoint for all prompt **text**. It is called from **22 sites** across `KanbanProvider`, `TaskViewerProvider`, and `PlanningPanelProvider` (verified: 23 `generateUnifiedPrompt(` matches in `src/`, minus the one definition = 22 call sites). Epic mode is not a flag the caller sets directly — it is *inferred* inside `generateUnifiedPrompt` (KanbanProvider.ts:3098):
 
 ```ts
 const hasSubtasks = plans.some(p => p.isSubtask);
@@ -25,34 +25,100 @@ The root cause of the recurring "epic dispatched as a plain plan" bug is **dupli
 
 The two builders also diverge in incidental ways that should converge:
 - **Input type**: `_cardsToPromptPlans` takes in-memory `KanbanCard[]`; `_resolveKanbanDispatchPlans` takes `sessionId[]` and hits the DB. The inline sites take a single `sessionId`/`planId`.
-- **Worktree resolution**: card path builds a `worktreePathMap` from the active-worktrees table once; sessionId path calls `TaskViewerProvider.resolveWorktreePathForPlan(db, {epicId, project})` per plan; inline copy path passes `undefined`.
+- **Worktree resolution (the difference is the *heuristic*, NOT a status filter)**: both paths read active worktrees only — `getWorktrees()` filters `WHERE status='active'` in SQL (KanbanDatabase.ts:2462), and `resolveWorktreePathForPlan` then re-filters `w.status === 'active'` redundantly (a no-op). They diverge in *how they match*: the board map keys on `epic_id` and adds a "if exactly one active worktree, use it" sole-entry fallback (no `project` match); the sessionId path matches `epic_id` then `project` (no sole-entry fallback); the inline copy path passes `undefined`.
 - **Plan-file resolution**: only `_resolveKanbanDispatchPlans` has the `mirror_path` / `brain_source_path` fallbacks; the others trust `record.planFile` via `_resolvePlanFilePath`.
 - **`epicTopic` label**: none of the five sets `epicTopic` on the *primary* epic plan object, so the epic line renders as `- [topic]` instead of `- [EPIC: topic]` in `buildPromptDispatchContext`. Cosmetic, but it should be fixed once, centrally.
+
+### Out-of-scope construction sites (explicitly excluded — Clarification)
+
+A complete audit of every `BatchPromptPlan` literal in `src/` (verified via grep) found **two additional construction sites** that are intentionally **excluded** from this consolidation because they bypass `generateUnifiedPrompt`:
+
+- **`chatCopyPrompt` handler** (KanbanProvider.ts:6365) — builds a minimal `chatPlans` array (`topic, absolutePath, sessionId` only) from in-memory cards and calls `buildKanbanBatchPrompt('chat', chatPlans, …)` **directly**, never `generateUnifiedPrompt`. Chat is a consultation role, not an agent dispatch — epic expansion, worktree resolution, and repoScope are correctly irrelevant. **No change.**
+- **`handleGetDefaultPromptPreviews`** (TaskViewerProvider.ts:4093) — builds a single synthetic `placeholder: BatchPromptPlan` (`{ topic: '[your selected plans]', absolutePath: '/path/to/plan.md' }`) to preview default role prompts with no real plans selected. Intentionally synthetic. **No change.**
+- **`copyGeneralChatPrompt`** (KanbanProvider.ts:734) — calls `buildKanbanBatchPrompt('chat', [], …)` with an **empty** array. Not a construction site. **No change.**
+
+The grep audit in the Verification Plan lists these three as known exceptions so it does not false-positive.
+
+## Metadata
+
+**Tags:** refactor, backend, reliability
+**Complexity:** 6
+
+## User Review Required
+
+**None.** The adversarial review framed two items as "behavioral choices to confirm"; both are decided below, with no open product call remaining.
+
+1. **Worktree resolution** — the review framed this as a *status-filter* convergence ("board path is unfiltered, CLI path filters active"). **That premise is false:** `getWorktrees()` already filters `status='active'` in SQL (KanbanDatabase.ts:2462) and `resolveWorktreePathForPlan`'s extra `.filter(w => w.status==='active')` (TaskViewerProvider.ts:7283) is a redundant no-op — both paths are already active-only. There is no status decision. The *real* difference is the matching heuristic (sole-entry fallback vs `project` match); it is **decided** in the Decisions section (unify on the superset) and **gated** by a mandatory non-epic worktree snapshot in the Edge-Case audit. No user sign-off required.
+2. **`[EPIC: …]` label on currently-working paths** — **decided: intended.** Setting `epicTopic` on the primary epic plan renders `- [EPIC: topic]` instead of `- [topic]` in *all* epic paths (including the ones that already work). It is a pure cosmetic improvement that does not affect epic-mode detection (which keys on `isSubtask`). Covered by the before/after snapshot in the Verification Plan.
+
+## Complexity Audit
+
+### Routine
+- Reducing `_cardsToPromptPlans` and `_resolveKanbanDispatchPlans` to thin adapters that resolve records then delegate to `buildDispatchPlans` — mechanical, reuses existing DB methods (`getPlanBySessionId`, `getSubtasksByEpicId`, `getWorktrees`).
+- Routing the three inline sites (`_handleTriggerAgentActionInternal`, `_handleCopyPlanLink`, `copyEpicPlannerPrompt`) through the builder — each already fetches the `KanbanPlanRecord`; the change replaces a hand-built literal + expansion block with one call.
+- Extracting `_resolveDispatchPlanFile` (the `planFile → mirror → brain` fallback chain) — already written inline in `_resolveKanbanDispatchPlans` (lines 2984–3012); extraction is copy-into-method.
+- Adding guardrail comments at former builder sites and `generateUnifiedPrompt`.
+- Removing the now-dead `_buildRepoScopeMap` method and its call sites (follow-up pass).
+- Halving per-card DB reads on the board path (current flow calls `getPlanBySessionId` twice per card — once in `_buildRepoScopeMap`, once in `_cardsToPromptPlans` for `epicId`; the record-driven builder calls it once).
+
+### Complex / Risky
+- **Worktree-resolution convergence** — folding two divergent *heuristics* into one shared resolver. NOT a status-filter issue: both paths are already active-only (`getWorktrees()` filters in SQL). The board path matches `epic_id` + sole-active-worktree fallback; the CLI path matches `epic_id` + `project`. Unifying to the superset changes worktree resolution for **non-epic** plans in multi-worktree / project-worktree setups (e.g. the board path gains `project` match; the CLI path gains sole-entry fallback), which can inject a safety-session block into a previously-bare non-epic prompt. This is the only risk that can break the byte-identical-non-epic guarantee; gated by the mandatory non-epic snapshot in Edge-Cases.
+- **Error-contract unification** — today the five sites are inconsistent: three wrap `expandEpicSubtaskPlans` in `try/catch` (log + continue), two do not (would throw). The builder must pick one contract and adapters must not double-handle.
+- **`options.workingDirectory` override preservation** in `_handleTriggerAgentActionInternal` — the override replaces both `effectiveWorkspaceRoot` and `effectiveWorkingDir`; the builder must use the real root for path resolution, then the override is applied to the primary plan's `workingDir` after the builder returns. Applying it before would resolve paths against the wrong root.
+- **Circular-import avoidance** — `KanbanProvider` must not import `TaskViewerProvider` to reach `resolveWorktreePathForPlan`; the worktree query must move to a shared location.
 
 ## Decisions (no open questions)
 
 - **One canonical builder, on `KanbanProvider`.** It already owns `expandEpicSubtaskPlans`, `_resolvePlanFilePath`, the worktree-map construction, and `generateUnifiedPrompt`. `TaskViewerProvider` and `PlanningPanelProvider` already hold a `_kanbanProvider`/`kp` reference and call into it. Putting the builder anywhere else would force the DB handle and three private helpers to be threaded out; this is the lowest-coupling home. **Not** creating a new standalone module — that would require passing `KanbanDatabase` + relocating `_resolvePlanFilePath`/worktree logic, a larger blast radius for no functional gain.
-- **The builder is record-driven.** Canonical input is `KanbanPlanRecord` (the DB row), because it carries every field needed (`planId`, `topic`, `complexity`, `repoScope`, `epicId`, `isEpic`, `planFile`, `mirrorPath`, `brainSourcePath`, `project`, `kanbanColumn`). Callers that start from `sessionId[]` resolve records first; callers that start from `KanbanCard[]` resolve the record by `sessionId` (the card's in-memory fields are a strict subset of the record, so a DB read loses nothing and gains `repoScope`/fallbacks). Dispatch is not a hot path — one DB read per dispatched card is acceptable and removes the separate `repoScopeMap` plumbing entirely.
-- **Worktree resolution moves into the builder.** It accepts an optional pre-built `worktreePathMap` (the board path already has one cheaply); when absent, it resolves per-record via the same logic as `resolveWorktreePathForPlan`. `resolveWorktreePathForPlan` is promoted/duplicated as needed so `KanbanProvider` does not import `TaskViewerProvider` (avoid a circular module reference — see Edge Cases).
-- **`epicTopic` is set on the primary epic plan** inside the builder, so the `[EPIC: …]` label renders correctly everywhere at once. This is safe: `generateUnifiedPrompt` already derives `epicTopic` from `plans.find(p => !p.isSubtask)?.topic`, so setting it on the object only improves the rendered label and does not change epic-mode detection.
+- **The builder is record-driven.** Canonical input is `KanbanPlanRecord` (the DB row), because it carries every field needed (`planId`, `topic`, `complexity`, `repoScope`, `epicId`, `isEpic` [number 0/1, coerced via `!!`], `planFile`, `mirrorPath`, `brainSourcePath`, `project`, `kanbanColumn`). Callers that start from `sessionId[]` resolve records first; callers that start from `KanbanCard[]` resolve the record by `sessionId` (the card's in-memory fields are a strict subset of the record, so a DB read loses nothing and gains `repoScope`/fallbacks). Dispatch is not a hot path — one DB read per dispatched card is acceptable and removes the separate `repoScopeMap` plumbing entirely. Note: `_buildRepoScopeMap` already does this same `getPlanBySessionId` read to source `repoScope`, so the builder **halves** the per-card DB reads on the board path (from 2 to 1), not adds one.
+- **Worktree resolution moves into the builder, unified on one heuristic.** Both existing paths are already active-only (`getWorktrees()` filters `status='active'` in SQL), so there is **no status-filter change to make** — the review's "converge on active" framing was based on a misread and is dropped. The genuine reconciliation is the matching *heuristic*. **Decision:** the unified resolver uses **`map.get(planId)` → `map.get(epicId)` → `project` match → sole-active-worktree fallback** (the superset of both paths). Rationale: a plan in a project with an active worktree *should* resolve it (the board path lacked this), and the sole-entry fallback preserves the board path's current single-worktree convenience. **Accepted consequence (the one permitted non-epic prompt diff):** a non-epic plan may now resolve a project- or sole-worktree on a path that previously returned `undefined`, gaining a safety-session block — this is correct behavior, and it MUST be snapshot-verified (see Edge-Cases) to confirm the blast radius is exactly this and nothing else. The worktree-table query moves to a shared free function so `KanbanProvider` does not import `TaskViewerProvider` (circular-import avoidance — see Edge-Cases). `_buildActiveWorktreePathMap` is a straight extraction of the existing map-building over `getWorktrees()` — no filter change needed.
+- **`epicTopic` is set on the primary epic plan** inside the builder, so the `[EPIC: …]` label renders correctly everywhere at once. This is safe: `generateUnifiedPrompt` already derives `epicTopic` from `plans.find(p => !p.isSubtask)?.topic` (KanbanProvider.ts:3103), so setting it on the object only improves the rendered label and does not change epic-mode detection (which keys on `isSubtask`).
 - **Plan-file fallbacks (`mirror_path`, `brain_source_path`) become universal** by living in the builder, so the copy/drag paths gain the same resilience the batch path already had.
-- **Behavioral parity is the success bar, not behavioral change.** The five sites must emit byte-identical prompts to today for non-epic plans, and correctly-bundled prompts for epics. This is a refactor; no prompt-text semantics change.
+- **Error contract: catch + continue.** The builder wraps `expandEpicSubtaskPlans` in `try/catch` and keeps the primary epic + any already-resolved subtasks on failure (matching the majority behavior and the edge-case note about missing subtask files). Adapters drop their own `try/catch` around the builder call to avoid double-handling.
+- **Behavioral parity is the success bar for non-epic prompts, with one documented exception.** The five sites must emit byte-identical prompts to today for non-epic plans, **except** for the unified-worktree-heuristic consequence: a non-epic plan in a project with an active project-worktree (or in a single-worktree workspace) may newly resolve that worktree + safety-session block on a path that previously returned `undefined`. That is the only allowed non-epic diff. Epics get correctly-bundled prompts; the two intended epic diffs are (a) the two previously-broken paths now show `EPIC MODE` + subtask list, and (b) **all** epic paths now render `- [EPIC: topic]` instead of `- [topic]` (cosmetic label improvement to working paths too).
 
 ## Current State
 
-- `src/services/agentPromptBuilder.ts` — `buildKanbanBatchPrompt` (prompt **text**), `BatchPromptPlan` interface (`topic, absolutePath, complexity?, workingDir?, sessionId?, worktreePath?, epicId?, isSubtask?, epicTopic?, isEpic?`), `buildPromptDispatchContext` (renders `[EPIC: …]` / `[SUBTASK] …` / `[topic]`). **No change needed here** beyond confirming the contract.
+- `src/services/agentPromptBuilder.ts` — `buildKanbanBatchPrompt` (prompt **text**), `BatchPromptPlan` interface (`topic, absolutePath, complexity?, workingDir?, sessionId?, worktreePath?, epicId?, isSubtask?, epicTopic?, isEpic?` — verified at line 28), `buildPromptDispatchContext` (renders `[EPIC: …]` / `[SUBTASK] …` / `[topic]` — verified at line 253). **No change needed here** beyond confirming the contract.
 - `src/services/KanbanProvider.ts`
-  - `generateUnifiedPrompt(role, plans, workspaceRoot, opts)` — public chokepoint (KanbanProvider.ts:2957). Already infers `epicMode` from `isSubtask` entries. **Unchanged.**
-  - `expandEpicSubtaskPlans(workspaceRoot, epicPlanId, epicTopic, epicColumn, worktreePath?, worktreePathMap?)` — public (2566). The shared subtask expander; the new builder calls it. `epicColumn` param is currently unused inside it — keep or drop as part of cleanup.
-  - `_cardsToPromptPlans(cards, workspaceRoot, repoScopeMap?)` — private (2490). Builds the worktree map and per-card plans; **to be reduced to a thin adapter** over the new builder.
-  - `_resolvePlanFilePath(workspaceRoot, planFile)` — private (2476). Reused by the builder.
+  - `generateUnifiedPrompt(role, plans, workspaceRoot, opts)` — public chokepoint (line 2957). Already infers `epicMode` from `isSubtask` entries (line 3098) and derives `epicTopic` from the primary non-subtask plan's `topic` (line 3103). **Unchanged.**
+  - `expandEpicSubtaskPlans(workspaceRoot, epicPlanId, epicTopic, epicColumn, worktreePath?, worktreePathMap?)` — public (line 2566). The shared subtask expander; the new builder calls it. `epicColumn` param is currently **unused** inside the body (verified) — keep or drop as part of cleanup.
+  - `_cardsToPromptPlans(cards, workspaceRoot, repoScopeMap?)` — private (line 2490). Builds the worktree map over `getWorktrees()` (already `status='active'`-filtered in SQL; the map keys on `epic_id` only) and per-card plans; **to be reduced to a thin adapter** over the new builder.
+  - `_resolvePlanFilePath(workspaceRoot, planFile)` — private (line 2476). Reused by the builder.
+  - `_buildRepoScopeMap(cards, workspaceRoot)` — private (line 2671). Reads `plan.repoScope` via `getPlanBySessionId` per card; **becomes dead code** after the adapter switch (the builder sources `repoScope` from the record directly). Delete in the follow-up pass.
+  - `chatCopyPrompt` handler (line 6365) — builds `chatPlans` and calls `buildKanbanBatchPrompt('chat', …)` directly. **Out of scope** (see Goal exclusions). No change.
 - `src/services/TaskViewerProvider.ts`
-  - `_resolveKanbanDispatchPlans(sessionIds, workspaceRoot)` — private (2959). **To be reduced to a thin adapter** (resolve records → call builder).
-  - `resolveWorktreePathForPlan(db, {epicId, project})` — public static (7272). Source of the worktree-resolution logic to centralize.
-  - `_handleTriggerAgentActionInternal` (~15754) and `_handleCopyPlanLink` (~13929) — inline builders, **to call the adapter/builder** instead of constructing arrays by hand.
+  - `_resolveKanbanDispatchPlans(sessionIds, workspaceRoot)` — private (line 2967). **To be reduced to a thin adapter** (resolve records → call builder).
+  - `resolveWorktreePathForPlan(db, {epicId, project})` — public static (line 7275). Source of the worktree-resolution logic to centralize. Matches `epic_id` then `project`. Its `.filter(w => w.status === 'active')` (line 7283) is redundant — `getWorktrees()` already filters active in SQL.
+  - `_handleTriggerAgentActionInternal` (line 15780) and `_handleCopyPlanLink` (line 13932) — inline builders, **to call the adapter/builder** instead of constructing arrays by hand.
+  - `handleGetDefaultPromptPreviews` (line 4093) — synthetic placeholder preview. **Out of scope.** No change.
 - `src/services/PlanningPanelProvider.ts`
-  - `copyEpicPlannerPrompt` handler (~3030) — inline builder, **to call the builder**.
+  - `copyEpicPlannerPrompt` handler (line 3030) — inline builder, **to call the builder**.
+- `src/services/KanbanDatabase.ts` — `KanbanPlanRecord` interface (line 32; `isEpic?: number`, `mirrorPath`, `brainSourcePath`, `repoScope`, `project?`, `kanbanColumn` all present), `getPlanBySessionId` (line 2689), `getSubtasksByEpicId` (line 3944; filters `status = 'active'`), `getWorktrees` — all verified, no change.
 - Tests: `src/test/` (the deleted `orchestrator-prompt.test.js` is gone; epic dispatch has no direct unit coverage today — this plan adds it).
+
+## Edge-Case & Dependency Audit
+
+- **Circular import (KanbanProvider ↔ TaskViewerProvider).** `resolveWorktreePathForPlan` is a static on `TaskViewerProvider`. `KanbanProvider` must not import `TaskViewerProvider` (they already have a one-way `_kanbanProvider` reference the other direction). **Resolution:** move the worktree-table query into a free function (e.g. in `KanbanDatabase` as `getActiveWorktreePathFor({epicId, project})`, or a small `worktreeResolver.ts`) and have both `KanbanProvider._resolveWorktreeForRecord` and the existing `TaskViewerProvider.resolveWorktreePathForPlan` delegate to it. Verify no new import cycle with `madge`/tsc.
+- **Worktree-resolution heuristic convergence + the non-epic invariant (the one real correctness gate).** There is **no status divergence** — `getWorktrees()` filters `status='active'` in SQL (line 2462), so both `_cardsToPromptPlans` (via `getWorktrees()`) and `resolveWorktreePathForPlan` (whose extra `.filter(active)` at line 7283 is a no-op) already see active-only worktrees. The divergence is the *heuristic*: board = `epic_id` + sole-active-worktree fallback; CLI = `epic_id` + `project` match. The unified resolver uses the superset (`planId → epicId → project → sole-entry`). **Mandatory verification:** snapshot the prompt for a **non-epic** plan that lives in a project with an active project-worktree, across all four entry points, before and after. The *only* permitted non-epic diff is that such a plan may newly gain that worktree path (and its safety-session block) on a path that previously returned `undefined`. If any *other* non-epic prompt text changes, the resolver heuristic is wrong — stop and reconcile. Also snapshot the multi-worktree case (board path gaining `project` match; CLI path gaining sole-entry fallback).
+- **Optimistic board state vs DB.** `_cardsToPromptPlans` currently reads `card.column`/`card.isEpic` from in-memory `_lastCards`, which during an optimistic drag may be a step ahead of the DB. Switching to a DB read per card means the builder sees committed state. Dispatch persists the column move to the DB *before* prompt generation in the existing flows, so this is safe — **but verify** the `promptOnDrop`/`triggerAction` ordering still persists-then-builds (it does today: `moveCardToColumn`/`_updateKanbanColumnForSession` run before/around prompt gen). Add a regression check for an epic dragged from `CODER CODED`.
+- **`isEpic` staleness / sticky flag.** `upsertPlan` keeps `is_epic` sticky (`CASE WHEN excluded.is_epic > 0 …`). The builder reads `rec.isEpic` (a `number`, coerced via `!!`) straight from the row, so a freshly-promoted epic is correctly detected as long as `getPlanBySessionId` returns the post-promotion row. No change to promotion logic.
+- **Subtask with no plan file / archived subtask.** `expandEpicSubtaskPlans` already filters to `status='active'` (verified, KanbanDatabase.ts:3947) and resolves paths via `_resolvePlanFilePath`; preserve that. A subtask whose file is missing should be skipped, not abort the whole epic — the builder's `try/catch` around `expandEpicSubtaskPlans` ensures the primary + remaining subtasks survive if one subtask path is bad.
+- **Empty result.** If `records` is empty or every plan file is missing, `buildDispatchPlans` returns `[]`; callers already handle the empty case (`if (validPlans.length === 0) return false`). Preserve those guards.
+- **`workingDirectory` override** (CLI dispatch `options.workingDirectory`) and **repoScope** — the override currently replaces both `effectiveWorkspaceRoot` and `effectiveWorkingDir` in `_handleTriggerAgentActionInternal` (lines 15957–15958). The builder computes `workingDir` from `repoScope` and resolves paths against the **real** `workspaceRoot`; when `options.workingDirectory` is set it must still win for the primary plan's `workingDir` only. Apply the override **after** the builder returns, on the primary entry only (subtasks keep their own repoScope-derived dirs, matching today). `generateUnifiedPrompt` is then called with `effectiveWorkspaceRoot` as today.
+- **`sessionId` stamping (minor contract change).** `_handleTriggerAgentActionInternal` currently builds its primary `dispatchPlan` with **no** `sessionId` (line 15961); the builder forces `sessionId: rec.sessionId || rec.planId` on every entry. This does not affect prompt text (sessionId is not rendered), but it does change the returned array structure. **Verify** no downstream drag-path consumer assumes the primary's `sessionId` is absent (run-sheet/column-cascade code iterates these arrays). The current `_resolveKanbanDispatchPlans` already stamps `sessionId` on every entry, so this aligns the drag path with the batch path.
+- **Multi-repo working dirs.** `buildPromptDispatchContext` switches between single shared `WORKING DIRECTORY` and `MULTI-REPO BATCH` based on distinct `workingDir`s. Since the builder sets `workingDir` exactly as before, this output is unchanged.
+- **`sessionId` on returned plans.** Batch/dispatch callers depend on `sessionId` being present on every returned entry (for run-sheet updates, column cascades). The builder must stamp `sessionId` on both primary and subtask entries (subtasks: `sp.sessionId || epicSessionId`) — matching current `_resolveKanbanDispatchPlans` behavior.
+- **`~4000 installs` / shipped state.** This is pure in-memory dispatch logic — no persisted format, settings, or files change. No migration required.
+- **Published prompt text.** Because the goal is byte-identical non-epic prompts (modulo the documented worktree-heuristic exception above), snapshot prompts **before** the refactor and diff after. Snapshot coverage: (a) planner/coder/reviewer for a normal non-epic plan with no project/sole worktree across all four entry points — byte-identical; (b) a non-epic plan in a project with an active worktree (and a single-worktree workspace) — only the new worktree path/safety-session block may differ; (c) coder/reviewer for an epic across **all four** entry points (board "Copy review prompt", project.html Plans-tab copy, single-card drag→column, multi-card drag) — not only the two previously-broken ones, because the `[EPIC: …]` label change touches the working paths too. Intended diffs: epics show `[EPIC: …]` and the `EPIC MODE` block in the two previously-broken paths, plus the `[EPIC: …]` label improvement in all epic paths.
+
+## Dependencies
+
+- None. This is a self-contained internal refactor of `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, and `src/services/PlanningPanelProvider.ts`. No external library, API, or sibling-plan dependency.
+
+## Adversarial Synthesis
+
+Key risks: (1) the `chatCopyPrompt` sixth construction site was unacknowledged and would false-positive the grep audit — now explicitly documented as out-of-scope; (2) **worktree resolution is NOT a status-filter divergence** (an earlier review claim that was checked against source and found false — `getWorktrees()` filters `status='active'` in SQL, so both paths are already active-only). The real divergence is the matching *heuristic* (board: `epic_id` + sole-entry fallback; CLI: `epic_id` + `project`); decided by unifying on the superset (`planId → epicId → project → sole-entry`), with the single permitted non-epic prompt diff (a plan newly gaining a project/sole worktree path) gated by a mandatory non-epic before/after snapshot; (3) the `epicTopic` label fix changes prompt text in currently-working epic paths, not just the two broken ones — the snapshot diff covers all four entry points. Mitigations: record-driven builder halves DB reads and eliminates `repoScopeMap` plumbing; error contract unified to catch+continue; circular import avoided by extracting the worktree query to a shared free function.
 
 ## Proposed Changes
 
@@ -93,11 +159,16 @@ public async buildDispatchPlans(
             ...(isEpic ? { epicTopic: rec.topic } : {}),   // primary epic gets [EPIC: …] label
         });
         if (isEpic && hasDb && rec.planId) {
-            const subs = await this.expandEpicSubtaskPlans(
-                workspaceRoot, rec.planId, rec.topic || 'Untitled', rec.kanbanColumn || '',
-                worktreePath, opts?.worktreePathMap
-            );
-            for (const sp of subs) { out.push({ ...sp, sessionId: sp.sessionId || rec.sessionId || rec.planId }); }
+            try {
+                const subs = await this.expandEpicSubtaskPlans(
+                    workspaceRoot, rec.planId, rec.topic || 'Untitled', rec.kanbanColumn || '',
+                    worktreePath, opts?.worktreePathMap
+                );
+                for (const sp of subs) { out.push({ ...sp, sessionId: sp.sessionId || rec.sessionId || rec.planId }); }
+            } catch (err) {
+                console.warn(`[KanbanProvider] epic subtask expansion failed for ${rec.planId}:`, err);
+                // keep primary + any already-pushed subtasks; do not abort
+            }
         }
     }
     return out;
@@ -105,8 +176,9 @@ public async buildDispatchPlans(
 ```
 
 Helpers extracted into `KanbanProvider` (private):
-- `_resolveDispatchPlanFile(workspaceRoot, rec)` — returns the first of `rec.planFile` / `rec.mirrorPath` (under `.switchboard/plans/`) / `rec.brainSourcePath` that exists on disk, as a workspace-relative path. This is the logic currently inline only in `_resolveKanbanDispatchPlans`.
-- `_resolveWorktreeForRecord(workspaceRoot, rec, map?)` — `map?.get(rec.planId) ?? map?.get(String(rec.epicId)) ?? (map size 1 ? sole value) ?? <DB resolve by {epicId, project}>`. Folds together the card path's map lookup and the sessionId path's `resolveWorktreePathForPlan`. Move the worktree-table query body here (or have both call a shared free function) so `KanbanProvider` does not depend on `TaskViewerProvider`.
+- `_resolveDispatchPlanFile(workspaceRoot, rec)` — returns the first of `rec.planFile` / `rec.mirrorPath` (under `.switchboard/plans/`) / `rec.brainSourcePath` that exists on disk, as a workspace-relative path. This is the logic currently inline only in `_resolveKanbanDispatchPlans` (lines 2984–3012).
+- `_resolveWorktreeForRecord(workspaceRoot, rec, map?)` — unified heuristic (superset of both paths): `map?.get(rec.planId) ?? map?.get(String(rec.epicId)) ?? <project match via shared resolver> ?? (map size 1 ? sole value)`. Folds together the card path's map lookup + sole-entry fallback and the sessionId path's `epic_id`/`project` match. Move the worktree-table query body into a shared free function (e.g. `KanbanDatabase.getActiveWorktreePathFor({epicId, project})`, or a small `worktreeResolver.ts`) so both `KanbanProvider._resolveWorktreeForRecord` and `TaskViewerProvider.resolveWorktreePathForPlan` delegate to it. No status-filter parameter needed — `getWorktrees()` already filters active. `KanbanProvider` does not depend on `TaskViewerProvider`.
+- `_buildActiveWorktreePathMap(workspaceRoot)` — straight extraction of the current inline map logic (lines 2499–2507) over `getWorktrees()`. No filter change (already active-only in SQL); rename keeps the intent explicit.
 
 ### 2. Reduce the two main builders to adapters
 
@@ -115,7 +187,7 @@ Helpers extracted into `KanbanProvider` (private):
 private async _cardsToPromptPlans(cards: KanbanCard[], workspaceRoot: string, _legacyRepoScopeMap?: Map<string,string>): Promise<BatchPromptPlan[]> {
     const db = this._getKanbanDb(workspaceRoot);
     if (!(db && await db.ensureReady())) return [];
-    const worktreePathMap = await this._buildActiveWorktreePathMap(workspaceRoot); // existing map logic, extracted
+    const worktreePathMap = await this._buildActiveWorktreePathMap(workspaceRoot); // extracted, now filters by active
     const records: KanbanPlanRecord[] = [];
     for (const card of cards) {
         const rec = await db.getPlanBySessionId(this._cardId(card));
@@ -124,7 +196,7 @@ private async _cardsToPromptPlans(cards: KanbanCard[], workspaceRoot: string, _l
     return this.buildDispatchPlans(workspaceRoot, records, { worktreePathMap });
 }
 ```
-(The `repoScopeMap` parameter is retained but ignored, then deleted from call sites in a follow-up pass to keep this diff reviewable. Mark it `_legacyRepoScopeMap` and add a one-line deprecation comment.)
+(The `repoScopeMap` parameter is retained but ignored, then deleted from call sites in a follow-up pass to keep this diff reviewable. Mark it `_legacyRepoScopeMap` and add a one-line deprecation comment. **Also delete `_buildRepoScopeMap` itself** in that pass — it becomes dead code since the builder sources `repoScope` from the record. This halves per-card DB reads: the old flow called `getPlanBySessionId` in both `_buildRepoScopeMap` and `_cardsToPromptPlans`; the new flow calls it once.)
 
 `TaskViewerProvider._resolveKanbanDispatchPlans` becomes:
 ```ts
@@ -139,44 +211,41 @@ private async _resolveKanbanDispatchPlans(sessionIds: string[], workspaceRoot: s
     return this._kanbanProvider!.buildDispatchPlans(workspaceRoot, records);
 }
 ```
+(Drop the existing `try/catch` around `expandEpicSubtaskPlans` — the builder now owns the catch+continue contract.)
 
 ### 3. Route the three inline sites through the builder
 
-- `_handleTriggerAgentActionInternal`: replace the hand-built `dispatchPlan` + the (just-added) expansion block with `const dispatchPlans = await this._kanbanProvider.buildDispatchPlans(resolvedWorkspaceRoot, [plan], {...})` where `plan` is the already-fetched record. Keep the `effectiveWorkingDir`/`options.workingDirectory` override by applying it to the returned primary plan if `options.workingDirectory` is set (rare path — preserve exactly).
-- `_handleCopyPlanLink`: replace the hand-built `[plan]` + expansion with a `buildDispatchPlans(resolvedWorkspaceRoot, [planRecord])` call.
+- `_handleTriggerAgentActionInternal`: replace the hand-built `dispatchPlan` + the (just-added) expansion block with `const dispatchPlans = await this._kanbanProvider.buildDispatchPlans(resolvedWorkspaceRoot, [plan], {...})` where `plan` is the already-fetched record (line 15836). Keep the `effectiveWorkingDir`/`options.workingDirectory` override by applying it to the returned primary plan's `workingDir` **after** the builder returns if `options.workingDirectory` is set (rare path — preserve exactly: builder uses real `resolvedWorkspaceRoot` for path resolution, override only rewrites the primary plan's `workingDir`, then `generateUnifiedPrompt` is called with `effectiveWorkspaceRoot`). Drop the existing `try/catch` around expansion — the builder owns it. Note: the builder stamps `sessionId` on the primary (previously absent); verify no downstream run-sheet/column-cascade consumer assumed an absent primary `sessionId` in this path.
+- `_handleCopyPlanLink`: replace the hand-built `[plan]` + expansion with a `buildDispatchPlans(resolvedWorkspaceRoot, [planRecord])` call. Drop the existing `try/catch` around expansion.
 - `PlanningPanelProvider` `copyEpicPlannerPrompt`: replace the `[epic] + expandEpicSubtaskPlans` block with `kp.buildDispatchPlans(wsRoot, [epic])`.
 
-After this, **`expandEpicSubtaskPlans` has exactly one caller** (`buildDispatchPlans`), and **no file constructs a `BatchPromptPlan` literal for dispatch** except the builder and the two Setup/preamble previews (which are intentionally synthetic and document why with a comment).
+After this, **`expandEpicSubtaskPlans` has exactly one caller** (`buildDispatchPlans`), and **no file constructs a `BatchPromptPlan` literal for dispatch through `generateUnifiedPrompt`** except the builder. The two intentionally-excluded sites (`chatCopyPrompt`, `handleGetDefaultPromptPreviews`) bypass `generateUnifiedPrompt` and are documented in the Goal section.
 
 ### 4. Guardrail comment + lint note
 
-At each former builder site and at `generateUnifiedPrompt`, add a short comment: `// Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans — do not hand-roll (epic subtasks get silently dropped otherwise).` Optionally add a unit test (below) that fails if a known epic dispatch loses its subtasks.
-
-## Edge-Case & Dependency Audit
-
-- **Circular import (KanbanProvider ↔ TaskViewerProvider).** `resolveWorktreePathForPlan` is a static on `TaskViewerProvider`. `KanbanProvider` must not import `TaskViewerProvider` (they already have a one-way `_kanbanProvider` reference the other direction). **Resolution:** move the worktree-table query into a free function (e.g. in `KanbanDatabase` as `getActiveWorktreePathFor({epicId, project})`, or a small `worktreeResolver.ts`) and have both `KanbanProvider._resolveWorktreeForRecord` and the existing `TaskViewerProvider.resolveWorktreePathForPlan` delegate to it. Verify no new import cycle with `madge`/tsc.
-- **Optimistic board state vs DB.** `_cardsToPromptPlans` currently reads `card.column`/`card.isEpic` from in-memory `_lastCards`, which during an optimistic drag may be a step ahead of the DB. Switching to a DB read per card means the builder sees committed state. Dispatch persists the column move to the DB *before* prompt generation in the existing flows, so this is safe — **but verify** the `promptOnDrop`/`triggerAction` ordering still persists-then-builds (it does today: `moveCardToColumn`/`_updateKanbanColumnForSession` run before/around prompt gen). Add a regression check for an epic dragged from `CODER CODED`.
-- **`isEpic` staleness / sticky flag.** `upsertPlan` keeps `is_epic` sticky (`CASE WHEN excluded.is_epic > 0 …`). The builder reads `rec.isEpic` straight from the row, so a freshly-promoted epic is correctly detected as long as `getPlanBySessionId` returns the post-promotion row. No change to promotion logic.
-- **Subtask with no plan file / archived subtask.** `expandEpicSubtaskPlans` already filters to `status='active'` and resolves paths via `_resolvePlanFilePath`; preserve that. A subtask whose file is missing should be skipped, not abort the whole epic — confirm `buildDispatchPlans` keeps the epic + remaining subtasks if one subtask path is bad.
-- **Empty result.** If `records` is empty or every plan file is missing, `buildDispatchPlans` returns `[]`; callers already handle the empty case (`if (validPlans.length === 0) return false`). Preserve those guards.
-- **`workingDirectory` override** (CLI dispatch `options.workingDirectory`) and **repoScope** — the override currently replaces both `effectiveWorkspaceRoot` and `effectiveWorkingDir` in `_handleTriggerAgentActionInternal`. The builder computes `workingDir` from `repoScope`; when `options.workingDirectory` is set it must still win for the primary plan. Apply the override after the builder returns, on the primary entry only (subtasks keep their own repoScope-derived dirs, matching today).
-- **Multi-repo working dirs.** `buildPromptDispatchContext` switches between single shared `WORKING DIRECTORY` and `MULTI-REPO BATCH` based on distinct `workingDir`s. Since the builder sets `workingDir` exactly as before, this output is unchanged.
-- **`sessionId` on returned plans.** Batch/dispatch callers depend on `sessionId` being present on every returned entry (for run-sheet updates, column cascades). The builder must stamp `sessionId` on both primary and subtask entries (subtasks: `sp.sessionId || epicSessionId`) — matching current `_resolveKanbanDispatchPlans` behavior.
-- **`~4000 installs` / shipped state.** This is pure in-memory dispatch logic — no persisted format, settings, or files change. No migration required.
-- **Published prompt text.** Because the goal is byte-identical non-epic prompts, snapshot a few prompts (planner/coder/reviewer for a normal plan; coder/reviewer for an epic) **before** the refactor and diff after. The only intended diff: epics now show `[EPIC: …]` and the `EPIC MODE` block in the two previously-broken paths, plus the `[EPIC: …]` label improvement everywhere.
+At each former builder site and at `generateUnifiedPrompt`, add a short comment: `// Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans — do not hand-roll (epic subtasks get silently dropped otherwise).` Add a unit test (below) that fails if a known epic dispatch loses its subtasks.
 
 ## Verification Plan
 
-1. `npx tsc --noEmit -p tsconfig.json` → no new errors (baseline currently has 2 pre-existing `TS2835` module-resolution warnings unrelated to this work).
+> **Session directives:** SKIP COMPILATION (no `tsc`/build) and SKIP TESTS (no automated test execution) — the user runs these separately. The steps below describe what to verify; the implementer should run the typecheck/test commands only if the user requests it.
+
+### Automated Tests
+1. `npx tsc --noEmit -p tsconfig.json` → no new errors (baseline currently has 2 pre-existing `TS2835` module-resolution warnings unrelated to this work). *(Skipped this session — run separately.)*
 2. Add `src/test/dispatch-plan-builder.test.js` (or `.ts`) asserting:
    - A non-epic record → single-element array, `isEpic` falsy, no `isSubtask` entries.
    - An epic record with 2 active subtasks → 3 entries: primary `isEpic:true` + `epicTopic` set, two `isSubtask:true` entries with `epicTopic`.
    - Feeding the epic array through `buildKanbanBatchPrompt` yields a prompt containing `EPIC MODE` and both subtask paths.
-   - An epic whose one subtask file is missing → primary + remaining subtasks, no throw.
+   - An epic whose one subtask file is missing → primary + remaining subtasks, no throw (catch+continue contract).
+   - A non-epic record → `sessionId` stamped on the primary (verifies the drag-path contract alignment).
+   *(Skipped this session — run separately.)*
 3. Manual (VSIX): for the artifact-round-trip epic (`a8af9501…`), confirm **all four** of {board "Copy review prompt" card button, project.html Plans-tab copy button, single-card drag→column, multi-card drag} produce a prompt with `EPIC MODE` + both subtasks. Confirm a non-epic plan is unchanged across the same four.
-4. `grep` audit: after the refactor, `expandEpicSubtaskPlans(` has exactly one caller (`buildDispatchPlans`), and no `BatchPromptPlan` array literal is built for dispatch outside `buildDispatchPlans` and the two documented previews.
+4. `grep` audit: after the refactor, `expandEpicSubtaskPlans(` has exactly one caller (`buildDispatchPlans`), and no `BatchPromptPlan` array literal is built for dispatch through `generateUnifiedPrompt` outside `buildDispatchPlans`. **Known exceptions** (intentionally excluded — bypass `generateUnifiedPrompt`): `chatCopyPrompt` (KanbanProvider.ts:6365), `handleGetDefaultPromptPreviews` (TaskViewerProvider.ts:4093). `copyGeneralChatPrompt` (KanbanProvider.ts:734) uses an empty array and is not a construction site.
+5. Before/after prompt snapshot diff:
+   - (a) a non-epic plan with **no** project/sole worktree, across all four entry points — must be **byte-identical**.
+   - (b) a non-epic plan **in a project with an active project-worktree** (and separately, a workspace with exactly one active worktree), across all four entry points — the *only* permitted diff is that previously-bare paths may newly gain that worktree path + safety-session block (the unified-heuristic consequence). Any other change means the resolver heuristic is wrong.
+   - (c) an epic across **all four** entry points — intended diffs are the `[EPIC: …]` label in the plan list (all four) and the `EPIC MODE` block + subtask list (the two previously-broken paths: drag→column and plans-tab copy). Confirm the board-copy and batch-dispatch epic paths show the new `[EPIC: …]` label and nothing else changed.
+6. Confirm no new circular import between `KanbanProvider` and `TaskViewerProvider` (the worktree query moved to a shared free function).
 
-## Metadata
+---
 
-**Complexity:** 6
-**Tags:** refactor, backend, reliability
+**Recommendation:** Complexity 6 → **Send to Coder.**

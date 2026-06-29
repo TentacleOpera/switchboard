@@ -18,7 +18,38 @@ Fix visual consistency issues in the Afterburner/claudify themes — CRT scanlin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove CRT Scanline Animation from the Design and Setup Panels](../plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md) — **CODER CODED**
-- [ ] [Make the "Disable CRT Animation" Toggle Take Effect Live](../plans/feature_plan_20260626124051_crt_animation_disable_not_live.md) — **CODER CODED**
-- [ ] [Unify Kanban Card Meta (Complexity + Timestamp) to Grey Across Themes](../plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md) — **CODER CODED**
+- [x] [Remove CRT Scanline Animation from the Design and Setup Panels](../plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md) — **CODE REVIEWED**
+- [x] [Make the "Disable CRT Animation" Toggle Take Effect Live](../plans/feature_plan_20260626124051_crt_animation_disable_not_live.md) — **CODE REVIEWED**
+- [x] [Unify Kanban Card Meta (Complexity + Timestamp) to Grey Across Themes](../plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+---
+
+## Epic Review Pass (Reviewer-Executor)
+
+### Summary
+
+All 3 subtasks reviewed in-place against their plan requirements. 1 CRITICAL + 1 NIT found and fixed in Plan 1; Plans 2 and 3 passed clean.
+
+| Subtask | Findings | Fixes Applied | Status |
+|---------|----------|---------------|--------|
+| Remove CRT Scanline from Design/Setup | 1 CRITICAL, 1 NIT | 2 fixes applied | Fixed & verified |
+| Disable CRT Animation Toggle Live | 0 findings | None needed | Clean pass |
+| Kanban Card Meta Grey | 0 findings | None needed | Clean pass |
+
+### Findings by Severity
+
+**CRITICAL (1):**
+- `src/webview/setup.html:531-532` — Orphaned `<div class="cyber-scanlines"></div>` + comment not removed (CSS was removed but the element was left behind). **Fixed:** element + comment deleted.
+
+**NIT (1):**
+- `src/webview/design.html:1356` — `box-shadow` comment still referenced "scanlines" after scanline removal. **Fixed:** comment updated to remove stale reference.
+
+### Files Changed During Review
+
+- `src/webview/setup.html` — removed orphaned scanline div + comment (CRITICAL fix)
+- `src/webview/design.html` — updated stale comment (NIT fix)
+
+### Remaining Risks
+
+- None. All 3 subtasks are complete and verified. The epic's visual consistency goals (scanline scope, live toggle, grey meta) are fully addressed.

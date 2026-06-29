@@ -194,7 +194,7 @@
             height: 100%;
             min-height: 0;
         }
-        #kanban-list-pane, #epics-list-pane, #constitution-list-pane, #system-list-pane, #tuning-list-pane {
+        #kanban-list-pane, #epics-list-pane, #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane {
             width: 320px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -251,7 +251,8 @@
         .edit-mode #epics-preview-content, 
         .edit-mode #constitution-preview-content,
         .edit-mode #system-preview-content,
-        .edit-mode #tuning-preview-content {
+        .edit-mode #tuning-preview-content,
+        .edit-mode #projects-preview-content {
             display: none;
         }
         /* Active Doc Banner */
@@ -500,7 +501,9 @@
         .content-row.collapsed #kanban-list-pane,
         .content-row.collapsed #epics-list-pane,
         .content-row.collapsed #constitution-list-pane,
-        .content-row.collapsed #tuning-list-pane {
+        .content-row.collapsed #system-list-pane,
+        .content-row.collapsed #tuning-list-pane,
+        .content-row.collapsed #projects-list-pane {
             padding: 4px;
             overflow: hidden;
         }
@@ -508,7 +511,9 @@
         .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #epics-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row) {
+        .content-row.collapsed #system-list-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #projects-list-pane > *:not(.sidebar-toggle-row) {
             display: none !important;
         }
 
@@ -727,7 +732,9 @@
         .cyber-theme-enabled #kanban-list-pane,
         .cyber-theme-enabled #epics-list-pane,
         .cyber-theme-enabled #constitution-list-pane,
-        .cyber-theme-enabled #tuning-list-pane {
+        .cyber-theme-enabled #system-list-pane,
+        .cyber-theme-enabled #tuning-list-pane,
+        .cyber-theme-enabled #projects-list-pane {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -838,7 +845,8 @@
         #epics-preview-content,
         #constitution-preview-content,
         #system-preview-content,
-        #tuning-preview-content {
+        #tuning-preview-content,
+        #projects-preview-content {
             flex: 1;
             width: 100%;
             box-sizing: border-box;
@@ -1443,25 +1451,37 @@
         <!-- Projects tab (per-project PRDs) -->
         <div id="projects-content" class="shared-tab-content">
             <div class="controls-strip">
-                <select id="projects-workspace-filter"></select>
-                <select id="projects-prd-select">
-                    <option value="">Select a project…</option>
+                <select id="projects-workspace-filter">
+                    <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-build-prd-via-planner" class="strip-btn" disabled>Build via Planner</button>
+                <button id="btn-copy-prd-prompt" class="strip-btn" disabled>Copy Build Prompt</button>
+                <button id="btn-edit-projects" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-projects" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-projects" class="strip-btn" style="display:none;">Cancel</button>
                 <button class="strip-btn" id="btn-project-context" data-tooltip="When on, the selected project's PRD is injected into every dispatched prompt">PROJECT CONTEXT: OFF</button>
-                <button class="strip-btn" id="btn-save-project-prd" title="Save this project's PRD" disabled>SAVE PRD</button>
                 <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
             </div>
-            <div style="padding:10px 14px; overflow-y:auto; flex:1; display:flex; flex-direction:column;">
-                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                    A PRD is a loose set of product requirements respected across all plans in a project — independent of epics.
-                    When <strong>PROJECT CONTEXT</strong> is on, the selected project's PRD is injected into <em>every</em> dispatched
-                    prompt (planner, lead, coder, reviewer, tester). Stored at
-                    <code>.switchboard/projects/&lt;project&gt;/prd.md</code> (git-trackable).
+            <div class="content-row">
+                <div id="projects-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div id="projects-empty-state" class="empty-state" style="display:none;">No projects — add one on the Kanban board (+).</div>
+                    <div id="projects-items-container"></div>
                 </div>
-                <div id="projects-prd-path-hint" style="font-size:10px; font-family:monospace; color:var(--text-secondary); opacity:0.7; margin-bottom:6px;"></div>
-                <textarea id="projects-prd-editor" spellcheck="false"
-                    placeholder="Select a project, then write its product requirements here…"
-                    style="width:100%; flex:1; min-height:380px; resize:vertical; font-family:var(--vscode-editor-font-family, monospace); font-size:12px; line-height:1.5; padding:10px; box-sizing:border-box; background:var(--vscode-input-background, #1e1e1e); color:var(--vscode-input-foreground, #ddd); border:1px solid var(--border-color, #333); border-radius:4px;" disabled></textarea>
+                <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
+                    <div id="projects-prd-path-hint" style="font-size:10px; font-family:monospace; color:var(--text-secondary); opacity:0.7; margin-bottom:6px;"></div>
+                    <div id="projects-preview-pane" class="constitution-preview-pane">
+                        <div id="projects-preview-content">
+                            <div class="empty-state">Select a project to view its PRD</div>
+                        </div>
+                        <textarea id="projects-editor" class="markdown-editor" spellcheck="false"
+                            placeholder="Select a project, then write its product requirements here…"
+                            style="display:none;"></textarea>
+                    </div>
+                </div>
             </div>
         </div>
 
