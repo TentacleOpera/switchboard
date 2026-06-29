@@ -5057,12 +5057,17 @@ Each plan file must include:
     private _buildLinearImportPlanContent(node: LinearImportNode, parentIssue?: LinearIssue, createdAt?: string): string {
         const issue = node.issue;
 
-        const yamlFrontmatter = createdAt ? [
-            '---',
-            `created: ${createdAt}`,
-            '---',
-            ''
-        ].join('\n') : '';
+        // Record source state + parent in frontmatter so the file-backed sidebar can
+        // drive the status filter and hide sub-issues without re-hitting the API.
+        const fmLines = ['---', `created: ${createdAt}`];
+        const lnState = issue?.state?.name ? String(issue.state.name).replace(/\s+/g, ' ').trim() : '';
+        const lnType = issue?.state?.type ? String(issue.state.type).trim() : '';
+        if (lnState) { fmLines.push(`status: ${lnState}`); }
+        if (lnType) { fmLines.push(`statusType: ${lnType}`); }
+        if (issue?.project?.id) { fmLines.push(`projectId: ${String(issue.project.id).trim()}`); }
+        if ((issue as any)?.parentId) { fmLines.push(`parentId: ${String((issue as any).parentId).trim()}`); }
+        fmLines.push('---', '');
+        const yamlFrontmatter = createdAt ? fmLines.join('\n') : '';
 
         const parts = [
             yamlFrontmatter,
@@ -5320,12 +5325,18 @@ Each plan file must include:
         comments?: Array<{ comment_text: string; user?: { username?: string; email?: string }; date?: string }>
     ): string {
         const description = (task.markdownDescription || task.markdown_description || task.description || '').trim();
-        const yamlFrontmatter = createdAt ? [
-            '---',
-            `created: ${createdAt}`,
-            '---',
-            ''
-        ].join('\n') : '';
+        // Record source status + parent in frontmatter so the sidebar (which is
+        // file-backed) can drive the status-filter dropdown and hide subtasks
+        // without re-hitting the API.
+        const fmLines = ['---', `created: ${createdAt}`];
+        const cuStatus = task?.status?.status ? String(task.status.status).replace(/\s+/g, ' ').trim() : '';
+        const cuType = task?.status?.type ? String(task.status.type).trim() : '';
+        if (cuStatus) { fmLines.push(`status: ${cuStatus}`); }
+        if (cuType) { fmLines.push(`statusType: ${cuType}`); }
+        if (task?.list?.id) { fmLines.push(`listId: ${String(task.list.id).trim()}`); }
+        if (task?.parentId) { fmLines.push(`parentId: ${String(task.parentId).trim()}`); }
+        fmLines.push('---', '');
+        const yamlFrontmatter = createdAt ? fmLines.join('\n') : '';
 
         const parts = [
             yamlFrontmatter,
@@ -18696,13 +18707,14 @@ What would you like to find?`;
             importMode: 'plan' | 'document';
             deltaSince?: number;       // ClickUp: epoch ms for date_updated_gt
             deltaSinceIso?: string;    // Linear: ISO 8601 for updatedAt gt filter
+            includeClosed?: boolean;   // when true, also import done/closed (Linear: completed/canceled) tickets
         }
-    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number }> {
+    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number; pruned?: number }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
         }
-        const { provider, ids, listId, projectId, page = 1, append = false, importMode, deltaSince, deltaSinceIso } = data;
+        const { provider, ids, listId, projectId, page = 1, append = false, importMode, deltaSince, deltaSinceIso, includeClosed = false } = data;
         const isDelta = deltaSince !== undefined || deltaSinceIso !== undefined;
 
         let successCount = 0;
@@ -18773,6 +18785,32 @@ What would you like to find?`;
                 targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
 
+            // Progressive import: only TOP-LEVEL tickets become files. Subtasks are
+            // embedded into their parent's file when the parent is opened (importTask-
+            // AsDocument with includeSubtasks) — they are never listed as separate
+            // sidebar entries. Done/closed (Linear: completed/canceled) tickets are
+            // excluded unless includeClosed is set (the user switched the status filter
+            // to a closed status). This is what keeps a ~15-ticket list from ballooning
+            // into hundreds of files.
+            const _isSubtask = (it: any): boolean => !!it?.parentId;
+            const _isClosed = (it: any): boolean => {
+                if (provider === 'clickup') {
+                    const ty = String(it?.status?.type || '').toLowerCase();
+                    return ty === 'closed' || ty === 'done';
+                }
+                const ty = String(it?.state?.type || '').toLowerCase();
+                return ty === 'completed' || ty === 'canceled';
+            };
+            // Raw fetch count BEFORE filtering — used to gate the destructive prune.
+            // A zero raw count means the fetch returned nothing (empty list, transient
+            // API error, or a query mismatch), in which case we must NOT prune or we'd
+            // wipe every file in the directory. Only a non-empty fetch may reconcile.
+            const rawItemCount = items.length;
+            items = items.filter(it => !_isSubtask(it) && (includeClosed || !_isClosed(it)));
+
+            // Keep-set for the cleanup prune below (top-level tickets we're importing).
+            const keepIds = new Set<string>(items.map(it => String(it?.id || '')).filter(Boolean));
+
             // For delta pulls, load the cache DB entries once to check conflict
             // status (file mtime > last_synced_at → locally modified → skip).
             let dbTickets: any[] = [];
@@ -18816,7 +18854,54 @@ What would you like to find?`;
                 }
             }
 
-            return { success: true, successCount, failCount, errors, ...(skippedModified > 0 ? { skippedModified } : {}) };
+            // Cleanup prune (full imports only — a delta pull has no full picture of
+            // the list, so it must never delete). Removes files in the list directory
+            // that are NOT in the keep-set: subtasks, and done/closed tickets (when
+            // includeClosed is false). This is what reconciles the on-disk files back
+            // down to the ~15 top-level open tickets and clears the legacy over-import.
+            // Locally-modified files (mtime > last_synced_at) are preserved — never
+            // destroy unpushed local edits.
+            let pruned = 0;
+            if (!isDelta && targetDir && rawItemCount > 0) {
+                try {
+                    const cacheService = this._getCacheService(resolvedRoot);
+                    const dbBySlug = new Map<string, any>(
+                        (dbTickets.length ? dbTickets : await cacheService.getImportedTickets())
+                            .map((t: any) => [t.slugPrefix, t])
+                    );
+                    const entries = fs.existsSync(targetDir) ? fs.readdirSync(targetDir) : [];
+                    const filePrefix = `${provider}_`;
+                    for (const fname of entries) {
+                        if (!fname.endsWith('.md') || !fname.startsWith(filePrefix)) { continue; }
+                        // Filename shape: <provider>_<id>_<slug>.md → extract <id>.
+                        const rest = fname.slice(filePrefix.length, -3); // strip prefix + ".md"
+                        const taskId = rest.split('_')[0];
+                        if (!taskId || keepIds.has(taskId)) { continue; }
+                        const fullPath = path.join(targetDir, fname);
+                        // Preserve locally-modified files.
+                        const slugPrefix = `${provider}_${taskId}`;
+                        const dbEntry = dbBySlug.get(slugPrefix);
+                        if (dbEntry && dbEntry.lastSyncedAt) {
+                            try {
+                                if (fs.statSync(fullPath).mtimeMs > new Date(dbEntry.lastSyncedAt).getTime() + 1000) {
+                                    continue; // modified — keep it
+                                }
+                            } catch { /* fall through to delete */ }
+                        }
+                        try {
+                            fs.unlinkSync(fullPath);
+                            pruned++;
+                            try { await cacheService.deleteImportedTicket(slugPrefix); } catch { /* DB row cleanup best-effort */ }
+                        } catch (e) {
+                            console.warn('[TaskViewerProvider] prune: failed to delete', fullPath, e);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[TaskViewerProvider] prune: skipped due to error:', e);
+                }
+            }
+
+            return { success: true, successCount, failCount, errors, ...(skippedModified > 0 ? { skippedModified } : {}), ...(pruned > 0 ? { pruned } : {}) };
         }
 
         // Slow path: explicit IDs or plan mode (per-item API calls)

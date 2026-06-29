@@ -30,6 +30,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _lastScanTime = new Map<string, number>(); // Track last scan per workspace
     private _scanInProgress = false; // Guard against overlapping scans
     private _recentRenames = new Set<string>();
+    private _recentlyDeletedColumns = new Map<string, { column: string; ts: number }>();
     private _currentProjects = new Map<string, string>();
     private _scanSeenPaths = new Map<string, Set<string>>();
 
@@ -599,6 +600,18 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     // epic has no subtasks yet (provider guards that case).
                     await this._recomputeEpicColumn?.(newRecord.planId, workspaceRoot);
                 }
+                if (!relativePath.startsWith('.switchboard/epics/')) {
+                    const tombKey = `${relativePath}|${workspaceId}`;
+                    const tomb = this._recentlyDeletedColumns.get(tombKey);
+                    if (tomb && Date.now() - tomb.ts < 5000 && tomb.column && tomb.column !== 'CREATED') {
+                        // movePlanByPlanFile validates the column against VALID_KANBAN_COLUMNS + SAFE_COLUMN_NAME_RE
+                        // at KanbanDatabase.ts:1531 — if the column was removed since the delete, the move is
+                        // silently rejected and the plan stays at CREATED (status quo fallback).
+                        await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
+                        newRecord.kanbanColumn = tomb.column; // update in-memory record for ClickUp sync at :664
+                    }
+                    this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
+                }
                 plan = newRecord;
 
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
@@ -716,6 +729,9 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                         this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping delete for archived completed plan: ${plan.planFile}`);
                         return;
                     }
+                    const tombKey = `${relativePath}|${plan.workspaceId}`;
+                    this._recentlyDeletedColumns.set(tombKey, { column: plan.kanbanColumn, ts: Date.now() });
+                    setTimeout(() => this._recentlyDeletedColumns.delete(tombKey), 5000);
                     await db.deletePlanByPlanFile(plan.planFile, plan.workspaceId);
                     this._outputChannel?.appendLine(`[GlobalPlanWatcher] Deleted plan: ${plan.planFile}`);
                     this._onPlanDiscovered.fire({ uri, workspaceRoot });

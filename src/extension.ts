@@ -1574,7 +1574,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(pushTicketEditsDisposable);
 
-    const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids?: string[]; listId?: string; projectId?: string; workspaceId?: string; page?: number; append?: boolean; importMode: 'plan' | 'document'; deltaSince?: number; deltaSinceIso?: string }) => {
+    const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids?: string[]; listId?: string; projectId?: string; workspaceId?: string; page?: number; append?: boolean; importMode: 'plan' | 'document'; deltaSince?: number; deltaSinceIso?: string; includeClosed?: boolean }) => {
         return taskViewerProvider.importAllTasks(data.workspaceRoot, data);
     });
     context.subscriptions.push(importAllTasksDisposable);

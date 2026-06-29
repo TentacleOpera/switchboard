@@ -4855,8 +4855,6 @@ Please format the updated output document strictly as follows:
                 // knows what to poll.
                 this._ticketsCurrentSelection.set(workspaceRoot, { provider, listId, projectId });
                 try {
-                    // Read the per-list delta cursor from the kanban DB.
-                    // Mirrors the last_ticket_heal_scan_ throttle pattern.
                     if (!this._cacheService) {
                         this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
                     }
@@ -4864,16 +4862,13 @@ Please format the updated output document strictly as follows:
                     const cursorKey = provider === 'clickup'
                         ? `last_delta_pull_clickup_${listId || ''}`
                         : `last_delta_pull_linear_${projectId || ''}`;
-                    let lastPullIso: string | null = null;
-                    if (kanbanDb) {
-                        try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
-                    }
 
-                    // If cursor is unset → fall back to full import (initial load).
-                    // If cursor is set → delta pull (only changed tasks).
-                    const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
-                    const deltaSinceIso = lastPullIso || undefined;
-
+                    // The user-facing select/Refresh always does a FULL import + prune:
+                    // it reconciles the on-disk files to the live list (top-level + open,
+                    // plus closed when the status filter is on a closed status). Delta
+                    // pulls are reserved for the background auto-sync timer — without a
+                    // full pass the cleanup prune can't run and stale files would linger.
+                    const includeClosed = !!msg.includeClosed;
                     const result: any = await vscode.commands.executeCommand(
                         'switchboard.importAllTasks',
                         {
@@ -4882,12 +4877,12 @@ Please format the updated output document strictly as follows:
                             listId,
                             projectId,
                             importMode: 'document',
-                            ...(deltaSince !== undefined ? { deltaSince } : {}),
-                            ...(deltaSinceIso ? { deltaSinceIso } : {})
+                            includeClosed
                         }
                     );
 
-                    // Update the cursor only after a successful pull.
+                    // Refresh the cursor baseline so the background delta timer polls
+                    // from "now" rather than re-pulling the whole window.
                     if (result?.success && kanbanDb) {
                         const nowIso = new Date().toISOString();
                         try { await kanbanDb.setMeta(cursorKey, nowIso); } catch { /* ignore */ }
@@ -4917,7 +4912,7 @@ Please format the updated output document strictly as follows:
                         provider,
                         listId,
                         projectId,
-                        isDelta: lastPullIso !== null
+                        isDelta: false
                     });
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
@@ -5135,10 +5130,31 @@ Please format the updated output document strictly as follows:
                                 dbTickets = await this._cacheService.getImportedTickets();
                             }
 
+                            // Scope to the currently-selected list/project. The DB holds
+                            // tickets for EVERY list ever opened; without this, selecting one
+                            // sprint would show files from every other sprint. We scope by the
+                            // listId/projectId recorded in each file's frontmatter at import
+                            // time — instance-independent (does NOT depend on which service holds
+                            // the live hierarchy selection, which differs between providers).
+                            // If the webview didn't send a scope id, we don't scope (show all)
+                            // so the sidebar is never wrongly emptied.
+                            // ClickUp scopes strictly by list id (the key written to each file's
+                            // frontmatter from the live task's list.id, and the same id the webview
+                            // tracks as the selected list). Linear is left unscoped for now: its
+                            // project picker is name-based and per-project import is a known
+                            // pre-existing gap, so scoping it on a mismatched key would wrongly
+                            // empty the sidebar. (Linear per-project scoping = follow-up.)
+                            const scopeId = provider === 'clickup'
+                                ? String((msg.listId as string) || '').trim()
+                                : '';
+
                             // Map DB entries to the provider-specific tickets output list
                             for (const dbT of dbTickets) {
                                 if (dbT.sourceId === provider) {
                                     let kanbanColumn = '';
+                                    let clickStatus = '';
+                                    let parentId = '';
+                                    let fileScopeId = '';
                                     let syncStatus: 'synced' | 'modified' | 'local-only' = 'local-only';
                                     if (fs.existsSync(dbT.filePath)) {
                                         try {
@@ -5147,6 +5163,15 @@ Please format the updated output document strictly as follows:
                                             if (fm) {
                                                 const km = fm[1].match(/kanbanColumn:\s*(.+)/);
                                                 if (km) { kanbanColumn = km[1].trim(); }
+                                                // Real source status (ClickUp status name / Linear state name),
+                                                // written into frontmatter at import time so the status-filter
+                                                // dropdown works on file-backed rows.
+                                                const sm = fm[1].match(/^status:\s*(.+)$/m);
+                                                if (sm) { clickStatus = sm[1].trim(); }
+                                                const pm = fm[1].match(/^parentId:\s*(.+)$/m);
+                                                if (pm) { parentId = pm[1].trim(); }
+                                                const idm = fm[1].match(provider === 'clickup' ? /^listId:\s*(.+)$/m : /^projectId:\s*(.+)$/m);
+                                                if (idm) { fileScopeId = idm[1].trim(); }
                                             }
                                             // Sync status is purely a timestamp comparison against the
                                             // DB's last-fetch time: if the local file was edited after we
@@ -5154,10 +5179,20 @@ Please format the updated output document strictly as follows:
                                             syncStatus = this._ticketSyncStatusFromTimestamps(dbT.filePath, dbT.lastSyncedAt);
                                         } catch {}
                                     }
+                                    // Defensive: a subtask file (has parentId) is never a sidebar row —
+                                    // subtasks are embedded in their parent's file.
+                                    if (parentId) { continue; }
+                                    // List/project scoping: when the webview names a selected list/
+                                    // project, show ONLY files belonging to it. Files for other lists
+                                    // (and legacy files lacking the key) are hidden. The selected list
+                                    // is always re-imported on select — which rewrites its files WITH
+                                    // this key from the live task's list.id/project.id — so its rows
+                                    // reappear once that import completes.
+                                    if (scopeId && fileScopeId !== scopeId) { continue; }
                                     tickets.push({
                                         id: dbT.remoteDocId || dbT.slugPrefix.replace(`${provider}_`, ''),
                                         title: dbT.docName,
-                                        status: kanbanColumn || '',
+                                        status: clickStatus || kanbanColumn || '',
                                         filePath: dbT.filePath,
                                         lastSyncedAt: dbT.lastSyncedAt,
                                         syncStatus
@@ -5226,6 +5261,40 @@ Please format the updated output document strictly as follows:
                     this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: true, title, content });
                 } catch {
                     this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
+                }
+                break;
+            }
+            case 'importTicketSubtasks': {
+                // Progressive subtask import: when a parent is opened, embed its
+                // subtasks into the parent's file (a `## Subtasks` checklist) so they
+                // are persisted locally — rather than mass-importing every subtask as
+                // its own file up front. Subtasks already render live in the detail
+                // view, so this is a silent, best-effort file enrichment (no editor
+                // refresh). Skipped when the file has unpushed local edits — never
+                // clobber the user's work.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider as 'clickup' | 'linear';
+                const id = msg.id;
+                if (!workspaceRoot || !provider || !id) { break; }
+                const filePath = this._findTicketFilePath(workspaceRoot, provider, id);
+                if (!filePath) { break; } // parent isn't a local file yet — nothing to enrich
+                try {
+                    if (!this._cacheService) {
+                        this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                    }
+                    const dbTickets = await this._cacheService.getImportedTickets();
+                    const entry = dbTickets.find((t: any) => t.slugPrefix === `${provider}_${id}`);
+                    if (entry && this._ticketSyncStatusFromTimestamps(filePath, entry.lastSyncedAt) === 'modified') {
+                        break; // locally modified — leave it alone (subtasks still show in the live detail view)
+                    }
+                } catch { /* fall through and attempt the enrich */ }
+                try {
+                    await vscode.commands.executeCommand(
+                        'switchboard.importTaskAsDocument',
+                        { workspaceRoot, provider, id, includeSubtasks: true }
+                    );
+                } catch (e) {
+                    console.warn('[PlanningPanel] importTicketSubtasks failed:', e);
                 }
                 break;
             }

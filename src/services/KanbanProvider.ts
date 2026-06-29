@@ -8560,8 +8560,13 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
     private async _regenerateEpicFile(workspaceRoot: string, epicPlanId: string, db: KanbanDatabase): Promise<void> {
         const epic = await db.getPlanByPlanId(epicPlanId);
-        if (!epic || !epic.isEpic) return;
+        console.log(`[KanbanProvider] _regenerateEpicFile: epicPlanId=${epicPlanId}, found=${!!epic}, isEpic=${epic?.isEpic}, planFile=${epic?.planFile}`);
+        if (!epic || !epic.isEpic) {
+            console.log(`[KanbanProvider] _regenerateEpicFile: BAILING — epic=${epic ? 'found' : 'null'}, isEpic=${epic?.isEpic}`);
+            return;
+        }
         const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+        console.log(`[KanbanProvider] _regenerateEpicFile: found ${subtasks.length} subtasks`);
         const epicAbsPath = path.resolve(workspaceRoot, epic.planFile);
         let existingContent = '';
         try {

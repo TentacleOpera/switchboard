@@ -38,6 +38,7 @@ There has never been an in-product bridge between a hosted claude.ai artifact an
   4. **Ownership caveat is worded into the upload prompt** — redeploying to an existing URL only overwrites if the user owns that artifact; otherwise the `Artifact` tool errors out (server-side permission denial) and may fall back to minting a new URL. The prompt instructs Claude Code to report either outcome.
   5. **Claude Code-native artifacts only** (`claude.ai/code/artifact/{uuid}`) — standard chat share links (`claude.ai/share/{uuid}`) are immutable snapshots and cannot be round-tripped. The download prompt detects the URL type and warns if a share link is pasted.
   6. **Auth/plan prerequisites are baked into the prompts** — the download prompt instructs Claude Code to run `/login` first if not authenticated; both prompts note the Team/Enterprise plan + org-capability requirement so the user understands why a prompt might fail.
+  7. **Single canonical publish-form file** — the on-disk file is wrapperless + fully inlined (publish-ready), normalized once at download. It both previews locally and republishes with no per-edit reformatting, so there is no separate "source" vs "build" copy. The upload prompt re-asserts the no-wrapper / inline-only constraints to guard against edits by non-Claude agents.
 
 ## Complexity Audit
 
@@ -53,6 +54,7 @@ There has never been an in-product bridge between a hosted claude.ai artifact an
 
 ## Edge-Case & Dependency Audit
 
+- **Format normalization (wrappers + inline-only assets) — the main churn/breakage risk:** The two ends of the round-trip use different HTML forms. `WebFetch` returns the host-**wrapped** full document (`<!DOCTYPE><html><head>…</head><body>…`), but the `Artifact` tool **re-wraps** on publish — **confirmed empirically: it double-wraps**, nesting the file inside its own skeleton, and the wrapper + host-injected script/CSS layers accumulate on every round-trip if not stripped on download — and its CSP **blocks all external resources**. So (a) the **download** prompt normalizes the fetched page to publish-form **once** — strip the outer document wrappers, keep inner `<title>`/`<style>`/`<script>`, add `<meta charset="utf-8">` — making the on-disk file the single canonical form that both previews locally AND uploads with zero reformat; (b) the **upload** prompt re-asserts the constraints (no wrappers, all assets inlined as `data:` URIs) because the file may have been edited by a non-Claude agent (Gemini, etc.) that doesn't know the inline-only rule and could reintroduce an external `<link>`/`<img>` that renders locally but vanishes once published. A wrapperless, fully-inlined fragment renders fine in a browser/iframe (the browser supplies the missing structure; inlined assets work offline), so **one** publish-form file serves both preview and publish — no separate "source" + "build" copy, and no per-edit reformatting.
 - **No folder configured:** If the HTML tab has no configured folder, the download prompt must still be useful — fall back to instructing Claude Code to save into the active workspace root (or a sensible `docs/` subfolder) and tell the user to add that folder via **Manage HTML Folders** to see the preview. Do NOT silently produce a prompt with an empty path.
 - **No file selected for upload:** If `state.activeDocName` is empty, derive a filename from the URL slug and word the upload prompt to "read the file you downloaded from `<url>`". Never emit an upload prompt with a blank file path.
 - **Ownership / permission-error on upload:** A teammate-owned artifact cannot be overwritten; the `Artifact` tool returns a server-side permission error. The agent may fall back to minting a new URL under the active user's ownership. The upload prompt explicitly tells Claude Code to report either the successful redeploy OR the permission error + any new URL it minted as a fallback. (No way for the webview to know ownership ahead of time — this is correctly deferred to Claude Code at execution.)
@@ -69,7 +71,7 @@ There has never been an in-product bridge between a hosted claude.ai artifact an
 
 ## Adversarial Synthesis
 
-Key risks and mitigations: (1) **Webview tries to fetch directly** and silently fails under CSP — mitigated by the prompt-bridge architecture; the webview only builds strings. (2) **Downloaded file lands where the previewer can't see it** — mitigated by resolving the target to a configured HTML folder and falling back with an explicit "add this folder" instruction rather than an empty path. (3) **Upload overwrites the wrong artifact or fails on a non-owned URL** — mitigated by the self-describing source-marker (upload targets exactly the URL the file came from) plus explicit "report the permission error or new URL" wording. (4) **A banned `confirm()`/modal sneaks in** — mitigated by spec'ing immediate-action buttons with a text-flash only. (5) **New message type clobbers an existing handler** — mitigated by using distinct names (`copyArtifactPrompt` / `artifactPromptCopied`) verified absent from current handlers. (6) **Marker comment breaks rendering or gets stripped** — mitigated by using a standard HTML comment as line 1 (invisible in iframe, valid in HTML and Markdown) and instructing the upload prompt to preserve it. (7) **User pastes a `/share/` link instead of a `/code/artifact/` link** — mitigated by URL-type detection in the download prompt builder that emits a warning. (8) **User's Claude Code session is unauthenticated or on a non-Team plan** — mitigated by baking the `/login` prerequisite and plan-requirement note into both prompts.
+Key risks and mitigations: (1) **Webview tries to fetch directly** and silently fails under CSP — mitigated by the prompt-bridge architecture; the webview only builds strings. (2) **Downloaded file lands where the previewer can't see it** — mitigated by resolving the target to a configured HTML folder and falling back with an explicit "add this folder" instruction rather than an empty path. (3) **Upload overwrites the wrong artifact or fails on a non-owned URL** — mitigated by the self-describing source-marker (upload targets exactly the URL the file came from) plus explicit "report the permission error or new URL" wording. (4) **A banned `confirm()`/modal sneaks in** — mitigated by spec'ing immediate-action buttons with a text-flash only. (5) **New message type clobbers an existing handler** — mitigated by using distinct names (`copyArtifactPrompt` / `artifactPromptCopied`) verified absent from current handlers. (6) **Marker comment breaks rendering or gets stripped** — mitigated by using a standard HTML comment as line 1 (invisible in iframe, valid in HTML and Markdown) and instructing the upload prompt to preserve it. (7) **User pastes a `/share/` link instead of a `/code/artifact/` link** — mitigated by URL-type detection in the download prompt builder that emits a warning. (8) **User's Claude Code session is unauthenticated or on a non-Team plan** — mitigated by baking the `/login` prerequisite and plan-requirement note into both prompts. (9) **Format mismatch causes silent breakage or reformat churn** — `WebFetch` returns a wrapped document and external agents may reintroduce external assets, while the host re-wraps and blocks external resources; mitigated by normalizing to publish-form once on download (strip wrappers, inline assets, add charset) and re-asserting no-wrappers / inline-only in the upload prompt, so one canonical file both previews and publishes with no per-edit reformat.
 
 ## Proposed Changes
 
@@ -110,24 +112,26 @@ Keep both rows inside the existing `#controls-strip-planning-html` so the sideba
       `enabled in your org settings. If you are not logged in, run /login first.\n\n` +
       `1. Use WebFetch to retrieve the content at: ${url}\n` +
       `   (WebFetch passes your active claude.ai session credentials, so it gets the rendered content, not the React shell.)\n` +
-      `2. Name the file from the artifact's <title> or first heading (slugify it, .html extension). ` +
+      `2. Normalize to publish-ready form so the file round-trips without reformatting later. WebFetch returns the HOST-WRAPPED page — claude.ai's own skeleton (a frame-navigation <script>, a viewport meta, a CSS reset) PLUS the original document nested inside its <body>. Discard the host skeleton AND strip the document's own outer <!DOCTYPE>/<html>/<head>/<body> tags, keeping only the real inner content (the real <title>, the author's <style>/<script>, meta description). Add a single <meta charset="utf-8"> line so special characters render in local preview. Keep ALL assets inlined (data: URIs / inline <style>/<script>) and do NOT add external fonts/CSS/JS/images — the artifact host's CSP blocks them. This strip is REQUIRED, not cosmetic: the platform double-wraps rather than strips (confirmed), so skipping it nests another host skeleton on every round-trip.\n` +
+      `3. Name the file from the artifact's <title> or first heading (slugify it, .html extension). ` +
       `If no title is available, fall back to a slug derived from the URL path.\n` +
-      `3. Save the full content to: ${folder ? folder + '/' : ''}<chosen-filename>\n` +
+      `4. Save the normalized content to: ${folder ? folder + '/' : ''}<chosen-filename>\n` +
       (folder ? `` : `   (No HTML folder is configured in Switchboard — after saving, add this file's folder via "Manage HTML Folders" to preview it in the HTML tab.)\n`) +
-      `4. Make the FIRST line of the saved file this marker so the round-trip knows the source:\n` +
+      `5. Make the FIRST line of the saved file this marker so the round-trip knows the source:\n` +
       `   <!-- switchboard-artifact-source: ${url} -->\n` +
-      `5. Report the local path you saved.`;
+      `6. Report the local path you saved.`;
   };
 
   const ARTIFACT_UPLOAD_PROMPT = ({ url, folder, filename }) =>
     `Publish a local document back to claude.ai as an Artifact.\n\n` +
     `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability enabled.\n\n` +
     `1. Read the file: ${folder ? folder + '/' : ''}${filename}\n` +
-    `2. If it contains a \`switchboard-artifact-source:\` marker comment, redeploy to that existing URL by passing it as the Artifact tool's \`url\`. ` +
+    `2. Verify it is publish-ready before uploading — the host re-wraps and blocks external resources: ensure there are NO <!DOCTYPE>/<html>/<head>/<body> wrappers (strip them if an editor re-added any), and ALL assets are inlined as data: URIs / inline <style>/<script> (no external fonts, CSS, JS, or images — they render locally but silently disappear once published). If an edit introduced an external resource, inline it before publishing.\n` +
+    `3. If it contains a \`switchboard-artifact-source:\` marker comment, redeploy to that existing URL by passing it as the Artifact tool's \`url\`. ` +
     `NOTE: this only overwrites if I own that artifact. If the tool returns a permission error, publish as a NEW artifact instead and tell me the new url.\n` +
     (url ? `   (Expected source url: ${url})\n` : ``) +
-    `3. If there is no marker, publish as a new Artifact and report the new url.\n` +
-    `4. Preserve (or refresh) the marker comment, and use the file's <title>/first heading as the artifact title.`;
+    `4. If there is no marker, publish as a new Artifact and report the new url.\n` +
+    `5. Preserve (or refresh) the marker comment, and use the file's <title>/first heading as the artifact title.`;
   ```
 
   **Clarification (filename strategy):** the webview no longer bakes a UUID-slug filename into the prompt. Claude.ai artifact URLs are UUID-shaped, so a webview-derived slug yields a useless filename. Instead the download prompt instructs Claude Code (which sees the fetched content) to name the file from the artifact's `<title>`/first heading, with a URL-slug fallback. The webview stays dumb; the agent that sees the content picks a human-readable name.
@@ -163,6 +167,7 @@ Web research was conducted to confirm the two assumptions that were initially un
 - **Two URL types:** `claude.ai/code/artifact/{uuid}` (Claude Code-native, mutable) vs. `claude.ai/share/{uuid}` (standard chat, immutable snapshot). The round-trip only works for the former. The download prompt builder detects `/share/` URLs and emits a warning.
 - **Plan requirement:** The `Artifact` tool requires a **Team or Enterprise** Claude Code plan with org-level "Artifacts" capability enabled. Both prompts now include a prerequisites note.
 - **Artifact IDs are UUIDv4**, not slugs — reinforcing the filename-from-title strategy (a URL-slug filename would be a UUID, useless to humans).
+- **Publish form ≠ fetched form — EMPIRICALLY CONFIRMED (tested 29 Jun 2026).** Publishing a file that contains full `<!DOCTYPE>/<html>/<head>/<body>` wrappers does NOT error and is NOT stripped — the platform **double-wraps**: it injects the file verbatim inside its own `<head>…</head><body>…</body>` skeleton (which also adds a frame-navigation `<script>`, a viewport meta, and a CSS reset). It still renders (browsers normalize nested document tags) and the `<title>` is still extracted correctly even when nested. **Consequence:** `WebFetch` returns that whole host-wrapped page, so re-uploading it verbatim wraps it AGAIN — host-skeleton-inside-host-skeleton, with the host's script/reset re-embedded as body content — and the layers **accumulate on every round-trip**. The download step MUST therefore strip back to the inner content (discard the host skeleton AND the file's own wrappers) to keep a clean single-wrap canonical file.
 
 ## Verification Plan
 
@@ -179,6 +184,7 @@ Web research was conducted to confirm the two assumptions that were initially un
 - **No-folder fallback:** With no HTML folder configured, the download prompt still produces a valid path + the "add this folder" instruction.
 - **No-selection fallback:** With nothing previewed, the upload prompt uses a URL-derived filename, no blank path.
 - **House rules:** Buttons act immediately (no confirm dialog); "Copied!" flashes; clipboard contains the expected prompt.
+- **Format round-trip (double-wrap confirmed):** After download, confirm the saved file contains ONLY the real content — NO claude.ai host skeleton (no frame-navigation `<script>` / reset CSS) and NO `<!DOCTYPE>/<html>/<head>/<body>` wrappers — includes `<meta charset="utf-8">`, and renders in the iframe. Round-trip it twice and confirm no extra wrapper/host-skeleton layers accumulate. Then add an external `<link>` font, run the upload prompt, and confirm the prompt instructs inlining external assets before publish (so the published artifact doesn't lose the font).
 
 ## Recommendation
 

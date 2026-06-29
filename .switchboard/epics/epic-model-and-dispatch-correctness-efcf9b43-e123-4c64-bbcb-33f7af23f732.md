@@ -13,10 +13,14 @@ Make the epic data model and its dispatch and routing behavior consistent and co
 - **Remove Standalone Epics as a Concept**: Deletes the filesystem-scan path so the Epics tab shows only database-backed epics, the same source every other plan surface uses — also eliminating the duplicate and dead-ended document cards as a side effect.
 - **Epic Complexity Is Derived from Subtasks (Max)**: Stores an epic's complexity as the maximum score among its active subtasks — recomputed at creation, on membership change, and whenever a subtask is rescored (including the planner-agent file-watch reparse) — so a cleanup epic of low-complexity subtasks routes to the cheap lane while an epic containing a hard subtask routes to the lead, and the old Unknown-driven frontend/backend routing divergence is gone.
 - **Remove the Epic Subtask Cap (epic_max_subtasks)**: Dispatches every active subtask in the epic prompt with no truncation or warning line, closing the latent bug where capped-but-cascaded subtasks were marked coded without ever reaching an agent.
+- **Remove the Worktree Chip from Epic Cards (Visual Noise)**: Deletes the non-interactive monospace worktree branch badge from the epic card topic line — pure visual noise that duplicates the Worktrees tab. The underlying `currentEpicWorktrees` state and the Worktrees-tab dropdown guard are preserved; only the redundant on-card chip is removed.
+- **Show Epic Complexity on the Epic Card (Replace the Timestamp)**: Replaces the relative timestamp in the epic card meta line with the epic's derived complexity chip (reusing the same colored chip and already-computed variables as normal plan cards), surfacing the routing-relevant complexity fact that was invisible on epic cards. Hard dependency on the Epic Complexity Is Derived from Subtasks plan — must ship in the same or later VSIX.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Remove the Epic Subtask Cap (`epic_max_subtasks`) Entirely](../plans/feature_plan_20260629081855_remove-epic-max-subtasks-cap.md) — **PLAN REVIEWED**
 - [ ] [Remove Standalone Epics as a Concept](../plans/feature_plan_20260629083123_remove-standalone-epics.md) — **PLAN REVIEWED**
 - [ ] [Epic Complexity Is the Max of Its Subtasks (Derived, Never Unknown)](../plans/feature_plan_20260629091401_epics-always-high-complexity.md) — **PLAN REVIEWED**
+- [ ] [Show Epic Complexity on the Epic Card (Replace the Timestamp)](../plans/feature_plan_20260629124815_epic-card-complexity-display.md) — **PLAN REVIEWED**
+- [ ] [Remove the Worktree Chip from Epic Cards (Visual Noise)](../plans/feature_plan_20260629130000_remove-epic-worktree-chip.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

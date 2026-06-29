@@ -256,6 +256,9 @@
     // ClickUp state
     let clickUpProjectIssues = [];
     let selectedClickUpIssue = null;
+    // Tracks parents whose subtasks were already embedded this session (progressive
+    // subtask import), so opening a ticket repeatedly doesn't re-import each time.
+    let _subtasksEnrichedFor = new Set();
     let _subtaskParent = null;
     let _convertSelectedParentId = null;
     let _convertCurrentTicketId = null;
@@ -7519,9 +7522,7 @@ Instructions:
 
         // Status filter (ClickUp)
         clickUpStatusFilter?.addEventListener('change', (e) => {
-            clickUpProjectStatusFilterValue = e.target.value;
-            renderTicketsClickUpList();
-            saveTicketsState();
+            _onClickUpStatusFilterChanged(e.target.value);
         });
 
         // Refresh button — delta pull (only changed tasks since last sync).
@@ -7691,6 +7692,19 @@ Instructions:
                         vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
                         vscode.postMessage({ type: 'clickupLoadTaskDetails', taskId: clickUpId, workspaceRoot: ticketsWorkspaceRoot || undefined });
                     }
+                }
+                // Progressive subtask import: opening a parent embeds its subtasks into
+                // the parent's local file (once per session). Subtasks are not imported
+                // up front, so this is how they become locally persisted on demand.
+                const _enrichId = linearId ? `linear_${linearId}` : (clickUpId ? `clickup_${clickUpId}` : '');
+                if (_enrichId && !_subtasksEnrichedFor.has(_enrichId)) {
+                    _subtasksEnrichedFor.add(_enrichId);
+                    vscode.postMessage({
+                        type: 'importTicketSubtasks',
+                        provider: linearId ? 'linear' : 'clickup',
+                        id: linearId || clickUpId,
+                        workspaceRoot: ticketsWorkspaceRoot
+                    });
                 }
             }
         });
@@ -8736,28 +8750,53 @@ Instructions:
         });
     }
 
+    // True when the named status is a done/closed-type status for the selected list.
+    function _isClickUpClosedStatus(statusName) {
+        if (!statusName) return false;
+        const s = (availableClickUpStatuses || []).find(st => (st.status || '') === statusName);
+        const ty = String(s?.type || '').toLowerCase();
+        return ty === 'closed' || ty === 'done';
+    }
+
+    // Status-filter change. Closed/done tickets are excluded from the default import,
+    // so selecting a closed status triggers a one-off import that INCLUDES closed
+    // (the "don't import closed until I switch the dropdown to closed" behavior).
+    function _onClickUpStatusFilterChanged(value) {
+        clickUpProjectStatusFilterValue = value;
+        if (_isClickUpClosedStatus(value) && clickUpSelectedListId) {
+            vscode.postMessage({
+                type: 'refreshTicketsDelta',
+                workspaceRoot: ticketsWorkspaceRoot,
+                provider: 'clickup',
+                listId: clickUpSelectedListId,
+                includeClosed: true
+            });
+        }
+        renderTicketsClickUpList();
+        saveTicketsState();
+    }
+
     function renderTicketsClickUpStatusFilterOptions() {
         const { clickUpStatusFilter } = getTicketsTabElements();
         if (!clickUpStatusFilter) return;
 
-        const statuses = Array.from(new Set(
-            clickUpProjectIssues.map(task => task.status || 'Unknown')
-        )).sort();
+        // Build the dropdown from the LIST's full status set (includes done/closed),
+        // not just the statuses of currently-loaded tickets — otherwise "Closed"
+        // could never be selected (no closed tickets are loaded by default).
+        const fromList = (availableClickUpStatuses || []).map(s => s.status).filter(Boolean);
+        const fromLoaded = clickUpProjectIssues.map(task => task.status || 'Unknown');
+        const statuses = Array.from(new Set([...fromList, ...fromLoaded].filter(s => s && s !== 'Unknown'))).sort();
 
         const html = `
             <option value="">All statuses</option>
-            ${statuses.map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}</option>`).join('')}
+            ${statuses.map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}${_isClickUpClosedStatus(status) ? ' (closed)' : ''}</option>`).join('')}
         `;
 
         if (_lastTicketsClickUpStateFilterHtml !== html) {
             clickUpStatusFilter.innerHTML = html;
             _lastTicketsClickUpStateFilterHtml = html;
             clickUpStatusFilter.value = clickUpProjectStatusFilterValue || '';
-            clickUpStatusFilter.onchange = (e) => {
-                clickUpProjectStatusFilterValue = e.target.value;
-                renderTicketsClickUpList();
-                saveTicketsState();
-            };
+            clickUpStatusFilter.onchange = (e) => _onClickUpStatusFilterChanged(e.target.value);
         }
     }
 
@@ -9168,7 +9207,16 @@ Instructions:
         // Guarding on a falsy root here left the (now files-only) sidebar permanently
         // blank even though the import wrote every file and the DB held every row.
         if (!lastIntegrationProvider) return;
-        vscode.postMessage({ type: 'listLocalTicketFiles', provider: lastIntegrationProvider, workspaceRoot: ticketsWorkspaceRoot || undefined });
+        vscode.postMessage({
+            type: 'listLocalTicketFiles',
+            provider: lastIntegrationProvider,
+            workspaceRoot: ticketsWorkspaceRoot || undefined,
+            // Scope the sidebar to the selected list (ClickUp). Linear stays unscoped
+            // for now (name-based picker). Sent on every call site since they all
+            // read the current selection from these globals.
+            listId: lastIntegrationProvider === 'clickup' ? (clickUpSelectedListId || undefined) : undefined,
+            projectId: lastIntegrationProvider === 'linear' ? (linearProjectPickerValue || undefined) : undefined
+        });
     }
 
     function _requestTicketSyncStatuses() {
