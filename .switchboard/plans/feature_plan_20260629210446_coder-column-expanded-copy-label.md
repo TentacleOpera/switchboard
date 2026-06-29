@@ -176,3 +176,42 @@ assert.strictEqual(label, 'Copy review prompt', 'LEAD CODED expanded should show
 ---
 
 **Recommendation:** Complexity is 2 → **Send to Intern**.
+
+## Review Pass — 2026-06-29
+
+### Stage 1 (Grumpy / Adversarial)
+
+| Severity | File:Line | Finding |
+|----------|-----------|---------|
+| NIT | `src/webview/kanban.html:5303` (commit) | Auto-commit hook bundled unrelated `src/webview/project.js` changes (epic document fetch + brace closure) and kanban state markdown files into this plan's commit. Code changes themselves are clean and isolated; this is a process smell, not a code defect. Out of scope. |
+| NIT | `src/webview/kanban.html:5304` | Pre-existing: `CODED_IDS.filter(id => columns.includes(id))` trusts `columns` as a defined array. Fix increases the surface where this runs (now also expanded mode), but sibling paths at 4747/5204 already run the identical pattern unconditionally — risk profile unchanged. Defer. |
+| NIT | `src/test/kanban-card-prompt-labels-regression.test.js:34-35` | Mock `stdDefs` omit `kind: 'coded'` on coder columns. Pre-existing test design; fix doesn't touch this. Defer. |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2 (Balanced Synthesis)
+
+- **Keep as-is:** Both code changes are correct and minimal. The fix eliminates the inconsistency by making the card-render path identical to the two already-correct sibling paths (lines 4747, 5204).
+- **Fix now:** Nothing — no CRITICAL/MAJOR findings.
+- **Defer:** Commit-hygiene pollution (auto-commit hook behavior), pre-existing `columns` trust, mock `kind` omission — all pre-existing / out of scope.
+
+### Code Fixes Applied
+
+None required. The implementation already matches the plan exactly:
+- `src/webview/kanban.html:5303` — `collapseCodersEnabled &&` guard removed. ✓
+- `src/test/kanban-card-prompt-labels-regression.test.js:71-73` — assertion updated to expect "Copy review prompt". ✓
+
+### Verification Results
+
+- **Compilation:** Skipped per session directives.
+- **Automated tests:** Skipped per session directives. Static trace verification confirms correctness:
+  - `LEAD CODED` expanded → `visibleCodedIds=['LEAD CODED','CODER CODED']` → `sourceColumn='CODER CODED'` → `getNextColumn`→`CODE REVIEWED` → `role='reviewer'` → "Copy review prompt" ✓
+  - `LEAD CODED` collapsed → same path (guard was redundant) → unchanged ✓
+  - `PLAN REVIEWED` → `CODED_IDS.includes()` false → skip → `LEAD CODED` → "Copy coder prompt" ✓ (unchanged)
+- **Regex extraction:** Test regex boundaries (`let copyLabel = 'Copy Prompt';` … `primaryActionBtn =`) unaffected — condition change is interior to the matched region. ✓
+- **Sibling consistency:** Confirmed lines 4747 and 5204 both lack the `collapseCodersEnabled` guard — fix achieves parity. ✓
+
+### Remaining Risks
+
+- **Low:** The auto-commit hook co-mingled unrelated `project.js` and kanban-state changes into this plan's commit. If strict per-plan commit isolation is required, the user should be aware these are bundled. No code risk.
+- **Low:** Pre-existing `columns` array trust (NIT above) — not introduced by this fix.

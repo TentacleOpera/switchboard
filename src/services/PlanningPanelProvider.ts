@@ -2780,6 +2780,20 @@ export class PlanningPanelProvider {
                 await vscode.commands.executeCommand('switchboard.importUnclaimedPlans');
                 break;
             }
+            case 'copyArtifactPrompt': {
+                await vscode.env.clipboard.writeText(msg.prompt || '');
+                const targetPanel = isProject ? this._projectPanel : this._panel;
+                targetPanel?.webview.postMessage({ type: 'artifactPromptCopied', kind: msg.kind });
+                break;
+            }
+            case 'sendArtifactPromptToTerminal': {
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.sendPromptToAgentTerminal('claude_artifacts', msg.prompt || '', msg.workspaceRoot);
+                    const targetPanel = isProject ? this._projectPanel : this._panel;
+                    targetPanel?.webview.postMessage({ type: 'artifactPromptSent', kind: msg.kind });
+                }
+                break;
+            }
             case 'copyChatPrompt': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined;
                 const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot);

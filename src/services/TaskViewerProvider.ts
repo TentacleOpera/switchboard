@@ -2685,6 +2685,55 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({ type: 'loading', value: loading });
     }
 
+    public async sendPromptToAgentTerminal(role: string, text: string, workspaceRoot?: string): Promise<void> {
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot || '');
+        if (!resolvedWorkspaceRoot) return;
+
+        // Resolve the agent name for the role
+        const agentName = await this._getAgentNameForRole(role, resolvedWorkspaceRoot) || (role === 'claude_artifacts' ? 'Claude Artifacts' : role);
+        const suffixedKey = this._suffixedName(agentName);
+
+        let terminal: vscode.Terminal | undefined;
+        if (this._registeredTerminals) {
+            terminal = this._registeredTerminals.get(agentName) || this._registeredTerminals.get(suffixedKey);
+        }
+
+        if (!terminal) {
+            const openTerminals = vscode.window.terminals || [];
+            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(agentName));
+            terminal = openTerminals.find(t => this._normalizeAgentKey(t.name) === strippedTarget);
+        }
+
+        if (!terminal) {
+            // Spawn the terminal
+            const startupCmd = await this.getAgentStartupCommand(role, resolvedWorkspaceRoot);
+            terminal = vscode.window.createTerminal({
+                name: agentName,
+                location: vscode.TerminalLocation.Panel,
+                cwd: resolvedWorkspaceRoot
+            });
+            if (this._registeredTerminals) {
+                this._registeredTerminals.set(suffixedKey, terminal);
+            }
+            terminal.show();
+
+            // Wait for terminal process to spawn and shell to initialize
+            await new Promise(r => setTimeout(r, 2000));
+            if (startupCmd && startupCmd.trim()) {
+                terminal.sendText(startupCmd.trim(), true);
+                // Wait for the startup command to complete / shell to settle
+                await new Promise(r => setTimeout(r, 3000));
+            }
+        } else {
+            terminal.show();
+        }
+
+        const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || agentName)) || agentName;
+        await withTerminalSendLock(sendLockKey, async () => {
+            await sendRobustText(terminal!, text, true);
+        });
+    }
+
     /** Called by the Kanban board to trigger an agent action on a plan session. */
     public async handleKanbanTrigger(
         role: string,
@@ -2922,7 +2971,7 @@ Each plan file must include:
                 let worktreePath: string | undefined;
                 let plan: KanbanPlanRecord | undefined;
                 if (db) {
-                    plan = await db.getPlanBySessionId(sid);
+                    plan = (await db.getPlanBySessionId(sid)) ?? undefined;
                     if (plan) {
                         // Try plan_file first
                         if (plan.planFile) {
@@ -3698,6 +3747,12 @@ Each plan file must include:
             console.log(`[TaskViewerProvider] Applied mcp_monitor fallback command: ${cmd}`);
         }
 
+        // Fallback: claude_artifacts defaults to 'claude' when configured command is missing/blank
+        if (role === 'claude_artifacts' && (!cmd || cmd.trim() === '')) {
+            cmd = 'claude';
+            console.log(`[TaskViewerProvider] Applied claude_artifacts fallback command: ${cmd}`);
+        }
+
         return cmd;
     }
 
@@ -3727,7 +3782,8 @@ Each plan file must include:
             jules: false, 
             ticket_updater: false,
             researcher: false,
-            mcp_monitor: false
+            mcp_monitor: false,
+            claude_artifacts: false
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
@@ -14867,6 +14923,9 @@ What would you like to find?`;
      * Called by refresh() and _syncFilesAndRefreshRunSheets().
      */
     private async _refreshRunSheets(workspaceRoot?: string) {
+        // DIAGNOSTIC (temporary): identify what is driving repeated refreshes. The frame
+        // that repeats in this log names the caller responsible for a refresh storm.
+        console.log('[refreshRunSheets] caller:', new Error().stack?.split('\n')[2]?.trim());
         const selectedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : this._resolveWorkspaceRoot();
@@ -17113,6 +17172,13 @@ What would you like to find?`;
             if (!workspaceRoot) return;
 
             const tracked = await this._getTrackedJulesSessions();
+            if (tracked.length === 0) {
+                // No sessions have ever been dispatched to Jules, so there is nothing to
+                // poll. Skip spawning the `jules` CLI entirely. This is why an unused/
+                // uninstalled Jules still emitted `spawn jules ENOENT` every 30s: the poll
+                // was started unconditionally in the constructor and never gated on usage.
+                return;
+            }
             let listedSessions: JulesSessionRecord[] = [];
             let degradedMode = false;
             try {

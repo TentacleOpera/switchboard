@@ -1,4 +1,6 @@
 ## CODER CODED
 
-_No plans_
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/claude-ai-artifact-round-trip-workflow-a8af9501-d22f-4f46-a851-502766e13704.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/claude-ai-artifact-round-trip-workflow-a8af9501-d22f-4f46-a851-502766e13704.md) — Claude.ai Artifact Round-Trip Workflow <!-- planId:a8af9501-d22f-4f46-a851-502766e13704 epic -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629121023_artifact-roundtrip-in-html-tab.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629121023_artifact-roundtrip-in-html-tab.md) — Claude.ai Artifact Round-Trip in the planning.html HTML Tab <!-- planId:87e946c5-cf29-4908-9c86-eb798e32179f subtask-of:"Claude.ai Artifact Round-Trip Workflow" -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629125310_claude-artifacts-agent-and-send-to-terminal.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260629125310_claude-artifacts-agent-and-send-to-terminal.md) — "Claude Artifacts" Terminal-Only Agent + Send-to-Terminal Buttons <!-- planId:5a93a86b-de31-4ca3-86f5-1d732ee527da subtask-of:"Claude.ai Artifact Round-Trip Workflow" -->
 

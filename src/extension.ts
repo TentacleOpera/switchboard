@@ -2666,7 +2666,8 @@ export async function activate(context: vscode.ExtensionContext) {
             { name: 'Coder', role: 'coder' },
             { name: 'Intern', role: 'intern' },
             { name: 'Reviewer', role: 'reviewer' },
-            { name: 'Analyst', role: 'analyst' }
+            { name: 'Analyst', role: 'analyst' },
+            { name: 'Claude Artifacts', role: 'claude_artifacts' }
         ];
         const plannerCount = await taskViewerProvider.getPlannerTerminalCount(effectiveWorkspaceRoot);
         const agents: { name: string; role: string }[] = [];

@@ -2684,6 +2684,25 @@
             align-items: stretch;
             gap: 6px;
         }
+        #controls-strip-planning-html {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+        #controls-strip-planning-html input[type="text"]#planning-html-artifact-url {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-size: 11px;
+        }
+        #controls-strip-planning-html input[type="text"]#planning-html-artifact-url:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+        }
         .controls-strip-row {
             display: flex;
             align-items: center;
@@ -3472,11 +3491,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <!-- HTML Tab — stakeholder HTML previews, independent from Design panel's HTML Previews -->
         <div id="html-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-planning-html">
-                <select id="planning-html-workspace-filter" class="workspace-filter-select">
-                    <option value="">All Workspaces</option>
-                </select>
-                <input type="text" id="planning-html-docs-search" class="sidebar-search-input" placeholder="Search HTML files..." />
-                <span id="status-planning-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
+                <div class="controls-strip-row">
+                    <select id="planning-html-workspace-filter" class="workspace-filter-select">
+                        <option value="">All Workspaces</option>
+                    </select>
+                    <input type="text" id="planning-html-docs-search" class="sidebar-search-input" placeholder="Search HTML files..." />
+                    <span id="status-planning-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
+                </div>
+                <div class="controls-strip-row">
+                    <input type="text" id="planning-html-artifact-url" placeholder="claude.ai artifact URL..." style="flex: 1;" />
+                    <button id="btn-copy-artifact-download" class="strip-btn" title="Copy a prompt that downloads this artifact into the selected HTML folder">Copy download prompt</button>
+                    <button id="btn-send-artifact-download" class="strip-btn" title="Send a prompt to Claude to download this artifact into the selected HTML folder">⇨ Send to Claude</button>
+                    <button id="btn-copy-artifact-upload" class="strip-btn" title="Copy a prompt that re-publishes the previewed file back to claude.ai">Copy upload prompt</button>
+                    <button id="btn-send-artifact-upload" class="strip-btn" title="Send a prompt to Claude to re-publish the previewed file back to claude.ai">⇨ Send to Claude</button>
+                </div>
             </div>
             <div class="content-row">
                 <div id="tree-pane-planning-html">

@@ -1,6 +1,6 @@
 # Kanban Board
 
-*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-29T13:05:08.477Z*
+*Workspace: 038bffef-9842-4574-96a1-69a43a280b3c* · *Updated: 2026-06-29T19:41:42.288Z*
 
 | Column | File |
 |---|---|
@@ -10,7 +10,6 @@
 | LEAD CODED | [kanban-state-lead-coded.md](./kanban-state-lead-coded.md) |
 | CODER CODED | [kanban-state-coder-coded.md](./kanban-state-coder-coded.md) |
 | INTERN CODED | [kanban-state-intern-coded.md](./kanban-state-intern-coded.md) |
-| ORCHESTRATING | [kanban-state-orchestrating.md](./kanban-state-orchestrating.md) |
 | CODE REVIEWED | [kanban-state-code-reviewed.md](./kanban-state-code-reviewed.md) |
 | ACCEPTANCE TESTED | [kanban-state-acceptance-tested.md](./kanban-state-acceptance-tested.md) |
 | TICKET UPDATER | [kanban-state-ticket-updater.md](./kanban-state-ticket-updater.md) |

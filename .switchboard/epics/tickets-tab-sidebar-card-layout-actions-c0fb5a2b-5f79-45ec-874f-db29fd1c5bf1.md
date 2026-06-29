@@ -214,8 +214,8 @@ Complexity 6 → **Send to Coder.** The frontend card work (both subtasks) is ro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Move 'synced' Badge Next to Status Label in Tickets Tab Sidebar Cards](../plans/feature_plan_20260629154315_move-synced-badge-next-to-status-label.md) — **CODE REVIEWED**
-- [x] [Move 'Open' Button from Ticket Top Bar into Sidebar Cards](../plans/feature_plan_20260629154316_move-open-button-into-sidebar-cards.md) — **CODE REVIEWED**
+- [ ] [Move 'synced' Badge Next to Status Label in Tickets Tab Sidebar Cards](../plans/feature_plan_20260629154315_move-synced-badge-next-to-status-label.md) — **CODE REVIEWED**
+- [ ] [Move 'Open' Button from Ticket Top Bar into Sidebar Cards](../plans/feature_plan_20260629154316_move-open-button-into-sidebar-cards.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ---

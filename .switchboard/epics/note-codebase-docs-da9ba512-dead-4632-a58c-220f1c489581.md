@@ -39,3 +39,10 @@ Today remote agents have zero repo access — `switchboard_remote_notion.md` tre
 
 Phase 1 (remote plan improvement + startup reconciler) has no dependency on this epic — land it first, then this. Within this epic: 1/4 → 2/4 → 3/4 → 4/4.
 
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Phase 2 (1/4): Codebase Doc Generator — Repo → Structured Markdown Doc Set](../plans/phase2-codebase-doc-generator.md) — **CREATED**
+- [ ] [Phase 2 (2/4): Notion Codebase-Docs Database + Incremental Push Pipeline](../plans/phase2-notion-codebase-docs-sync.md) — **CREATED**
+- [ ] [Phase 2 (3/4): Continuous Sync Triggers + Remote-Tab Config & Controls](../plans/phase2-codebase-docs-sync-triggers-and-ui.md) — **CREATED**
+- [ ] [Phase 2 (4/4): Remote Agent Orientation — Plan From Notion Codebase Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CREATED**
+<!-- END SUBTASKS -->

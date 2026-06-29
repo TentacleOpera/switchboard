@@ -5619,8 +5619,15 @@ FROM plans
         return { restored, skipped };
     }
 
+    private _exportStateInFlight = false;
+    private _exportStatePending = false;
     private async exportStateToFile(): Promise<void> {
         if (!this._workspaceRoot || !this._db) return;
+        // Single-flight: while one export runs, collapse all further requests into a
+        // single trailing run. Prevents the refresh-driven export churn and the
+        // shared-".tmp" rename race that produced "ENOENT ... rename kanban-state-*.md.tmp".
+        if (this._exportStateInFlight) { this._exportStatePending = true; return; }
+        this._exportStateInFlight = true;
         try {
             const workspaceId = await this.getWorkspaceId();
             if (!workspaceId) return;
@@ -5683,7 +5690,7 @@ FROM plans
                     }
                     colMd += `\n`;
                 }
-                const tmpPath = perColPath + '.tmp';
+                const tmpPath = `${perColPath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
                 await fs.promises.writeFile(tmpPath, colMd, 'utf8');
                 await fs.promises.rename(tmpPath, perColPath);
             }
@@ -5702,11 +5709,17 @@ FROM plans
                 await fs.promises.unlink(oldJsonPath);
             }
 
-            const tmpPath = this._stateFilePath + '.tmp';
+            const tmpPath = `${this._stateFilePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
             await fs.promises.writeFile(tmpPath, md, 'utf8');
             await fs.promises.rename(tmpPath, this._stateFilePath);
         } catch (error) {
             console.error('[KanbanDatabase] Failed to export state to file:', error);
+        } finally {
+            this._exportStateInFlight = false;
+            if (this._exportStatePending) {
+                this._exportStatePending = false;
+                void this.exportStateToFile();
+            }
         }
     }
 

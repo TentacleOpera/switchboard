@@ -181,3 +181,8 @@ The original plan shipped only its "Phase 1" (inline editing added to a still-se
 ## Prior Review Findings (from the superseded Phase 1 implementation, retained for context)
 
 The Phase 1 scaffolding (HTML buttons/textarea, edit-mode `online` branches, `saveOnlineDocFile` handler, watcher 2s suppression at `PlanningPanelProvider.ts:548`, preview-ready deferral guard) was correctly implemented, but the online flow originally passed the remote `docId` where the backend requires a `slugPrefix`. That was fixed in `src/webview/planning.js` by keying `importedDocs` by `docId` and adding `resolveActiveOnlineSlugPrefix()` (used by the save handler and deferred reload). These fixes carry forward into the unified tab. The `resolveActiveOnlineSlugPrefix()` helper in particular is a dependency of step 2's save routing.
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] (no subtasks)
+<!-- END SUBTASKS -->

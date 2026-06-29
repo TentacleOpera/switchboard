@@ -2746,6 +2746,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="jules" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Jules</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Cloud coder visibility only</span></div>
           <div class="agent-description">Offloads tasks to Google Jules cloud-coding service for quota-free background execution.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="claude_artifacts" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Claude Artifacts</label><input type="text" data-role="claude_artifacts" id="agents-tab-cmd-claude-artifacts" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="agent-description">Terminal-only helper to download and upload claude.ai document artifacts.</div>
           <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
             <input id="agents-tab-jules-auto-sync" type="checkbox" style="width:auto;margin:0;">
             <span>Auto-sync repo before sending to Jules</span>

@@ -4316,6 +4316,29 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             }
 
+            case 'artifactPromptCopied': {
+                const isDownload = msg.kind === 'download';
+                const btnId = isDownload ? 'btn-copy-artifact-download' : 'btn-copy-artifact-upload';
+                const btn = document.getElementById(btnId);
+                if (btn) {
+                    const originalText = btn.textContent;
+                    btn.textContent = 'Copied!';
+                    setTimeout(() => { btn.textContent = originalText; }, 2000);
+                }
+                break;
+            }
+            case 'artifactPromptSent': {
+                const isDownload = msg.kind === 'download';
+                const btnId = isDownload ? 'btn-send-artifact-download' : 'btn-send-artifact-upload';
+                const btn = document.getElementById(btnId);
+                if (btn) {
+                    const originalText = btn.textContent;
+                    btn.textContent = 'Sent ✓';
+                    setTimeout(() => { btn.textContent = originalText; }, 2000);
+                }
+                break;
+            }
+
             case 'planningHtmlFoldersListed': {
                 if (!state.planningHtmlFolderPathsByRoot) state.planningHtmlFolderPathsByRoot = {};
                 state.planningHtmlFolderPathsByRoot[msg.workspaceRoot || ''] = msg.paths || [];
@@ -6752,6 +6775,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         state.activeSource = sourceId;
         state.activeDocId = docId;
         state.activeDocName = docName;
+        state.activeDocSourceFolder = sourceFolder;
         state.previewRequestId++;
 
         vscode.postMessage({
@@ -6862,6 +6886,105 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 sourceId: msg.sourceId || 'planning-html-folder',
                 nodes: filteredNodes,
                 folderPaths: getCurrentFolderPaths(state.planningHtmlFolderPathsByRoot, state.planningHtmlWorkspaceRootFilter)
+            });
+        });
+    }
+
+    const isShareLink = (url) => /claude\.ai\/share\//i.test(url);
+
+    const ARTIFACT_DOWNLOAD_PROMPT = ({ url, folder }) => {
+        if (isShareLink(url)) {
+            return `WARNING: The URL ${url} is a claude.ai SHARE link, not a Claude Code artifact.\n` +
+                `Share links are immutable snapshots — WebFetch will retrieve only a React shell or a 403, ` +
+                `and the Artifact tool cannot republish to this URL.\n` +
+                `Ask the artifact owner to share the claude.ai/code/artifact/ URL instead.\n` +
+                `If you want to proceed anyway, WebFetch may return the rendered content if you are logged in, ` +
+                `but you will not be able to push edits back to this URL.`;
+        }
+        return `Download a claude.ai artifact into this repo so I can preview and edit it locally.\n\n` +
+            `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability ` +
+            `enabled in your org settings. If you are not logged in, run /login first.\n\n` +
+            `1. Use WebFetch to retrieve the content at: ${url}\n` +
+            `   (WebFetch passes your active claude.ai session credentials, so it gets the rendered content, not the React shell.)\n` +
+            `2. Normalize to publish-ready form so the file round-trips without reformatting later. WebFetch returns the HOST-WRAPPED page — claude.ai's own skeleton (a frame-navigation <script>, a viewport meta, a CSS reset) PLUS the original document nested inside its <body>. Discard the host skeleton AND strip the document's own outer <!DOCTYPE>/<html>/<head>/<body> tags, keeping only the real inner content (the real <title>, the author's <style>/<script>, meta description). Add a single <meta charset="utf-8"> line so special characters render in local preview. Keep ALL assets inlined (data: URIs / inline <style>/<script>) and do NOT add external fonts/CSS/JS/images — the artifact host's CSP blocks them. This strip is REQUIRED, not cosmetic: the platform double-wraps rather than strips (confirmed), so skipping it nests another host skeleton on every round-trip.\n` +
+            `3. Name the file from the artifact's <title> or first heading (slugify it, .html extension). ` +
+            `If no title is available, fall back to a slug derived from the URL path.\n` +
+            `4. Save the normalized content to: ${folder ? folder + '/' : ''}<chosen-filename>\n` +
+            (folder ? `` : `   (No HTML folder is configured in Switchboard — after saving, add this file's folder via "Manage HTML Folders" to preview it in the HTML tab.)\n`) +
+            `5. Make the FIRST line of the saved file this marker so the round-trip knows the source:\n` +
+            `   <!-- switchboard-artifact-source: ${url} -->\n` +
+            `6. Report the local path you saved.`;
+    };
+
+    const ARTIFACT_UPLOAD_PROMPT = ({ url, folder, filename }) =>
+        `Publish a local document back to claude.ai as an Artifact.\n\n` +
+        `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability enabled.\n\n` +
+        `1. Read the file: ${folder ? folder + '/' : ''}${filename}\n` +
+        `2. Verify it is publish-ready before uploading — the host re-wraps and blocks external resources: ensure there are NO <!DOCTYPE>/<html>/<head>/<body> wrappers (strip them if an editor re-added any), and ALL assets are inlined as data: URIs / inline <style>/<script> (no external fonts, CSS, JS, or images — they render locally but silently disappear once published). If an edit introduced an external resource, inline it before publishing.\n` +
+        `3. If it contains a \`switchboard-artifact-source:\` marker comment, redeploy to that existing URL by passing it as the Artifact tool's \`url\`. ` +
+        `NOTE: this only overwrites if I own that artifact. If the tool returns a permission error, publish as a NEW artifact instead and tell me the new url.\n` +
+        (url ? `   (Expected source url: ${url})\n` : ``) +
+        `4. If there is no marker, publish as a new Artifact and report the new url.\n` +
+        `5. Preserve (or refresh) the marker comment, and use the file's <title>/first heading as the artifact title.`;
+
+    const getHtmlFolderFallback = () => {
+        const paths = getCurrentFolderPaths(state.planningHtmlFolderPathsByRoot, state.planningHtmlWorkspaceRootFilter);
+        return paths[0] || '';
+    };
+
+    const getArtifactUrlInput = () => {
+        const input = document.getElementById('planning-html-artifact-url');
+        return (input ? input.value.trim() : '');
+    };
+
+    const btnCopyDownload = document.getElementById('btn-copy-artifact-download');
+    if (btnCopyDownload) {
+        btnCopyDownload.addEventListener('click', () => {
+            const url = getArtifactUrlInput();
+            const folder = getHtmlFolderFallback();
+            const prompt = ARTIFACT_DOWNLOAD_PROMPT({ url, folder });
+            vscode.postMessage({ type: 'copyArtifactPrompt', prompt, kind: 'download' });
+        });
+    }
+
+    const btnSendDownload = document.getElementById('btn-send-artifact-download');
+    if (btnSendDownload) {
+        btnSendDownload.addEventListener('click', () => {
+            const url = getArtifactUrlInput();
+            const folder = getHtmlFolderFallback();
+            const prompt = ARTIFACT_DOWNLOAD_PROMPT({ url, folder });
+            vscode.postMessage({
+                type: 'sendArtifactPromptToTerminal',
+                prompt,
+                kind: 'download',
+                workspaceRoot: state.planningHtmlWorkspaceRootFilter || undefined
+            });
+        });
+    }
+
+    const btnCopyUpload = document.getElementById('btn-copy-artifact-upload');
+    if (btnCopyUpload) {
+        btnCopyUpload.addEventListener('click', () => {
+            const url = getArtifactUrlInput();
+            const folder = state.activeDocSourceFolder || getHtmlFolderFallback();
+            const filename = state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html');
+            const prompt = ARTIFACT_UPLOAD_PROMPT({ url, folder, filename });
+            vscode.postMessage({ type: 'copyArtifactPrompt', prompt, kind: 'upload' });
+        });
+    }
+
+    const btnSendUpload = document.getElementById('btn-send-artifact-upload');
+    if (btnSendUpload) {
+        btnSendUpload.addEventListener('click', () => {
+            const url = getArtifactUrlInput();
+            const folder = state.activeDocSourceFolder || getHtmlFolderFallback();
+            const filename = state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html');
+            const prompt = ARTIFACT_UPLOAD_PROMPT({ url, folder, filename });
+            vscode.postMessage({
+                type: 'sendArtifactPromptToTerminal',
+                prompt,
+                kind: 'upload',
+                workspaceRoot: state.planningHtmlWorkspaceRootFilter || undefined
             });
         });
     }

@@ -8548,7 +8548,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Verify the record is findable by the new planId. If ON CONFLICT kept an old
         // plan_id (pre-existing record for the same plan_file), use the actual DB plan_id
         // for all downstream operations.
-        let effectiveEpicPlanId = planId;
+        let effectiveEpicPlanId: string = planId;
         const verifyRecord = await db.getPlanByPlanId(planId);
         if (!verifyRecord) {
             // ON CONFLICT kept an old plan_id — look up by plan_file

@@ -18,7 +18,7 @@ Fix visual consistency issues in the Afterburner/claudify themes — CRT scanlin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove CRT Scanline Animation from the Design and Setup Panels](../plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md)
-- [ ] [Make the "Disable CRT Animation" Toggle Take Effect Live](../plans/feature_plan_20260626124051_crt_animation_disable_not_live.md)
-- [ ] [Unify Kanban Card Meta (Complexity + Timestamp) to Grey Across Themes](../plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md)
+- [ ] [Remove CRT Scanline Animation from the Design and Setup Panels](../plans/feature_plan_20260626124050_crt_animation_scope_design_setup_panels.md) — **PLAN REVIEWED**
+- [ ] [Make the "Disable CRT Animation" Toggle Take Effect Live](../plans/feature_plan_20260626124051_crt_animation_disable_not_live.md) — **PLAN REVIEWED**
+- [ ] [Unify Kanban Card Meta (Complexity + Timestamp) to Grey Across Themes](../plans/feature_plan_20260626124052_kanban_card_meta_teal_afterburner.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

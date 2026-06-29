@@ -18,7 +18,7 @@ Extend the Linear integration beyond basic column sync. Today, Switchboard syncs
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Channel Issues: Analyst Chat & Extension Command Interface](../plans/linear-channel-issues-analyst-and-command.md)
-- [ ] [Linear Free-Tier: Auto-Archive Issues on Plan Completion](../plans/linear-free-tier-auto-archive-on-completion.md)
-- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md)
+- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md) — **PLAN REVIEWED**
+- [ ] [Linear Channel Issues: Analyst Chat & Extension Command Interface](../plans/linear-channel-issues-analyst-and-command.md) — **PLAN REVIEWED**
+- [ ] [Linear Free-Tier: Auto-Archive Issues on Plan Completion](../plans/linear-free-tier-auto-archive-on-completion.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
