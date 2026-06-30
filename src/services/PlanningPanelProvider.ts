@@ -66,6 +66,9 @@ export class PlanningPanelProvider {
     private static readonly IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg']);
     private _panel: vscode.WebviewPanel | undefined;
     private _projectPanel: vscode.WebviewPanel | undefined;
+    private _projectPanelReady = false;
+    private _pendingProjectMessages: any[] = [];
+    private _projectPanelReadyTimer: NodeJS.Timeout | undefined;
     private _disposables: vscode.Disposable[] = [];
     private _latestRequestIds: Map<string, number> = new Map();
     private _registeredRootsKey: string | null = null;
@@ -331,6 +334,22 @@ export class PlanningPanelProvider {
                 retainContextWhenHidden: true
             }
         );
+        // Fresh webview: must re-handshake before any outbound message is delivered.
+        this._projectPanelReady = false;
+        this._pendingProjectMessages = [];
+        if (this._projectPanelReadyTimer) {
+            clearTimeout(this._projectPanelReadyTimer);
+            this._projectPanelReadyTimer = undefined;
+        }
+        // Best-effort flush safeguard: if the webview never signals readiness
+        // (e.g. a script error blocks boot), flush the queue after 10s so it
+        // doesn't grow unbounded.
+        this._projectPanelReadyTimer = setTimeout(() => {
+            if (!this._projectPanelReady && this._projectPanel) {
+                console.warn('[ProjectPanel] webviewReady not received within 10s; flushing pending messages best-effort.');
+                this._flushPendingProjectMessages();
+            }
+        }, 10000);
         this._projectPanel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
         this._updateWebviewRoots();
 
@@ -352,6 +371,12 @@ export class PlanningPanelProvider {
         this._projectPanel.onDidDispose(
             () => {
                 this._projectPanel = undefined;
+                this._projectPanelReady = false;
+                this._pendingProjectMessages = [];
+                if (this._projectPanelReadyTimer) {
+                    clearTimeout(this._projectPanelReadyTimer);
+                    this._projectPanelReadyTimer = undefined;
+                }
             },
             null,
             this._disposables
@@ -729,7 +754,23 @@ export class PlanningPanelProvider {
     }
 
     public postMessageToProjectWebview(message: any): void {
+        if (!this._projectPanelReady) {
+            this._pendingProjectMessages.push(message);
+            return;
+        }
         this._projectPanel?.webview.postMessage(message);
+    }
+
+    private _flushPendingProjectMessages(): void {
+        this._projectPanelReady = true;
+        if (this._projectPanelReadyTimer) {
+            clearTimeout(this._projectPanelReadyTimer);
+            this._projectPanelReadyTimer = undefined;
+        }
+        for (const m of this._pendingProjectMessages) {
+            this._projectPanel?.webview.postMessage(m);
+        }
+        this._pendingProjectMessages = [];
     }
 
     private _setupDocsFolderWatcher(workspaceRoot: string | undefined): void {
@@ -1964,6 +2005,14 @@ export class PlanningPanelProvider {
     }
 
     private async _handleMessage(msg: any, isProject: boolean = false): Promise<void> {
+        // Ready-handshake: the Project panel webview signals boot completion.
+        // Handle before the allRoots guard so readiness is recorded even when
+        // no workspace is open. Only the Project panel sends this message.
+        if (msg.type === 'webviewReady' && isProject) {
+            this._flushPendingProjectMessages();
+            return;
+        }
+
         const allRoots = this._getWorkspaceRoots();
         if (allRoots.length === 0) {
             const errorPanel = isProject ? this._projectPanel : this._panel;
@@ -3152,7 +3201,7 @@ export class PlanningPanelProvider {
                     }
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: true });
                 } catch (err) {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: false, error: String(err) });
@@ -3265,7 +3314,7 @@ export class PlanningPanelProvider {
                     await db.updateEpicStatus(subtask.planId, 0, epic.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] addSubtaskToEpic failed:', err);
                 }
@@ -3282,7 +3331,7 @@ export class PlanningPanelProvider {
                     await db.updateEpicStatus(subtask.planId, 0, '');
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] removeSubtaskFromEpic failed:', err);
                 }
@@ -3308,7 +3357,7 @@ export class PlanningPanelProvider {
                     await db.tombstonePlan(epic.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] deleteEpic failed:', err);
                 }
@@ -3326,11 +3375,8 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Epic name is required.' });
                         break;
                     }
-                    const addToKanbanBoard = msg.addToKanbanBoard !== false;
                     const description = msg.description ? String(msg.description).trim() : '';
-                    const yamlSafeName = name.replace(/'/g, "''");
-                    const yamlSafeDesc = description.replace(/'/g, "''");
-                    const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${name}\n\n${description}`;
+                    const epicContent = `# ${name}\n\n${description}\n`;
 
                     // Add to kanban board: create a DB plan record + file in epics/
                     const db = KanbanDatabase.forWorkspace(wsRoot);
@@ -5731,11 +5777,25 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, ticketId, attachments } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    let result: any = await vscode.commands.executeCommand(
                         'switchboard.getAttachmentList',
                         { workspaceRoot, provider, ticketId, attachmentsArray: attachments }
                     );
-                    this._panel?.webview.postMessage({
+                    const targetPanel = isProject ? this._projectPanel : this._panel;
+                    if (Array.isArray(result) && targetPanel) {
+                        const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'];
+                        result = result.map((att: any) => {
+                            if (att.isDownloaded && att.localPath) {
+                                const ext = path.extname(att.localPath).toLowerCase();
+                                if (imageExts.includes(ext)) {
+                                    const uri = vscode.Uri.file(att.localPath);
+                                    att.webviewUri = targetPanel.webview.asWebviewUri(uri).toString();
+                                }
+                            }
+                            return att;
+                        });
+                    }
+                    targetPanel?.webview.postMessage({
                         type: 'attachmentsListResult',
                         success: true,
                         ticketId,
@@ -5743,7 +5803,8 @@ Read the current content above. Determine what's missing. Produce a complete epi
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    const targetPanel = isProject ? this._projectPanel : this._panel;
+                    targetPanel?.webview.postMessage({
                         type: 'attachmentsListResult',
                         success: false,
                         ticketId,

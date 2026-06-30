@@ -282,3 +282,64 @@ When the inspected image is likely a screenshot, show a persistent note in the r
 ---
 
 **Recommendation:** Complexity 6 (Medium) — four files (design.html, new inspect.js, DesignPanelProvider.ts, design.js), one backend message handler (hybrid fallback), color-space feature-detection, and a confirmed CORS-untainting technique. The two highest risks are now research-resolved with confirmed mitigations; remaining risks (mapping correctness, button enable/disable, dominant-colour quality) are well-scoped. **Send to Coder.** Lead with the Step 0 CORS/color-space probe before any UI work.
+
+---
+
+## Reviewer Pass (in-place, 2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *Reviews the commit `d8d418b` against this plan. Buckle up.*
+
+**[CRITICAL] design.js:1472-1474 — You broke the Design System tab's image preview. Full stop.**
+The original `handlePreviewReady` design-folder branch was an exclusive `if (isImage) … else if (json) … else if (yaml) … else { markdown }` chain. You "refactored" it into `if (isImage) { … } else { disable inspect }` followed by a **separate top-level** `if (msg.fileType === 'json') … else if (yaml) … else { markdown }`. Congratulations: when an image loads (`fileType === 'image'`, confirmed at `DesignPanelProvider.ts:3115`), the image branch shows the container, and then the orphaned markdown `else` branch runs and does `imgCont.style.display = 'none'` — **hiding the image you just rendered and showing an empty markdown pane.** The Design System tab can no longer display images. This is the exact feature the plan exists to enhance, and you bricked it. Unacceptable.
+
+**[CRITICAL] design.html:4049-4053 — You deleted the Apply Design System modal's action buttons.**
+The diff removed `<button id="btn-cancel-apply">` and `<button id="btn-execute-apply">` plus their wrapping row, and in the process dropped a closing `</div>` so the `#design-system-apply-modal` container never closed — leaving the `#inspect-overlay` **nested inside the hidden apply modal** (`display: none`), which would make the inspector invisible forever. The JS handlers at `design.js:4175` and `design.js:4188` still reference both button IDs, so the "Apply Design System to Screens" workflow is now a dead modal with no way to apply or cancel. You added a feature by amputating an existing one. Two regressions for the price of one commit.
+
+**[MAJOR] inspect.js:314-318 / 326-330 — The SecurityError fallback you spec'd is not wired.**
+The plan (Proposed Changes, inspect.js) explicitly requires: "wrap `getImageData()` in try/catch; on `SecurityError`, `postMessage({ type: 'inspectRequestDataUrl', filePath })`." Your catch just retries `getImageData` **without the `{ colorSpace }` option** — which has nothing to do with taint and will throw `SecurityError` again, uncaught. The only fallback path that actually fires is `probe.onerror` (line 129). That covers the common CORS-failure case (crossOrigin + no CORS header ⇒ load failure, not load-tainted), so it's not totally dead — but the spec'd defense-in-depth is missing and the catch is misleading dead code.
+
+**[MAJOR] inspect.js:110 — Screenshot guardrail over-triggers on every PNG.**
+`fileName.endsWith('.png')` flags **every** PNG as a screenshot, including legitimate PNG design assets / logo exports. The plan said "`.png` + dimensions matching common device sizes" — you dropped the dimension signal. The result: the orange guardrail banner screams "this is a lossy screenshot" at a user inspecting a pristine exported logo. Also case-sensitive — `.PNG` escapes. Annoying, not fatal.
+
+**[NIT] inspect.js:4061 / design.html:4061 — Overlay is `position: absolute` pinned to viewport coords.**
+The overlay resolves against the initial containing block (no positioned ancestor — verified, the modals are `position: fixed` and the overlay is a body-level sibling), so it works at open time. But it won't follow panel scroll. `position: fixed` would be more honest for a viewport-pinned interaction layer. Defer.
+
+**[NIT] design.js:4094 — Unguarded deref in the local-subtab re-evaluation.**
+`document.getElementById('image-preview-container-design').style.display` will throw if that element is ever absent. It exists today, so it's fine, but defensive `?.` costs nothing. Also the local handler only *enables* the button, never disables it when switching back to local with no image loaded — minor state asymmetry vs. the stitch handler.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- `DesignPanelProvider.ts` wiring (`{{INSPECT_JS_URI}}` + `inspectRequestDataUrl` handler) — clean, and the path-validation defense-in-depth exceeds the plan's requirement. `_getWorkspaceRoots`/`fs`/`path` all present.
+- `inspect.js` core: dedicated `crossOrigin="anonymous"` `Image()` before `src` (ordering correct), `getBoundingClientRect()`-fraction coordinate mapping, bucket-quantized dominant colour, P3 feature-detection with sRGB read, colorSpace label in readout, copy-hex, stale-request token guard. All faithful to the plan.
+- `design.js` IMAGES-tab branch — the added `else { disable }` is safe (no following chain to desync).
+- `dataset.filePath` plumbing on both image-load paths — correct, read-only, used only on the fallback path.
+
+**Fix now (CRITICAL/MAJOR):**
+1. **CRITICAL — restore the exclusive if/else chain** in the design-folder branch so images render again. Done: nested the json/yaml/markdown chain inside the non-image `else`, with the inspect-disable at the top of that else.
+2. **CRITICAL — restore the apply-modal buttons + closing structure** so `#inspect-overlay` is a sibling (not a child of the hidden modal) and the Apply workflow works. Done.
+
+**Defer (NIT / acceptable risk):**
+- SecurityError→backend-fallback wiring (MAJOR but largely unreachable in practice via the onerror path; revisit if Step 0 probe shows load-tainted behaviour on any target VS Code).
+- PNG guardrail over-trigger + case-sensitivity (UX noise, not a crash).
+- Overlay `position: fixed` + scroll-follow (verify manually; defer).
+- Local-subtab `?.` guard + disable-on-no-image symmetry.
+
+### Code fixes applied
+- `src/webview/design.js` (design-folder `handlePreviewReady` branch): re-nested the `json`/`yaml`/`markdown` chain inside the non-image `else` block, restoring the original exclusive semantics so image previews render in the DESIGN SYSTEM tab. Inspect-button disable now lives at the top of that `else`.
+- `src/webview/design.html` (apply-modal block): restored `<button id="btn-cancel-apply">`, `<button id="btn-execute-apply">`, and their wrapping flex row; restored the three closing `</div>`s so `#design-system-apply-modal` closes before `#inspect-overlay`, making the overlay a body-level sibling instead of a child of the hidden modal.
+
+### Validation results
+- `node --check src/webview/inspect.js` → OK.
+- `node --check src/webview/design.js` → OK (brace-balanced after re-nest).
+- HTML div-balance: apply-modal now opens 1 (modal) + 1 (modal-content) + 1 (modal-header, self-closed) + 1 (modal-body) + 2 inner rows + 1 apply-screens-list, with matching closes; `#inspect-overlay` confirmed as a sibling starting at the line after the modal's final `</div>`.
+- Per session directives: `npm run compile` and automated tests NOT run in this session (deferred to user). No new test authored here.
+
+### Remaining risks
+1. **SecurityError→data-URL fallback not wired on the `getImageData` path** (only `probe.onerror` triggers the backend relay). Reachable only if an image loads-but-tainted despite `crossOrigin="anonymous"`; the Step 0 real-webview probe is the gate.
+2. **Screenshot guardrail flags all `.png` files** (no dimension check, case-sensitive `.png`). UX noise on legitimate PNG assets.
+3. **Overlay uses `position: absolute` pinned to the viewport rect captured at open** — won't follow panel scroll during an active inspection session.
+4. **DESIGN-tab inspect enable/disable** depends on the `btn-design-subtab-local.active` class check inside `img.onload`; switching subtabs before load completes, or the local-subtab handler's disable-on-no-image gap, can leave the button in a stale state. Manual verification recommended.
+5. **Step 0 CORS/color-space probe** still required on a real webview across target VS Code versions before declaring the primary path solid for the ~4,000-install base.

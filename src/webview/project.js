@@ -445,7 +445,8 @@
                     const intent = _pendingKanbanFilterIntent;
                     if (intent.workspaceRoot && kanbanWorkspaceFilter) {
                         const opts = Array.from(kanbanWorkspaceFilter.options).map(o => o.value);
-                        if (opts.includes(intent.workspaceRoot)) {
+                        const intentNorm = normalizeRoot(intent.workspaceRoot);
+                        if (opts.some(o => normalizeRoot(o) === intentNorm)) {
                             kanbanFilters.workspaceRoot = intent.workspaceRoot;
                             kanbanWorkspaceFilter.value = intent.workspaceRoot;
                         }
@@ -1082,6 +1083,12 @@
         }
     });
 
+    // Ready-handshake: signal the extension host that the message listener is
+    // registered. The host queues outbound messages until this arrives so that
+    // cold-open messages (e.g. activateKanbanTabAndSelectPlan from a kanban
+    // Review click) are not dropped by the browser before the listener exists.
+    vscode.postMessage({ type: 'webviewReady' });
+
     // Shared Tab/Workspace Population
     function populateWorkspaceDropdowns() {
         if (!kanbanWorkspaceFilter || !epicsWorkspaceFilter) return;
@@ -1376,7 +1383,7 @@
         return _kanbanPlansCache.filter(plan => {
             if (plan.isEpic) return false;
             if (kanbanFilters.column && plan.column !== kanbanFilters.column) return false;
-            if (kanbanFilters.workspaceRoot && plan.workspaceRoot !== kanbanFilters.workspaceRoot) return false;
+            if (kanbanFilters.workspaceRoot && normalizeRoot(plan.workspaceRoot) !== normalizeRoot(kanbanFilters.workspaceRoot)) return false;
             if (kanbanFilters.project) {
                 if (kanbanFilters.project === '__none__') {
                     if (plan.project !== '') return false;
@@ -1568,7 +1575,42 @@
             return;
         }
         const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
-        if (!itemDiv) return;
+        if (!itemDiv) {
+            // The plan is confirmed in the cache but is hidden by the current
+            // filters. The filter intent is a nicety and must never prevent the
+            // selection the user explicitly requested. Force-clear all kanban
+            // filters, re-render, and re-query. This also breaks the infinite
+            // re-narrow loop (kanbanPlansReady re-applies the intent every time)
+            // by clearing the intent so the next render stays wide.
+            kanbanFilters.workspaceRoot = '';
+            if (kanbanWorkspaceFilter) kanbanWorkspaceFilter.value = '';
+            kanbanFilters.project = '';
+            if (kanbanProjectFilter) kanbanProjectFilter.value = '';
+            kanbanFilters.column = '';
+            if (kanbanColumnFilter) kanbanColumnFilter.value = '';
+            kanbanFilters.complexity = '';
+            if (kanbanComplexityFilter) kanbanComplexityFilter.value = '';
+            _pendingKanbanFilterIntent = null;
+            renderKanbanPlans();
+            const revealed = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
+            if (revealed) {
+                revealed.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
+                revealed.classList.add('selected');
+                loadKanbanPlanPreview(match);
+                _pendingKanbanSelection = null;
+                return;
+            }
+            // Still hidden even after clearing filters — the cache likely does
+            // not actually contain the rendered plan yet. Increment the retry
+            // counter and fall through to the normal retry/fallback flow so the
+            // 3-retry widest-filter re-fetch can kick in.
+            if (++_pendingKanbanSelectionRetries >= 3) {
+                _pendingKanbanSelection = null;
+                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+            }
+            return;
+        }
         itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
         document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
         itemDiv.classList.add('selected');

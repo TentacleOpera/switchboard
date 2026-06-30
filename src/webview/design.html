@@ -1911,6 +1911,10 @@
             outline: none;
             border-color: var(--accent-teal-dim);
         }
+        /* Claude tab: left-justify all controls (override the right-push from .sidebar-search-input) */
+        #controls-strip-claude .sidebar-search-input {
+            margin-left: 0;
+        }
         .cyber-theme-enabled .sidebar-search-input {
             background: rgba(10, 10, 10, 0.70);
             border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
@@ -4049,6 +4053,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div id="apply-screens-list" style="max-height: 250px; overflow-y: auto; border: 1px solid var(--border-color); padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--panel-bg2, #1a1a1a);">
                         <!-- Checklist of screens will be rendered here -->
                     </div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
+                        <button id="btn-cancel-apply" class="strip-btn">Cancel</button>
+                        <button id="btn-execute-apply" class="strip-btn stitch-btn-primary">Apply Design System</button>
+                    </div>
+                </div>
             </div>
         </div>
 

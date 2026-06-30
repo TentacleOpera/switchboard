@@ -1471,42 +1471,42 @@
                 }
             } else {
                 if (inspectBtn) inspectBtn.setAttribute('disabled', 'true');
-            }
-            if (msg.fileType === 'json') {
-                if (imgCont) imgCont.style.display = 'none';
-                if (mdPrev) mdPrev.style.display = 'none';
-                if (jsonCont) {
-                    jsonCont.style.display = 'block';
-                    jsonCont.innerHTML = '';
-                    try {
-                        jsonCont.appendChild(renderJsonTree(JSON.parse(content)));
-                    } catch (e) {
-                        jsonCont.innerHTML = `<div class="json-error">Failed to parse JSON: ${e.message}</div>`;
-                    }
-                }
-            } else if (msg.fileType === 'yaml') {
-                if (imgCont) imgCont.style.display = 'none';
-                if (mdPrev) mdPrev.style.display = 'none';
-                if (jsonCont) {
-                    jsonCont.style.display = 'block';
-                    jsonCont.innerHTML = '';
-                    if (msg.parsedJson !== undefined) {
+                if (msg.fileType === 'json') {
+                    if (imgCont) imgCont.style.display = 'none';
+                    if (mdPrev) mdPrev.style.display = 'none';
+                    if (jsonCont) {
+                        jsonCont.style.display = 'block';
+                        jsonCont.innerHTML = '';
                         try {
-                            jsonCont.appendChild(renderJsonTree(msg.parsedJson));
+                            jsonCont.appendChild(renderJsonTree(JSON.parse(content)));
                         } catch (e) {
-                            jsonCont.innerHTML = `<div class="json-error">Failed to render YAML tree: ${e.message}</div>`;
+                            jsonCont.innerHTML = `<div class="json-error">Failed to parse JSON: ${e.message}</div>`;
                         }
-                    } else {
-                        jsonCont.innerHTML = `<div class="json-error">Invalid YAML on disk — cannot render tree.</div>`;
                     }
-                }
-            } else {
-                // Markdown/Text
-                if (imgCont) imgCont.style.display = 'none';
-                if (jsonCont) jsonCont.style.display = 'none';
-                if (mdPrev) {
-                    mdPrev.style.display = 'block';
-                    mdPrev.innerHTML = renderMarkdown(content) || '';
+                } else if (msg.fileType === 'yaml') {
+                    if (imgCont) imgCont.style.display = 'none';
+                    if (mdPrev) mdPrev.style.display = 'none';
+                    if (jsonCont) {
+                        jsonCont.style.display = 'block';
+                        jsonCont.innerHTML = '';
+                        if (msg.parsedJson !== undefined) {
+                            try {
+                                jsonCont.appendChild(renderJsonTree(msg.parsedJson));
+                            } catch (e) {
+                                jsonCont.innerHTML = `<div class="json-error">Failed to render YAML tree: ${e.message}</div>`;
+                            }
+                        } else {
+                            jsonCont.innerHTML = `<div class="json-error">Invalid YAML on disk — cannot render tree.</div>`;
+                        }
+                    }
+                } else {
+                    // Markdown/Text
+                    if (imgCont) imgCont.style.display = 'none';
+                    if (jsonCont) jsonCont.style.display = 'none';
+                    if (mdPrev) {
+                        mdPrev.style.display = 'block';
+                        mdPrev.innerHTML = renderMarkdown(content) || '';
+                    }
                 }
             }
 

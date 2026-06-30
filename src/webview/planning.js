@@ -8343,6 +8343,21 @@ Instructions:
                         Path: ${escapeHtml(localPath)}
                     </div>
                 `;
+                // NEW: inline image preview for image files
+                if (att.webviewUri) {
+                    const ext = (filename || '').split('.').pop().toLowerCase();
+                    const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
+                    if (imageExts.includes(ext)) {
+                        html += `
+                            <div style="margin-top: 6px; border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden; background: var(--panel-bg);">
+                                <img src="${escapeAttr(att.webviewUri)}" 
+                                     style="display: block; max-width: 100%; max-height: 300px; object-fit: contain; cursor: pointer;" 
+                                     data-local-path="${escapeAttr(localPath)}"
+                                     class="inline-attachment-img" />
+                            </div>
+                        `;
+                    }
+                }
             }
 
             html += `
@@ -8390,6 +8405,18 @@ Instructions:
                     filename,
                     ticketId,
                     ticketTitle
+                });
+            });
+        });
+
+        // Click handler for inline images
+        attachmentsList.querySelectorAll('.inline-attachment-img').forEach(img => {
+            img.addEventListener('click', () => {
+                const localPath = img.dataset.localPath;
+                vscode.postMessage({
+                    type: 'openAttachment',
+                    workspaceRoot: ticketsWorkspaceRoot,
+                    localPath
                 });
             });
         });

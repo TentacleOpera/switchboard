@@ -51,7 +51,6 @@ import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
  */
 const ULTRACODE_EPIC_PREFIX = 'This is an epic with multiple subtasks. Activate your ultracode workflow.';
 const GOAL_EPIC_PREFIX = '/goal';
-const VALID_EPIC_WORKFLOW_MODES = new Set(['none', 'ultracode', 'goal']);
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -206,12 +205,18 @@ export class KanbanProvider implements vscode.Disposable {
         } else if (this._planningPanelProvider.isProjectInCurrentWindow()) {
             this._planningPanelProvider.revealProject();
         }
+        // Resolve through the effective root so the value the Project panel
+        // receives matches what _getKanbanPlans tags plans with. In the happy
+        // path this is a no-op; in edge cases (empty fallback, child workspace
+        // selected directly) it corrects the root.
+        const rawRoot = workspaceRoot || this.getCurrentWorkspaceRoot() || '';
+        const effectiveRoot = rawRoot ? this.resolveEffectiveWorkspaceRoot(rawRoot) : '';
         this._planningPanelProvider.postMessageToProjectWebview({
             type: 'activateKanbanTabAndSelectPlan',
             planId: '',
             sessionId: '',
             planFile: planFile || '',
-            workspaceRoot: workspaceRoot || '',
+            workspaceRoot: effectiveRoot,
             autoEdit: autoEdit === true
         });
     }
@@ -934,12 +939,19 @@ export class KanbanProvider implements vscode.Disposable {
         }
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
-            // Trigger unified refresh so the board gets fresh data
-            await vscode.commands.executeCommand('switchboard.fullSync');
+            // Switch the visible tab immediately — do NOT gate on fullSync.
+            // The DB is kept in sync proactively by TaskViewerProvider's file watchers
+            // (plan watcher, brain watcher, etc.), which call refreshUI on every file
+            // change. A fullSync here is redundant and blocks for seconds while scanning
+            // all session files from disk.
             if (this._pendingTab) {
                 this._panel.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
                 this._pendingTab = undefined;
             }
+            // Fire-and-forget: push current DB state to the webview without blocking the
+            // tab switch above. refreshUI is a lightweight DB read (no file-system scan);
+            // it has its own internal try/catch so errors here are bounded.
+            void vscode.commands.executeCommand('switchboard.refreshUI');
             return;
         }
 
@@ -2719,11 +2731,27 @@ export class KanbanProvider implements vscode.Disposable {
      */
     private async _postEpicWorkflowModeState(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
-        let mode = 'none';
+        let ultracode = false;
+        let goal = false;
         if (db && await db.ensureReady()) {
-            mode = (await db.getConfig('epic_workflow_mode')) || 'none';
+            const ucRaw = await db.getConfig('epic_ultracode_enabled');
+            const goalRaw = await db.getConfig('epic_goal_enabled');
+            if (ucRaw !== null && goalRaw !== null) {
+                // New keys already present — use them directly
+                ultracode = ucRaw === 'true';
+                goal = goalRaw === 'true';
+            } else {
+                // Migration needed: either first load or partial-write crash recovery.
+                // The legacy tri-state key is the source of truth.
+                const legacy = (await db.getConfig('epic_workflow_mode')) || 'none';
+                ultracode = legacy === 'ultracode';
+                goal = legacy === 'goal';
+                // Persist migrated values so future loads skip this branch
+                await db.setConfig('epic_ultracode_enabled', ultracode ? 'true' : 'false');
+                await db.setConfig('epic_goal_enabled', goal ? 'true' : 'false');
+            }
         }
-        this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', mode });
+        this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', ultracode, goal });
     }
 
     private async _getDefaultPromptOverrides(
@@ -3247,14 +3275,14 @@ export class KanbanProvider implements vscode.Disposable {
         if (primaryPlan && primaryPlan.isEpic && role !== 'planner') {
             const db = this._getKanbanDb(workspaceRoot);
             if (db && await db.ensureReady()) {
-                const mode = (await db.getConfig('epic_workflow_mode')) || 'none';
-                if (mode === 'ultracode') {
-                    return `${ULTRACODE_EPIC_PREFIX}\n\n${built}`;
-                } else if (mode === 'goal') {
-                    // /goal must be position-zero for the host to parse it as a
-                    // slash command. Prepending to the outermost return string
-                    // guarantees no safeguard/authorization wall precedes it.
-                    return `${GOAL_EPIC_PREFIX}\n${built}`;
+                const ultracode = (await db.getConfig('epic_ultracode_enabled')) === 'true';
+                const goal = (await db.getConfig('epic_goal_enabled')) === 'true';
+                if (goal || ultracode) {
+                    let prefix = '';
+                    // /goal must be position-zero for the host to parse it as a slash command.
+                    if (goal) { prefix += `${GOAL_EPIC_PREFIX}\n`; }
+                    if (ultracode) { prefix += `${ULTRACODE_EPIC_PREFIX}\n\n`; }
+                    return `${prefix}${built}`;
                 }
             }
         }
@@ -5739,14 +5767,25 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await this._updateSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
                 break;
             case 'setEpicWorkflowMode': {
-                const mode = String(msg.mode || 'none');
-                if (!VALID_EPIC_WORKFLOW_MODES.has(mode)) { break; }
+                // New shape: { ultracode: boolean, goal: boolean }
+                // Legacy shape: { mode: 'none'|'ultracode'|'goal' } — tolerated for back-compat
+                let ultracode: boolean;
+                let goal: boolean;
+                if (typeof msg.ultracode === 'boolean') {
+                    ultracode = msg.ultracode;
+                    goal = !!msg.goal;
+                } else {
+                    const mode = String(msg.mode || 'none');
+                    ultracode = mode === 'ultracode';
+                    goal = mode === 'goal';
+                }
                 const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const db = wsRoot ? this._getKanbanDb(wsRoot) : undefined;
                 if (db && await db.ensureReady()) {
-                    await db.setConfig('epic_workflow_mode', mode);
+                    await db.setConfig('epic_ultracode_enabled', ultracode ? 'true' : 'false');
+                    await db.setConfig('epic_goal_enabled', goal ? 'true' : 'false');
                 }
-                this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', mode });
+                this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', ultracode, goal });
                 break;
             }
             case 'toggleDynamicComplexityRouting':
@@ -6854,12 +6893,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     } else if (this._planningPanelProvider.isProjectInCurrentWindow()) {
                         this._planningPanelProvider.revealProject();
                     }
+                    // Resolve through the effective root so the value the
+                    // Project panel receives matches what _getKanbanPlans tags
+                    // plans with. Guards against the empty data-workspace-root
+                    // fallback in kanban.html and child-workspace selections.
+                    const reviewRawRoot = msg.workspaceRoot || this.getCurrentWorkspaceRoot() || '';
+                    const reviewEffectiveRoot = reviewRawRoot ? this.resolveEffectiveWorkspaceRoot(reviewRawRoot) : '';
                     this._planningPanelProvider.postMessageToProjectWebview({
                         type: 'activateKanbanTabAndSelectPlan',
                         planId: msg.planId || '',
                         sessionId: reviewId,
                         planFile: msg.planFile || '',
-                        workspaceRoot: msg.workspaceRoot || '',
+                        workspaceRoot: reviewEffectiveRoot,
                         project: msg.project || '',
                         column: msg.column || '',
                         isEpic: msg.isEpic === true
@@ -8598,14 +8643,12 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             }
         }
 
-        // Quote YAML values to prevent frontmatter breakage from names containing ---, :, etc.
-        const yamlSafeName = epicName.replace(/'/g, "''");
-        // The description lives in the markdown body under ## Goal (after the closed
-        // frontmatter block), so newlines are safe and preserve the agent's multi-line
-        // goal formatting. Only normalize CRLF and trim — no flattening.
+        // The description lives in the markdown body under ## Goal, so newlines are safe
+        // and preserve the agent's multi-line goal formatting. Only normalize CRLF and
+        // trim — no flattening. No frontmatter is emitted — the file begins with the H1.
         const epicDesc = (description ? String(description).replace(/\r\n/g, '\n').trim() : '');
         const goalSection = epicDesc ? `## Goal\n\n${epicDesc}\n` : '';
-        const epicContent = `---\ndescription: '${yamlSafeName}'\n---\n\n# ${epicName}\n\n${goalSection}`;
+        const epicContent = `# ${epicName}\n\n${goalSection}`;
 
         // Register before writing so the file watcher skips this file —
         // the DB record is already committed above with is_epic=1.

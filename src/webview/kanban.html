@@ -4201,25 +4201,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
-        // Epic workflow mode: 'none' | 'ultracode' | 'goal' (mutually exclusive sticky toggles)
-        let epicWorkflowMode = 'none';
+        // Epic workflow toggles: independently toggleable (both can be active at once)
+        let epicUltracodeEnabled = false;
+        let epicGoalEnabled = false;
         function updateEpicWorkflowToggleUi() {
             const ucBtn = document.getElementById('btn-epic-ultracode');
             const goalBtn = document.getElementById('btn-epic-goal');
             if (ucBtn) {
-                ucBtn.classList.toggle('is-active', epicWorkflowMode === 'ultracode');
-                ucBtn.classList.toggle('is-off', epicWorkflowMode !== 'ultracode');
+                ucBtn.classList.toggle('is-active', epicUltracodeEnabled);
+                ucBtn.classList.toggle('is-off', !epicUltracodeEnabled);
             }
             if (goalBtn) {
-                goalBtn.classList.toggle('is-active', epicWorkflowMode === 'goal');
-                goalBtn.classList.toggle('is-off', epicWorkflowMode !== 'goal');
+                goalBtn.classList.toggle('is-active', epicGoalEnabled);
+                goalBtn.classList.toggle('is-off', !epicGoalEnabled);
             }
         }
-        function setEpicWorkflowMode(mode) {
-            // Clicking the active button resets to 'none'
-            epicWorkflowMode = (epicWorkflowMode === mode) ? 'none' : mode;
+        function toggleEpicUltracode() {
+            epicUltracodeEnabled = !epicUltracodeEnabled;
             updateEpicWorkflowToggleUi();
-            postKanbanMessage({ type: 'setEpicWorkflowMode', mode: epicWorkflowMode });
+            postKanbanMessage({ type: 'setEpicWorkflowMode', ultracode: epicUltracodeEnabled, goal: epicGoalEnabled });
+        }
+
+        function toggleEpicGoal() {
+            epicGoalEnabled = !epicGoalEnabled;
+            updateEpicWorkflowToggleUi();
+            postKanbanMessage({ type: 'setEpicWorkflowMode', ultracode: epicUltracodeEnabled, goal: epicGoalEnabled });
         }
 
         function updateComplexityRoutingToggleUi() {
@@ -5281,7 +5287,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         function createCardHtml(card) {
-            const timeAgo = formatTimeAgo(card.lastActivity);
             const shortTopic = card.topic.length > 50 ? card.topic.substring(0, 47) + '...' : card.topic;
             const complexityValue = card.complexity || 'Unknown';
             const category = scoreToCategory(complexityValue);
@@ -5340,8 +5345,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const epicBadge = ''; // Badge removed; epic identity shown via purple border + meta line
             
             const cardMetaContent = card.isEpic
-                ? `<span class="epic-subtask-label">EPIC: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`
-                : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}`;
+                ? `<span class="epic-subtask-label">EPIC: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
+                : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`;
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -5476,19 +5481,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             result = result.replace(/\n{3,}/g, '\n\n');
             return result.trim();
         }
-
-        function formatTimeAgo(iso) {
-            if (!iso) return '';
-            const diff = Date.now() - new Date(iso).getTime();
-            const mins = Math.floor(diff / 60000);
-            if (mins < 1) return 'just now';
-            if (mins < 60) return mins + 'm ago';
-            const hrs = Math.floor(mins / 60);
-            if (hrs < 24) return hrs + 'h ago';
-            return Math.floor(hrs / 24) + 'd ago';
-        }
-
-
 
         // Recover Selected handler
         document.addEventListener('click', (e) => {
@@ -6292,7 +6284,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateCliToggleUi();
                     break;
                 case 'epicWorkflowModeState':
-                    epicWorkflowMode = ['none', 'ultracode', 'goal'].includes(msg.mode) ? msg.mode : 'none';
+                    if (typeof msg.ultracode === 'boolean') {
+                        epicUltracodeEnabled = msg.ultracode;
+                        epicGoalEnabled = !!msg.goal;
+                    } else {
+                        // Legacy fallback: translate tri-state mode to booleans
+                        epicUltracodeEnabled = msg.mode === 'ultracode';
+                        epicGoalEnabled = msg.mode === 'goal';
+                    }
                     updateEpicWorkflowToggleUi();
                     break;
                 case 'dynamicComplexityRoutingState':
@@ -7034,12 +7033,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateCliToggleUi();
             postKanbanMessage({ type: 'toggleCliTriggers', enabled: cliTriggersEnabled });
         });
-        document.getElementById('btn-epic-ultracode')?.addEventListener('click', () => {
-            setEpicWorkflowMode('ultracode');
-        });
-        document.getElementById('btn-epic-goal')?.addEventListener('click', () => {
-            setEpicWorkflowMode('goal');
-        });
+        document.getElementById('btn-epic-ultracode')?.addEventListener('click', toggleEpicUltracode);
+        document.getElementById('btn-epic-goal')?.addEventListener('click', toggleEpicGoal);
         document.getElementById('unknown-complexity-toggle')?.addEventListener('change', (event) => {
             const checked = !!event.target?.checked;
             allowUnknownComplexityAutoMove = checked;
