@@ -63,18 +63,15 @@ The codebase already documents the intended convention at `PlanningPanelProvider
 
 ### Phase 2 — Resolve split-brain workflow flags (Findings B)
 4. Pick a single target per setting and apply it in **both** the Kanban and Setup/Planning/Design write sites, plus clear the stale other-scope value (as in step 2).
-   - `accurateCoding.enabled`, `reviewer.advancedMode`, `leadCoder.inlineChallenge` → **Global** (they're agent-behavior preferences; Kanban already treats them as Global). *Recommended.*
-   - `planner.designDocEnabled` / `planner.designDocLink` → **OPEN DECISION** (see below). A design-doc *link* is plausibly project-specific (→ Workspace), which would mean the Kanban's Global write is the bug, not the Setup write. Do not change these until the direction is confirmed.
+   - `accurateCoding.enabled`, `reviewer.advancedMode`, `leadCoder.inlineChallenge` → **Global** (they're agent-behavior preferences; Kanban already treats them as Global). Align the Setup-panel Workspace writes (`TaskViewerProvider.ts:7930/7937/7944`) to Global + clear stale Workspace value.
+   - `planner.designDocEnabled` / `planner.designDocLink` → **Workspace** (RESOLVED, see D1). This is the *legacy* project-wide design-doc/PRD pointer (labeled "PLANNING EPIC REFERENCE" in the planner prompt, "LEGACY DESIGN DOC (fallback baseline)" in the acceptance-review prompt — `agentPromptBuilder.ts:564`/`:766`). It points at a specific project's requirements doc (often a Notion page or repo file), so it is inherently per-project. Therefore the **Kanban's Global write is the bug** — change `KanbanProvider.ts:3687`/`:3690` from `true` (Global) to `ConfigurationTarget.Workspace`, and clear any stale Global value. The Setup/Planning/Design Workspace writes are already correct and stay.
 
 ### Phase 3 — Aggressive-pair cleanup (Findings C) — Kanban is the sole owner
 5. **Remove the dead Setup-panel path entirely:**
    - Delete the `data.aggressivePairProgramming` write block at `TaskViewerProvider.ts:7961–7973` (the `pairProgramming.aggressive` Workspace write). Confirm whether the trailing `autobanState` update (lines 7967–7972) is reachable from any *current* Setup message; if nothing sends `data.aggressivePairProgramming`, remove the whole block. If something does still send it, remove only the dead config write and keep/redirect the autobanState update as appropriate.
    - Remove `handleGetAggressivePairSetting` (TaskViewerProvider) and the `getAggressivePairSetting` → `aggressivePairSetting` round-trip (`SetupPanelProvider.ts:550–555`).
    - Remove the orphaned `case 'aggressivePairSetting'` handler and the `aggressive-pair-toggle` `getElementById` reference in `setup.html` (~4540–4543).
-6. **Fix the key name / registration mismatch (Kanban side):** decide the canonical key and make it consistent:
-   - Either (a) **rename** the live key to the registered name — change `KanbanProvider.ts:3684`/`:3370` from `aggressivePairProgramming.enabled` to `pairProgramming.aggressive`, keeping it Global, so the registered `package.json:296` setting is the one actually used; **migrate** any existing `aggressivePairProgramming.enabled` value forward on read (one-time fallback) since this key may have shipped; or
-   - (b) **register** `aggressivePairProgramming.enabled` in `package.json` and remove the unused `pairProgramming.aggressive` entry.
-   - **Recommended: (a)** — `pairProgramming.aggressive` is the cleaner, already-registered name; (b) leaves a slightly awkward key. Whichever is chosen, end state = exactly one key, registered, written+read at Global, set only from the Kanban.
+6. **Fix the key name / registration mismatch (Kanban side)** — RESOLVED (D2): **rename the live key to the registered name.** Change `KanbanProvider.ts:3684`/`:3370` from `aggressivePairProgramming.enabled` to the registered `pairProgramming.aggressive` (`package.json:296`), keeping it Global. Add a **one-time read fallback** so any existing shipped `aggressivePairProgramming.enabled` value is honored under the new key (read new key; if undefined, read old key and write it forward to the new key at Global). End state = exactly one key (`pairProgramming.aggressive`), registered, written+read at Global, set only from the Kanban; the unregistered `aggressivePairProgramming.enabled` is fully retired.
 
 ### Phase 4 — Verification
 7. Build only if producing a VSIX (`dist/` not authoritative per CLAUDE.md); otherwise test from `src/` via installed VSIX.
@@ -84,9 +81,9 @@ The codebase already documents the intended convention at `PlanningPanelProvider
    - Aggressive pair: toggling in the Kanban persists and affects prompts (via `aggressivePairProgramming` in autoban/role state, fallback to the single config key); confirm the Setup panel no longer references it and no console errors from removed message handlers; confirm a one-time read migration (if 6a) picks up any old `aggressivePairProgramming.enabled` value.
    - Grep the tree for the removed identifiers (`pairProgramming.aggressive` orphan reads, `getAggressivePairSetting`, `aggressive-pair-toggle`) → no stragglers.
 
-## Open Decisions
-- **D1 — `planner.designDoc*` target:** Global (user pref, matches Kanban) **or** Workspace (a design-doc link is arguably project-specific, making the Kanban write the bug)? This is the one genuinely ambiguous case in Findings B; everything else has a clear answer. *Needs your call before Phase 2 touches these two keys.*
-- **D2 — aggressive-pair canonical key:** rename to registered `pairProgramming.aggressive` (recommended) vs register `aggressivePairProgramming.enabled`.
+## Resolved Decisions
+- **D1 — `planner.designDoc*` target → Workspace.** It is the legacy project-wide design-doc/PRD pointer (`agentPromptBuilder.ts:564`/`:766`), inherently project-specific. The Kanban's Global write (`KanbanProvider.ts:3687`/`:3690`) is the bug; Setup/Planning/Design Workspace writes are correct. *(Aside: this doc is largely superseded by the per-project PRD `prd.md` and now serves only as a fallback acceptance baseline — a future deprecation candidate, out of scope here.)*
+- **D2 — aggressive-pair canonical key → `pairProgramming.aggressive`** (the registered name), Global, with a one-time read fallback from the retired `aggressivePairProgramming.enabled`.
 
 ## Migration Considerations (published extension, ~4k installs)
 - Per CLAUDE.md: settings shipped in a released version must be migrated, not dropped. `theme.name`, the status-bar keys, the workflow flags, and `aggressivePairProgramming.enabled` have all shipped, so:
