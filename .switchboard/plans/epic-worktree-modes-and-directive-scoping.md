@@ -43,13 +43,16 @@ implementing agent has to improvise.
 
 - A **global "Epic Worktree Mode" selector** in the WORKTREES tab → new *Epics* section, persisted
   as a single config value (`epic_worktree_mode`), applied to **newly created** epics:
-  - `single` *(default — current behavior, migration-safe)*: one shared epic worktree; no
-    automatic creation (manual "Create Epic Worktree" button unchanged).
+  - `none` *(default — current behavior, migration-safe)*: no automatic epic worktrees at all. The
+    existing manual "Create Epic Worktree" button is unchanged and remains available.
   - `per-subtask` *(Feature 1)*: extension auto-provisions one worktree per subtask off a shared
     epic integration branch, records the mapping in the epic file, and hands the agent the paths.
   - `high-low` *(Feature 2)*: at epic creation, provisions exactly two tier worktrees (high / low);
     the planner consolidates the epic's subtasks into two plan files; the implementing agent runs
     both tiers in parallel via subagents.
+  - **Open fork (D1):** whether a fourth `single` option (auto-provision one shared worktree at
+    creation) is also offered, or whether "single shared worktree" stays purely as the manual
+    button. Recommendation: keep it manual → three selector modes (`none`/`per-subtask`/`high-low`).
 - A **bug fix**: scope the ultracode/goal directive to `lead`/`coder`/`intern` only, plus a new
   per-custom-role opt-in (`applyEpicDirectives`).
 
@@ -69,7 +72,7 @@ These were chosen as sensible, migration-safe defaults. Flag any you want change
 
 | # | Decision | Default chosen | Alternative |
 |---|----------|----------------|-------------|
-| D1 | Default mode | `single` = today's behavior, **no** auto-creation | Auto-create a single epic worktree on creation |
+| D1 | Default mode & mode set | `none` (no auto worktrees = today). Selector = `none`/`per-subtask`/`high-low`; "single shared" stays the manual button | Add a 4th `single` mode that auto-provisions one shared worktree at creation |
 | D2 | High/low boundary | complexity **≥5 = high**, ≤4 = low (matches pair-programming) | A dedicated configurable threshold |
 | D3 | Subtask-worktree branch base | off the **epic integration branch** | off `main` directly |
 | D4 | Subtask worktree on subtask **removal** | auto-**abandon** (discard branch) | keep until epic merge |
@@ -84,7 +87,7 @@ These were chosen as sensible, migration-safe defaults. Flag any you want change
 WORKTREES tab ──(epic_worktree_mode: single|per-subtask|high-low)──► config table
                                                    │
 Epic created ──────────────────────────────────────┤
-   single     → no auto worktree (manual button as today)
+   none       → no auto worktree (manual button as today)  [default]
    per-subtask→ create epic integration worktree (branch off main, epic_id-bound)
    high-low   → create epic integration branch + 2 tier worktrees (high/low)
                                                    │
@@ -163,7 +166,7 @@ the later parts build on.
 
 ### Backend
 1. **Config key** `epic_worktree_mode` in the existing `config` table (no migration needed).
-   Reader/writer via existing `db.getConfig` / `setConfig`. Default `'single'` when unset.
+   Reader/writer via existing `db.getConfig` / `setConfig`. Default `'none'` when unset.
 2. **Message handlers** in `KanbanProvider.ts`: `getEpicWorktreeMode` (include in the worktree
    config payload sent by `_sendWorktreeConfig`) and `setEpicWorktreeMode` (validate ∈ enum,
    persist, echo back).
