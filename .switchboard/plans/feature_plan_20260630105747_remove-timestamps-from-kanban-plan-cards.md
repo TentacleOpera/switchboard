@@ -128,3 +128,49 @@ None required. This is a pure presentation change with no logic, data flow, or p
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern**.
+
+---
+
+## Reviewer Pass — 2026-06-30
+
+### Stage 1 — Grumpy (adversarial findings)
+
+- **NIT — `src/webview/kanban.html:5349`:** Non-epic branch correctly drops `· ${timeAgo}` suffix, retains `Complexity: ` prefix and colored `complexity-indicator` span. Matches plan "After" spec for the non-epic branch. No defect.
+- **NIT — `src/webview/kanban.html:5348`:** Epic branch no longer matches this plan's "After" spec verbatim (the `Complexity: ` prefix is absent). Root cause: Plan 1 (Remove "Complexity:" Word from Epic Kanban Cards) was implemented in the same file and removed it. Plan 2's contract was "epic cards unchanged *by this plan*" — Plan 2 did not touch line 5348. Cross-plan interference is expected and correct. Flagged for traceability only.
+- **NIT — dead-code cleanup:** `formatTimeAgo` — zero matches in all of `src/`. `timeAgo` local — zero matches in `kanban.html`. Function and local fully removed (not commented out, not deferred). Removal site (around line 5483) is clean — no stray blank lines, no orphaned comments. ✓
+- **NIT — sort path preservation:** `card._ts` derived from `card.lastActivity` at line 5085–5086; sort comparator at line 5118–5119 uses `b._ts - a._ts`; `createdAt` tiebreaker at lines 5122–5124 intact; fingerprint at line 4492 still includes `card.lastActivity`. Sorting fully preserved. ✓
+- **NIT — empty `lastActivity` glitch:** Removing `formatTimeAgo` eliminates the prior trailing ` · ` glitch on cards with empty `lastActivity`. Side benefit realized — no dangling separator possible.
+
+No CRITICAL. No MAJOR.
+
+### Stage 2 — Balanced synthesis
+
+- **Keep as-is:** Non-epic branch edit at line 5349 — correct. Dead-code removal of `formatTimeAgo` and `timeAgo` — complete and clean. Sort path — intact.
+- **Fix now:** None.
+- **Defer:** None.
+- **Cross-plan note:** The epic branch at line 5348 diverges from this plan's "After" spec (no `Complexity: ` prefix) because Plan 1 removed it. This is correct combined behavior, not a Plan 2 regression. Plan 2's contract was "epic cards unchanged *by this plan*" — Plan 2 did not touch the epic branch.
+
+### Code fixes applied
+
+None — implementation matches plan requirements.
+
+### Verification results
+
+- **Source inspection (line 5349, non-epic branch):** `· ${timeAgo}` suffix removed; `Complexity: ` prefix and `complexity-indicator` span retained. ✓
+- **Dead-code check (`formatTimeAgo`):** Zero matches in `src/`. Function fully removed. ✓
+- **Dead-code check (`timeAgo`):** Zero matches in `src/webview/kanban.html`. Local fully removed. ✓
+- **Removal-site cleanliness:** Area around line 5483 (former `formatTimeAgo` location) — no stray blank lines, no orphaned comments. ✓
+- **Sort path:** `card._ts` from `card.lastActivity` at line 5085–5086; sort at line 5119; `createdAt` tiebreaker at 5122–5124. ✓
+- **Fingerprint:** `card.lastActivity` still in fingerprint at line 4492. ✓
+- **Compilation/tests:** Skipped per session directive.
+
+### Files changed
+
+- `src/webview/kanban.html`:
+  - Line 5349 (non-epic branch of `cardMetaContent` ternary): removed `· ${timeAgo}` suffix.
+  - Removed `const timeAgo = formatTimeAgo(card.lastActivity);` local from `createCardHtml`.
+  - Removed the now-dead `formatTimeAgo` function definition and its trailing blank lines.
+
+### Remaining risks
+
+- None material. The only divergence from the plan's "After" spec is the epic branch (missing `Complexity: ` prefix), which is explained by Plan 1's concurrent implementation and is correct combined behavior.

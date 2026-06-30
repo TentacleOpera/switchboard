@@ -102,3 +102,57 @@ Add a scoped CSS rule that resets `margin-left` to `0` for `.sidebar-search-inpu
 
 ## Recommendation
 Complexity 2 → **Send to Intern**.
+
+## Reviewer Pass (2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+Alright, let me look at this "fix." One CSS rule. One property. You'd think it'd be hard to screw up. Let me find out if you managed it anyway.
+
+**[NIT] Specificity brag is technically correct but irrelevant.** The plan spends two paragraphs proving `#controls-strip-claude .sidebar-search-input` (1,1,0) beats `.cyber-theme-enabled .sidebar-search-input` (0,2,0). True — ID beats class. But the cyber-theme rule (lines 1918-1921) only sets `background` and `border-color`. It doesn't touch `margin-left`. So the specificity comparison is a flex on a fight that wasn't happening. Not wrong, just noise. No action.
+
+**[NIT] "Forward-looking caveat" about a hypothetical `#status-claude` span.** The plan warns that if someone later adds a `#status-claude` span expecting right-alignment, this override will have already collapsed the free space. Cool story. You're documenting a problem that doesn't exist, for an element that doesn't exist, in a tab that has no status label. This is the CSS equivalent of buying insurance for a car you don't own. Harmless, but it's padding the word count. No action.
+
+**[NIT] Plan claims the rule sits "immediately after line 1913, before line 1914."** Line numbers in a living file are a lie waiting to happen. The rule is actually at lines 1914-1917 in the current file. The *relative* placement (after `:focus` block, before cyber-theme block) is correct, which is what actually matters. The line-number citation is already stale. No action — relative placement is what was implemented.
+
+**Actual correctness check:**
+- Rule present at `design.html:1914-1917`? ✓
+- Selector `#controls-strip-claude .sidebar-search-input`? ✓
+- Property `margin-left: 0`? ✓
+- Placed after `.sidebar-search-input:focus` (ends 1913), before `.cyber-theme-enabled .sidebar-search-input` (1918)? ✓
+- HTML structure at 3738-3745 matches plan (select → search → design-project → button)? ✓
+- Other tabs (Briefs 3576, Design 3611, HTML 3694, Images 3800) still carry `.sidebar-search-input` without the scoped override? ✓
+- No JS mutates `margin-left` on `.sidebar-search-input` elements (confirmed via grep — only unrelated kanban dots and tree-depth indentation)? ✓
+
+Well. You actually did it right. One rule, scoped correctly, no collateral damage. I'm almost disappointed.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- The single scoped CSS rule at `design.html:1914-1917`. It is minimal, correctly scoped, and resolves the root cause (`.sidebar-search-input`'s `margin-left: auto` fragmenting the Claude strip).
+- The placement relative to the `:focus` and cyber-theme blocks — correct and stable.
+
+**Fix now:** None. No CRITICAL or MAJOR findings. The implementation matches the plan's intent and the codebase's conventions.
+
+**Defer / no action:**
+- The specificity-vs-cyber-theme commentary and the hypothetical `#status-claude` caveat are documentation-only nits. They don't affect behavior. Leave them in the plan as historical context; do not edit code.
+
+### Code Fixes Applied
+None. The implementation was already correct — no CRITICAL or MAJOR findings to fix.
+
+### Validation Results
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive (pure CSS change, no logic surface).
+- **Static verification (performed):**
+  - Scoped rule present and correctly placed: ✓
+  - Selector specificity overrides base class without affecting other tabs: ✓
+  - HTML source order produces correct left-to-right packing once auto-margin is neutralized: ✓
+  - No JS interaction with `margin-left` on target elements: ✓
+  - Inline `style="max-width: 200px;"` on `#claude-design-project` (line 3743) untouched: ✓
+
+### Files Changed
+- `src/webview/design.html` — lines 1914-1917 (the scoped CSS rule; pre-existing implementation, no changes made during review).
+
+### Remaining Risks
+- **Low:** If a `#status-claude` span is added to the Claude strip in the future expecting right-edge alignment (matching the Briefs/Design/HTML/Images pattern), it will pack left instead of right because this override collapses the free space. Documented in the plan's Complexity Audit; no action needed now since no such span exists.
+- **None other:** Change is isolated to one tab, one property, one rule. No state, no JS, no migration surface.

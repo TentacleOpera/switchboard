@@ -109,3 +109,42 @@ be run separately by the user.
 ## Recommendation
 
 Complexity 2 → **Send to Intern**.
+
+---
+
+## Reviewer Pass — 2026-06-30
+
+### Stage 1 — Grumpy (adversarial findings)
+
+- **NIT — `src/webview/kanban.html:5348`:** Epic branch correctly drops `Complexity: ` literal, keeps `·` separator and colored `complexity-indicator` span. Matches plan "After" spec exactly. No defect.
+- **NIT — `src/webview/kanban.html:5349`:** Non-epic branch no longer matches this plan's "After" spec verbatim (the `· ${timeAgo}` suffix is absent). Root cause: Plan 2 (Remove Timestamps from Kanban Plan Cards) was implemented in the same file and removed the timestamp. Plan 1's contract was "only the epic branch changes; plan cards unchanged *by this plan*" — Plan 1 did not touch line 5349. Cross-plan interference is expected and correct. Flagged for traceability only.
+- **NIT — accessibility:** Removing the `Complexity: ` label reduces explicit screen-reader context. Already considered and rejected as non-blocking in the plan's Adversarial Synthesis (user explicitly requested space optimization; color-coded level word remains visible). Concur — not a defect.
+
+No CRITICAL. No MAJOR.
+
+### Stage 2 — Balanced synthesis
+
+- **Keep as-is:** Epic-branch edit at line 5348 — correct and complete.
+- **Fix now:** None.
+- **Defer:** None.
+- **Cross-plan note:** The non-epic branch at line 5349 diverges from this plan's "After" spec because Plan 2 removed the timestamp suffix. This is correct combined behavior, not a regression.
+
+### Code fixes applied
+
+None — implementation matches plan requirements.
+
+### Verification results
+
+- **Source inspection (line 5348, epic branch):** `Complexity: ` prefix removed; `·` separator and `complexity-indicator` span retained. ✓
+- **Source inspection (line 5349, plan branch):** `Complexity: ` prefix retained (Plan 1 contract: plan cards unchanged by this plan). Missing `· ${timeAgo}` is attributable to Plan 2. ✓
+- **Dead-code check:** Zero references to `formatTimeAgo` or `timeAgo` in `src/` (Plan 2's cleanup; not Plan 1's concern). ✓
+- **Sort path:** `card._ts` derived from `card.lastActivity` at line 5085; sort comparator at line 5119 intact. ✓
+- **Compilation/tests:** Skipped per session directive.
+
+### Files changed
+
+- `src/webview/kanban.html` — line 5348 (epic branch of `cardMetaContent` ternary): removed literal `Complexity: ` prefix.
+
+### Remaining risks
+
+- None material. The only divergence from the plan's "After" spec is the non-epic branch, which is explained by Plan 2's concurrent implementation and is correct combined behavior.
