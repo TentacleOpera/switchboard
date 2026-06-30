@@ -241,3 +241,67 @@ showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste i
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**. This is a mechanical swap across 2 files and 16 call sites, but the original plan's own grep missed one call site — a fresh grep and careful per-site verification are warranted, which makes it a Coder task rather than an Intern one.
+
+---
+
+## Reviewer Pass (2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You want me to review a find-and-replace? Fine. Let me see if you managed to screw up the one thing you were asked to do."*
+
+**CRITICAL — none.** Hate to say it, but the swap is clean.
+
+**MAJOR — none.** I grepped both files for `showInformationMessage`. Zero matches. Every single success toast the plan enumerated is gone, replaced with `showTemporaryNotification`. The imports landed in the right place (`DesignPanelProvider.ts:6`, `PlanningPanelProvider.ts:2`), relative path `'../utils/showTemporaryNotification'` is correct for files in `src/services/`. The utility signature (`message: string, durationMs = 2500`) matches every call site — all use the single-arg form, so the 2500ms default applies uniformly. No call site passes a bad type.
+
+**NIT-1 (plan-internal, not code):** The plan's Recommendation line says "16 call sites" but the Proposed Changes section enumerates 15 (7 in DesignPanelProvider §1b–1h, 8 in PlanningPanelProvider §2b–2i). The implementation converted exactly 15. The count in prose is wrong; the code is right. Not worth a code fix — just noting the plan miscounted its own list.
+
+**NIT-2 (line drift, expected):** Every line number in Proposed Changes has drifted (e.g. `copyClaudeImportPrompt` planned at 1605, now 1582; diagram prompt planned at 5442, now 5468). This is exactly why the plan mandated a fresh grep before editing. The implementer did the right thing. No action needed.
+
+**Error-path preservation — verified.** `showErrorMessage` calls survive intact: 7 in `DesignPanelProvider.ts` (lines 1621, 1639, 1663, 2274, 2619, 2842, 3234), 25 in `PlanningPanelProvider.ts`. The error branches adjacent to converted success paths (e.g. `PlanningPanelProvider.ts:6610` catch → `showErrorMessage`, `DesignPanelProvider.ts:3234` catch → `showErrorMessage`) are still persistent. Errors remain visible. Good.
+
+**The review-added call site (§2b, line 6368):** Confirmed present and correct — `runTuningExtract` empty-result branch now uses `showTemporaryNotification('No plans with adversarial review sections found.')`. The plan author's self-flagged miss was caught and fixed.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** All 15 conversions. Imports. Error-path preservation. No wrapper needed — the 2500ms default is appropriate for path-bearing confirmations and matches the plan's rationale.
+
+**Fix now:** None. No CRITICAL or MAJOR findings. The implementation is a faithful, complete execution of the plan.
+
+**Defer:** The NIT-1 prose count mismatch ("16" vs actual 15) lives in the plan's Recommendation line, not in code. Correcting it here for the record; no code impact.
+
+**No code fixes applied** — there was nothing material to fix.
+
+### Verification Results
+
+- **Fresh grep (mandated by plan):** `showInformationMessage` → 0 matches in both `DesignPanelProvider.ts` and `PlanningPanelProvider.ts`. ✅
+- **Import presence:** `showTemporaryNotification` imported at `DesignPanelProvider.ts:6` and `PlanningPanelProvider.ts:2`. ✅
+- **Call-site count:** 7 in DesignPanelProvider (lines 1582, 1597, 1637, 1661, 2272, 2832, 3232), 8 in PlanningPanelProvider (lines 5468, 5525, 5580, 6368, 6397, 6406, 6608, 6672) = 15 total, matching the enumerated Proposed Changes. ✅
+- **Error paths preserved:** 7 `showErrorMessage` in DesignPanelProvider, 25 in PlanningPanelProvider — all intact. ✅
+- **Utility signature check:** `showTemporaryNotification(message: string, durationMs?: number)` — all 15 call sites pass a string literal/template, no arg-type mismatch. ✅
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive (user runs separately).
+- **Manual verification (plan §Verification Plan items 1–11):** Not executed in this session — deferred to the user's manual test pass.
+
+### Files Changed (by implementation, pre-review)
+
+- `src/services/DesignPanelProvider.ts` — import added (line 6); 7 `showInformationMessage` → `showTemporaryNotification` swaps.
+- `src/services/PlanningPanelProvider.ts` — import added (line 2); 8 `showInformationMessage` → `showTemporaryNotification` swaps.
+
+### Remaining Risks
+
+1. **Manual UX verification outstanding** — the 11-step manual checklist in Verification Plan has not been run this session. The `withProgress` spinner visual (vs. plain info toast) is the established convention but should be eyeballed by the user.
+2. **Rapid-click stacking** (Verification Plan §11) not exercised — expected to match `TaskViewerProvider` behaviour but unverified.
+3. **No automated test coverage** for notification behaviour — inherent to the VS Code notification API; not a regression introduced here.
+
+### Summary
+
+| Severity | Finding | Ref |
+|----------|---------|-----|
+| CRITICAL | none | — |
+| MAJOR | none | — |
+| NIT | Plan prose says "16 call sites", actual enumerated & implemented = 15 | plan §Recommendation |
+| NIT | Line numbers drifted from plan (expected; implementer re-grepped) | plan §Proposed Changes |
+
+**Fixes applied:** None — implementation was already correct and complete.
+**Remaining risks:** Manual UX verification (11-step checklist) deferred to user; rapid-click stacking unverified; no automated notification tests (pre-existing limitation).

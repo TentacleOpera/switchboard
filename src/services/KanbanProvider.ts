@@ -3150,7 +3150,7 @@ export class KanbanProvider implements vscode.Disposable {
         // directive at position-zero of the prompt. Covers both copy and CLI
         // dispatch paths since both funnel through generateUnifiedPrompt.
         const primaryPlan = plans[0];
-        if (primaryPlan && primaryPlan.isEpic) {
+        if (primaryPlan && primaryPlan.isEpic && role !== 'planner') {
             const db = this._getKanbanDb(workspaceRoot);
             if (db && await db.ensureReady()) {
                 const mode = (await db.getConfig('epic_workflow_mode')) || 'none';
