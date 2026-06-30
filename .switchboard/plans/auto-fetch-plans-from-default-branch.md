@@ -22,6 +22,7 @@ The gap is purely **getting the bytes from GitHub onto local disk**. After a ses
 - **Source:** the **default branch** (plans matter locally after the PR is merged into main). No per-feature-branch discovery.
 - **Trust gate:** only auto-advance when **every** new commit is authored by the user's local `git config user.email`. (User confirmed their session commits are authored by their own email, not a bot identity, so this gate will actually match.)
 - **Trigger:** on extension **startup** *and* on a **periodic** interval.
+- **Control surface:** a toggle lives directly in the **KANBAN PLANS tab** of the board (`project.html`), not just in VS Code settings — backed by the same setting key so the two stay in sync.
 
 ### Non-goals
 
@@ -59,6 +60,22 @@ For each workspace folder that contains a `.switchboard/` directory and is insid
 - **Multi-root workspaces:** iterate over each workspace folder independently.
 - This runs the extension's own git (consistent with existing worktree merges in `KanbanProvider.ts`); it is unrelated to the agent-facing `GIT_PROHIBITION_DIRECTIVE`, which only constrains *agents*.
 
+## UI control (KANBAN PLANS tab)
+
+The feature is toggled from the board itself, following the existing webview-toggle pattern (cf. the cyber-animation / colour-icons switches: webview checkbox → `postMessage` → provider `config.update()` → state hydrated back on load).
+
+- **Location:** a small control block in the **KANBAN PLANS** tab of `src/webview/project.html` (the first tab, `data-tab="kanban"`), near the existing tab toolbar/sidebar controls.
+- **Elements:**
+  - An **"Auto-fetch plans from `<default>`"** checkbox bound to `switchboard.planAutoFetch.enabled`.
+  - A **"Fetch now"** button to trigger a cycle on demand.
+  - A **status line** showing the last cycle's outcome — e.g. *"Fast-forwarded 2 plans"*, *"Up to date"*, or a skip reason (*"on a feature branch"*, *"working tree not clean"*, *"untrusted author — skipped"*). This is important precisely because the feature silently no-ops; the status line makes the reason visible instead of leaving the user guessing why a plan didn't appear.
+- **Wiring:**
+  - `project.js`: change listener on the checkbox → `vscode.postMessage({ type: 'setPlanAutoFetchEnabled', enabled })`; "Fetch now" → `{ type: 'planAutoFetchRunNow' }`; handle inbound `planAutoFetchState` messages to hydrate the checkbox + status line.
+  - `KanbanProvider` message handler (the provider backing `project.html`): add cases `setPlanAutoFetchEnabled` (→ `config.update('planAutoFetch.enabled', …, Workspace)`, then start/stop the service timer) and `planAutoFetchRunNow` (→ `PlanAutoFetchService.runCycle()`), then post `planAutoFetchState` back.
+  - On webview-ready (where the project board already hydrates its initial state), post the current `enabled` value + last-cycle status so the toggle renders correctly.
+  - `PlanAutoFetchService` records the last cycle's result (outcome + reason + timestamp) so both the periodic run and "Fetch now" can report it to the webview.
+- **Sync with settings:** because the toggle and the VS Code setting are the *same* key, flipping either updates the other (the webview re-hydrates from config on focus/refresh). No duplicate state.
+
 ## Implementation steps
 
 1. **New service** `src/services/PlanAutoFetchService.ts`:
@@ -74,7 +91,8 @@ For each workspace folder that contains a `.switchboard/` directory and is insid
    - `switchboard.planAutoFetch.trustedAuthors` (string[], default `[]` → falls back to local `user.email`).
    - Scope: `resource` (per workspace folder), matching other workspace-git settings.
 4. **Logging:** reuse the existing Switchboard output channel; log each cycle's decision (fetched / skipped-reason / fast-forwarded N commits) for debuggability.
-5. **No migration required.** This is net-new behavior with net-new settings — no released state changes shape, so per the migration policy it's a clean addition (a no-op for anyone who leaves it disabled).
+5. **Board UI control** in the KANBAN PLANS tab: add the checkbox + "Fetch now" button + status line to `src/webview/project.html`; wire `project.js` listeners/hydration; add the `setPlanAutoFetchEnabled` / `planAutoFetchRunNow` cases to the `KanbanProvider` message handler and hydrate `planAutoFetchState` on webview-ready. (See **UI control** section.)
+6. **No migration required.** This is net-new behavior with net-new settings — no released state changes shape, so per the migration policy it's a clean addition (a no-op for anyone who leaves it disabled).
 
 ## Testing
 
@@ -83,7 +101,7 @@ For each workspace folder that contains a `.switchboard/` directory and is insid
 
 ## Open question for review
 
-- **Default for `switchboard.planAutoFetch.enabled`.** Defaulting **ON** delivers the "just works" experience but introduces a startup `git fetch` for ~4,000 existing installs (a behavioral change, minor network cost; all mutations are still gated). Defaulting **OFF** is conservative and opt-in. Recommendation: **default ON** since every state-changing step is heavily guarded and it no-ops safely, but flagging it explicitly because it changes startup behavior for the existing install base.
+- **Default for `switchboard.planAutoFetch.enabled`.** Defaulting **ON** delivers the "just works" experience but introduces a startup `git fetch` for ~4,000 existing installs (a behavioral change, minor network cost; all mutations are still gated). Defaulting **OFF** is conservative and opt-in. Now that there's a discoverable toggle **in the KANBAN PLANS tab**, the cost of defaulting OFF drops sharply — users flip it on right where they'd look. Updated recommendation: **default OFF**, with the in-board toggle as the one-click opt-in, so the existing install base sees no startup-behavior change.
 
 ## Metadata
 
