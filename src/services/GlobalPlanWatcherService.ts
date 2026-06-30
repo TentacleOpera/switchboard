@@ -632,6 +632,23 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     // kanban_column='CREATED'). Re-derive from subtasks so the
                     // epic's column survives the race. No-op when no subtasks yet.
                     await this._recomputeEpicColumn?.(updatedRecord.planId, workspaceRoot);
+                } else if (updatedRecord.epicId) {
+                    // Subtask rescoring bubble-up: insertFileDerivedPlan writes the
+                    // fresh complexity into the subtask's column (now full-fidelity
+                    // via parsePlanMetadata → deriveComplexityFromContent), but it
+                    // does NOT recompute the parent epic's derived max — unlike
+                    // updateComplexityByPlanFile (KanbanDatabase.ts:1682), which
+                    // bubbles up. Without this, a subtask whose audit section
+                    // changes would self-heal its own column but leave the epic
+                    // stale until a membership change or the one-time backfill.
+                    // Guard: only for non-epic plans with a non-empty epicId.
+                    try {
+                        await db.recomputeEpicComplexity(updatedRecord.epicId);
+                    } catch (bubbleErr) {
+                        this._outputChannel?.appendLine(
+                            `[GlobalPlanWatcher] recomputeEpicComplexity failed for ${updatedRecord.epicId}: ${bubbleErr}`
+                        );
+                    }
                 }
                 plan = updatedRecord;
 

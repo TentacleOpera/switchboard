@@ -4,6 +4,8 @@ description: 'Terminal Dispatch & Implementation Panel Agents Tab'
 
 # Terminal Dispatch & Implementation Panel Agents Tab
 
+**Complexity:** 6
+
 ## Goal
 
 Fix terminal targeting reliability and improve the Implementation panel's Agents tab UX. Today, clipboard paste actions sometimes target the wrong terminal (the paste goes to a different terminal than the one that was focused), the per-terminal Locate/Clear buttons are left-justified and ungrouped (making them hard to scan visually), and the Implementation panel's Agents tab doesn't track extra planner terminals (so agents launched in additional terminals are invisible in the UI).

@@ -4,6 +4,8 @@ description: 'Epic Creation and Specification UX'
 
 # Epic Creation and Specification UX
 
+**Complexity:** 6
+
 ## Goal
 
 Make the journey of creating and fleshing out an epic coherent and correct, from the button that starts it to the file it produces. Today the create entry points are mislabeled, cannot make a blank epic, produce epic files missing their subtask list, and offer no way to improve a thin epic description. This epic fixes the create-button label and behavior, repairs the generated epic file so it always lists its subtasks, and adds a Refine path so a sparse epic can be turned into a complete, decomposable specification.

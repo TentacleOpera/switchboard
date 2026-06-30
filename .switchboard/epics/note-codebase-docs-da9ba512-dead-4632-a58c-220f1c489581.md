@@ -4,6 +4,8 @@ description: 'Note codebase docs'
 
 # Note codebase docs
 
+**Complexity:** 6
+
 > Phase 2 of the Remote Planning Infrastructure epic (`epic-remote-planning-infrastructure-7421946e-...`), split out as its own epic.
 
 ## Goal

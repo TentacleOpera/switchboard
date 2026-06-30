@@ -98,6 +98,7 @@ type SqlJsDatabase = {
         free: () => void;
     };
     export: () => Uint8Array;
+    getRowsModified: () => number;
     close?: () => void;
 };
 
@@ -3963,6 +3964,25 @@ export class KanbanDatabase {
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans WHERE epic_id = ? AND status = 'active'`,
             [epicPlanId]
+        );
+        return this._readRows(stmt);
+    }
+
+    /**
+     * Active, non-epic plans whose `complexity` column is still 'Unknown'.
+     * Used by the one-time backfill reconciliation pass
+     * (`KanbanProvider._backfillComplexityColumn`) to self-heal pre-fix installs
+     * whose audit-only complexity was never written to the column. Epics are
+     * excluded because epic complexity is derived (recomputeEpicComplexity), and
+     * parsing an epic file yields 'Unknown' — writing that back would clobber the
+     * derived max. Completed/archived rows are excluded (display-only, bypass
+     * file checks).
+     */
+    public async getUnscoredActivePlans(workspaceId: string): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND is_epic = 0 AND status = 'active' AND complexity = 'Unknown' ORDER BY updated_at ASC`,
+            [workspaceId]
         );
         return this._readRows(stmt);
     }

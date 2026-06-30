@@ -4,6 +4,8 @@ description: 'Kanban Card Action-Button Cleanup'
 
 # Kanban Card Action-Button Cleanup
 
+**Complexity:** 2
+
 ## Goal
 
 De-clutter and visually unify the action-button row on kanban cards, where epics and high-complexity plans carry the most buttons. This epic removes a redundant per-card dispatch button now that pairing is fully driven by the Pair-mode dropdown, and brings a stylistically inconsistent button back in line with the outline convention used by every other card button.

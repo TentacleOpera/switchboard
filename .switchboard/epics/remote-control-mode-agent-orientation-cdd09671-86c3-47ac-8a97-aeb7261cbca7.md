@@ -4,6 +4,8 @@ description: 'Remote Control Mode & Agent Orientation'
 
 # Remote Control Mode & Agent Orientation
 
+**Complexity:** 5
+
 ## Goal
 
 Establish the operational boundaries of Remote Control mode and provide orientation tooling for external agents that drive Switchboard boards. Remote Control mode lets an external agent (Claude web, Linear's native agent) operate a Switchboard kanban board through an external tracker. Today, Remote Control can conflict with Bug-Triage mode, external agents have no orientation instructions, and the Linear Remote tab lacks a way to generate agent-specific skill text.

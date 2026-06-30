@@ -28,7 +28,12 @@ The `+ Subtask` button handler (line 8031) uses `selectedClickUpIssue` / `select
 
 Both technically work but are confusing. The user's expectation is to navigate back to the parent task.
 
-**Parent ID availability:** The `selectedClickUpIssue.task` and `selectedLinearIssue.issue` objects come from the backend API response (`msg.task` / `msg.issue` in the `clickupTaskDetailsLoaded` / `linearTaskDetailsLoaded` handlers at lines 5200 / 5058). The backend code in `TaskViewerProvider.ts` already uses `task?.parentId` (line 5539) and `(issue as any)?.parentId` (line 5272) when writing frontmatter, which means the API response objects include a `parentId` field. However, the frontend does not explicitly extract or store `parentId` — it passes the whole `msg.task` / `msg.issue` object through. The `_getSelectedParentId()` helper must check multiple possible field locations (`parentId`, `parent?.id`) for robustness.
+**Parent ID availability (confirmed via API research):** The `selectedClickUpIssue.task` and `selectedLinearIssue.issue` objects come from the backend API response (`msg.task` / `msg.issue` in the `clickupTaskDetailsLoaded` / `linearTaskDetailsLoaded` handlers at lines 5200 / 5058). Research confirms the actual API field structures:
+
+- **ClickUp API v2:** The `Get Task` response (`GET /api/v2/task/{task_id}`) includes a field named `parent` which is a **flat string** containing the parent task ID (e.g., `"parent": "8ckjp5"`), or `null` for top-level tasks. There is **no** `parentId` field in the response. Subtasks are only included when `include_subtasks=true` is passed as a query parameter; each subtask in the `subtasks` array has its own `parent` field with the parent's string ID.
+- **Linear API (GraphQL):** The `Issue` type includes a field named `parent` which is a **nested object** of type `Issue` (or `null` for top-level issues). To get the parent ID, the query must request `parent { id }`. There is **no** flat `parentId` field on the query response — `parentId` is only used as an input field in mutations (`IssueCreateInput`, `IssueUpdateInput`). Sub-issues are under the `children` field (an `IssueConnection` with `nodes`).
+
+**Backend bug identified:** The backend code in `TaskViewerProvider.ts` uses `task?.parentId` (line 5539) for ClickUp and `(issue as any)?.parentId` (line 5272) for Linear when writing the `parentId:` frontmatter field. Since neither API response includes a `parentId` field, these conditions evaluate to `undefined` and the `parentId:` frontmatter line is **never written**. This means the subtask filter `if (task?.parentId) return false;` in `getFilteredClickUpTasks` (line 8999) and `getFilteredLinearIssues` (line 8426) never filters out file-backed subtasks. This is a pre-existing bug that should be fixed as part of this plan (see step 4a below).
 
 ## Metadata
 **Tags:** frontend, ui, bugfix
@@ -49,7 +54,8 @@ Yes — before implementation, confirm:
 - Add click handler for "To parent task" that navigates to the parent ticket's detail view.
 
 ### Complex / Risky
-- **Parent ID availability:** The selected subtask's data comes from the `subtasks` array of the parent's detail response. ClickUp subtask objects may have a `parent` field with the parent task ID. Linear subtask objects may have a `parent` field with the parent issue ID. When a subtask is loaded via `loadClickUpTaskDetails` / `loadLinearTaskDetails`, the detail response (`msg.task` / `msg.issue`) should include the parent ID. The `_getSelectedParentId()` helper must check `parentId`, `parent?.id`, and `parent` fields for robustness.
+- **Parent ID field structure (confirmed):** ClickUp API v2 returns `parent` as a flat string ID (not `parentId`, not `parent.id`). Linear API returns `parent` as a nested object (access via `parent?.id`, not `parentId`). The `_getSelectedParentId()` helper must use the correct field for each provider: `task?.parent` for ClickUp, `issue?.parent?.id` for Linear. The helper should also check `parentId` as a fallback in case the backend normalizes the field.
+- **Backend frontmatter bug:** `TaskViewerProvider.ts` uses `task?.parentId` (line 5539) and `(issue as any)?.parentId` (line 5272) to write the `parentId:` frontmatter field. Since neither API includes `parentId` on the response, this field is never written. This must be fixed to use `task?.parent` (ClickUp) and `(issue as any)?.parent?.id` (Linear). See step 4a.
 - **Parent detail cache:** When navigating to the parent, the parent's detail may already be cached in `clickUpTaskDetailCache` / `linearIssueDetailCache` (lines 326-327). If not, it needs to be re-fetched. The existing card-click handler (line 7875) already handles this caching logic.
 
 ## Edge-Case & Dependency Audit
@@ -58,20 +64,17 @@ Yes — before implementation, confirm:
 - **Security:** No security implications. Parent IDs are internal identifiers used for navigation.
 - **Side Effects:** Hiding/showing buttons changes the meta bar layout. The meta bar uses `display: flex` (line 9110 / 8591), so hiding buttons with `display: none` will cause remaining buttons to reflow. This is expected behavior.
 - **Dependencies & Conflicts:** This plan is compatible with Plan 3 (Subtask Drill-Down). When the user clicks "To parent task", the parent's detail loads and the drill-down state (if active) should be preserved or reset depending on the Plan 3 implementation. No direct conflict.
-- **Subtask loaded directly (not via parent):** If a subtask is loaded via search or direct navigation (not by clicking from a parent), the parent ID must still be available. ClickUp task detail responses include `parent.id`; Linear issue detail responses include `parent.id`. This should be stored in the cached detail object.
+- **Subtask loaded directly (not via parent):** If a subtask is loaded via search or direct navigation (not by clicking from a parent), the parent ID must still be available. ClickUp task detail responses include `parent` (flat string with parent task ID); Linear issue detail responses include `parent` (nested object with `id`). Since the frontend stores the whole `msg.task` / `msg.issue` object, the parent field will be available as long as the backend passes it through.
 - **Orphaned subtasks:** If a subtask's parent has been deleted, clicking "To parent task" should show an error or gracefully handle the missing parent. The `loadClickUpTaskDetails` / `loadLinearTaskDetails` functions will get an error from the API, which is already handled by the existing error display.
 - **Top-level task with no parent:** A top-level task has no `parentId` — the "To parent task" button should not be shown. The "+ Subtask" and "To subtask" buttons should remain visible for top-level tasks.
 - **Meta bar visibility:** The meta bar is shown/hidden as a unit (`previewMetaBar.style.display = 'flex'` / `'none'`). The individual button visibility changes should not affect the meta bar's overall visibility.
 - **`getTicketsTabElements` does not include `btn-add-subtask` / `btn-convert-subtask`:** These buttons are NOT in the `getTicketsTabElements()` function (line 1054). The plan uses `document.getElementById()` directly, which is consistent with the existing button handlers (lines 8031, 8053).
 
 ## Dependencies
-- None — this plan is self-contained within `src/webview/planning.js` and `src/webview/planning.html`.
-
-## Uncertain Assumptions
-- **ClickUp/Linear API parent field structure:** The plan assumes that `msg.task` / `msg.issue` objects in the `clickupTaskDetailsLoaded` / `linearTaskDetailsLoaded` handlers include `parentId` or `parent.id` fields. The backend code uses `task?.parentId` and `(issue as any)?.parentId` when writing frontmatter, which suggests these fields exist on the API response objects. However, the exact field name (`parentId` vs `parent.id` vs `parent`) has not been verified against the actual API response structure. The user was advised to run web research to confirm the ClickUp and Linear API response field names for parent task references before implementation.
+- None — this plan is self-contained within `src/webview/planning.js`, `src/webview/planning.html`, and `src/services/TaskViewerProvider.ts`.
 
 ## Adversarial Synthesis
-Key risks: (1) parent ID field may not be present on subtask detail objects if the ClickUp/Linear API doesn't include it in the task detail response, (2) the `_getSelectedParentId()` helper may need to check multiple field locations (`parentId`, `parent?.id`, `parent`) depending on the API, (3) navigating to the parent when the parent detail is not cached will trigger an API fetch with a loading state. Mitigations: check multiple field locations in `_getSelectedParentId()`, use the existing cache-and-fetch pattern from the card click handler, and handle orphaned parents gracefully via existing API error handling.
+Key risks: (1) the backend `TaskViewerProvider.ts` uses `task?.parentId` / `(issue as any)?.parentId` which don't exist on the API responses — the `parentId:` frontmatter field is never written, breaking subtask filtering for file-backed tickets, (2) the `_getSelectedParentId()` helper must use provider-specific field names (`task?.parent` for ClickUp, `issue?.parent?.id` for Linear), (3) navigating to the parent when the parent detail is not cached will trigger an API fetch with a loading state. Mitigations: fix the backend frontmatter writing to use correct API field names, use provider-specific field access in `_getSelectedParentId()` with `parentId` fallback, and use the existing cache-and-fetch pattern from the card click handler.
 
 ## Proposed Changes
 
@@ -96,10 +99,12 @@ Create a helper function near the other ticket helpers (around line 8445):
 function _getSelectedParentId() {
     if (lastIntegrationProvider === 'linear') {
         const issue = selectedLinearIssue?.issue;
-        return issue?.parentId || issue?.parent?.id || issue?.parent || null;
+        // Linear API: parent is a nested Issue object with an id field
+        return issue?.parent?.id || issue?.parentId || null;
     } else {
         const task = selectedClickUpIssue?.task;
-        return task?.parentId || task?.parent?.id || task?.parent || null;
+        // ClickUp API v2: parent is a flat string containing the parent task ID
+        return task?.parent || task?.parentId || null;
     }
 }
 ```
@@ -162,27 +167,46 @@ document.getElementById('btn-to-parent-task')?.addEventListener('click', () => {
 });
 ```
 
-### 4. Ensure parentId is available on subtask detail objects
+### 4. Fix backend frontmatter writing to use correct API field names
+**File:** `src/services/TaskViewerProvider.ts`
+
+The backend currently uses `task?.parentId` (line 5539) for ClickUp and `(issue as any)?.parentId` (line 5272) for Linear. Research confirms neither API includes a `parentId` field on the response — these must be changed to the correct field names:
+
+```typescript
+// ClickUp (line 5539) — change from:
+if (task?.parentId) { fmLines.push(`parentId: ${String(task.parentId).trim()}`); }
+// to:
+if (task?.parent) { fmLines.push(`parentId: ${String(task.parent).trim()}`); }
+
+// Linear (line 5272) — change from:
+if ((issue as any)?.parentId) { fmLines.push(`parentId: ${String((issue as any).parentId).trim()}`); }
+// to:
+if ((issue as any)?.parent?.id) { fmLines.push(`parentId: ${String((issue as any).parent.id).trim()}`); }
+```
+
+This fix ensures the `parentId:` frontmatter field is actually written for subtasks, which also fixes the subtask filtering in `getFilteredClickUpTasks` (line 8999) and `getFilteredLinearIssues` (line 8426) for file-backed tickets.
+
+### 4a. Ensure parentId is available on subtask detail objects (frontend)
 **File:** `src/webview/planning.js`
 
-When a subtask is loaded via the subtask nav click handler (line 7798) or via the API detail response, ensure the `parentId` is preserved on the task/issue object.
+When a subtask is loaded via the subtask nav click handler (line 7798) or via the API detail response, the parent ID must be available on the task/issue object.
 
-For the subtask nav click handler, the subtask objects from the parent's `subtasks` array already contain parent information. When `selectedClickUpIssue` / `selectedLinearIssue` is set from the cache (lines 7810-7811 / 7816-7817), the subtask's `task` / `issue` object should include the parent ID.
+For the subtask nav click handler, the subtask objects from the parent's `subtasks` array contain parent information. When `selectedClickUpIssue` / `selectedLinearIssue` is set from the cache (lines 7810-7811 / 7816-7817), the subtask's `task` / `issue` object should include the parent field.
 
-For API-loaded subtask details, verify that the ClickUp/Linear detail response handlers (`clickupTaskDetailsLoaded` at line 5200 / `linearTaskDetailsLoaded` at line 5058) pass through the `parentId` or `parent` field from the API response. Since `selectedClickUpIssue = { task: msg.task, ... }` and `selectedLinearIssue = { issue: msg.issue, ... }`, the parent field will be available if the API response includes it. No explicit extraction is needed — the whole `msg.task` / `msg.issue` object is stored.
+For API-loaded subtask details, the `clickupTaskDetailsLoaded` (line 5200) / `linearTaskDetailsLoaded` (line 5058) handlers store the whole `msg.task` / `msg.issue` object. Since the API responses include the `parent` field (flat string for ClickUp, nested object for Linear), the parent ID will be available via `_getSelectedParentId()`.
 
-If the API response does NOT include the parent field, add explicit extraction:
+No explicit extraction is needed on the frontend — the `_getSelectedParentId()` helper reads the correct field directly from the stored API response object. However, as a safety net, normalize the parent ID into a `parentId` field in the detail handlers:
 
 ```javascript
 // In clickupTaskDetailsLoaded (line 5203), after building selectedClickUpIssue:
-// Ensure parentId is set on the task object
-if (msg.task && !msg.task.parentId && msg.task.parent?.id) {
-    msg.task.parentId = msg.task.parent.id;
+// Normalize parent string into parentId for consistent access
+if (msg.task?.parent && !msg.task.parentId) {
+    msg.task.parentId = msg.task.parent;
 }
 
 // In linearTaskDetailsLoaded (line 5061), after building selectedLinearIssue:
-// Ensure parentId is set on the issue object
-if (msg.issue && !msg.issue.parentId && msg.issue.parent?.id) {
+// Normalize parent.id into parentId for consistent access
+if (msg.issue?.parent?.id && !msg.issue.parentId) {
     msg.issue.parentId = msg.issue.parent.id;
 }
 ```
@@ -208,5 +232,7 @@ In the "no selection" branches of `renderTicketsClickUpTaskDetail` (line 9092) a
 8. Verify: a top-level task (no parent) never shows "To parent task".
 9. Verify: both ClickUp and Linear providers handle the button toggle correctly.
 10. Verify: after navigating to the parent, the "+ Subtask" button creates a subtask under the parent (not under the previously selected subtask).
+11. Verify (backend fix): after re-importing a subtask, the `parentId:` field is present in the ticket file's frontmatter (check the `.md` file).
+12. Verify (backend fix): file-backed subtasks are now correctly filtered out of the sidebar list (they should not appear as top-level entries).
 
 **Recommendation:** Send to Coder

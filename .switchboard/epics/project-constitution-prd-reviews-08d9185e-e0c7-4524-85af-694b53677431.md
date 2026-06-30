@@ -4,6 +4,8 @@ description: 'Make the PRD/constitution the authored, enforced source of product
 
 # Project constitution/prd reviews
 
+**Complexity:** 6
+
 Switchboard's "product intent" layer (the per-project **PRD** and the workspace **constitution**) and the **acceptance review** that is supposed to enforce it were built at different times and do not yet connect into a coherent system. This epic closes that gap from both ends: make intent docs easy to author/import, and make the acceptance reviewer actually judge work against them.
 
 Two reinforcing workstreams:

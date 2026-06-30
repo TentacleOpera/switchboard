@@ -4,6 +4,8 @@ description: 'Epic Model and Dispatch Correctness'
 
 # Epic Model and Dispatch Correctness
 
+**Complexity:** 4
+
 ## Goal
 
 Make the epic data model and its dispatch and routing behavior consistent and correct, independent of how an epic was created. Today an epic complexity is stored as Unknown, which routes it to the wrong lane, its subtasks are silently capped at dispatch time, and the Epics tab merges a vestigial filesystem scan with the database, surfacing dead-ended document cards. This epic makes an epic's complexity the maximum of its subtasks' scores (stored, recomputed, never Unknown), dispatches every subtask with no cap, and makes the Epics tab database-only like every other plan surface.

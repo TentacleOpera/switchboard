@@ -22,7 +22,7 @@ import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, co
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { KanbanMigration } from './KanbanMigration';
-import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
+import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
@@ -503,6 +503,11 @@ export class KanbanProvider implements vscode.Disposable {
                     continue;
                 }
                 await this._globalPlanWatcher.triggerScan(folder);
+                // One-time complexity-column backfill for pre-fix installs.
+                // Runs after the scan so freshly-imported rows are also
+                // reconciled. Guarded once-per-workspace by
+                // `kanban.complexityBackfillV1Done`; no-op on subsequent launches.
+                void this._backfillComplexityColumn(folder);
             } catch (err) {
                 console.error(`[KanbanProvider] Failed to scan folder ${folder}:`, err);
             }
@@ -966,6 +971,13 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._lastColumnsSignature = null;
+            // Reset the board-snapshot dedup cache too: it's a singleton field that
+            // outlives the panel, so a freshly reopened webview would otherwise have
+            // its `updateBoard` push skipped as "unchanged" and render an empty board
+            // until a dropdown interaction mutated the snapshot key. (Columns survive
+            // because _lastColumnsSignature IS reset here.)
+            this._lastBoardSnapshotKey = '';
+            this._lastBoardSnapshotHash = null;
             this._webviewReady = false;
             this._pendingWebviewMessages = [];
         }, null, this._disposables);
@@ -1008,6 +1020,13 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._lastColumnsSignature = null;
+            // Reset the board-snapshot dedup cache too: it's a singleton field that
+            // outlives the panel, so a freshly reopened webview would otherwise have
+            // its `updateBoard` push skipped as "unchanged" and render an empty board
+            // until a dropdown interaction mutated the snapshot key. (Columns survive
+            // because _lastColumnsSignature IS reset here.)
+            this._lastBoardSnapshotKey = '';
+            this._lastBoardSnapshotHash = null;
             this._webviewReady = false;
             this._pendingWebviewMessages = [];
         }, null, this._disposables);
@@ -2494,6 +2513,75 @@ export class KanbanProvider implements vscode.Disposable {
         }, 100);
     }
 
+    /**
+     * One-time, guarded reconciliation pass that backfills the `complexity` DB
+     * column for pre-fix installs. Plans imported before the parser-unification
+     * (Part A) keep `complexity = 'Unknown'` in the DB because the old
+     * `parsePlanMetadata`/`extractComplexity` only recognized the
+     * `**Complexity:**` metadata line, not the Complexity Audit / Agent
+     * Recommendation sections agent-authored plans actually use. The watcher
+     * only re-parses on file change, so without this pass those rows stay
+     * 'Unknown' until touched — and epic complexity rollups over them yield
+     * 'Unknown'.
+     *
+     * Discipline:
+     *  - Guarded once-per-workspace by `kanban.complexityBackfillV1Done` in the
+     *    DB `config` table. A crash mid-pass simply re-runs next launch
+     *    (idempotent — writes only on `Unknown` → real-score mismatch).
+     *  - Targets only active, non-epic rows (`getUnscoredActivePlans`). Epics
+     *    are derived; writing a file-parsed 'Unknown' would clobber the max.
+     *  - `updateComplexityByPlanFile` already bubbles up to
+     *    `recomputeEpicComplexity`, so epics re-derive as their subtasks score.
+     *  - After the pass, every distinct epic touched is recomputed once more
+     *    (belt-and-suspenders, matching the explicit recompute at
+     *    `createEpicFromPlanIds:8571`).
+     *  - Reads short-circuit on the now-populated DB column afterward, so
+     *    steady-state refreshes do zero extra writes (no churn).
+     */
+    private async _backfillComplexityColumn(workspaceRoot: string): Promise<void> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!(await db.ensureReady())) return;
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            if (!workspaceId) return;
+
+            const doneFlag = await db.getConfig('kanban.complexityBackfillV1Done');
+            if (doneFlag === 'true') return;
+
+            const unscored = await db.getUnscoredActivePlans(workspaceId);
+            if (unscored.length === 0) {
+                await db.setConfig('kanban.complexityBackfillV1Done', 'true');
+                return;
+            }
+
+            const touchedEpics = new Set<string>();
+            for (const row of unscored) {
+                if (!row.planFile) continue;
+                const score = await this.getComplexityFromPlan(workspaceRoot, row.planFile);
+                if (score === 'Unknown') continue;
+                const ok = await db.updateComplexityByPlanFile(row.planFile, workspaceId, score);
+                if (ok && row.epicId) touchedEpics.add(row.epicId);
+            }
+
+            // Belt-and-suspenders: recompute every distinct parent epic once
+            // more after the pass, mirroring createEpicFromPlanIds' explicit
+            // recompute. updateComplexityByPlanFile already bubbled up per
+            // subtask, but a single consolidated pass guards against any
+            // intermediate recompute seeing a partially-scored subtask set.
+            for (const epicId of touchedEpics) {
+                try { await db.recomputeEpicComplexity(epicId); } catch { /* best-effort */ }
+            }
+
+            await db.setConfig('kanban.complexityBackfillV1Done', 'true');
+            this._outputChannel?.appendLine(
+                `[KanbanProvider] complexity backfill V1 complete: scored ${unscored.length} row(s), recomputed ${touchedEpics.size} epic(s) for ${workspaceRoot}`
+            );
+            this._scheduleBoardRefresh(workspaceRoot);
+        } catch (err) {
+            console.error('[KanbanProvider] complexity backfill V1 failed:', err);
+        }
+    }
+
     private _isLowComplexity(card: KanbanCard): boolean {
         const score = parseComplexityScore(card.complexity || '');
         return score >= 1 && score <= 6;
@@ -3149,6 +3237,8 @@ export class KanbanProvider implements vscode.Disposable {
         // board-level workflow toggle (ultracode / goal) is active, prepend the
         // directive at position-zero of the prompt. Covers both copy and CLI
         // dispatch paths since both funnel through generateUnifiedPrompt.
+        // Skipped for the planner role — /goal and ultracode are execution-mode
+        // directives that would hijack the improve-plan workflow.
         const primaryPlan = plans[0];
         if (primaryPlan && primaryPlan.isEpic && role !== 'planner') {
             const db = this._getKanbanDb(workspaceRoot);
@@ -4364,73 +4454,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 console.error('[KanbanProvider] Failed to read complexity from DB:', err);
             }
 
-            // Check ## Metadata section for explicit **Complexity:** field.
-            // Supports both numeric ('7') and legacy ('Low'/'High') formats.
-            const metadataComplexity = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/im);
-            if (metadataComplexity) {
-                const val = metadataComplexity[1];
-                const num = parseInt(val, 10);
-                if (!isNaN(num) && num >= 1 && num <= 10) return String(num);
-                const legacy = legacyToScore(val);
-                if (legacy > 0) return String(legacy);
-            }
-
-            // Agent Recommendation section.
-            const leadCoderRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
-            const coderAgentRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
-            if (leadCoderRec.test(content)) return '8';
-            if (coderAgentRec.test(content)) return '3';
-
-            // Fallback: parse the Complexity Audit / Complex (Band B) section
-            const auditMatch = content.match(/^#{1,4}\s+Complexity\s+Audit\b/im);
-            if (!auditMatch) {
-                return 'Unknown';
-            }
-
-            const auditStart = auditMatch.index! + auditMatch[0].length;
-            const afterAudit = content.slice(auditStart);
-            const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex\s*(?:\/\s*Risky)?|Complex)\b/im);
-            if (!bandBMatch) return '3';
-
-            const bandBStart = bandBMatch.index! + bandBMatch[0].length;
-            const afterBandB = afterAudit.slice(bandBStart);
-            const nextSection = afterBandB.match(/^\s*(?:#{1,4}\s+|Band\s+[C-Z]\b|\*\*Recommendation\*\*\s*:|Recommendation\s*:|---+\s*$)/im);
-            const bandBContent = nextSection
-                ? afterBandB.slice(0, nextSection.index).trim()
-                : afterBandB.trim();
-
-            const normalizeBandBLine = (line: string): string => (
-                line
-                    .replace(/^[\s>*\-+\u2013\u2014:]+/, '')
-                    .replace(/[*_`~]/g, '')
-                    .trim()
-                    .replace(/\((?:complex(?:\s*[\/&]\s*|\s+)risky|complex|risky|high complexity)\)/gi, '')
-                    .replace(/^\((.*)\)$/, '$1')
-                    .replace(/[\s:\u2013\u2014-]+$/g, '')
-                    .replace(/\s+/g, ' ')
-                    .trim()
-                    .toLowerCase()
-            );
-
-            const isBandBLabel = (line: string): boolean => (
-                /^(complex(?:\s*(?:\/|and)\s*|\s+)risky|complex|risky|high complexity|routine)\.?$/.test(line)
-            );
-
-            const isEmptyMarker = (line: string): boolean => {
-                if (!line) return true;
-                if (/^(?:\u2014|-)+$/.test(line)) return true;
-                return /^(none|n\/?a|unknown)\.?$/.test(line);
-            };
-
-            const meaningful = bandBContent
-                .split(/\r?\n/)
-                .map((line: string) => line.trim())
-                .filter((line: string) => line.length > 0)
-                .map(normalizeBandBLine)
-                .filter((line: string) => line.length > 0)
-                .filter((line: string) => !isEmptyMarker(line) && !isBandBLabel(line) && !/^recommendation\b/.test(line));
-
-            return meaningful.length === 0 ? '3' : '8';
+            // File-only fallback chain (override → **Complexity:** → agent rec →
+            // Complexity Audit / Band B). Shared with parsePlanMetadata and
+            // PlanFileImporter.extractComplexity so the DB column, the watcher,
+            // and this rich parser all converge on the same value. Once the
+            // watcher/importer write the score into the DB column, the lookup
+            // above short-circuits and this tail is not reached on steady-state
+            // reads.
+            return deriveComplexityFromContent(content);
         } catch {
             return 'Unknown';
         }
@@ -8357,6 +8388,21 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             newContent = existingContent.slice(0, beginIdx) + subtaskSection + existingContent.slice(endIdx + endMarker.length);
         } else {
             newContent = existingContent.replace(/\n*$/, '') + '\n\n' + subtaskSection + '\n';
+        }
+        // Embed/refresh a derived **Complexity:** marker (= max active-subtask score) in the
+        // epic file. Epic complexity is derived in the DB, but the plan watcher's
+        // insertFileDerivedPlan re-parses the FILE on every rescan and overwrites the derived
+        // value with whatever the file says — so a markerless epic file clobbers its own
+        // complexity to 'Unknown' on the next restart. Writing the score the watcher will read
+        // back makes the derived value survive a rescan. Derived from subtasks (not the epic's
+        // own column) so it's correct even if that column is mid-clobber.
+        const epicMaxScore = subtasks.reduce((m, s) => Math.max(m, parseComplexityScore(s.complexity || '')), 0);
+        if (epicMaxScore >= 1) {
+            const complexityLine = `**Complexity:** ${epicMaxScore}`;
+            const complexityRe = /^[ \t>*\-]*\*\*Complexity:\*\*[^\n]*$/im;
+            newContent = complexityRe.test(newContent)
+                ? newContent.replace(complexityRe, complexityLine)
+                : newContent.replace(/(^# [^\n]*\n)/m, `$1\n${complexityLine}\n`);
         }
         // Content no-op: skip the write (and the registerPendingCreation guard) when the
         // generated content is byte-identical to what's already on disk. This breaks the

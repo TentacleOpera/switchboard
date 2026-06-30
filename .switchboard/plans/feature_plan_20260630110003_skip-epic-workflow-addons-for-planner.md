@@ -132,3 +132,69 @@ No other files require changes. The UI toggles (`btn-epic-ultracode`, `btn-epic-
 
 ## Recommendation
 Complexity is 2 → **Send to Intern**.
+
+---
+
+## Reviewer Pass (2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"A one-line guard clause. One. And you still managed to half-ass the comment. Let's look."*
+
+**CRITICAL — none.** The guard works. `role !== 'planner'` at `KanbanProvider.ts:3155` is correct, strict equality, cannot leak. Verified.
+
+**MAJOR — none.** All three planner dispatch paths confirmed covered by the function-level fix:
+- `KanbanProvider.ts:6054` — `batchPlannerPrompt` → `generateUnifiedPrompt('planner', …)`. ✅
+- `PlanningPanelProvider.ts:3081` — per-epic copy planner prompt → `kp.generateUnifiedPrompt('planner', plans, wsRoot)`. ✅
+- `TaskViewerProvider.ts:16315` — TaskViewer dispatch → `generateUnifiedPrompt('planner', dispatchPlans, …)`. ✅
+
+Custom-agent early return at `KanbanProvider.ts:2989` confirmed — custom agents never reach the prepend block. ✅
+
+`ULTRACODE_EPIC_PREFIX` (line 52) and `GOAL_EPIC_PREFIX` (line 53) constants intact and referenced correctly. ✅
+
+**NIT-1 (comment deviation — fixed):** The plan's "After" block specified a 4-line explanatory comment documenting *why* the planner is excluded ("execution-mode directives… would hijack the improve-plan workflow"). The implementer kept the original 4-line comment ("prepend the directive at position-zero…") which describes the general prepend behavior but says nothing about the planner exclusion. The original comment is not *wrong*, but a future reader seeing `role !== 'planner'` with no explanation would have to git-blame to understand the intent. The plan explicitly asked for the rationale comment. **Fixed in review** — added a 2-line note to the existing comment block preserving the original context.
+
+**NIT-2 (line drift, expected):** Plan cited line 3153 for the guard; actual code is at 3155 (after the comment addition). Trivial drift, no impact.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:** The `&& role !== 'planner'` guard clause. The original 4-line comment (still accurate for non-planner roles). The constant definitions. All three dispatch paths funnel through the single guarded function — no per-call-site changes needed or wanted.
+
+**Fix now (applied):** Added a 2-line comment at `KanbanProvider.ts:3152-3153` explaining the planner exclusion rationale, satisfying the plan's "After" block intent without deleting the existing context.
+
+**Defer:** The plan's recommended unit test (stub `epic_workflow_mode = 'ultracode'`, assert planner prompt excludes the prefix, coder prompt includes it) is net-new test scaffolding — deferred to the user per session directives.
+
+### Verification Results
+
+- **Guard clause present:** `KanbanProvider.ts:3155` — `if (primaryPlan && primaryPlan.isEpic && role !== 'planner')`. ✅
+- **Planner dispatch path 1:** `KanbanProvider.ts:6054` — `generateUnifiedPrompt('planner', …)` → guard skips prepend. ✅
+- **Planner dispatch path 2:** `PlanningPanelProvider.ts:3081` — `kp.generateUnifiedPrompt('planner', plans, wsRoot)` → guard skips prepend. ✅
+- **Planner dispatch path 3:** `TaskViewerProvider.ts:16315` — `generateUnifiedPrompt('planner', dispatchPlans, …)` → guard skips prepend. ✅
+- **Custom-agent early return:** `KanbanProvider.ts:2989` — `role.startsWith('custom_agent_')` returns before prepend block. ✅
+- **Non-planner roles unaffected:** `generateUnifiedPrompt('coder', …)` / `('lead', …)` calls (lines 3574, 3895, 5523, 6082, etc.) — guard evaluates `role !== 'planner'` → `true`, prepend proceeds. ✅
+- **Constants intact:** `ULTRACODE_EPIC_PREFIX` (line 52), `GOAL_EPIC_PREFIX` (line 53). ✅
+- **Comment rationale added:** `KanbanProvider.ts:3152-3153`. ✅
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive (user runs separately).
+
+### Files Changed
+
+- `src/services/KanbanProvider.ts` — `&& role !== 'planner'` guard added to epic-workflow prepend condition (line 3155); 2-line rationale comment added (lines 3152-3153).
+
+### Remaining Risks
+
+1. **No automated test coverage** for the planner-exclusion behaviour — the prepend block is entirely untested. The plan's recommended unit test is deferred to the user.
+2. **Manual UX verification outstanding** — the 4-step manual checklist (set toggle, dispatch planner, dispatch coder, repeat via Planning panel) has not been run this session.
+3. **Future planning-adjacent roles** — the plan's User Review Required flag asks whether roles beyond `'planner'` (e.g. a future "architect") should also be excluded. Current scope excludes exactly `role === 'planner'`. If new planning roles are added later, they will receive the prepend unless separately guarded.
+
+### Summary
+
+| Severity | Finding | Ref |
+|----------|---------|-----|
+| CRITICAL | none | — |
+| MAJOR | none | — |
+| NIT | Plan-specified rationale comment missing; original comment didn't explain planner exclusion — **fixed** | `KanbanProvider.ts:3152-3153` |
+| NIT | Line drift (plan cited 3153, actual 3155 after comment add) | `KanbanProvider.ts:3155` |
+
+**Fixes applied:** Added 2-line rationale comment at `KanbanProvider.ts:3152-3153` explaining why the planner role is excluded from epic-workflow addons.
+**Remaining risks:** No automated test for the exclusion (deferred to user); manual UX verification (4-step checklist) deferred; future planning-adjacent roles would need their own guard.

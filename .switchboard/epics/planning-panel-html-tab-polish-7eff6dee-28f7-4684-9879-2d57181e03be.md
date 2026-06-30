@@ -4,6 +4,8 @@ description: 'Planning Panel HTML Tab Polish'
 
 # Planning Panel HTML Tab Polish
 
+**Complexity:** 5
+
 ## Goal
 
 Bring the Planning panel HTML tab up to parity with the rest of the panel and the Design panel. The tab is currently mis-ordered, renders an unstyled flat document list, and shows CRT scanline distortion over previews. This epic repositions the tab to second place, gives its sidebar the shared card-based layout used by the Design panel, and removes the scanline overlay so HTML previews render cleanly while the Docs and Tickets tabs keep theirs.

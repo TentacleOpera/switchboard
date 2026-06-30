@@ -97,3 +97,113 @@ export function parseComplexityScore(value: string): number {
     if (!isNaN(num) && num >= 1 && num <= 10) return num;
     return legacyToScore(value);
 }
+
+/**
+ * Pure, content-only complexity extractor. Implements the full file-only fallback
+ * chain used by `KanbanProvider.getComplexityFromPlan`'s tail (minus the DB lookup,
+ * which is the caller's responsibility). Shared by:
+ *   - `parsePlanMetadata` (writes the `complexity` DB column via the plan watcher)
+ *   - `PlanFileImporter.extractComplexity` (writes the column on batch import)
+ *   - `KanbanProvider.getComplexityFromPlan` (file fallback after the DB short-circuit)
+ *
+ * Precedence (file-only): Manual Override → `**Complexity:**` line →
+ * Agent Recommendation → Complexity Audit / Band B section → `'Unknown'`.
+ *
+ * The Manual Override check is intentionally included even though
+ * `getComplexityFromPlan` short-circuits on its own override check first —
+ * `parsePlanMetadata`/`extractComplexity` call this helper directly and need
+ * the override branch. The redundancy is a harmless no-op for the provider.
+ *
+ * Returns a `'1'`–`'10'` string or `'Unknown'`.
+ */
+export function deriveComplexityFromContent(content: string): string {
+    if (!content) return 'Unknown';
+
+    // Highest priority: explicit manual complexity override (user-set via dropdown).
+    // Permissive form matches both `**…**:` and `**…:**` colon placements.
+    const overrideMatch = content.match(
+        /^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Manual Complexity Override(?:\*\*:\s*|:\*\*)\s*(\d{1,2}|Low|High|Unknown)/im
+    );
+    if (overrideMatch) {
+        const val = overrideMatch[1];
+        if (val.toLowerCase() !== 'unknown') {
+            const num = parseInt(val, 10);
+            if (!isNaN(num) && num >= 1 && num <= 10) return String(num);
+            const legacy = legacyToScore(val);
+            if (legacy > 0) return String(legacy);
+        }
+    }
+
+    // `**Complexity:**` metadata line. Same permissive colon form.
+    const metadataComplexity = content.match(
+        /^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Complexity(?:\*\*:\s*|:\*\*)\s*(\d{1,2}|Low|High)/im
+    );
+    if (metadataComplexity) {
+        const val = metadataComplexity[1];
+        const num = parseInt(val, 10);
+        if (!isNaN(num) && num >= 1 && num <= 10) return String(num);
+        const legacy = legacyToScore(val);
+        if (legacy > 0) return String(legacy);
+    }
+
+    // Agent Recommendation section.
+    const leadCoderRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
+    const coderAgentRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
+    if (leadCoderRec.test(content)) return '8';
+    if (coderAgentRec.test(content)) return '3';
+
+    // Fallback: parse the Complexity Audit / Complex (Band B) section.
+    const auditMatch = content.match(/^#{1,4}\s+Complexity\s+Audit\b/im);
+    if (!auditMatch) {
+        return 'Unknown';
+    }
+
+    const auditStart = auditMatch.index! + auditMatch[0].length;
+    const afterAudit = content.slice(auditStart);
+    const bandBMatch = afterAudit.match(
+        /^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex\s*(?:\/\s*Risky)?|Complex)\b/im
+    );
+    if (!bandBMatch) return '3';
+
+    const bandBStart = bandBMatch.index! + bandBMatch[0].length;
+    const afterBandB = afterAudit.slice(bandBStart);
+    const nextSection = afterBandB.match(
+        /^\s*(?:#{1,4}\s+|Band\s+[C-Z]\b|\*\*Recommendation\*\*\s*:|Recommendation\s*:|---+\s*$)/im
+    );
+    const bandBContent = nextSection
+        ? afterBandB.slice(0, nextSection.index).trim()
+        : afterBandB.trim();
+
+    const normalizeBandBLine = (line: string): string => (
+        line
+            .replace(/^[\s>*\-+\u2013\u2014:]+/, '')
+            .replace(/[*_`~]/g, '')
+            .trim()
+            .replace(/\((?:complex(?:\s*[\/&]\s*|\s+)risky|complex|risky|high complexity)\)/gi, '')
+            .replace(/^\((.*)\)$/, '$1')
+            .replace(/[\s:\u2013\u2014-]+$/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase()
+    );
+
+    const isBandBLabel = (line: string): boolean => (
+        /^(complex(?:\s*(?:\/|and)\s*|\s+)risky|complex|risky|high complexity|routine)\.?$/.test(line)
+    );
+
+    const isEmptyMarker = (line: string): boolean => {
+        if (!line) return true;
+        if (/^(?:\u2014|-)+$/.test(line)) return true;
+        return /^(none|n\/?a|unknown)\.?$/.test(line);
+    };
+
+    const meaningful = bandBContent
+        .split(/\r?\n/)
+        .map((line: string) => line.trim())
+        .filter((line: string) => line.length > 0)
+        .map(normalizeBandBLine)
+        .filter((line: string) => line.length > 0)
+        .filter((line: string) => !isEmptyMarker(line) && !isBandBLabel(line) && !/^recommendation\b/.test(line));
+
+    return meaningful.length === 0 ? '3' : '8';
+}

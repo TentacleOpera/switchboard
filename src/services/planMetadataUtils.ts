@@ -1,7 +1,7 @@
 
 import * as path from 'path';
 import * as fs from 'fs';
-import { legacyToScore } from './complexityScale';
+import { deriveComplexityFromContent } from './complexityScale';
 
 export const ALLOWED_TAGS = new Set([
     'frontend', 'backend', 'auth', 'authentication', 'database', 'api', 'ui', 'ux',
@@ -80,32 +80,10 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
     // Extract kanbanColumn
     const columnMatch = content.match(/kanbanColumn[:\s]+(\w+)/i);
 
-    // Extract complexity
-    let complexity: string = 'Unknown';
-    const overrideMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Manual Complexity Override(?:\*\*:\s*|:\*\*)\s*(\d{1,2}|Low|High|Unknown)/im);
-    if (overrideMatch) {
-        const val = overrideMatch[1];
-        if (val.toLowerCase() !== 'unknown') {
-            const num = parseInt(val, 10);
-            if (!isNaN(num) && num >= 1 && num <= 10) complexity = String(num);
-            else {
-                const legacy = legacyToScore(val);
-                if (legacy > 0) complexity = String(legacy);
-            }
-        }
-    }
-    if (complexity === 'Unknown') {
-        const metadataMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Complexity(?:\*\*:\s*|:\*\*)\s*(\d{1,2}|Low|High)/im);
-        if (metadataMatch) {
-            const val = metadataMatch[1];
-            const num = parseInt(val, 10);
-            if (!isNaN(num) && num >= 1 && num <= 10) complexity = String(num);
-            else {
-                const legacy = legacyToScore(val);
-                if (legacy > 0) complexity = String(legacy);
-            }
-        }
-    }
+    // Extract complexity — full-fidelity chain (override → **Complexity:** →
+    // agent recommendation → Complexity Audit / Band B). Shared helper keeps the
+    // watcher's DB-column write in sync with the rich parser used for display.
+    const complexity: string = deriveComplexityFromContent(content);
 
     // Extract tags
     let tags: string = '';

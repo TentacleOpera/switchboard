@@ -4,6 +4,8 @@ description: 'Tickets Tab & Link-All Functionality'
 
 # Tickets Tab & Link-All Functionality
 
+**Complexity:** 5
+
 ## Goal
 
 Make the "Link All" copy-paths feature reliable and move filter controls to their correct location in the Tickets and Kanban Plans tabs. Today, "Link All" on the Tickets tab doesn't fetch all sidebar tickets (it silently truncates), the Kanban Plans tab lacks a Link All button and complexity filter, and the Status/State filter is buried inside the Tickets Source modal where users can't find it.

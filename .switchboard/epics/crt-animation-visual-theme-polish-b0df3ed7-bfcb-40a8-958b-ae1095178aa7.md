@@ -4,6 +4,8 @@ description: 'CRT Animation & Visual Theme Polish'
 
 # CRT Animation & Visual Theme Polish
 
+**Complexity:** 4
+
 ## Goal
 
 Fix visual consistency issues in the Afterburner/claudify themes — CRT scanline animation appears in panels where it shouldn't, the "Disable CRT Animation" toggle doesn't take effect until a full reload, and kanban card meta text (complexity + timestamp) renders in teal instead of grey, breaking visual hierarchy. Together these make the themed UI feel unfinished and inconsistent.

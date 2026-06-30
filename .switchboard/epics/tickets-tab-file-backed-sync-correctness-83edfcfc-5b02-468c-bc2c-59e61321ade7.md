@@ -4,6 +4,8 @@ description: 'Tickets Tab File-Backed Sync Correctness'
 
 # Tickets Tab File-Backed Sync Correctness
 
+**Complexity:** 6
+
 ## Goal
 
 Make the Tickets Tab local file layer faithfully reflect remote provider state — both deletions and project-selection-driven imports. The file-backed sync refactor established the substrate (delta pull, per-list/project cursor, cache DB entries, local-file rendering); these two plans close the correctness gaps it left: remote deletions leave ghost files, and the Linear project picker never triggers an import at all. Both plans depend on the same file-backed sync infrastructure and address the same capability (local-file-layer fidelity to remote state).

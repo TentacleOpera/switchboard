@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, KanbanPlanRecord, KanbanPlanStatus } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 import { extractEmbeddedMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
+import { deriveComplexityFromContent } from './complexityScale';
 
 type ImportablePlanFile = {
     filePath: string;
@@ -211,16 +212,11 @@ function extractTopic(content: string, filename: string): string {
 }
 
 function extractComplexity(content: string): string {
-    const metadataMatch = content.match(/## Metadata[\s\S]*?\*\*Complexity:\*\*\s*(Low|High|[\d]{1,2})/i);
-    if (metadataMatch) {
-        const val = metadataMatch[1];
-        const lowVal = val.toLowerCase();
-        if (lowVal === 'low') return '3';
-        if (lowVal === 'high') return '8';
-        const num = parseInt(val, 10);
-        if (!isNaN(num) && num >= 1 && num <= 10) return num.toString();
-    }
-    return 'Unknown';
+    // Full-fidelity chain (override → **Complexity:** → agent rec → audit/Band B)
+    // via the shared helper, so batch import writes the same score the rich parser
+    // would derive for display. Previously only recognized the `## Metadata`
+    // `**Complexity:**` line, leaving audit-only plans at 'Unknown'.
+    return deriveComplexityFromContent(content);
 }
 
 function extractTags(content: string): string {

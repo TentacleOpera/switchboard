@@ -4,6 +4,8 @@ description: 'Linear Sync & Channel Features'
 
 # Linear Sync & Channel Features
 
+**Complexity:** 7
+
 ## Goal
 
 Extend the Linear integration beyond basic column sync. Today, Switchboard syncs kanban column changes to Linear issue status, but description changes aren't bidirectional, Linear channel issues (issues created in a shared team channel for triage) can't be interacted with from Switchboard, and Linear's free tier accumulates closed issues that should be auto-archived when the corresponding plan completes.

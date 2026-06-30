@@ -4,6 +4,8 @@ description: 'Claude Tab: Independent Folder Manage... Epic'
 
 # Claude Tab: Independent Folder Manage... Epic
 
+**Complexity:** 5
+
 Improvements to the Claude tab of design.html
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->

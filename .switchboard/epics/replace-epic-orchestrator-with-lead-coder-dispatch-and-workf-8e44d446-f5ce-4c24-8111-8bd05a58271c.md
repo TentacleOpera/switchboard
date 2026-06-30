@@ -4,6 +4,8 @@ description: 'Replace Epic Orchestrator with Lead-Coder Dispatch and Workflow Bu
 
 # Replace Epic Orchestrator with Lead-Coder Dispatch and Workflow Buttons
 
+**Complexity:** 6
+
 ## Goal
 
 Retire the dedicated epic-orchestration lane — the orchestrator role, its terminal, and the ORCHESTRATING column — and route epics through the normal lead-coder dispatch instead. Epics carry their full subtask bundle on both the Copy Prompt and CLI dispatch paths, and an optional workflow directive (Ultracode or /goal) is prepended via two sticky board toggles. This removes a heavyweight, epic-only parallel mechanism while preserving subtask bundling and adding discoverable workflow controls. It also closes a pre-existing bug where CLI-dispatched epics silently dropped their subtasks.

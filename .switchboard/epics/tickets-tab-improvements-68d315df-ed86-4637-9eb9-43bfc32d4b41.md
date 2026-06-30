@@ -4,6 +4,8 @@ description: 'Tickets tab improvements'
 
 # Tickets tab improvements
 
+**Complexity:** 6
+
 The tickets tab needs to be actually usable for subtasks and better sidebar navigation.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
