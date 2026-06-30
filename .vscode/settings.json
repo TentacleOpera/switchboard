@@ -32,5 +32,8 @@
 	"switchboard.statusBar.showArtifactsButton": true,
 	"switchboard.theme.name": "afterburner",
 	"switchboard.statusBar.showDesignButton": true,
-	"switchboard.theme.disableCyberAnimation": true
+	"switchboard.theme.disableCyberAnimation": true,
+	"switchboard.statusBar.showAgentOpenToggle": true,
+	"switchboard.statusBar.showProjectButton": true,
+	"switchboard.statusBar.showMemoButton": true
 }

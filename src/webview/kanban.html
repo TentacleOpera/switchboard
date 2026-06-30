@@ -5168,9 +5168,32 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         selectedCards.delete(pid);
                         el.classList.remove('selected');
                     } else {
+                        const incomingWorkspaceRoot = el.dataset.workspaceRoot || currentWorkspaceRoot;
+
+                        // Cross-workspace guard: the board must never hold plans from two
+                        // different parent workspaces at once — doing so breaks ASSIGN
+                        // ("Cannot assign plans from multiple workspaces at once") and
+                        // silently drops subtasks during PROMOTE/GROUP INTO EPIC.
+                        // When the incoming card belongs to a different workspace than ANY
+                        // existing selection, clear the prior selection first. This clear
+                        // happens ONLY on selecting a new plan, never on a workspace dropdown
+                        // switch, so the cross-workspace reassign flow (select in A, switch
+                        // dropdown to B, ASSIGN) keeps working.
+                        if (selectedCards.size > 0) {
+                            const hasDifferentWorkspace = Array.from(selectedCards.values()).some(val => {
+                                const existingRoot = val && typeof val === 'object' ? val.workspaceRoot : val;
+                                return existingRoot !== incomingWorkspaceRoot;
+                            });
+                            if (hasDifferentWorkspace) {
+                                selectedCards.clear();
+                                document.querySelectorAll('.kanban-card.selected')
+                                    .forEach(sel => sel.classList.remove('selected'));
+                            }
+                        }
+
                         const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
                         selectedCards.set(pid, {
-                            workspaceRoot: el.dataset.workspaceRoot || currentWorkspaceRoot,
+                            workspaceRoot: incomingWorkspaceRoot,
                             project: el.dataset.project || '',
                             isEpic: cardData?.isEpic || false,
                             epicId: cardData?.epicId || ''

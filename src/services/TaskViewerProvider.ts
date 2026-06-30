@@ -4072,7 +4072,7 @@ Each plan file must include:
     }
 
     public handleGetStatusShowAgentOpenSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showAgentOpenToggle', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showAgentOpenToggle', true);
     }
 
     public async handleSetStatusShowAgentOpenSetting(enabled: boolean): Promise<void> {
@@ -4081,7 +4081,7 @@ Each plan file must include:
     }
 
     public handleGetStatusShowTerminalsSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showTerminalControls', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showTerminalControls', true);
     }
 
     public async handleSetStatusShowTerminalsSetting(enabled: boolean): Promise<void> {
@@ -4090,7 +4090,7 @@ Each plan file must include:
     }
 
     public handleGetStatusShowKanbanSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showKanbanButton', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showKanbanButton', true);
     }
 
     public async handleSetStatusShowKanbanSetting(enabled: boolean): Promise<void> {
@@ -4099,7 +4099,7 @@ Each plan file must include:
     }
 
     public handleGetStatusShowArtifactsSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showArtifactsButton', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showArtifactsButton', true);
     }
 
     public async handleSetStatusShowArtifactsSetting(enabled: boolean): Promise<void> {
@@ -4108,7 +4108,7 @@ Each plan file must include:
     }
 
     public handleGetStatusShowDesignSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showDesignButton', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showDesignButton', true);
     }
 
     public async handleSetStatusShowDesignSetting(enabled: boolean): Promise<void> {
@@ -4117,7 +4117,7 @@ Each plan file must include:
     }
 
     public handleGetStatusShowProjectSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showProjectButton', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showProjectButton', true);
     }
 
     public async handleSetStatusShowProjectSetting(enabled: boolean): Promise<void> {
@@ -4126,7 +4126,7 @@ Each plan file must include:
     }
 
     public handleGetStatusShowMemoSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showMemoButton', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showMemoButton', true);
     }
 
     public async handleSetStatusShowMemoSetting(enabled: boolean): Promise<void> {

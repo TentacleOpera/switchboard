@@ -1950,13 +1950,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
     function updateStatusBarVisibility() {
         const config = vscode.workspace.getConfiguration('switchboard');
-        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
-        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', false);
-        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
-        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
-        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
-        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
-        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', false);
+        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', true);
+        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
+        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
+        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
+        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
+        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
+        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
         const compactMode = config.get<boolean>('statusBar.compactMode', true);
 
         if (compactMode) {
@@ -2058,13 +2058,13 @@ export async function activate(context: vscode.ExtensionContext) {
         const compactMode = config.get<boolean>('statusBar.compactMode', true);
         if (!compactMode) return;
 
-        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
-        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', false);
-        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
-        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
-        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
-        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
-        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', false);
+        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', true);
+        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
+        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
+        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
+        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
+        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
+        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
 
         const lines: string[] = ['**Switchboard Actions**', ''];
 
@@ -2147,13 +2147,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const openHubDisposable = vscode.commands.registerCommand('switchboard.openHub', async () => {
         const config = vscode.workspace.getConfiguration('switchboard');
-        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
-        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', false);
-        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
-        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
-        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', false);
-        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', false);
-        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', false);
+        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', true);
+        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
+        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
+        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
+        const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
+        const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
+        const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
 
         interface CommandQuickPickItem extends vscode.QuickPickItem {
             command?: string;

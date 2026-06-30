@@ -7256,6 +7256,12 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 await this._saveStartupCommands(workspaceRoot, msg);
+                // startupCommands / customAgents / visibleAgents feed the
+                // updateAgentNames auxiliary message in refreshWithData.
+                // Bump the config epoch so the next refresh tick is NOT
+                // short-circuited by the O(1) early-out — otherwise the
+                // kanban board's agent-name labels go stale until a DB write.
+                this._markConfigDirty();
                 break;
             }
 

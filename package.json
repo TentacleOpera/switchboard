@@ -625,37 +625,37 @@
         },
         "switchboard.statusBar.showAgentOpenToggle": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Controls visibility of the existing agent-open toggle on the status bar.",
           "scope": "window"
         },
         "switchboard.statusBar.showTerminalControls": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Controls visibility of the Agents/Clear/Reset terminal buttons on the status bar.",
           "scope": "window"
         },
         "switchboard.statusBar.showKanbanButton": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Controls visibility of the Open Kanban button on the status bar.",
           "scope": "window"
         },
         "switchboard.statusBar.showArtifactsButton": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Controls visibility of the Open Artifacts Panel button on the status bar.",
           "scope": "window"
         },
         "switchboard.statusBar.showDesignButton": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Controls visibility of the Open Design Panel button on the status bar.",
           "scope": "window"
         },
         "switchboard.statusBar.showProjectButton": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Controls visibility of the Open Project Panel button on the status bar.",
           "scope": "window"
         },
@@ -721,7 +721,7 @@
         },
         "switchboard.statusBar.showMemoButton": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Show a dedicated memo button in the status bar.",
           "scope": "window"
         }
