@@ -112,3 +112,55 @@ None. This is a pure visual/DOM-order change with no logic to unit-test. Per ses
 
 ## Recommendation
 Complexity 2/10 → **Send to Intern**. This is a trivial, single-file DOM reorder with no logic changes and fully verified ID-based references.
+
+---
+
+## Reviewer Pass — 2026-06-30
+
+### Stage 1: Grumpy Adversarial Review
+
+**Diff reviewed:** `016f93d..19f5c7c` (`src/webview/planning.html`)
+
+The change is a single-line DOM reorder: `<input id="tickets-search">` moved from before the three filter `<select>` elements to after them. The comment `<!-- Inline filters moved out of Source modal -->` stayed with the selects. This matches the plan's "Proposed" layout exactly.
+
+**Independent verification of all plan claims:**
+- JS references are ID-based: `planning.js:1059-1062` (`getElementById` for all four elements), `planning.js:1091` (source summary), `planning.js:1205` (`wireSidebarSearch`). **Confirmed.**
+- No positional DOM access (`nextSibling`, `previousSibling`, `children[index]`) anywhere in `planning.js`. **Confirmed.**
+- `margin-left: auto` on `.sidebar-search-input` at `planning.html:1900`. **Confirmed.**
+- `.controls-strip-row`: `flex-wrap: wrap` at `:2714`, `gap: 8px` at `:2715`. **Confirmed.**
+- Zero `:nth-child` / `:nth-of-type` selectors in `planning.html`. **Confirmed.**
+- Visibility toggling by element reference: `renderTicketsLinearPanel()` (`planning.js:8189-8191`) and `renderTicketsClickUpPanel()` (`planning.js:8655-8658`) set `style.display` via cached refs. **Confirmed.**
+- Change scoped to `#controls-strip-tickets` only; `.sidebar-search-input` class untouched (shared with lines 3419, 3503 but not modified). **Confirmed.**
+
+**Findings:**
+- **CRITICAL:** None.
+- **MAJOR:** None.
+- **NIT:** Plan's "Current (lines 3623–3629)" code block is now historical (line numbers shifted post-edit). Cosmetic only — the git diff is the source of truth.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---|---|---|
+| DOM reorder matches plan exactly | — | Keep — implementation correct |
+| JS references all ID-based | — | Keep — no breakage risk |
+| CSS assertions accurate | — | Keep — all verified |
+| No positional CSS anywhere | — | Keep — no hidden traps |
+| Visibility toggle by reference | — | Keep — confirmed |
+| Plan "Current" block now historical | NIT | Defer — cosmetic |
+
+**Fixes applied:** None required. No CRITICAL or MAJOR findings.
+
+### Files Changed
+- `src/webview/planning.html` — lines 3623-3629: search input moved from before to after the three filter `<select>` elements (single-line reorder, committed in `19f5c7c`).
+
+### Validation Results
+- **Compilation:** Skipped per session directives.
+- **Automated tests:** Skipped per session directives.
+- **Static verification (read-only):**
+  - Git diff confirms exactly one change, no collateral edits.
+  - JS reference audit: all 6 references use `getElementById`; no positional DOM access in `planning.js`.
+  - CSS audit: `margin-left: auto` (`:1900`), `flex-wrap: wrap` (`:2714`), `gap: 8px` (`:2715`) confirmed; no positional selectors in file.
+  - Visibility toggle audit: both render functions toggle `style.display` by cached element reference.
+
+### Remaining Risks
+None material. The only theoretical concern (`flex-wrap: wrap` on narrow viewports) is an improvement over the prior state — filters now wrap with the source cluster rather than the action button cluster.

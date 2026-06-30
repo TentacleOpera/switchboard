@@ -64,6 +64,7 @@
         stitchAttachedFiles: [],
         stitchScreenPolls: new Map(),
         stitchProjectRefreshAttempted: false,
+        docsSectionCollapsed: persistedState.docsSectionCollapsed || {},
     };
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
@@ -511,69 +512,83 @@
         return list.querySelector(`.tree-node[data-node-id="${nodeId}"]`);
     }
 
-    function buildFolderLinkHeader(folderPath, docCount) {
+    // tabKey: namespaces the persisted collapse map
+    function buildAccordionFolderHeader({ folderPath, folderName, docCount, tabKey, actions, subheader, forceOpen, defaultCollapsed }) {
+        const headerContainer = document.createElement('div');
+        headerContainer.className = 'folder-section-container';
+
         const header = document.createElement('div');
-        header.className = 'folder-subheader source-folder-header';
+        header.className = subheader
+            ? 'folder-subheader folder-subheader-collapsible'
+            : 'folder-subheader source-folder-header';
         header.title = folderPath;
+        header.style.cursor = 'pointer';
 
-        const label = document.createElement('span');
-        label.style.fontWeight = 'bold';
-        const folderName = folderPath.split(/[\\/]/).filter(Boolean).pop() || folderPath;
-        label.textContent = `${folderName}${docCount != null ? ` (${docCount})` : ''}`;
-        header.appendChild(label);
+        const labelWrapper = document.createElement('div');
+        labelWrapper.style.cssText = 'display: flex; flex-direction: column; gap: 2px; flex: 1;';
 
-        const linkBtn = document.createElement('button');
-        linkBtn.className = 'folder-link-btn';
-        linkBtn.textContent = 'Link';
-        linkBtn.title = 'Copy folder path to clipboard';
-        linkBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            vscode.postMessage({ type: 'linkToFolder', folderPath });
+        const labelSpan = document.createElement('span');
+        if (!subheader) {
+            labelSpan.style.fontWeight = 'bold';
+        }
+        const chevronSpan = document.createElement('span');
+        chevronSpan.className = 'section-chevron';
+        chevronSpan.style.marginRight = '6px';
+        labelSpan.textContent = `${folderName}${docCount != null ? ` (${docCount})` : ''}`;
+        labelSpan.prepend(chevronSpan);
+        labelWrapper.appendChild(labelSpan);
+        header.appendChild(labelWrapper);
+
+        const actionsDiv = document.createElement('div');
+        actionsDiv.style.cssText = 'display: flex; gap: 4px;';
+        (actions || []).forEach(({ label, title, className, onClick }) => {
+            const btn = document.createElement('button');
+            btn.className = className || 'folder-link-btn';
+            btn.textContent = label;
+            btn.title = title || label;
+            btn.addEventListener('click', (e) => { e.stopPropagation(); onClick(btn, e); });
+            actionsDiv.appendChild(btn);
         });
-        header.appendChild(linkBtn);
+        header.appendChild(actionsDiv);
 
-        return header;
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'folder-section-content';
+
+        // Persisted collapse state, namespaced per tab
+        if (!state.docsSectionCollapsed) state.docsSectionCollapsed = {};
+        const collapseKey = `${tabKey}::${folderPath}`;
+        let isCollapsed = state.docsSectionCollapsed[collapseKey];
+        if (isCollapsed === undefined) {
+            isCollapsed = defaultCollapsed !== undefined ? defaultCollapsed : false;
+        }
+
+        if (forceOpen) {
+            isCollapsed = false;
+        }
+
+        // Save initial state if forced or resolved
+        state.docsSectionCollapsed[collapseKey] = isCollapsed;
+
+        const updateCollapsedUI = () => {
+            chevronSpan.textContent = isCollapsed ? '▸ ' : '▾ ';
+            contentDiv.style.display = isCollapsed ? 'none' : 'block';
+        };
+        header.addEventListener('click', (e) => {
+            if (e.target.closest('button') || e.target.closest('select')) return;
+            isCollapsed = !isCollapsed;
+            state.docsSectionCollapsed[collapseKey] = isCollapsed;
+            updateCollapsedUI();
+            const cur = vscode.getState() || {};
+            vscode.setState({ ...cur, docsSectionCollapsed: state.docsSectionCollapsed });
+        });
+        updateCollapsedUI();
+
+        headerContainer.appendChild(header);
+        headerContainer.appendChild(contentDiv);
+        return { headerContainer, contentDiv };
     }
 
-    /**
-     * Build a subfolder header row with a "Link" button that copies the subfolder path.
-     * folderId is the `<index>:<relativePath>` node id; the backend handler resolves it.
-     */
-    function buildSubfolderLinkHeader(folderId, folderName, docCount) {
-        const subheader = document.createElement('div');
-        subheader.className = 'folder-subheader';
-        subheader.title = folderId;
-
-        const subLabel = document.createElement('span');
-        subLabel.textContent = `${folderName}${docCount != null ? ` (${docCount})` : ''}`;
-        subheader.appendChild(subLabel);
-
-        const subLinkBtn = document.createElement('button');
-        subLinkBtn.className = 'folder-link-btn';
-        subLinkBtn.textContent = 'Link';
-        subLinkBtn.title = 'Copy subfolder path to clipboard';
-        subLinkBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            vscode.postMessage({ type: 'linkToFolder', folderPath: folderId });
-        });
-        subheader.appendChild(subLinkBtn);
-
-        return subheader;
-    }
-
-    /**
-     * Render subfolder-level Link headers and their document cards, then root-level docs.
-     * Mirrors planning.js lines 2264-2322: group docs by parent folder id (derived from
-     * the doc node id by stripping the last path segment), match against the subfolder
-     * node ids, and render a subfolder Link header for each subfolder.
-     *
-     * @param {HTMLElement} docList   — container to append to
-     * @param {Array} docs            — document nodes for this source folder
-     * @param {Array} subfolderNodes  — folder nodes (kind==='folder') for this source folder
-     * @param {Function} createCardFn — (doc) => HTMLElement
-     * @param {boolean} showAll       — when true, render empty subfolders too (no-search mode)
-     */
-    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll) {
+    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll, tabKey) {
         const folderIdMap = new Map();
         subfolderNodes.forEach(f => folderIdMap.set(f.id, f));
 
@@ -596,9 +611,26 @@
             const folderDocs = docsByParentFolder.get(folder.id) || [];
             if (folderDocs.length === 0 && !showAll) return;
 
-            docList.appendChild(buildSubfolderLinkHeader(folder.id, folder.name, folderDocs.length));
+            const hasSelectedDoc = folderDocs.some(d => state.activeSource === 'local-folder' && state.activeDocId === d.id);
+            const { headerContainer, contentDiv } = buildAccordionFolderHeader({
+                folderPath: folder.id,
+                folderName: folder.name,
+                docCount: folderDocs.length,
+                tabKey,
+                actions: [
+                    {
+                        label: 'Link',
+                        title: 'Copy subfolder path to clipboard',
+                        onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: folder.id })
+                    }
+                ],
+                subheader: true,
+                forceOpen: hasSelectedDoc
+            });
+
+            docList.appendChild(headerContainer);
             folderDocs.forEach(doc => {
-                docList.appendChild(createCardFn(doc));
+                contentDiv.appendChild(createCardFn(doc));
             });
         });
 
@@ -607,21 +639,9 @@
         });
     }
 
-    /**
-     * Shared folder-grouping renderer: top-level source-folder Link headers + subfolder
-     * Link headers + document cards. Used by all four design-tab render functions.
-     *
-     * @param {HTMLElement} docList      — container to append to
-     * @param {Array} docNodes           — filtered document nodes (kind==='document')
-     * @param {Array} folderNodes        — all folder nodes (kind==='folder') from the scan
-     * @param {Array} folderPaths        — configured source folder absolute paths
-     * @param {string} search            — lowercased search string (empty if no search)
-     * @param {Function} createCardFn    — (doc) => HTMLElement
-     */
-    function renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, createCardFn) {
+    function renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, createCardFn, tabKey = 'folder-grouped') {
         const folderPathsList = folderPaths || [];
 
-        // Group folder nodes by sourceFolder
         const foldersBySourceFolder = new Map();
         (folderNodes || []).forEach(f => {
             const sf = f.metadata?.sourceFolder;
@@ -631,7 +651,6 @@
         });
 
         if (search) {
-            // Group filtered docs by sourceFolder; only show folders with matches.
             const byFolder = new Map();
             docNodes.forEach(d => {
                 const sf = d.metadata?.sourceFolder;
@@ -640,11 +659,24 @@
                 byFolder.get(sf).push(d);
             });
             [...byFolder.entries()].forEach(([sf, docs]) => {
-                docList.appendChild(buildFolderLinkHeader(sf, docs.length));
-                renderSubfolderGroups(docList, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false);
+                const { headerContainer, contentDiv } = buildAccordionFolderHeader({
+                    folderPath: sf,
+                    folderName: sf.split(/[\\/]/).filter(Boolean).pop() || sf,
+                    docCount: docs.length,
+                    tabKey,
+                    actions: [
+                        {
+                            label: 'Link',
+                            title: 'Copy folder path to clipboard',
+                            onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: sf })
+                        }
+                    ],
+                    forceOpen: true
+                });
+                docList.appendChild(headerContainer);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false, tabKey);
             });
         } else {
-            // Show every configured folder, even empty ones.
             const docsByFolder = new Map();
             docNodes.forEach(d => {
                 const sf = d.metadata?.sourceFolder;
@@ -654,15 +686,45 @@
                 }
             });
             folderPathsList.forEach(fp => {
-                docList.appendChild(buildFolderLinkHeader(fp, (docsByFolder.get(fp) || []).length));
-                renderSubfolderGroups(docList, docsByFolder.get(fp) || [], foldersBySourceFolder.get(fp) || [], createCardFn, true);
+                const docs = docsByFolder.get(fp) || [];
+                const hasSelectedDoc = docs.some(d => state.activeSource === 'local-folder' && state.activeDocId === d.id);
+                const { headerContainer, contentDiv } = buildAccordionFolderHeader({
+                    folderPath: fp,
+                    folderName: fp.split(/[\\/]/).filter(Boolean).pop() || fp,
+                    docCount: docs.length,
+                    tabKey,
+                    actions: [
+                        {
+                            label: 'Link',
+                            title: 'Copy folder path to clipboard',
+                            onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: fp })
+                        }
+                    ],
+                    forceOpen: hasSelectedDoc
+                });
+                docList.appendChild(headerContainer);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(fp) || [], createCardFn, true, tabKey);
             });
-            // Also surface any sourceFolders seen on docs that aren't in folderPaths
             const configuredSet = new Set(folderPathsList);
             docsByFolder.forEach((docs, sf) => {
                 if (!configuredSet.has(sf)) {
-                    docList.appendChild(buildFolderLinkHeader(sf, docs.length));
-                    renderSubfolderGroups(docList, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true);
+                    const hasSelectedDoc = docs.some(d => state.activeSource === 'local-folder' && state.activeDocId === d.id);
+                    const { headerContainer, contentDiv } = buildAccordionFolderHeader({
+                        folderPath: sf,
+                        folderName: sf.split(/[\\/]/).filter(Boolean).pop() || sf,
+                        docCount: docs.length,
+                        tabKey,
+                        actions: [
+                            {
+                                label: 'Link',
+                                title: 'Copy folder path to clipboard',
+                                onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: sf })
+                            }
+                        ],
+                        forceOpen: hasSelectedDoc
+                    });
+                    docList.appendChild(headerContainer);
+                    renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true, tabKey);
                 }
             });
         }
@@ -711,7 +773,7 @@
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createDesignDocCard(doc, sourceId));
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createDesignDocCard(doc, sourceId), 'design-system');
     }
 
     function createDesignDocCard(node, sourceId) {
@@ -783,7 +845,7 @@
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createBriefDocCard(doc, sourceId));
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createBriefDocCard(doc, sourceId), 'briefs');
     }
 
     function createBriefDocCard(node, sourceId) {
@@ -886,7 +948,7 @@
             return;
         }
 
-        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createHtmlDocCard(doc, sourceId));
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createHtmlDocCard(doc, sourceId), 'html-previews');
     }
 
     function createHtmlDocCard(doc, sourceId) {
@@ -956,7 +1018,7 @@
             return;
         }
 
-        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createImageDocCard(doc));
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createImageDocCard(doc), 'images');
     }
 
     function createImageDocCard(doc) {
