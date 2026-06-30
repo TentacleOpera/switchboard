@@ -101,3 +101,7 @@ Key risks: (1) double-injecting the PRD into the tester prompt (ambient prefix +
 
 ---
 **Recommendation:** Complexity 6 → **Send to Coder.**
+
+## Review Findings
+
+Reviewed the implemented changes in `src/services/agentPromptBuilder.ts` (tester prompt rewrite + `buildPrdReferenceBlock` tester guard + precedence-ordered acceptance-baseline block) and `src/services/KanbanProvider.ts` (tester option resolution: constitution resolved regardless of `planner.constitutionEnabled`, gate throws only when neither `prdEnabled` nor `designDocLink`, constitution NOT a gate-satisfier, legacy designDoc kept as fallback). All plan requirements are satisfied: intent/spirit framing, both-direction flagging, deviation-verification clarification, PRD-vs-constitution conflict resolution, reviewer-contrast line, de-dupe of the shared-prefix PRD, and back-compat for legacy Notion installs. No CRITICAL/MAJOR code issues found — no code fixes applied. The tester block uses direct string construction (no `.replace()` coupling), avoiding the fragility flagged in the plan's WARNING. Remaining risks: (1) the plan's Verification Plan calls for new/extended prompt-generation unit tests (double-injection, gate-behavior, constitution-not-gate-satisfier, intent-framing assertions) — no test files were added in the implementation commit; tests deferred per session directive. (2) The optional `buildAcceptanceBaselineBlock` helper extraction was inlined instead — functionally equivalent, NIT only.

@@ -1039,6 +1039,20 @@ export class PlanningPanelProvider {
         return getGovernanceFilePath(this._context, workspaceRoot, key);
     }
 
+    /**
+     * Post a message to BOTH the project panel and the planning panel webviews.
+     * The Docs-tab "Set as Requirements / Set as Constitution" actions run in the
+     * planning panel (`this._panel`) but reuse handlers that were originally wired
+     * to the project panel (`this._projectPanel`). Replying to only one panel left
+     * the planning-panel listeners dead (collision detection, success status, and
+     * the Project-Context toggle warning never fired). Posting to both ensures the
+     * requesting panel receives the response regardless of which is visible.
+     */
+    private _postToBothPanels(msg: unknown): void {
+        this._projectPanel?.webview?.postMessage(msg);
+        this._panel?.webview?.postMessage(msg);
+    }
+
     private _setupConstitutionWatcher(): void {
         // Watch each workspace root's governance files so the project panel's
         // Constitution tab live-updates when the file is created/edited/deleted
@@ -3497,7 +3511,7 @@ export class PlanningPanelProvider {
                 const wsRoot = msg.workspaceRoot;
                 const key = msg.governanceFile ?? 'constitution';
                 if (!allRoots.includes(wsRoot)) {
-                    this._projectPanel?.webview.postMessage({
+                    this._postToBothPanels({
                         type: 'constitutionFileRead',
                         workspaceRoot: wsRoot,
                         governanceFile: key,
@@ -3511,7 +3525,7 @@ export class PlanningPanelProvider {
                     try {
                         const content = fs.readFileSync(filePath, 'utf8');
                         const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
-                        this._projectPanel?.webview.postMessage({
+                        this._postToBothPanels({
                             type: 'constitutionFileRead',
                             workspaceRoot: wsRoot,
                             governanceFile: key,
@@ -3521,7 +3535,7 @@ export class PlanningPanelProvider {
                             renderedHtml
                         });
                     } catch (err) {
-                        this._projectPanel?.webview.postMessage({
+                        this._postToBothPanels({
                             type: 'constitutionFileRead',
                             workspaceRoot: wsRoot,
                             governanceFile: key,
@@ -3530,7 +3544,7 @@ export class PlanningPanelProvider {
                         });
                     }
                 } else {
-                    this._projectPanel?.webview.postMessage({
+                    this._postToBothPanels({
                         type: 'constitutionFileRead',
                         workspaceRoot: wsRoot,
                         governanceFile: key,
@@ -3545,8 +3559,7 @@ export class PlanningPanelProvider {
                 const key = msg.governanceFile ?? 'constitution';
                 const mode = msg.mode; // replace or append
                 if (!allRoots.includes(wsRoot)) {
-                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
-                    targetWebview?.postMessage({
+                    this._postToBothPanels({
                         type: 'fileSaved',
                         success: false,
                         error: 'Invalid workspace root',
@@ -3575,8 +3588,7 @@ export class PlanningPanelProvider {
                         }
                     }
                     fs.writeFileSync(filePath, finalContent, 'utf8');
-                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
-                    targetWebview?.postMessage({
+                    this._postToBothPanels({
                         type: 'fileSaved',
                         success: true,
                         tab: 'constitution',
@@ -3584,8 +3596,7 @@ export class PlanningPanelProvider {
                     });
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
-                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
-                    targetWebview?.postMessage({
+                    this._postToBothPanels({
                         type: 'fileSaved',
                         success: false,
                         error: String(err),
@@ -3605,7 +3616,7 @@ export class PlanningPanelProvider {
                 const enabled = (wsRoot && this._kanbanProvider)
                     ? await this._kanbanProvider.getProjectContextEnabled(wsRoot)
                     : false;
-                this._projectPanel?.webview.postMessage({ type: 'projectContextEnabled', enabled, workspaceRoot: wsRoot });
+                this._postToBothPanels({ type: 'projectContextEnabled', enabled, workspaceRoot: wsRoot });
                 break;
             }
             case 'setProjectContextEnabled': {
@@ -3637,7 +3648,7 @@ export class PlanningPanelProvider {
                     try {
                         renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', rawContent);
                     } catch { renderedHtml = ''; }
-                    this._projectPanel?.webview.postMessage({
+                    this._postToBothPanels({
                         type: 'projectPrdContent',
                         projectName: msg.projectName,
                         workspaceRoot: wsRoot,
@@ -3680,8 +3691,7 @@ export class PlanningPanelProvider {
                     } catch (err) {
                         console.error('[PlanningPanelProvider] Failed to save project PRD:', err);
                     }
-                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
-                    targetWebview?.postMessage({
+                    this._postToBothPanels({
                         type: 'projectPrdSaved',
                         projectName: msg.projectName,
                         ok,

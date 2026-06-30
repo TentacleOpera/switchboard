@@ -510,7 +510,12 @@
         .row-header {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            gap: 6px;
+        }
+
+        .row-header .agent-identity {
+            flex: 1 1 auto;
+            min-width: 0;
         }
 
         .agent-identity {
@@ -581,6 +586,9 @@
             text-transform: uppercase;
             letter-spacing: 1px;
             color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .agent-row:has(.status-dot.green) .agent-name,
@@ -612,10 +620,6 @@
             color: var(--text-secondary);
             cursor: default;
             opacity: 0.25;
-        }
-
-        .locate-btn + .locate-btn {
-            margin-left: 6px;
         }
 
         /* Action Buttons */
@@ -1932,6 +1936,7 @@
         let lastJulesSessions = [];
         let lastStartupCommands = {};
         let lastTerminalAgentNames = {}; // Terminal-derived agent names; workspace-agnostic
+        let lastPlannerTarget = null;  // current rotation-cursor target terminal name, from terminalStatuses
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
         let lastJulesAutoSyncEnabled = undefined;
@@ -2227,6 +2232,7 @@
                     lastTerminals = message.terminals || {};
                     lastAllOpenTerminals = message.allOpenTerminals || [];
                     if (message.dispatchReadiness !== undefined) { lastDispatchReadiness = message.dispatchReadiness || {}; }
+                    if (message.currentPlannerTarget !== undefined) { lastPlannerTarget = message.currentPlannerTarget || null; }
                     renderAgentList();
                     updateTerminalButtonState(); // NEW
                     break;
@@ -2341,6 +2347,13 @@
                             analystButtonFeedbackTimer = null;
                             renderAgentList();
                         }, 2000);
+                        renderAgentList();
+                        break;
+                    }
+                    if (role === 'planner') {
+                        if (success && message.nextPlannerTarget) {
+                            lastPlannerTarget = message.nextPlannerTarget;
+                        }
                         renderAgentList();
                         break;
                     }
@@ -2679,11 +2692,11 @@
 
 
 
-        function createAgentRow(label, roleId, actionLabel, findTerminalFn, hideLocate) {
+        function createAgentRow(label, roleId, actionLabel, findTerminalFn, hideLocate, explicitTermName) {
             const container = document.createElement('div');
             container.className = 'agent-row';
 
-            const termName = findTerminalFn ? findTerminalFn(lastTerminals) : null;
+            const termName = explicitTermName || (findTerminalFn ? findTerminalFn(lastTerminals) : null);
             const dispatchInfo = lastDispatchReadiness && roleId ? lastDispatchReadiness[roleId] : null;
             const dispatchState = dispatchInfo && dispatchInfo.state ? dispatchInfo.state : null;
             const routedTermName = (dispatchInfo && dispatchInfo.terminalName) ? dispatchInfo.terminalName : null;
@@ -2746,11 +2759,11 @@
                     suffix = ' <span style="font-size:9px; opacity:0.6;">(worktree)</span>';
                 }
 
-                if (lastTerminalAgentNames[roleId]) {
-                    const termNameDisplay = dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName
-                        ? dispatchInfo.terminalName
-                        : lastTerminalAgentNames[roleId];
-                    name.innerHTML = `${label} - ${termNameDisplay}${suffix}`;
+                const displayName = explicitTermName
+                    || (dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName ? dispatchInfo.terminalName : lastTerminalAgentNames[roleId]);
+
+                if (displayName) {
+                    name.innerHTML = `${label} - ${displayName}${suffix}`;
                 } else if (lastStartupCommands[roleId]) {
                     const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
                     const termNameDisplay = dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName
@@ -3028,7 +3041,9 @@
             if (va.planner !== false) {
                 agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
                     'IMPROVE PLAN',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner')
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner'),
+                    false, // hideLocate
+                    lastPlannerTarget || undefined
                 ));
             }
 

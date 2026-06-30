@@ -6916,15 +6916,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 return;
             }
 
-            // Check if constitution already exists (using loadConstitutionFiles or readConstitutionFile concept)
-            vscode.postMessage({ type: 'loadConstitutionFiles', workspaceRoot: activeWorkspace });
-            
+            // Check if a constitution already exists for this workspace. Use
+            // readConstitutionFile (returns constitutionFileRead with an `exists`
+            // flag) — NOT loadConstitutionFiles (which returns constitutionFilesLoaded,
+            // a workspace summary with a different shape). The provider now routes
+            // constitutionFileRead to both panels so the planning panel receives it.
+            vscode.postMessage({ type: 'readConstitutionFile', workspaceRoot: activeWorkspace, governanceFile: 'constitution' });
+
             const constListener = (event) => {
                 const msg = event.data;
-                if (msg.type === 'constitutionFilesReady' || msg.type === 'constitutionFileRead') {
+                if (msg.type === 'constitutionFileRead' && msg.workspaceRoot === activeWorkspace) {
                     window.removeEventListener('message', constListener);
                     // Check if content exists
-                    const exists = msg.exists || (msg.files && msg.files.some(f => f.key === 'constitution' && f.exists));
+                    const exists = !!msg.exists;
                     if (exists) {
                         const collModal = document.getElementById('constitution-collision-modal');
                         const collText = document.getElementById('constitution-collision-text');

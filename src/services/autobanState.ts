@@ -1,6 +1,8 @@
+export type AutobanTriggerMode = 'drain' | 'watch';
 export type AutobanRuleState = {
     enabled: boolean;
     intervalMinutes: number;
+    triggerMode?: AutobanTriggerMode;
 };
 
 export type AutobanComplexityFilter = 'all' | 'low_and_below' | 'medium_and_below' | 'medium_and_above' | 'high_and_above';
@@ -193,6 +195,10 @@ export function getNextAutobanTerminalName(
     return uniqueName;
 }
 
+export function isWatchColumn(rule?: AutobanRuleState | null): boolean {
+    return rule?.triggerMode === 'watch' && rule?.enabled === true;
+}
+
 export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> | null): AutobanConfigState {
     const rawRules = state?.rules ?? {};
     const legacyCodedRule = rawRules['CODED'];
@@ -211,7 +217,8 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
                 const intervalMinutes = normalizeFiniteCount(rule?.intervalMinutes, fallback.intervalMinutes, 1);
                 return [column, {
                     enabled: typeof rule?.enabled === 'boolean' ? rule.enabled : fallback.enabled,
-                    intervalMinutes
+                    intervalMinutes,
+                    triggerMode: rule?.triggerMode === 'watch' ? 'watch' : 'drain'
                 }];
             })
     );

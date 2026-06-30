@@ -81,7 +81,8 @@ import {
     normalizeAutobanConfigState,
     SingleColumnAutobanConfig,
     normalizeSingleColumnConfig,
-    DEFAULT_SINGLE_COLUMN_CONFIG
+    DEFAULT_SINGLE_COLUMN_CONFIG,
+    isWatchColumn
 } from './autobanState';
 import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory } from './complexityScale';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
@@ -334,6 +335,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // V8's clearInterval/clearTimeout are interchangeable, so clearInterval works for both.
     private _autobanTimers = new Map<string, NodeJS.Timeout>();
     private _autobanLastTickAt = new Map<string, number>();
+    private _autobanWatchDisp?: { dispose(): any };
+    private _autobanWatchDebounceTimers = new Map<string, NodeJS.Timeout>();
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
     private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
@@ -6890,9 +6893,17 @@ Each plan file must include:
         return false;
     }
 
+    private _hasActiveWatchColumn(): boolean {
+        return this._getEnabledAutobanSourceColumns()
+            .some(col => isWatchColumn(this._autobanState.rules[col]));
+    }
+
     private async _stopAutobanIfNoValidTicketsRemain(workspaceRoot: string): Promise<boolean> {
         if (!this._autobanState.enabled) {
             return false;
+        }
+        if (this._hasActiveWatchColumn()) {
+            return false; // standing watcher — never auto-stop on empty
         }
         const hasEligible = await this._autobanHasEligibleCardsInEnabledColumns(workspaceRoot);
         console.log(`[Autoban] Empty-column check: eligible=${hasEligible}`);
@@ -16102,7 +16113,7 @@ What would you like to find?`;
             const paced = meta.sender !== meta.recipient;
             if (clearBeforePrompt) {
                 try {
-                    await pasteTextViaClipboard(terminal, '/clear');
+                    await pasteTextViaClipboard(terminal, '/clear', { acquireFocus: true });
                     // Submit the pasted /clear command
                     await new Promise(r => setTimeout(r, paced ? 1000 : 100));
                     terminal.sendText('', true);
@@ -16271,8 +16282,22 @@ What would you like to find?`;
 
 
         let targetAgent: string | undefined;
+        let plannerLocationKey: string | undefined;
         if (options?.targetTerminalOverride && this._isValidAgentName(options.targetTerminalOverride)) {
             targetAgent = options.targetTerminalOverride;
+        } else if (role === 'planner') {
+            const { terminals, locationKey } = await this.getRoleTerminalSet('planner', resolvedWorkspaceRoot);
+            if (terminals.length > 0) {
+                const cursor = this.getPlannerRotationCursor(locationKey);
+                const picked = terminals[cursor % terminals.length];
+                if (picked && this._isValidAgentName(picked)) {
+                    targetAgent = picked;
+                    plannerLocationKey = locationKey;
+                }
+            }
+            if (!targetAgent) {
+                targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+            }
         } else {
             targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
         }
@@ -16414,7 +16439,21 @@ What would you like to find?`;
 
             if (success) {
                 // Dispatch succeeded — no additional state updates needed (already done above)
-                this._view?.webview.postMessage({ type: 'actionTriggered', role, success: true });
+                if (plannerLocationKey) {
+                    await this.advancePlannerRotationCursor(plannerLocationKey, 1);
+                }
+                let nextPlannerTarget: string | undefined;
+                if (role === 'planner' && plannerLocationKey) {
+                    const { terminals, locationKey } = await this.getRoleTerminalSet('planner', resolvedWorkspaceRoot);
+                    if (terminals.length > 0) {
+                        const nextCursor = this.getPlannerRotationCursor(locationKey);
+                        const picked = terminals[nextCursor % terminals.length];
+                        if (picked && this._isValidAgentName(picked)) {
+                            nextPlannerTarget = picked;
+                        }
+                    }
+                }
+                this._view?.webview.postMessage({ type: 'actionTriggered', role, success: true, nextPlannerTarget });
                 await this._logEvent('dispatch', {
                     event: 'dispatch_sent',
                     role,
@@ -18496,8 +18535,18 @@ What would you like to find?`;
                 const roleCandidates = Object.fromEntries(customAgents.map(agent => [agent.role, [agent.name, agent.role]]));
                 const dispatchReadiness = await this._computeDispatchReadiness(enrichedTerminals, terminalsMap, activeTerminals, roles, roleCandidates);
 
-                this._view.webview.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness });
-                this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness });
+                let currentPlannerTarget: string | undefined;
+                const plannerSet = await this.getRoleTerminalSet('planner', state.workspaceRoot || '');
+                if (plannerSet.terminals.length > 0) {
+                    const cursor = this.getPlannerRotationCursor(plannerSet.locationKey);
+                    const picked = plannerSet.terminals[cursor % plannerSet.terminals.length];
+                    if (picked && this._isValidAgentName(picked)) {
+                        currentPlannerTarget = picked;
+                    }
+                }
+
+                this._view.webview.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness, currentPlannerTarget });
+                this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness, currentPlannerTarget });
 
                 // Send ALL open terminals for the dropdown, with alias/friendlyName prioritized as displayName
                 const pidAliasMap = new Map<number, string>();
@@ -18522,13 +18571,15 @@ What would you like to find?`;
                     type: 'terminalStatuses',
                     terminals: enrichedTerminals,
                     dispatchReadiness,
-                    allOpenTerminals
+                    allOpenTerminals,
+                    currentPlannerTarget
                 });
                 this._kanbanProvider?.postMessage({
                     type: 'terminalStatuses',
                     terminals: enrichedTerminals,
                     dispatchReadiness,
-                    allOpenTerminals
+                    allOpenTerminals,
+                    currentPlannerTarget
                 });
             }
         } catch (e) {

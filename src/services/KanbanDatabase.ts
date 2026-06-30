@@ -1133,6 +1133,33 @@ export class KanbanDatabase {
     private _dataVersion = 0;
     public getDataVersion(): number { return this._dataVersion; }
 
+    private _onColumnChanged: any;
+    public get onColumnChanged(): any {
+        if (!this._onColumnChanged) {
+            try {
+                const vscode = require('vscode');
+                this._onColumnChanged = new vscode.EventEmitter<{ workspaceId: string; planFile: string; column: string }>();
+            } catch {
+                return () => ({ dispose: () => {} });
+            }
+        }
+        return this._onColumnChanged.event;
+    }
+
+    private _fireColumnChanged(planFile: string, column: string): void {
+        if (this._onColumnChanged) {
+            try {
+                this._onColumnChanged.fire({
+                    workspaceId: this._workspaceRoot,
+                    planFile,
+                    column
+                });
+            } catch (err) {
+                console.error('[KanbanDatabase] Failed to fire onColumnChanged:', err);
+            }
+        }
+    }
+
     private get _stateFilePath(): string {
         return path.join(this._workspaceRoot, '.switchboard', 'kanban-board.md');
     }
@@ -1146,6 +1173,11 @@ export class KanbanDatabase {
         // Optional: final flush on deactivation
         void this.exportStateToFile();
         void this._writeKanbanStateBackup();
+        if (this._onColumnChanged) {
+            try {
+                this._onColumnChanged.dispose();
+            } catch {}
+        }
     }
 
     public get lastInitError(): string | null {
@@ -1339,6 +1371,7 @@ export class KanbanDatabase {
     public async insertFileDerivedPlan(record: KanbanPlanRecord): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const relativePlanFile = this._ensureRelativePlanFile(record.planFile);
+        const isExisting = await this.hasPlanByPlanFile(relativePlanFile, record.workspaceId);
 
         // Resolve project_id from the denormalized project name. The kanban board's
         // project filter JOINs on project_id (NOT the `project` text column), so a plan
@@ -1400,7 +1433,11 @@ export class KanbanDatabase {
             console.error('[KanbanDatabase] insertFileDerivedPlan failed:', error);
             return false;
         }
-        return this._persist();
+        const result = await this._persist();
+        if (result && !isExisting) {
+            this._fireColumnChanged(relativePlanFile, 'CREATED');
+        }
+        return result;
     }
 
     public async hasActivePlans(workspaceId: string): Promise<boolean> {
@@ -1484,6 +1521,9 @@ export class KanbanDatabase {
             } catch (e) {
                 console.error(`[KanbanDatabase] updateColumnByPlanFile VERIFY failed:`, e);
             }
+        }
+        if (result) {
+            this._fireColumnChanged(normalized, newColumn);
         }
         return result;
     }
@@ -1612,7 +1652,12 @@ export class KanbanDatabase {
             params = [newColumn, now, normalized, workspaceId];
         }
 
-        return this._persistedUpdate(sql, params);
+        const result = await this._persistedUpdate(sql, params);
+        if (result) {
+            const finalPlanFile = newPlanFile ? this._ensureRelativePlanFile(newPlanFile) : normalized;
+            this._fireColumnChanged(finalPlanFile, newColumn);
+        }
+        return result;
     }
 
     /** @deprecated session_id is no longer the unique key; use movePlanByPlanFile instead. */

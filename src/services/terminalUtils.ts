@@ -50,17 +50,42 @@ const POST_PASTE_SETTLE_MS = 800;
  */
 export async function pasteTextViaClipboard(
     terminal: vscode.Terminal,
-    text: string
+    text: string,
+    options?: { acquireFocus?: boolean }
 ): Promise<void> {
+    const acquireFocus = options?.acquireFocus !== false; // default true
     await withClipboardLock(async () => {
         let previousClipboard = '';
         try { previousClipboard = await vscode.env.clipboard.readText(); } catch { /* ignore */ }
-
         await vscode.env.clipboard.writeText(text);
-        terminal.show(false);
-        await new Promise(r => setTimeout(r, PRE_PASTE_SETTLE_MS));
-        await vscode.commands.executeCommand('workbench.action.terminal.paste');
 
+        if (acquireFocus) {
+            // workbench.action.terminal.paste targets the ACTIVE terminal, not the
+            // captured reference. Force-focus the target and verify before pasting.
+            // Retry loop covers the brief window where another terminal could steal focus.
+            for (let attempt = 0; attempt < 3; attempt++) {
+                terminal.show(true);
+                await new Promise(r => setTimeout(r, 20));
+                if (vscode.window.activeTerminal === terminal) { break; }
+                await new Promise(r => setTimeout(r, 30));
+            }
+            if (vscode.window.activeTerminal !== terminal) {
+                // Could not acquire focus. THROW rather than fall back to sendText —
+                // sendText('/clear') reintroduces the slash-command concatenation bug
+                // that pasteTextViaClipboard exists to prevent. Both callers have
+                // try/catch handlers that degrade gracefully:
+                //   - _attemptDirectTerminalPush: skips clear, proceeds to prompt
+                //   - sendRobustText: falls back to chunked sendText (safe for prompts)
+                try { await vscode.env.clipboard.writeText(previousClipboard); } catch { /* ignore */ }
+                throw new Error(`pasteTextViaClipboard: could not acquire focus on terminal '${terminal.name}' after 3 attempts`);
+            }
+            await new Promise(r => setTimeout(r, PRE_PASTE_SETTLE_MS));
+        } else {
+            terminal.show(false);
+            await new Promise(r => setTimeout(r, PRE_PASTE_SETTLE_MS));
+        }
+
+        await vscode.commands.executeCommand('workbench.action.terminal.paste');
         await new Promise(r => setTimeout(r, POST_PASTE_SETTLE_MS));
         try { await vscode.env.clipboard.writeText(previousClipboard); } catch { /* ignore */ }
     });
@@ -94,7 +119,8 @@ export async function sendRobustText(
     terminal: vscode.Terminal,
     text: string,
     paced: boolean = true,
-    log?: (msg: string) => void
+    log?: (msg: string) => void,
+    options?: { acquireFocus?: boolean }
 ): Promise<void> {
     const CHUNK_SIZE = 500;
     const CHUNK_DELAY = 50; // ms between chunks
@@ -111,7 +137,7 @@ export async function sendRobustText(
     if (text.length > CLIPBOARD_PASTE_THRESHOLD) {
         _log(`Large payload (${text.length} chars) for '${terminal.name}', using clipboard paste delivery.`);
         try {
-            await pasteTextViaClipboard(terminal, text);
+            await pasteTextViaClipboard(terminal, text, options);
 
             // Submit the pasted content
             await new Promise(r => setTimeout(r, NEWLINE_DELAY));
