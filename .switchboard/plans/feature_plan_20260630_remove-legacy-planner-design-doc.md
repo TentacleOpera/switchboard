@@ -73,27 +73,18 @@ So today the setting is populated **only** by manual UI toggles. Removing it is 
 - `src/test/agent-config-drag-drop-mode.test.js` (8), `src/test/prompts-tab-move-regression.test.js` (10), `src/test/planning-aggregate-cache.test.js` (2), `src/test/minimal-prompt.test.js` (1), `src/services/__tests__/KanbanProvider.test.ts` (2), plus Notion fetch tests/fixtures referencing it. Remove `designDoc*` assertions/fixtures; keep `designSystemDoc*`. Update snapshots that asserted the "PLANNING EPIC REFERENCE"/"LEGACY DESIGN DOC" blocks.
 - `PlanningPanelProvider.ts.bak3` (5) — a stale `.bak3` backup; ignore (not compiled) or delete separately.
 
-## Migration (published extension, ~4k installs)
+## Migration — none needed
 
-`planner.designDocEnabled` / `planner.designDocLink` shipped in released versions, so per CLAUDE.md they must be migrated, not silently dropped:
+Per direction: this is not critical state. `planner.designDoc*` is an opt-in convenience pointer, not user data — the referenced doc file is never touched by removal, and anyone who had one set can re-attach it via the Projects panel's per-project PRD. So **no migration, notice, or one-time clear is required.** Just delete the settings from `package.json` and all code paths.
 
-1. On activation, run a one-time migration (guard with a `globalState` flag, e.g. `switchboard.legacyDesignDoc.migrated.v1`):
-   - Read `planner.designDocLink` (workspace + global via `inspect()`).
-   - If a non-empty value exists, surface a single non-blocking `showInformationMessage`: the planner design-doc option has been removed in favor of per-project PRDs (`.switchboard/projects/<slug>/prd.md`); the previously referenced doc was `<link>`. (No confirmation dialog — informational only, per CLAUDE.md.)
-   - Then clear both keys at every scope: `update('planner.designDocEnabled', undefined, <scope>)` and same for the link, for Workspace and Global.
-2. The referenced **doc file itself is not touched** — removal only drops the pointer/injection, so no user content is destroyed. The migration notice tells users how to re-wire via the PRD if they want.
-3. **Open decision (M1):** auto-seed vs notify-only. Notify-only (above) is the low-risk default. Alternatively, if a `designDocLink` points at a local file and the active project has no `prd.md`, optionally copy/seed it into the project PRD path. Recommend **notify-only** for v1 — auto-seeding makes assumptions about which project owns the doc.
+This is consistent with CLAUDE.md's migration rule: that rule protects state whose loss "destroys user data." Here nothing is destroyed — the doc remains on disk/Notion; only a redundant pointer disappears. Any value still sitting in a user's `settings.json` for the removed keys becomes a harmless, unread orphan (VS Code does not error on unknown config keys).
 
 ## Verification
 - Build only for VSIX; otherwise test from `src/`.
 - Grep the tree post-change for `designDocLink|designDocEnabled|designDocContent|planner\.designDoc` → zero matches outside `.bak3`. Confirm `designSystemDoc*` and `designDocs*` are untouched.
 - Planner prompt no longer contains "PLANNING EPIC REFERENCE"; acceptance-review prompt no longer contains "LEGACY DESIGN DOC"; PRD and Constitution blocks still present and correctly ordered.
 - Setup/Kanban/Planning UIs no longer show the design-doc control; no console errors from removed message handlers.
-- Migration: with a pre-set `planner.designDocLink`, launch once → info notice shown, both keys cleared, flag set, notice not shown again. With no value set → silent no-op.
 - Run the updated test suites green.
-
-## Open Decisions
-- **M1 — migration style:** notify-only (recommended) vs auto-seed into project PRD.
 
 ## Files Touched
 `package.json`, `src/extension.ts`, `src/services/agentPromptBuilder.ts`, `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/services/PlanningPanelProvider.ts`, `src/services/PlannerPromptWriter.ts`, `src/services/agentConfig.ts`, `src/services/SetupPanelProvider.ts`, `src/webview/setup.html`, `src/webview/kanban.html`, `src/webview/project.html`, `src/webview/project.js`, `src/webview/design.js`, `src/webview/sharedDefaults.js`, plus listed test files. (`PlanningPanelProvider.ts.bak3` ignored.)
