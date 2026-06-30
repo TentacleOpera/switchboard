@@ -158,6 +158,15 @@ export class KanbanProvider implements vscode.Disposable {
     // `updateBoard` data push, not the auxiliary state messages refreshWithData posts.
     private _lastBoardSnapshotHash: string | null = null;
     private _lastBoardSnapshotKey: string = '';
+    // Composite early-out key (workspaceId|projectFilter|repoScope|dataVersion|configEpoch)
+    // recorded after every successful board push. Lets refreshWouldBeNoOp() short-circuit
+    // a no-op refresh tick in O(1) before the DB query / card build / stringify / hash /
+    // auxiliary posts. Reset on panel dispose alongside _lastBoardSnapshotKey/Hash.
+    private _lastPushKey: string = '';
+    // Bumped by _markConfigDirty() from each setter/handler that mutates state pushed by
+    // the auxiliary messages in refreshWithData. Ensures a config-only change is never
+    // dropped by the version-only early-out.
+    private _configEpoch = 0;
     private _currentWorkspaceRoot: string | null = null;
     private _columnDragDropModes: Record<string, 'cli' | 'prompt' | 'disabled'>;
     private _showingBacklog: boolean = false;
@@ -987,6 +996,9 @@ export class KanbanProvider implements vscode.Disposable {
             // because _lastColumnsSignature IS reset here.)
             this._lastBoardSnapshotKey = '';
             this._lastBoardSnapshotHash = null;
+            // Reset the O(1) early-out key too — otherwise reopening the panel
+            // matches the stale key and skips the first refresh (empty board).
+            this._lastPushKey = '';
             this._webviewReady = false;
             this._pendingWebviewMessages = [];
         }, null, this._disposables);
@@ -1036,6 +1048,9 @@ export class KanbanProvider implements vscode.Disposable {
             // because _lastColumnsSignature IS reset here.)
             this._lastBoardSnapshotKey = '';
             this._lastBoardSnapshotHash = null;
+            // Reset the O(1) early-out key too — otherwise reopening the panel
+            // matches the stale key and skips the first refresh (empty board).
+            this._lastPushKey = '';
             this._webviewReady = false;
             this._pendingWebviewMessages = [];
         }, null, this._disposables);
@@ -1232,6 +1247,16 @@ export class KanbanProvider implements vscode.Disposable {
             const workspaceId = await db.getWorkspaceId();
             const projList = projects || (workspaceId ? await db.getProjects(workspaceId) : []);
 
+            // O(1) no-op early-out (backstop). The primary early-out lives in
+            // TaskViewerProvider._refreshRunSheetsImpl (skips the DB query too);
+            // this backstop covers any future direct caller of refreshWithData.
+            // Compares the composite key (workspaceId|filters|dataVersion|configEpoch)
+            // against the last successful push. If unchanged, skip the entire
+            // card-build / stringify / hash / auxiliary-post path.
+            if (workspaceId && this.refreshWouldBeNoOp(workspaceId, db.getDataVersion())) {
+                return;
+            }
+
             // Filter out ghost plans: plan files that no longer exist on disk.
             // Only filter ACTIVE plans — completed plans may have been archived (file moved)
             // and should still appear in the COMPLETED column; the DB is the source of truth.
@@ -1426,6 +1451,14 @@ export class KanbanProvider implements vscode.Disposable {
                     type: 'liveSyncStates',
                     states: liveSyncStates.map(([sessionId, state]) => state)
                 });
+            }
+
+            // Record the composite push key so the next no-op tick can be
+            // short-circuited by refreshWouldBeNoOp(). Done after the successful
+            // push (cards + auxiliary messages) so a failed push does not record
+            // a stale key that would suppress the retry.
+            if (workspaceId) {
+                this.recordBoardPush(workspaceId, db.getDataVersion());
             }
 
             console.log(`[KanbanProvider] refreshWithData: sent ${cards.length} cards (${activeRowsFiltered.length} active + ${completedRowsFiltered.length} completed) to kanban webview`);
@@ -4217,6 +4250,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (options.clearAll) {
             this._kanbanOrderOverrides = {};
             this._columnDragDropModes = {};
+            this._markConfigDirty();
             await Promise.all([
                 this._updateSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
                 this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes)
@@ -4247,6 +4281,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(nextOrderOverrides);
         this._columnDragDropModes = nextDragDropModes;
+        this._markConfigDirty();
 
         await Promise.all([
             this._updateSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
@@ -4396,6 +4431,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
     /** Receive updated Autoban configuration from the sidebar and relay to the Kanban webview. */
     public updateAutobanConfig(state: AutobanConfigState): void {
         this._autobanState = state;
+        this._markConfigDirty();
         if (!this._panel) { return; }
         this._panel.webview.postMessage({ type: 'updateAutobanConfig', state });
         this._panel.webview.postMessage({ type: 'updatePairProgrammingMode', mode: state.pairProgrammingMode });
@@ -4616,6 +4652,45 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
     public getProjectFilter(): string | null {
         return this._projectFilter;
+    }
+
+    // --- O(1) no-op refresh early-out (see plan: fix-refresh-loop-cost-on-large-boards) ---
+
+    /**
+     * Build the composite early-out key. workspaceId is NOT a field on this class
+     * (it is computed per-call from db.getWorkspaceId(), same as the snapshot key
+     * below) so it must be passed in by the caller.
+     */
+    private _buildPushKey(workspaceId: string, dataVersion: number): string {
+        return `${workspaceId}|${this._projectFilter ?? ''}|${this._repoScopeFilter ?? ''}|${dataVersion}|${this._configEpoch}`;
+    }
+
+    /**
+     * Returns true when the board data + filter + config state is byte-identical to
+     * the last successful push — i.e. a refresh tick would do nothing but redundant
+     * O(card-count) work. Callers should return immediately without querying/building.
+     */
+    public refreshWouldBeNoOp(workspaceId: string, dataVersion: number): boolean {
+        return this._lastPushKey === this._buildPushKey(workspaceId, dataVersion);
+    }
+
+    /**
+     * Record the composite key after a successful board push so the next no-op
+     * tick can be short-circuited.
+     */
+    public recordBoardPush(workspaceId: string, dataVersion: number): void {
+        this._lastPushKey = this._buildPushKey(workspaceId, dataVersion);
+    }
+
+    /**
+     * Bump the config epoch — call from every setter/handler that mutates state
+     * pushed by the auxiliary messages in refreshWithData (drag-drop modes,
+     * dynamic-complexity-routing, autoban, pair-programming, visible agents,
+     * CLI triggers, live-sync, agent names, …). Ensures a config-only change is
+     * never dropped by the version-only early-out.
+     */
+    private _markConfigDirty(): void {
+        this._configEpoch++;
     }
 
     /**
@@ -5443,6 +5518,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (this._autobanState) {
                     this._autobanState = { ...this._autobanState, enabled };
                 }
+                this._markConfigDirty();
                 await vscode.commands.executeCommand('switchboard.setAutobanEnabledFromKanban', enabled);
                 break;
             }
@@ -5460,6 +5536,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (this._autobanState && valid.includes(mode)) {
                     this._autobanState = { ...this._autobanState, pairProgrammingMode: mode };
                 }
+                this._markConfigDirty();
                 await vscode.commands.executeCommand('switchboard.setPairProgrammingModeFromKanban', mode);
                 break;
             }
@@ -5772,6 +5849,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
             case 'toggleCliTriggers':
                 this._cliTriggersEnabled = !!msg.enabled;
+                this._markConfigDirty();
                 await this._updateSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
                 break;
             case 'setEpicWorkflowMode': {
@@ -5798,6 +5876,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             case 'toggleDynamicComplexityRouting':
                 this._dynamicComplexityRoutingEnabled = !!msg.enabled;
+                this._markConfigDirty();
                 try {
                     await this._updateSetting(
                         'kanban.dynamicComplexityRoutingEnabled',
@@ -5809,6 +5888,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             case 'toggleAllowUnknownComplexityAutoMove':
                 this._allowUnknownComplexityAutoMove = !!msg.enabled;
+                this._markConfigDirty();
                 try {
                     await this._updateSetting(
                         'kanban.allowUnknownComplexityAutoMove',
@@ -5820,6 +5900,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             case 'toggleClearTerminalBeforePrompt':
                 this._clearTerminalBeforePrompt = !!msg.enabled;
+                this._markConfigDirty();
                 try {
                     await vscode.workspace.getConfiguration('switchboard').update(
                         'terminal.clearBeforePrompt',
@@ -5839,6 +5920,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'updateClearTerminalBeforePromptDelay':
                 const clampedDelay = Math.min(Math.max(msg.delay ?? 2000, 0), 10000);
                 this._clearTerminalBeforePromptDelay = clampedDelay;
+                this._markConfigDirty();
                 try {
                     await vscode.workspace.getConfiguration('switchboard').update(
                         'terminal.clearBeforePromptDelay',
@@ -5862,6 +5944,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const { columnId, mode } = msg;
                 if (columnId && (mode === 'cli' || mode === 'prompt')) {
                     this._columnDragDropModes[columnId] = mode;
+                    this._markConfigDirty();
                     await this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes);
                 }
                 break;

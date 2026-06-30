@@ -979,6 +979,45 @@ async function testDebouncedSyncAndUnmappedColumn() {
     });
 }
 
+async function testSyncBailsSilentlyWithoutToken() {
+    await withWorkspace('linear-no-token', async ({ workspaceRoot }) => {
+        // No token seeded in SecretStorage — simulates token lost from keychain
+        // while config still says setupComplete: true + realTimeSyncEnabled: true.
+        const { service } = createContext(workspaceRoot, {});
+        await service.saveConfig(baseConfig({ realTimeSyncEnabled: true }));
+
+        const http = installHttpsMock();
+        try {
+            // syncPlan must bail silently — no throw, no network call.
+            const requestCountBefore = http.requests.length;
+            await service.syncPlan({
+                sessionId: 'session-no-token',
+                topic: 'No token',
+                planFile: 'plan.md',
+                complexity: '3'
+            }, 'CREATED');
+            assert.strictEqual(http.requests.length, requestCountBefore, 'syncPlan with no token must not make any network call');
+
+            // syncPlanContent must return { success: false } without calling graphqlRequest.
+            const contentResult = await service.syncPlanContent('issue-1', '# Plan\n\n## Goal\n- x\n');
+            assert.strictEqual(contentResult.success, false);
+            assert.ok(/token not configured/i.test(contentResult.error || ''), `Expected token-not-configured error, got: ${contentResult.error}`);
+            assert.strictEqual(http.requests.length, requestCountBefore, 'syncPlanContent with no token must not make any network call');
+
+            // hasApiToken() must report false and be cached.
+            assert.strictEqual(await service.hasApiToken(), false);
+
+            // completeSetup-style invalidation: storing a token then clearing the cache
+            // must flip hasApiToken() to true.
+            await service._secretStorage.store('switchboard.linear.apiToken', 'lin_api_token');
+            service.clearApiTokenCache();
+            assert.strictEqual(await service.hasApiToken(), true);
+        } finally {
+            http.restore();
+        }
+    });
+}
+
 async function testRateLimitingAndRetry() {
     await withWorkspace('linear-rate-limiting', async ({ workspaceRoot }) => {
         const { service } = createContext(workspaceRoot, {
@@ -1063,6 +1102,7 @@ async function run() {
     await testTeamWideIssueListQueriesUseFilterVariable();
     await testDetailQueryHelpers();
     await testDebouncedSyncAndUnmappedColumn();
+    await testSyncBailsSilentlyWithoutToken();
     await testRateLimitingAndRetry();
     console.log('linear sync service test passed');
 }

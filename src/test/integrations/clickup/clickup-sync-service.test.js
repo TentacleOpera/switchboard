@@ -673,11 +673,62 @@ async function testNativeTaskQueryAndMutationHelpers() {
     });
 }
 
+async function testSyncBailsSilentlyWithoutToken() {
+    await withWorkspace('clickup-no-token', async ({ workspaceRoot }) => {
+        // No token seeded — simulates token lost from keychain while config
+        // still says setupComplete: true + realTimeSyncEnabled: true.
+        const { service, secretStorage } = createContext(workspaceRoot, {});
+        await service.saveConfig(buildConfig({
+            CREATED: 'list-created',
+            BACKLOG: 'list-backlog',
+            'PLAN REVIEWED': '',
+            'LEAD CODED': '',
+            'CODER CODED': '',
+            'CODE REVIEWED': '',
+            CODED: '',
+            COMPLETED: ''
+        }));
+
+        const http = installHttpsMock();
+        try {
+            // syncPlan must bail with { success: false } — no throw, no network call.
+            const requestCountBefore = http.requests.length;
+            const result = await service.syncPlan(createPlanRecord({
+                planId: 'plan-no-token',
+                sessionId: 'session-no-token',
+                topic: 'No token',
+                kanbanColumn: 'CREATED'
+            }));
+            assert.strictEqual(result.success, false);
+            assert.ok(/token not configured/i.test(result.error || ''), `Expected token-not-configured error, got: ${result.error}`);
+            assert.strictEqual(http.requests.length, requestCountBefore, 'syncPlan with no token must not make any network call');
+
+            // syncPlanContent must return { success: false } without calling httpRequest.
+            const contentResult = await service.syncPlanContent('task-1', '# Plan\n\n## Goal\n- x\n');
+            assert.strictEqual(contentResult.success, false);
+            assert.ok(/token not configured/i.test(contentResult.error || ''), `Expected token-not-configured error, got: ${contentResult.error}`);
+            assert.strictEqual(http.requests.length, requestCountBefore, 'syncPlanContent with no token must not make any network call');
+
+            // hasApiToken() must report false and be cached.
+            assert.strictEqual(await service.hasApiToken(), false);
+
+            // completeSetup-style invalidation: storing a token then clearing the cache
+            // must flip hasApiToken() to true.
+            await secretStorage.store('switchboard.clickup.apiToken', 'pk_token');
+            service.clearApiTokenCache();
+            assert.strictEqual(await service.hasApiToken(), true);
+        } finally {
+            http.restore();
+        }
+    });
+}
+
 async function run() {
     await testConfigNormalizationAndSetupFlow();
     await testApplyConfigOptionsAndValidation();
     await testSyncPlanCreateAndUpdateFlows();
     await testLoopGuardAndUnmappedColumns();
+    await testSyncBailsSilentlyWithoutToken();
     await testNativeTaskQueryAndMutationHelpers();
     console.log('clickup sync service test passed');
 }

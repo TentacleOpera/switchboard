@@ -1127,6 +1127,12 @@ export class KanbanDatabase {
     private static readonly STAT_DEBOUNCE_MS = 500; // Don't re-stat more often than this
     private static _lastLoadedMtimes = new Map<string, number>();
 
+    // Monotonic version counter — bumped on every board-data mutation (via _persist)
+    // and after a successful external reload in _reloadIfStale. Lets KanbanProvider
+    // short-circuit a no-op refresh in O(1) instead of O(card-count).
+    private _dataVersion = 0;
+    public getDataVersion(): number { return this._dataVersion; }
+
     private get _stateFilePath(): string {
         return path.join(this._workspaceRoot, '.switchboard', 'kanban-board.md');
     }
@@ -1514,6 +1520,10 @@ export class KanbanDatabase {
             }
             if (migrated === 0) return 0;
             this._db.run(sql, params);
+            // Route through _persist() so the plans-table write reaches disk
+            // (previously lost on reload — a latent persistence bug) AND bumps
+            // _dataVersion so the board refreshes to reflect the migration.
+            await this._persist();
             console.log(`[KanbanDatabase] migrateDeprecatedColumns: workspaceId=${workspaceId}, migrated ${migrated} card(s) out of deprecated columns`);
             return migrated;
         } catch (error) {
@@ -4160,6 +4170,12 @@ export class KanbanDatabase {
 
             this._loadedMtime = currentMtime;
             KanbanDatabase._lastLoadedMtimes.set(this._dbPath, currentMtime);
+            // Bump the board-data version counter: an external write (another
+            // window / agent CLI) reached this instance via the disk reload.
+            // Placed AFTER the successful-reload exit point (post-swap, post
+            // migrations, post rollback-guard) so a rolled-back reload failure
+            // never produces a false-positive bump.
+            this._dataVersion++;
         } catch (error) {
             console.error('[KanbanDatabase] Failed to reload from disk:', error);
             // Keep using stale in-memory copy — better than crashing
@@ -5767,6 +5783,14 @@ FROM plans
 
     private async _persist(): Promise<boolean> {
         if (!this._db) return false;
+        // Bump the board-data version counter. Every board-data write funnels
+        // through _persist(), so this is the single choke point that lets
+        // KanbanProvider short-circuit a no-op refresh in O(1). Non-board-data
+        // writes that also call _persist() (imported_docs, config, …) bump this
+        // too — that is intentional and safe: the false positive is caught by
+        // the sha256 snapshot skip in KanbanProvider, while a missed bump would
+        // stale the board.
+        this._dataVersion++;
         const data = this._db.export();
         const writeOperation = async (): Promise<boolean> => {
             // Use crypto random suffix to avoid collisions in rapid writes

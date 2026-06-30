@@ -232,3 +232,70 @@ Considered and rejected as the primary mechanism: writing the global config file
 ## Recommendation
 
 **Complexity: 4 → Send to Coder.** Multi-file (6 files) but every change is a small, identical-pattern guard insertion. No architectural changes, no data-consistency risk, no breaking changes. The one decision point (external-store-path invalidation) is flagged for user review.
+
+---
+
+## Reviewer Pass (in-place)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"You had ONE job — stop the noisy token-missing errors — and you couldn't even do it symmetrically. Let's walk through this disaster."*
+
+**[MAJOR] ClickUp automation service left unguarded — `ClickUpAutomationService.ts:199-202`**
+The plan's own Background section thunders: *"This affects **both** providers symmetrically — Linear and ClickUp share the identical guard pattern."* So what did the implementation do? It guarded `LinearAutomationService.poll()` (line 278) and **completely forgot** `ClickUpAutomationService.poll()`. The ClickUp automation poller loads config, checks `setupComplete`, then immediately fires `listFolderLists` (line 219) and `listTasksFromClickUp` (line 228) — both network calls that hit the deep `httpRequest` token check and throw `ClickUp API token not configured`. The errors get caught and shoved into `result.errors`, but the network attempt still happens and the noise still accumulates. This is the EXACT bug the plan exists to fix, left alive in the ClickUp automation path. The plan's Proposed Changes §6 names `LinearAutomationService` only — the plan itself under-specified, and the implementation followed the under-specification faithfully instead of applying the symmetry principle the plan's own analysis demanded. Unacceptable.
+
+**[MAJOR] Test deliverables from the Verification Plan were never written**
+The plan's Verification Plan section explicitly specifies two unit tests: (1) Linear `syncPlan` with `setupComplete:true` + no token returns silently with no `graphqlRequest` call; (2) ClickUp mirror. The implementation added **zero** tests. The session directive says "SKIP TESTS: Do NOT run automated tests" — that skips *execution*, not *authoring*. The test cases themselves are code deliverables specified by the plan. Marking the plan "complete" with its verification deliverables missing is a process failure.
+
+**[NIT] Plan-vs-code naming drift — `LinearAutomationService`**
+The plan's Proposed Changes §6 references `runAutomation` at "line 274" with guard at "line 275." The actual method is `poll()` at line 266. The implementation correctly targeted the real entry point (the guard is at line 278, after the `setupComplete` bail), so the code is right — but the plan's documentation is inaccurate. Not a code defect; flag for plan hygiene.
+
+**[NIT] Conditional external-invalidation section — decision was made but not recorded**
+The plan's "User Review Required" section presented mitigation (a) vs (b) as an open decision. The implementation chose (a) — `clearApiTokenCache()` is wired into all 6 external store paths (`TaskViewerProvider.ts:4768, 4936, 4977, 5017`; `extension.ts:1310, 1440`). Correct and complete, but the plan file never records which mitigation was chosen. Document it.
+
+**[INFO] Service-instance caching verified — cache is effective**
+The plan flagged a verification need: "confirm `_getLinearService`/`_getClickUpService` return cached instances." Verified at `KanbanProvider.ts:1475-1482` (`_clickUpServices` Map, returns existing) and `1651-1657` (`_linearServices` Map, returns existing). `ContinuousSyncService` and `GlobalPlanWatcherService` receive these same factories as constructor params. The `_tokenPresentCache` is effective across all callers. No issue — recording the verification result the plan asked for.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- All guard insertions in `LinearSyncService.ts`, `ClickUpSyncService.ts`, `KanbanProvider.ts`, `ContinuousSyncService.ts`, `GlobalPlanWatcherService.ts`, `LinearAutomationService.ts` — verified correct, placed after the existing `setupComplete`/`realTimeSyncEnabled` guards, matching the plan's specified bail shapes (silent `return` for `syncPlan`, `{ success: false, error: '... token not configured' }` for `syncPlanContent`, `{ skipped: true, reason: '...' }` for live-sync).
+- `hasApiToken()` / `clearApiTokenCache()` / `_tokenPresentCache` field additions in both sync services — exact match to plan spec.
+- `completeSetup` cache invalidation (`this._tokenPresentCache = true` after `_secretStorage.store`) in both services — correct.
+- External-path invalidation (mitigation (a)) in `TaskViewerProvider.ts` and `extension.ts` — all 6 sites wired, correct decision.
+
+**Fix now (CRITICAL/MAJOR):**
+1. Add `hasApiToken()` guard to `ClickUpAutomationService.poll()` — symmetric with `LinearAutomationService`. **DONE.**
+2. Author the two specified unit tests (Linear + ClickUp no-token bail) plus the cache-invalidation regression assertion. **DONE.**
+
+**Defer (NIT):**
+- Plan documentation cleanup (rename `runAutomation` → `poll()`, record mitigation (a) decision) — cosmetic, no code impact. Applied to plan file below.
+
+### Fixes Applied
+
+1. **`src/services/ClickUpAutomationService.ts:203-205`** — Added `if (!(await this._clickUpService.hasApiToken())) { return result; }` after the `setupComplete` bail in `poll()`, mirroring `LinearAutomationService.poll():278-280`. Closes the symmetric-guard gap.
+2. **`src/test/integrations/linear/linear-sync-service.test.js`** — Added `testSyncBailsSilentlyWithoutToken()`: asserts `syncPlan` makes no network call with no token, `syncPlanContent` returns `{ success: false }` with token-not-configured error and no network call, `hasApiToken()` returns `false`, and cache invalidation via `clearApiTokenCache()` after external store flips it to `true`. Registered in `run()`.
+3. **`src/test/integrations/clickup/clickup-sync-service.test.js`** — Added `testSyncBailsSilentlyWithoutToken()`: ClickUp mirror — `syncPlan` returns `{ success: false }` with no network call, `syncPlanContent` returns `{ success: false }` with no network call, `hasApiToken()` returns `false`, cache invalidation flips to `true`. Registered in `run()`.
+
+### Validation Results
+
+- **Compilation**: SKIPPED per session directives (project assumed pre-compiled).
+- **Automated tests**: SKIPPED per session directives (test suite to be run separately by the user). The two new test functions are registered in their respective `run()` harnesses and follow the existing `withWorkspace` + `installHttpsMock` + `SecretStorageMock` pattern.
+- **Static verification (read-only)**:
+  - All 8 files in the plan's Proposed Changes have the specified guards — confirmed via grep + targeted reads.
+  - All 5 `debouncedSync` call sites are token-guarded upstream.
+  - Both automation services (`Linear` + `ClickUp`) now guarded symmetrically.
+  - Service-instance caching confirmed (Map-based singletons in `KanbanProvider`) — `_tokenPresentCache` is effective.
+  - No other `setupComplete`-gated network entry points found that lack a token guard (swept all `*AutomationService.ts` and `*SyncService.ts` files).
+- **Unrelated pre-existing changes observed** (NOT part of this plan, not reviewed against it): `src/services/KanbanDatabase.ts` adds a `_dataVersion` counter and `src/services/KanbanProvider.ts` has additional lines beyond the `hasApiToken` guards (a board-refresh short-circuit consuming `getDataVersion()`). These appear to be from a separate optimization task and are out of scope for this review.
+
+### Remaining Risks
+
+- **Cache staleness (token deleted externally)**: unchanged from original plan — worst case is one failed network call per sync (original behavior), self-corrects on reload. Acceptable.
+- **Cache staleness (token stored externally while cache is `false`)**: **mitigated** — mitigation (a) was chosen and implemented; all 6 external store paths now call `clearApiTokenCache()`. The "new failure mode" is closed.
+- **No token-deletion path exists**: `clearApiTokenCache()` has no caller from a deletion flow (none exists in the codebase). Future disconnect/reset flows must remember to call it. Low risk — no current caller needs it.
+- **Test execution pending**: the two new tests are authored but not yet run (per directives). They must pass in the user's separate test run. If the ClickUp `syncPlan` early-return shape differs from `{ success: false, error }` for the no-token case (it returns exactly this per `ClickUpSyncService.ts:2559-2561`), the test will need a trivial assertion adjustment.
+
+### Mitigation Decision Record
+
+**External token-store invalidation: mitigation (a) chosen.** `clearApiTokenCache()` is wired into all 6 external store paths in `TaskViewerProvider.ts` (lines 4768, 4936, 4977, 5017) and `extension.ts` (lines 1310, 1440). This closes the cache-staleness "new failure mode" identified in the Complexity Audit. Mitigation (b) (accept staleness) was rejected in favor of correctness.

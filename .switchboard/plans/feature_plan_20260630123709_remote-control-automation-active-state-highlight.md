@@ -108,7 +108,7 @@ The generic `.strip-icon-btn.is-active` rule (kanban.html:567-580) stays at its 
 }
 ```
 
-**New scoped rules** added immediately after (kanban.html:582-598):
+**New scoped rules** added immediately after (kanban.html:582-600):
 
 ```css
 /* Highlight ONLY the Remote Control & Automation buttons when active.
@@ -116,21 +116,25 @@ The generic `.strip-icon-btn.is-active` rule (kanban.html:567-580) stays at its 
    (shared by CLI Triggers, Epic Ultracode/Goal, Collapse Coders, etc.)
    is NOT affected. No img filter here — the border + background tint
    carry the cue, and an ID-scoped filter would clobber the Claudify
-   colour-icon opt-in rules (which rely on brightness(0)+recolour). */
+   colour-icon opt-in rules (which rely on brightness(0)+recolour).
+   Mix with --panel-bg2 (not transparent) so the tint is opaque and
+   clearly visible against the dark controls-strip background. */
 #btn-remote-control.is-active,
 #btn-autoban.is-active {
     border-color: var(--accent-teal);
-    background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+    background: color-mix(in srgb, var(--accent-teal) 30%, var(--panel-bg2));
     box-shadow: var(--glow-teal);
 }
 #btn-remote-control.is-active:hover:not(:disabled),
 #btn-autoban.is-active:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
+    background: color-mix(in srgb, var(--accent-teal) 40%, var(--panel-bg2));
     box-shadow: var(--glow-teal);
 }
 ```
 
 Specificity: `#btn-remote-control.is-active` = (1,1,0) — beats the generic `.strip-icon-btn.is-active` (0,2,0) and `.controls-strip .strip-icon-btn` (0,2,0) by the ID column. No `img` filter rule is added, so the Claudify colour-icon opt-in (`body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-active img`, 0,4,2) and the Claudify grey-on-active (`body.theme-claudify .strip-icon-btn.is-active img`, 0,3,0) continue to control icon colour unimpeded.
+
+> **UAT Fix #2 (2026-06-30):** The first version of these scoped rules used `color-mix(in srgb, var(--accent-teal) 18%, transparent)` — 82% transparent. This replaced the opaque `var(--panel-bg2)` background from `.controls-strip .strip-icon-btn` with a mostly-transparent teal tint that was nearly invisible on the dark page background. The user reported "NO highlight on the automation and remote buttons." Fixed by mixing with `var(--panel-bg2)` instead of `transparent` (so the background stays opaque) and bumping the tint to 30% (40% on hover) for a clearly visible teal-tinted button.
 
 #### Change 2 (REVISED) — Revert sub-bar generic rule to original (no change needed)
 
@@ -280,3 +284,27 @@ The plan scoped the CSS change to the **class** level (`.strip-icon-btn.is-activ
 ### Remaining Risks (post-fix)
 
 1. **Manual visual confirmation still required:** User must verify via installed VSIX that (a) only RC & Automation show the teal highlight when ON, (b) all other toggles (CLI Triggers, Epic Ultracode/Goal, Collapse Coders) do NOT highlight when active, (c) Claudify colour icons still show terracotta for RC & Automation when active, (d) both themes render correctly.
+
+---
+
+## UAT Failure #2 & Fix (2026-06-30)
+
+### UAT Result: FAILED (second time)
+
+The user reported: "you fixed the other buttons, but we are back to NO highlight on the automation and remote buttons."
+
+### Root Cause
+
+The ID-scoped rules were correctly applied (specificity (1,1,0) beats `.controls-strip .strip-icon-btn` at (0,2,0)), but the **background tint was nearly invisible**. The rules used `color-mix(in srgb, var(--accent-teal) 18%, transparent)` — 82% transparent. This replaced the opaque `var(--panel-bg2)` background from `.controls-strip .strip-icon-btn` with a mostly-transparent teal wash. On the dark page background, this was visually indistinguishable from the resting state. The 1px teal border alone was too subtle to register.
+
+### Fix Applied
+
+Changed the `color-mix` to mix with `var(--panel-bg2)` instead of `transparent`, so the button retains an opaque background but with a clear teal tint. Bumped the tint from 18% to 30% (40% on hover) for strong visibility:
+
+- `background: color-mix(in srgb, var(--accent-teal) 30%, var(--panel-bg2))` — opaque, clearly teal-tinted
+- Hover: `background: color-mix(in srgb, var(--accent-teal) 40%, var(--panel-bg2))`
+
+### Files Changed (UAT fix #2)
+
+- `src/webview/kanban.html` (lines 590-600) — changed `color-mix` from `transparent` to `var(--panel-bg2)`, bumped 18%→30% / 26%→40%.
+- `.switchboard/plans/feature_plan_20260630123709_remote-control-automation-active-state-highlight.md` — updated scoped rule code blocks and appended this section.

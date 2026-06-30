@@ -436,9 +436,17 @@ Manual verification steps:
             existsStub.withArgs(path.resolve(resolvedWorkspaceRoot, 'exists-comp.md')).returns(true);
             existsStub.withArgs(path.resolve(resolvedWorkspaceRoot, 'missing-comp.md')).returns(false);
 
-            // Stub _getKanbanDb to avoid real path validation
+            // Stub _getKanbanDb to avoid real path validation. Must include
+            // getWorkspaceId/getDataVersion/getProjects/getWorktrees so the
+            // O(1) no-op early-out backstop in refreshWithData can build its
+            // composite key without throwing (the backstop is a no-op on the
+            // first call since _lastPushKey starts as '').
             const mockDb = {
-                ensureReady: sandbox.stub().resolves(true)
+                ensureReady: sandbox.stub().resolves(true),
+                getWorkspaceId: sandbox.stub().resolves('test-workspace'),
+                getDataVersion: sandbox.stub().returns(0),
+                getProjects: sandbox.stub().resolves([]),
+                getWorktrees: sandbox.stub().resolves([])
             };
             sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
 

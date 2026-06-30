@@ -200,6 +200,9 @@ export class ClickUpAutomationService {
         if (!config?.setupComplete) {
             return result;
         }
+        if (!(await this._clickUpService.hasApiToken())) {
+            return result;
+        }
 
         const activeRules = this._getRules(config);
         if (activeRules.length === 0) {

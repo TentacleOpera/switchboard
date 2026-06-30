@@ -584,16 +584,18 @@
            (shared by CLI Triggers, Epic Ultracode/Goal, Collapse Coders, etc.)
            is NOT affected. No img filter here — the border + background tint
            carry the cue, and an ID-scoped filter would clobber the Claudify
-           colour-icon opt-in rules (which rely on brightness(0)+recolour). */
+           colour-icon opt-in rules (which rely on brightness(0)+recolour).
+           Mix with --panel-bg2 (not transparent) so the tint is opaque and
+           clearly visible against the dark controls-strip background. */
         #btn-remote-control.is-active,
         #btn-autoban.is-active {
             border-color: var(--accent-teal);
-            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 30%, var(--panel-bg2));
             box-shadow: var(--glow-teal);
         }
         #btn-remote-control.is-active:hover:not(:disabled),
         #btn-autoban.is-active:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 40%, var(--panel-bg2));
             box-shadow: var(--glow-teal);
         }
 

@@ -306,6 +306,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _refreshRunSheetsInFlight: Promise<void> | null = null;
     private _refreshRunSheetsQueued: Promise<void> | null = null;
     private _refreshRunSheetsQueuedRoot: string | undefined;
+    // Throttle for the O(1) early-out instrumentation log so dev-tools can
+    // confirm storm ticks are being skipped without spamming the output channel.
+    private _lastNoOpSkipLogMs = 0;
+    private static readonly NOOP_SKIP_LOG_INTERVAL_MS = 5000;
     private _syncFilesAndRefreshInFlight: Promise<void> | null = null;
     private _syncFilesAndRefreshQueued: Promise<void> | null = null;
     private _syncFilesAndRefreshQueuedRoot: string | undefined;
@@ -15289,6 +15293,25 @@ What would you like to find?`;
             if (!db) {
                 console.warn(`[refreshRunSheets] No DB for ${resolvedWorkspaceRoot}, cannot refresh`);
                 return;
+            }
+
+            // O(1) no-op early-out (PRIMARY): if the board data + filter + config
+            // state is byte-identical to the last successful push, skip the entire
+            // O(card-count) path — DB query, card build, stringify, sha256 hash,
+            // and all ~10 auxiliary postMessages. This is what collapses the
+            // repeating `[refreshRunSheets] DB returned …` triplet during a
+            // refresh storm on a large board. Adds zero latency to genuine
+            // changes (the key differs → full refresh runs).
+            if (this._kanbanProvider?.refreshWouldBeNoOp(workspaceId, db.getDataVersion())) {
+                // Throttled instrumentation: confirms storm ticks are being
+                // skipped (the repeating `[refreshRunSheets] DB returned …`
+                // triplet should collapse to ~zero while idle).
+                const now = Date.now();
+                if (now - this._lastNoOpSkipLogMs >= TaskViewerProvider.NOOP_SKIP_LOG_INTERVAL_MS) {
+                    this._lastNoOpSkipLogMs = now;
+                    console.log(`[refreshRunSheets] O(1) early-out: skipping no-op tick (dataVersion=${db.getDataVersion()})`);
+                }
+                return; // no-op tick — board data + config unchanged since last push
             }
 
             // ONE DB read — this snapshot feeds both sidebar and kanban
