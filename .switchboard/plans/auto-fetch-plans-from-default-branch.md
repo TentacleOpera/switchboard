@@ -208,3 +208,7 @@ Key risks: (1) the ff-merge touches the user's live working repo — a guard bug
 
 ### Recommendation
 Complexity 5 → **Send to Coder**.
+
+## Review Findings
+
+**Reviewer pass completed.** Implementation matches the plan: new `PlanAutoFetchService.ts` with four-guard ff-only logic, `package.json` settings schema (5 settings, `enabled` defaults `false`), activation wiring in `extension.ts`, `PlanningPanelProvider` message handlers + webview-ready hydration, and `project.html`/`project.js` UI control block. **Fixes applied:** (1) backoff now only increments on fetch failures (not post-fetch guard/merge errors) via a `fetchSucceeded` flag — previously a transient `git status` lock failure after a successful fetch would starve the next cycle; (2) catch block re-reads failure count from the map instead of a stale local variable; (3) backoff skip now updates the webview status line so the user sees "Backoff (N consecutive fetch failures)" instead of a stale message. **Validation:** no orphaned references to `PlanAutoFetchService` or removed `SettingsSyncService`; all HTML IDs match JS references; guard logic, UI wiring, and settings schema verified by inspection (compilation/tests skipped per session directive). **Remaining risks:** "Fetch now" button silently no-ops when `enabled=false` (plan-compliant but potentially confusing UX); trust gate is email-convention-only (not cryptographic, per user-confirmed decision); the bundled `SettingsSyncService` removal in the same commit is a separate plan's concern but verified clean of orphaned references.

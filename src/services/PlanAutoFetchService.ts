@@ -157,12 +157,14 @@ export class PlanAutoFetchService implements vscode.Disposable {
             const waitTimeMs = backoffMultiplier * intervalSeconds * 1000;
             if (Date.now() - failureInfo.lastTime < waitTimeMs) {
                 this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Skipping fetch due to backoff (${failureInfo.count} failures).`);
+                this._updateStatus(resolvedRoot, 'skipped', `Backoff (${failureInfo.count} consecutive fetch failures)`);
                 return;
             }
         }
 
         this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Running auto-fetch cycle in ${effectiveGitRoot}`);
 
+        let fetchSucceeded = false;
         try {
             // Resolve default branch
             let defaultBranch = defaultBranchSetting;
@@ -189,6 +191,7 @@ export class PlanAutoFetchService implements vscode.Disposable {
             // Fetch default branch
             this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Fetching ${remote}/${defaultBranch}...`);
             await execFileAsync('git', ['fetch', remote, defaultBranch], { cwd: effectiveGitRoot, timeout: 15000 });
+            fetchSucceeded = true;
 
             // Fetch succeeded, reset backoff
             this._failuresMap.delete(resolvedRoot);
@@ -257,9 +260,13 @@ export class PlanAutoFetchService implements vscode.Disposable {
             this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Successfully fast-forwarded ${count} commits.`);
             
         } catch (err: any) {
-            // Fetch/git execution failed (e.g. timeout, offline)
-            const count = (failureInfo?.count || 0) + 1;
-            this._failuresMap.set(resolvedRoot, { count, lastTime: Date.now() });
+            // Only increment backoff on fetch failures (not post-fetch guard/merge errors).
+            // Re-read from the map to avoid stale local references after delete().
+            if (!fetchSucceeded) {
+                const currentFailures = this._failuresMap.get(resolvedRoot);
+                const count = (currentFailures?.count || 0) + 1;
+                this._failuresMap.set(resolvedRoot, { count, lastTime: Date.now() });
+            }
             
             const errMsg = err?.message || String(err);
             this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Error running auto-fetch: ${errMsg}`);

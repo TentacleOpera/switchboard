@@ -3,45 +3,49 @@
 ## Goal
 
 ### Problem
-When the user clicks a ticket card in the Tickets tab of `planning.html`, an error is surfaced (paraphrased by the user as "cannot fetch ticket") instead of the ticket detail rendering reliably.
+When the user clicks a ticket card in the Tickets tab of `planning.html`, an error is surfaced (paraphrased by the user as "cannot fetch ticket"). This happens even though the local ticket file exists on disk and the ClickUp API token is configured. The error makes the user think the entire ticket fetch failed, even though the local description content is (or should be) available.
 
 ### Background Context
 Clicking a ticket card (`planning.js` ~line 8168) triggers **two parallel backend messages** for an uncached/not-fully-fetched ticket:
 
-1. `readLocalTicketFile` — fast local-file read for the description (`PlanningPanelProvider.ts` ~line 5453).
-2. `linearLoadTaskDetails` / `clickupLoadTaskDetails` — live API fetch for comments/attachments (`PlanningPanelProvider.ts` ~line 4350 / ~line 4610).
+1. `readLocalTicketFile` — fast local-file read for the description (`PlanningPanelProvider.ts` ~line 5453). On success, the webview handler (~line 4534) sets `selectedClickUpIssue`/`selectedLinearIssue` with `localDescription: true` and calls `renderTicketsTab()` to display the local markdown.
+2. `linearLoadTaskDetails` / `clickupLoadTaskDetails` — live API fetch for comments/attachments (`PlanningPanelProvider.ts` ~line 4350 / ~line 4610). This is **supplementary** — its only purpose is to enrich the view with live comments and attachments. The description itself already comes from the local file.
 
-If the local file read fails (`success: false`), the `localTicketFileRead` webview handler (~line 4534) **falls back** by calling `loadLinearTaskDetails(msg.id)` / `loadClickUpTaskDetails(msg.id)` — which sets `selectedLinearIssue = null` / `selectedClickUpIssue = null`, re-renders, and sends **another** `linearLoadTaskDetails` / `clickupLoadTaskDetails` message. This means up to **two concurrent API fetches** are in flight for the same ticket.
+The API fetch can fail for many reasons even when the token is configured: the task was deleted from the remote, a network timeout, rate limiting (429), a transient 5xx, or the token expired after initial setup. When it fails, the backend posts a `clickupError`/`linearError` message (scope `'task'`), which the webview routes to `showTicketsError(msg.error)` (~line 5280 / ~line 5293). This displays the raw API error text (e.g., `"Failed to fetch ClickUp task abc123: 404"`) in the `#tickets-status-footer` — a red, prominent-looking message at the bottom of the detail pane.
 
 ### Root Cause
-The error the user sees is the backend API fetch failing. The backend handlers post a `linearError` / `clickupError` message (scope `'task'`) on failure, which the webview routes to `showTicketsError(msg.error || 'ClickUp request failed' / 'Linear request failed')` (~line 5280 / ~line 5293), displayed in the `#tickets-status-footer`. The backend failure conditions are:
+The error is **not suppressed or contextualized when the local file was already successfully read.** The supplementary API fetch (comments/attachments only) fails, but its error is surfaced with the same prominence as a total fetch failure. Three compounding problems:
 
-- **`clickupLoadTaskDetails`** (~line 4610): throws `'No workspace folder found'` if `_resolveWorkspaceRoot` returns null; or `clickUp.getTaskDetails(taskId)` throws — most commonly `'ClickUp not configured'` (`ClickUpSyncService.ts` line 1220, when `config?.setupComplete` is false) or `'Failed to fetch ClickUp task <id>: <status>'` (line 1233, non-200 HTTP).
-- **`linearLoadTaskDetails`** (~line 4350): throws `'Select a Linear issue first.'` if `workspaceRoot` or `issueId` is empty; or `linear.getIssue(issueId)` throws `'Linear not configured'` (`LinearSyncService.ts` line 890, when `config?.setupComplete || !config.teamId`); or returns `null` → `'Linear issue <id> was not found.'`.
+1. **No error clearing on local-file success.** The `localTicketFileRead` success handler (~line 4534) sets `selectedClickUpIssue` and renders the local content, but it **never clears** the `#tickets-status-footer`. If the `clickupError` arrives before or after the local content renders, the error text persists in the footer (auto-hiding after 4 seconds via `showTicketsStatus`'s timeout, but still visible long enough to confuse the user).
 
-The **most likely trigger** is the **double-fetch race + the `readLocalTicketFile` fallback**. When no local ticket file exists yet (the ticket was never imported/saved locally), `readLocalTicketFile` returns `success: false`, and the fallback calls `loadClickUpTaskDetails`/`loadLinearTaskDetails` — firing a **second** API request on top of the one the card-click handler already sent. If the integration is not fully configured (token expired, no `setupComplete`, no `teamId`), or the API returns an error, **both** fetches fail and the error is shown. Even when configured, the redundant second fetch wastes a round-trip and can surface a transient error that would otherwise have been superseded by the first fetch's success.
+2. **No error clearing on API success.** The `clickupTaskDetailsLoaded` / `linearTaskDetailsLoaded` handlers (~line 5237 / ~line 5092) also **never clear** the footer. So a stale error from a previous failed fetch can persist even after a successful API load of a different ticket.
 
-A secondary contributor: `loadClickUpTaskDetails` / `loadLinearTaskDetails` set `selectedClickUpIssue = null` / `selectedLinearIssue = null` and re-render **before** sending the message, so the user briefly sees an empty detail pane followed by the error — making the failure more visible than it needs to be.
+3. **The error message is not contextualized.** When the local file was successfully read (`selectedClickUpIssue?.localDescription === true`), the API fetch failure means only "comments/attachments unavailable" — not "cannot fetch ticket." But the raw error text (`"Failed to fetch ClickUp task ..."`) makes the user think the whole ticket failed to load.
+
+A secondary issue (still worth fixing): if `readLocalTicketFile` returns `success: false` (file not found), the handler falls back to calling `loadClickUpTaskDetails`/`loadLinearTaskDetails` (~line 4537-4538), which sets `selectedClickUpIssue = null`, re-renders an empty pane, and sends a **second** API fetch — racing with the one the card-click handler already sent. This is not the user's scenario (their local files exist), but it compounds the error-surfacing problem for tickets without local files.
 
 ## Metadata
-- **Tags:** tickets, error-handling, race-condition, api-fetch, planning-webview
+- **Tags:** tickets, error-handling, api-fetch, planning-webview, ux
 - **Complexity:** 4/10
 
 ## Complexity Audit
-**Complex.** The fix is primarily control-flow logic in the webview message handler — eliminating the redundant double-fetch and improving error surfacing. No backend data-model changes. Risk is low-moderate: must ensure the local-file-fallback still works when the card-click API fetch is suppressed, and that legitimate errors still surface.
+**Complex.** The fix is primarily control-flow logic in the webview message handlers — suppressing/contextualizing the supplementary API fetch error when local content is already displayed, and clearing stale errors on success. No backend data-model changes. Risk is low-moderate: must ensure genuine errors (integration not configured, no local file AND API fails) still surface clearly.
 
 ## Edge-Case & Dependency Audit
-- **Card-click already sends the API fetch:** The fallback in `localTicketFileRead` must NOT re-send the same message when the card-click handler already did. The card-click path (~line 8195-8211) sends `readLocalTicketFile` AND `linearLoadTaskDetails`/`clickupLoadTaskDetails` together. So when `readLocalTicketFile` fails, the API fetch is already in flight — the fallback is redundant.
-- **Subtask / parent navigation paths:** `loadLinearTaskDetails` / `loadClickUpTaskDetails` are also called from subtask navigation (~line 8068, 8075) and parent navigation (~line 8387, 8395), where there is **no** accompanying `readLocalTicketFile`. These callers still need the API fetch. The fix must only suppress the fallback inside the `localTicketFileRead` handler, not these other callers.
-- **`pendingClickUpDetailIssueId` / `pendingLinearDetailIssueId`:** The error handler clears `pendingClickUpDetailIssueId` (line 5276). A double-fetch can clear this prematurely. Deduplicating removes the race.
+- **Local file exists, API fails (the user's scenario):** Local content renders, but the API error appears in the footer. Fix: clear footer on local success + suppress/contextualize the API error.
+- **No local file, API fails:** No content at all. The error MUST still surface clearly — this is a genuine total failure. Fix: only suppress the error when `selectedClickUpIssue?.localDescription === true`.
+- **No local file, API succeeds:** Content loads from API. Fix: clear any stale footer error on API success.
+- **Local file exists, API succeeds:** Best case — local description + live comments/attachments. Fix: clear any stale footer error on API success.
+- **Subtask / parent navigation:** `loadLinearTaskDetails` / `loadClickUpTaskDetails` are called from subtask navigation (~line 8068, 8075) and parent navigation (~line 8387, 8395), where there is no accompanying `readLocalTicketFile`. These callers need the API fetch and its error to surface normally. The fix must only suppress errors when local content is already displayed, not in these paths.
+- **`pendingClickUpDetailIssueId`:** The error handler clears this (line 5276). The fix should preserve this behavior.
 - **Cached `detailsFetched` shortcut:** When a ticket is fully cached, neither `readLocalTicketFile` nor the API fetch is sent (line 8185/8200) — unaffected.
-- **`importTicketSubtasks`** (line 8218): sent alongside on first open — unaffected by this fix.
-- **Genuine "not configured" errors:** If the integration genuinely isn't configured, the user still needs a clear message. The fix should surface a single, clear error rather than two overlapping ones.
+- **`showTicketsStatus` auto-hide:** The footer auto-hides after 4 seconds for all messages (line 555-557). Errors are not persistent, but 4 seconds is long enough to confuse the user.
+- **`importTicketSubtasks`** (line 8218): sent alongside on first open — unaffected.
 
 ## Proposed Changes
 
-### `src/webview/planning.js` — `localTicketFileRead` handler (~line 4534)
-Remove the redundant API-fetch fallback. The card-click handler already sends `linearLoadTaskDetails` / `clickupLoadTaskDetails` in parallel with `readLocalTicketFile`. When the local file is missing, the in-flight API fetch will deliver the detail (or the error) — no second fetch is needed.
+### `src/webview/planning.js` — `localTicketFileRead` success handler (~line 4534)
+Clear any prior error in the footer when the local file is successfully read. Also remove the redundant double-fetch fallback when `success: false` (the card-click handler already sent the API fetch in parallel).
 
 **Before:**
 ```js
@@ -53,6 +57,9 @@ case 'localTicketFileRead': {
         break;
     }
     // ... render local content ...
+    renderTicketsTab();
+    break;
+}
 ```
 
 **After:**
@@ -61,17 +68,137 @@ case 'localTicketFileRead': {
     if (!msg.success) {
         // No local file — the card-click handler already dispatched a
         // parallel linearLoadTaskDetails / clickupLoadTaskDetails request
-        // for comments/attachments. Do NOT fire a redundant second fetch
-        // (it races with the first and double-surfaces errors).
+        // for comments/attachments. Do NOT fire a redundant second fetch.
         break;
     }
     // ... render local content ...
+    // Clear any stale error from a previous/parallel failed API fetch —
+    // the local description is already displayed, so a supplementary
+    // API failure (comments/attachments only) is not a total failure.
+    const { ticketsStatusFooter } = getTicketsTabElements();
+    if (ticketsStatusFooter) {
+        ticketsStatusFooter.textContent = '';
+        ticketsStatusFooter.style.display = 'none';
+    }
+    renderTicketsTab();
+    break;
+}
 ```
 
-> **Caveat for non-card-click callers:** If any other code path sends `readLocalTicketFile` **without** a parallel API fetch and relies on the fallback, this change would break it. A grep confirms `readLocalTicketFile` is only sent from the card-click handler (~line 8195/8210) — so the fallback is safe to remove. If future callers are added, they should send their own API-fetch message explicitly.
+### `src/webview/planning.js` — `clickupTaskDetailsLoaded` / `linearTaskDetailsLoaded` handlers (~line 5237 / ~line 5092)
+Clear any prior error in the footer when the API fetch succeeds.
 
-### `src/webview/planning.js` — `loadClickUpTaskDetails` / `loadLinearTaskDetails` (~line 9765 / 9803)
-Avoid blanking the selection and re-rendering an empty pane before the fetch completes, which makes the error state more jarring. Only clear the selection if there is no existing cached partial detail to show.
+**Add at the end of each handler (before `break`):**
+```js
+// Clear any stale error footer — the API fetch succeeded
+const { ticketsStatusFooter } = getTicketsTabElements();
+if (ticketsStatusFooter) {
+    ticketsStatusFooter.textContent = '';
+    ticketsStatusFooter.style.display = 'none';
+}
+```
+
+### `src/webview/planning.js` — `clickupError` handler, scope `task` (~line 5260)
+When the API fetch fails but the local file was already successfully read (`selectedClickUpIssue?.localDescription === true`), suppress the prominent error and show a subtle, contextual message instead. When no local content is displayed, show the full error as before (genuine total failure).
+
+**Before:**
+```js
+case 'clickupError': {
+    switch (msg.scope) {
+        case 'hierarchy':
+            clickUpHierarchyLoading = false;
+            break;
+        case 'project':
+            clickUpProjectLoading = false;
+            clickUpProjectStatus = 'error';
+            clickUpProjectMessage = msg.error || 'Failed to load tasks';
+            break;
+        case 'task':
+            pendingClickUpDetailIssueId = '';
+            break;
+    }
+    setTicketsLoadingState(false);
+    showTicketsError(msg.error || 'ClickUp request failed');
+    renderTicketsTab();
+    break;
+}
+```
+
+**After:**
+```js
+case 'clickupError': {
+    switch (msg.scope) {
+        case 'hierarchy':
+            clickUpHierarchyLoading = false;
+            break;
+        case 'project':
+            clickUpProjectLoading = false;
+            clickUpProjectStatus = 'error';
+            clickUpProjectMessage = msg.error || 'Failed to load tasks';
+            break;
+        case 'task':
+            pendingClickUpDetailIssueId = '';
+            break;
+    }
+    setTicketsLoadingState(false);
+    // When the local file was already read, the API fetch is supplementary
+    // (comments/attachments only). Its failure is not a total ticket-fetch
+    // failure — show a subtle contextual message instead of the raw API error.
+    if (msg.scope === 'task' && selectedClickUpIssue?.localDescription) {
+        showTicketsStatus('Live comments/attachments unavailable', false);
+    } else {
+        showTicketsError(msg.error || 'ClickUp request failed');
+    }
+    renderTicketsTab();
+    break;
+}
+```
+
+### `src/webview/planning.js` — `linearError` handler, scope `task` (~line 5284)
+Apply the same contextualization for Linear.
+
+**Before:**
+```js
+case 'linearError': {
+    switch (msg.scope) {
+        case 'project':
+            linearProjectLoading = false;
+            linearProjectStatus = 'error';
+            linearProjectMessage = msg.error || 'Failed to load issues';
+            break;
+    }
+    setTicketsLoadingState(false);
+    showTicketsError(msg.error || 'Linear request failed');
+    renderTicketsTab();
+    break;
+}
+```
+
+**After:**
+```js
+case 'linearError': {
+    switch (msg.scope) {
+        case 'project':
+            linearProjectLoading = false;
+            linearProjectStatus = 'error';
+            linearProjectMessage = msg.error || 'Failed to load issues';
+            break;
+    }
+    setTicketsLoadingState(false);
+    if (msg.scope === 'task' && selectedLinearIssue?.localDescription) {
+        showTicketsStatus('Live comments/attachments unavailable', false);
+    } else {
+        showTicketsError(msg.error || 'Linear request failed');
+    }
+    renderTicketsTab();
+    break;
+}
+```
+
+> **Note:** The `linearError` handler currently doesn't have a `case 'task'` in its switch — the scope is only checked for `'project'`. The `msg.scope === 'task'` check in the conditional works regardless, since the backend sends `scope: 'task'` for task-detail failures (line 4355, 4384, 4412).
+
+### `src/webview/planning.js` — `loadClickUpTaskDetails` / `loadLinearTaskDetails` (~line 9765 / ~line 9803)
+Avoid blanking the selection and re-rendering an empty pane before the fetch completes. Only clear the selection if there is no existing cached partial detail to show. This prevents an empty-pane flash when the API fetch is a refetch (e.g., from subtask navigation) and there's already content displayed.
 
 **Before (loadLinearTaskDetails):**
 ```js
@@ -88,8 +215,7 @@ function loadLinearTaskDetails(issueId) {
 function loadLinearTaskDetails(issueId) {
     if (!issueId) return;
     // Keep any cached partial detail visible while refetching; only blank
-    // if there is genuinely nothing to show (avoids an empty-pane flash
-    // before the error/success arrives).
+    // if there is genuinely nothing to show (avoids an empty-pane flash).
     if (!linearIssueDetailCache.get(issueId)) {
         selectedLinearIssue = null;
         renderTicketsLinearPanel();
@@ -100,37 +226,27 @@ function loadLinearTaskDetails(issueId) {
 
 Apply the analogous change to `loadClickUpTaskDetails` (~line 9803) using `clickUpTaskDetailCache`.
 
-### `src/webview/planning.js` — error handlers (~line 5260 / 5284)
-Make the error message more actionable so the user can distinguish "not configured" from "network/transient". The backend already sends specific messages (`'ClickUp not configured'`, `'Linear not configured'`, `'No workspace folder found'`); ensure these surface verbatim rather than being masked by the generic fallback. The current code already uses `msg.error || 'ClickUp request failed'`, so the specific message is preserved — **no change needed** as long as the backend sends `error`. Confirm the backend `clickupError`/`linearError` posts always include `error` for scope `'task'` (they do: lines 4616, 4648, 4358, 4387, 4415).
-
-Optional polish: only show the task-scope error if no detail is currently displayed (avoid overwriting a successfully rendered local-file detail with a stale API error from a redundant fetch). After the double-fetch fix above this is less critical, but as a guard:
-
-```js
-case 'clickupError': {
-    switch (msg.scope) {
-        // ... existing cases ...
-        case 'task':
-            pendingClickUpDetailIssueId = '';
-            // Only clobber the detail pane if nothing is shown yet
-            if (!selectedClickUpIssue) {
-                setTicketsLoadingState(false);
-                showTicketsError(msg.error || 'ClickUp request failed');
-            }
-            renderTicketsTab();
-            break;
-    }
-    // ... (remove the unconditional showTicketsError at function level for task scope)
-}
-```
-
-Apply analogously to `linearError`. (Keep the unconditional `showTicketsError` for `hierarchy`/`project` scopes.)
-
 ## Verification Plan
-1. **Reproduce the original error:** With the integration misconfigured (e.g., expired token or `setupComplete` false), click a ticket — confirm a **single** clear error appears (e.g. "ClickUp not configured"), not a double error or empty-pane flash.
-2. **No local file, configured integration:** Click a ticket that has never been imported locally — confirm the detail (description + comments + attachments) loads via the single API fetch with no redundant second request (verify in the browser devtools network/message log that only one `clickupLoadTaskDetails`/`linearLoadTaskDetails` is sent).
-3. **Local file exists:** Click an imported ticket — confirm the local description renders instantly and the API fetch supplements comments/attachments without error.
-4. **Cached ticket:** Click a fully-cached ticket a second time — confirm no API fetch is sent (existing shortcut) and no error.
-5. **Subtask / parent navigation:** Click a subtask and use "To parent task" — confirm the API fetch still fires (these paths don't go through `readLocalTicketFile` and must still fetch).
-6. **Transient network failure:** Simulate a non-200 API response — confirm the error message surfaces once and the loading state clears (no stuck spinner).
-7. **Workspace not selected:** With no workspace root chosen, click a ticket — confirm "No workspace folder found" appears clearly.
-8. Toggle claudify/cyber themes — confirm no visual regression in the error footer.
+1. **The user's scenario (local file exists, API token configured, API call fails):**
+   - Click a ticket whose local file exists but whose ClickUp API call fails (simulate by temporarily revoking the API token or blocking the network).
+   - Confirm the local description renders immediately.
+   - Confirm the footer shows a subtle "Live comments/attachments unavailable" message (non-error color), NOT a red "Failed to fetch ClickUp task ..." error.
+   - Confirm the footer auto-hides after 4 seconds.
+2. **No local file, API fails (genuine total failure):**
+   - Click a ticket with no local file and a failing API.
+   - Confirm the full error message appears in red (e.g., "Failed to fetch ClickUp task ...") — this is a real failure the user needs to see.
+3. **No local file, API succeeds:**
+   - Click a ticket with no local file but a working API.
+   - Confirm the detail loads from the API and no error footer appears.
+4. **Local file exists, API succeeds:**
+   - Click a ticket with both local file and working API.
+   - Confirm local description renders instantly, then comments/attachments supplement it.
+   - Confirm no error footer appears.
+5. **Stale error clearing:**
+   - Click ticket A (API fails, subtle message shows). Then click ticket B (API succeeds).
+   - Confirm ticket B's view has no stale error footer from ticket A.
+6. **Subtask / parent navigation:**
+   - Click a subtask and use "To parent task" — confirm the API fetch still fires and errors still surface normally (these paths don't go through `readLocalTicketFile`).
+7. **Cached ticket:** Click a fully-cached ticket a second time — confirm no API fetch, no error, content displays immediately.
+8. **No redundant double-fetch:** Click a ticket with no local file — confirm only ONE `clickupLoadTaskDetails` message is sent (not two).
+9. **Toggle claudify/cyber themes** — confirm no visual regression in the footer.
