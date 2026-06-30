@@ -22,7 +22,16 @@ VS Code's `config.update(key, value, target)` takes a target of `Global`, `Works
 - **Split-brain (same key, two targets).** Several workflow flags are written `Global` from the Kanban but `Workspace` from the Setup panel. Because reads via `inspect()` prefer `workspaceValue` over `globalValue`, the two UIs disagree and a value can appear to "jump" or get stuck.
 - **Key-name divergence + dead code (aggressive pair).** Two different config keys exist for one concept; only one is read, the *registered* one is never read, and the Setup-panel control behind it has already been removed, leaving orphaned plumbing.
 
-The codebase already documents the intended convention at `PlanningPanelProvider.ts:2332`: `// MUST be Global — user preference, not workspace`. This plan applies that convention consistently.
+The codebase already documents the intended convention at `PlanningPanelProvider.ts:2332`: `// MUST be Global — user preference, not workspace`. This plan applies that convention consistently, via a single guiding principle (below).
+
+### Guiding principle: "whether" vs "what"
+
+Two levels often get conflated into one setting pair:
+
+1. **"Whether" — behavior/preference toggles** (do I want X to happen, how should the agent behave): these are **user preferences → Global**. Examples: `designDocEnabled`, `designSystemDocEnabled`, `accurateCoding.enabled`, `reviewer.advancedMode`, theme/status-bar prefs.
+2. **"What" — project-specific resource identity** (the actual path, link, or doc reference that only makes sense for one project): these are **per-project → Workspace**. Examples: `designDocLink`, `designSystemDocLink`, `kanban.dbPath`, `kanban.controlPlaneRoot`.
+
+The two stay orthogonal at read time (e.g. `KanbanProvider.ts:3030`: `designDocEnabled ? config.get('designDocLink') : undefined` — the toggle *gates*, the link *provides*), so an `enabled=true` preference in a project with no link simply no-ops. Every target decision below follows this principle.
 
 ## Findings (audit recap)
 
@@ -62,9 +71,18 @@ The codebase already documents the intended convention at `PlanningPanelProvider
 3. Confirm the corresponding `getEffective*` / read sites don't hard-prefer `workspaceValue` in a way that defeats step 2 (e.g. anything modeled on `getEffectiveColourKanbanIcons` in `themeBodyClass.ts`). For `theme.name`, verify the first-paint resolver and the `affectsConfiguration('switchboard.theme.name')` broadcasts (`KanbanProvider.ts:358`, `PlanningPanelProvider.ts:389`) still fire correctly after the target change.
 
 ### Phase 2 — Resolve split-brain workflow flags (Findings B)
-4. Pick a single target per setting and apply it in **both** the Kanban and Setup/Planning/Design write sites, plus clear the stale other-scope value (as in step 2).
-   - `accurateCoding.enabled`, `reviewer.advancedMode`, `leadCoder.inlineChallenge` → **Global** (they're agent-behavior preferences; Kanban already treats them as Global). Align the Setup-panel Workspace writes (`TaskViewerProvider.ts:7930/7937/7944`) to Global + clear stale Workspace value.
-   - `planner.designDocEnabled` / `planner.designDocLink` → **Workspace** (RESOLVED, see D1). This is the *legacy* project-wide design-doc/PRD pointer (labeled "PLANNING EPIC REFERENCE" in the planner prompt, "LEGACY DESIGN DOC (fallback baseline)" in the acceptance-review prompt — `agentPromptBuilder.ts:564`/`:766`). It points at a specific project's requirements doc (often a Notion page or repo file), so it is inherently per-project. Therefore the **Kanban's Global write is the bug** — change `KanbanProvider.ts:3687`/`:3690` from `true` (Global) to `ConfigurationTarget.Workspace`, and clear any stale Global value. The Setup/Planning/Design Workspace writes are already correct and stay.
+4. Apply the "whether vs what" principle per field, in **both** the Kanban and Setup/Planning/Design write sites, plus clear the stale other-scope value (as in step 2).
+
+   **"Whether" toggles → Global:**
+   - `accurateCoding.enabled`, `reviewer.advancedMode`, `leadCoder.inlineChallenge` — Kanban already Global; align the Setup-panel Workspace writes (`TaskViewerProvider.ts:7930/7937/7944`) to Global.
+   - `planner.designDocEnabled` — Kanban already Global (`KanbanProvider.ts:3687`); the bugs are the **Workspace** writes at `TaskViewerProvider.ts:7976`, `PlanningPanelProvider.ts:6564`, `DesignPanelProvider.ts:1488` → change to Global.
+   - `planner.designSystemDocEnabled` — currently **Workspace** at `DesignPanelProvider.ts:1473/1489` → change to Global.
+
+   **"What" resource pointers → Workspace:**
+   - `planner.designDocLink` — Setup/Planning/Design already Workspace (correct); the bug is the **Global** write at `KanbanProvider.ts:3690` → change to `ConfigurationTarget.Workspace`.
+   - `planner.designSystemDocLink` — already Workspace at `DesignPanelProvider.ts:1470/1492` (correct); no change, but verify no other site writes it Global.
+
+   Context on the design-doc pair: `planner.designDoc*` is the *legacy* project-wide design-doc/PRD pointer (labeled "PLANNING EPIC REFERENCE" in the planner prompt, "LEGACY DESIGN DOC (fallback baseline)" in the acceptance-review prompt — `agentPromptBuilder.ts:564`/`:766`), largely superseded by the per-project PRD. The link is project-specific (Workspace); the enable toggle is a planner-behavior preference (Global).
 
 ### Phase 3 — Aggressive-pair cleanup (Findings C) — Kanban is the sole owner
 5. **Remove the dead Setup-panel path entirely:**
@@ -82,7 +100,7 @@ The codebase already documents the intended convention at `PlanningPanelProvider
    - Grep the tree for the removed identifiers (`pairProgramming.aggressive` orphan reads, `getAggressivePairSetting`, `aggressive-pair-toggle`) → no stragglers.
 
 ## Resolved Decisions
-- **D1 — `planner.designDoc*` target → Workspace.** It is the legacy project-wide design-doc/PRD pointer (`agentPromptBuilder.ts:564`/`:766`), inherently project-specific. The Kanban's Global write (`KanbanProvider.ts:3687`/`:3690`) is the bug; Setup/Planning/Design Workspace writes are correct. *(Aside: this doc is largely superseded by the per-project PRD `prd.md` and now serves only as a fallback acceptance baseline — a future deprecation candidate, out of scope here.)*
+- **D1 — `planner.designDoc*` split by the "whether vs what" principle.** The *toggle* `planner.designDocEnabled` is a planner-behavior preference → **Global** (Kanban already correct; fix the Setup/Planning/Design Workspace writes). The *link* `planner.designDocLink` is a project-specific resource → **Workspace** (Setup/Planning/Design already correct; the Kanban's Global write `KanbanProvider.ts:3690` is the bug). Same split applied to `designSystemDocEnabled` (→ Global) / `designSystemDocLink` (→ Workspace). *(Aside: the legacy design-doc is largely superseded by the per-project PRD `prd.md`, now only a fallback acceptance baseline — a future deprecation candidate, out of scope here.)*
 - **D2 — aggressive-pair canonical key → `pairProgramming.aggressive`** (the registered name), Global, with a one-time read fallback from the retired `aggressivePairProgramming.enabled`.
 
 ## Migration Considerations (published extension, ~4k installs)
@@ -96,5 +114,5 @@ The codebase already documents the intended convention at `PlanningPanelProvider
 - `src/services/TaskViewerProvider.ts` — target changes (theme.name, status-bar group, workflow flags), remove dead aggressive-pair setter/getter.
 - `src/services/KanbanProvider.ts` — workflow-flag target alignment, aggressive-pair key rename + read fallback.
 - `src/services/SetupPanelProvider.ts` — remove `getAggressivePairSetting`/`aggressivePairSetting` plumbing.
-- `src/services/PlanningPanelProvider.ts`, `src/services/DesignPanelProvider.ts` — `planner.designDoc*` target alignment (pending D1).
+- `src/services/PlanningPanelProvider.ts`, `src/services/DesignPanelProvider.ts` — `*Enabled` toggles → Global, `*Link` pointers stay/go Workspace (per "whether vs what").
 - `src/webview/setup.html` — remove orphaned aggressive-pair message handler + element reference.
