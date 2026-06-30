@@ -246,3 +246,7 @@ No automated tests are added or run as part of this session. The click handler l
 ---
 
 **Recommendation:** Complexity 4/10 → **Send to Coder.** The change is a single conditional block in one file (routine), but it guards a UX-critical cross-workspace reassign flow that must not break, elevating it above pure intern-level work.
+
+## Review Findings
+
+**Reviewed:** Implementation in `src/webview/kanban.html` lines 5171–5192 (cross-workspace guard in card click handler). No code changes were needed — the implementation is a faithful, correct execution of the plan. Static verification confirmed: `selectedCards.set()` appears at exactly 1 site (guarded), `updateWorkspaceSelection` (line 6060) has zero `selectedCards` references (reassign flow intact), `data-workspace-root` is emitted on every card (line 5401), and legacy string-shape handling matches existing patterns at lines 5064/6825. No CRITICAL or MAJOR findings; two NITs (verbose comment, unscoped `querySelectorAll`) noted but not worth fixing. **Remaining risk:** None material — the guard is isolated, synchronous, and covers the sole selection entry point.

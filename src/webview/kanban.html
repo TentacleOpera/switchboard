@@ -582,21 +582,19 @@
         /* Highlight ONLY the Remote Control & Automation buttons when active.
            Scoped by ID so the generic .strip-icon-btn.is-active rule above
            (shared by CLI Triggers, Epic Ultracode/Goal, Collapse Coders, etc.)
-           is NOT affected. No img filter here — the border + background tint
-           carry the cue, and an ID-scoped filter would clobber the Claudify
-           colour-icon opt-in rules (which rely on brightness(0)+recolour).
-           Mix with --panel-bg2 (not transparent) so the tint is opaque and
-           clearly visible against the dark controls-strip background. */
+           is NOT affected. !important is a diagnostic test — if the highlight
+           still doesn't appear with !important, the issue is that is-active
+           is never being added to these buttons (JS round-trip failure). */
         #btn-remote-control.is-active,
         #btn-autoban.is-active {
-            border-color: var(--accent-teal);
-            background: color-mix(in srgb, var(--accent-teal) 30%, var(--panel-bg2));
-            box-shadow: var(--glow-teal);
+            border-color: var(--accent-teal) !important;
+            background: color-mix(in srgb, var(--accent-teal) 30%, var(--panel-bg2)) !important;
+            box-shadow: var(--glow-teal) !important;
         }
         #btn-remote-control.is-active:hover:not(:disabled),
         #btn-autoban.is-active:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-teal) 40%, var(--panel-bg2));
-            box-shadow: var(--glow-teal);
+            background: color-mix(in srgb, var(--accent-teal) 40%, var(--panel-bg2)) !important;
+            box-shadow: var(--glow-teal) !important;
         }
 
         .strip-icon-btn.is-off {
@@ -4985,9 +4983,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         function updateAutobanButtonState() {
             const autobanBtn = document.getElementById('btn-autoban');
+            console.log('[DIAG] updateAutobanButtonState called, autobanConfig:', JSON.stringify(autobanConfig), 'btn found:', !!autobanBtn);
             if (!autobanBtn) return;
             const isEnabled = !!(autobanConfig && autobanConfig.enabled);
+            console.log('[DIAG] autoban isEnabled:', isEnabled, '— adding is-active?', isEnabled);
             autobanBtn.classList.toggle('is-active', isEnabled);
+            console.log('[DIAG] autoban btn classes after toggle:', autobanBtn.className);
             autobanBtn.setAttribute('data-tooltip', isEnabled ? 'Stop automation engine' : 'Start automation engine');
             autobanBtn.title = isEnabled ? 'Stop automation engine' : 'Start automation engine';
             const img = autobanBtn.querySelector('img');
@@ -6477,10 +6478,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'remoteConfig':
+                    console.log('[DIAG] received remoteConfig, msg.active:', msg.active, 'typeof:', typeof msg.active);
                     if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
                     renderRemoteConfig(msg.config, msg);
                     break;
                 case 'remoteControlState':
+                    console.log('[DIAG] received remoteControlState, msg.active:', msg.active);
                     remoteControlActive = !!msg.active;
                     applyRemoteControlButtonState();
                     break;
@@ -6494,6 +6497,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'updateAutobanConfig':
+                    console.log('[DIAG] received updateAutobanConfig, msg.state:', JSON.stringify(msg.state));
                     autobanConfig = msg.state || null;
                     if (autobanConfig && autobanConfig.automationMode) {
                         currentAutomationMode = autobanConfig.automationMode;
@@ -6939,7 +6943,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let remoteControlActive = false;
         function applyRemoteControlButtonState() {
             const btn = document.getElementById('btn-remote-control');
-            if (btn) { btn.classList.toggle('is-active', !!remoteControlActive); }
+            console.log('[DIAG] applyRemoteControlButtonState called, remoteControlActive:', remoteControlActive, 'btn found:', !!btn);
+            if (btn) {
+                btn.classList.toggle('is-active', !!remoteControlActive);
+                console.log('[DIAG] RC btn classes after toggle:', btn.className);
+            }
         }
         let _remoteWorkspaces = [];
         function renderRemoteConfig(config, payload) {
