@@ -3543,8 +3543,10 @@ export class PlanningPanelProvider {
                 const wsRoot = msg.workspaceRoot;
                 const content = msg.content;
                 const key = msg.governanceFile ?? 'constitution';
+                const mode = msg.mode; // replace or append
                 if (!allRoots.includes(wsRoot)) {
-                    this._projectPanel?.webview.postMessage({
+                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
+                    targetWebview?.postMessage({
                         type: 'fileSaved',
                         success: false,
                         error: 'Invalid workspace root',
@@ -3555,8 +3557,26 @@ export class PlanningPanelProvider {
                 }
                 const filePath = this._getGovernanceFilePath(wsRoot, key);
                 try {
-                    fs.writeFileSync(filePath, content, 'utf8');
-                    this._projectPanel?.webview.postMessage({
+                    let finalContent = content;
+                    if (fs.existsSync(filePath)) {
+                        if (mode === 'append') {
+                            const original = fs.readFileSync(filePath, 'utf8');
+                            const dateStr = new Date().toISOString().slice(0, 10);
+                            finalContent = original + `\n\n## Imported from docs (${dateStr})\n\n` + content;
+                        } else if (mode === 'replace') {
+                            // Backup chaining
+                            let backupPath = filePath + '.bak';
+                            let counter = 1;
+                            while (fs.existsSync(backupPath)) {
+                                backupPath = filePath + `.bak.${counter}`;
+                                counter++;
+                            }
+                            fs.writeFileSync(backupPath, fs.readFileSync(filePath, 'utf8'), 'utf8');
+                        }
+                    }
+                    fs.writeFileSync(filePath, finalContent, 'utf8');
+                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
+                    targetWebview?.postMessage({
                         type: 'fileSaved',
                         success: true,
                         tab: 'constitution',
@@ -3564,7 +3584,8 @@ export class PlanningPanelProvider {
                     });
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({
+                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
+                    targetWebview?.postMessage({
                         type: 'fileSaved',
                         success: false,
                         error: String(err),
@@ -3631,17 +3652,36 @@ export class PlanningPanelProvider {
             case 'saveProjectPrd': {
                 // Write a project's PRD file (creating .switchboard/projects/<slug>/).
                 const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const mode = msg.mode; // replace or append
                 if (wsRoot && typeof msg.projectName === 'string' && typeof msg.content === 'string') {
                     const filePath = getProjectPrdPath(wsRoot, msg.projectName);
                     let ok = false;
                     try {
+                        let finalContent = msg.content;
+                        if (fs.existsSync(filePath)) {
+                            if (mode === 'append') {
+                                const original = fs.readFileSync(filePath, 'utf8');
+                                const dateStr = new Date().toISOString().slice(0, 10);
+                                finalContent = original + `\n\n## Imported from docs (${dateStr})\n\n` + msg.content;
+                            } else if (mode === 'replace') {
+                                // Backup chaining
+                                let backupPath = filePath + '.bak';
+                                let counter = 1;
+                                while (fs.existsSync(backupPath)) {
+                                    backupPath = filePath + `.bak.${counter}`;
+                                    counter++;
+                                }
+                                fs.writeFileSync(backupPath, fs.readFileSync(filePath, 'utf8'), 'utf8');
+                            }
+                        }
                         await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-                        await fs.promises.writeFile(filePath, msg.content, 'utf8');
+                        await fs.promises.writeFile(filePath, finalContent, 'utf8');
                         ok = true;
                     } catch (err) {
                         console.error('[PlanningPanelProvider] Failed to save project PRD:', err);
                     }
-                    this._projectPanel?.webview.postMessage({
+                    const targetWebview = this._projectPanel?.webview || this._panel?.webview;
+                    targetWebview?.postMessage({
                         type: 'projectPrdSaved',
                         projectName: msg.projectName,
                         ok,
@@ -5243,6 +5283,7 @@ Please format the updated output document strictly as follows:
                                     let clickStatus = '';
                                     let parentId = '';
                                     let fileScopeId = '';
+                                    let dateCreated: string | undefined;
                                     let syncStatus: 'synced' | 'modified' | 'local-only' = 'local-only';
                                     if (fs.existsSync(dbT.filePath)) {
                                         try {
@@ -5260,6 +5301,15 @@ Please format the updated output document strictly as follows:
                                                 if (pm) { parentId = pm[1].trim(); }
                                                 const idm = fm[1].match(provider === 'clickup' ? /^listId:\s*(.+)$/m : /^projectId:\s*(.+)$/m);
                                                 if (idm) { fileScopeId = idm[1].trim(); }
+                                                // Ticket creation date (source system), written at import time.
+                                                // Drives the sidebar's newest-first sort.
+                                                const cm = fm[1].match(/^created:\s*(.+)$/m);
+                                                if (cm) { dateCreated = cm[1].trim(); }
+                                            }
+                                            // Fallback to file mtime for older files lacking a `created:` field,
+                                            // so they still sort in a reasonable order rather than to the end.
+                                            if (!dateCreated) {
+                                                try { dateCreated = fs.statSync(dbT.filePath).mtime.toISOString(); } catch {}
                                             }
                                             // Sync status is purely a timestamp comparison against the
                                             // DB's last-fetch time: if the local file was edited after we
@@ -5284,7 +5334,8 @@ Please format the updated output document strictly as follows:
                                         filePath: dbT.filePath,
                                         lastSyncedAt: dbT.lastSyncedAt,
                                         syncStatus,
-                                        url: dbT.url || ''
+                                        url: dbT.url || '',
+                                        dateCreated
                                     });
                                 }
                             }
@@ -8406,14 +8457,23 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 const id = match[1];
                 let title = match[2].replace(/-/g, ' ');
                 let kanbanColumn = '';
+                let dateCreated: string | undefined;
                 try {
                     const content = nfs.readFileSync(fullPath, 'utf8');
                     const fm = content.match(/^---\n([\s\S]*?)\n---/);
-                    if (fm) { const km = fm[1].match(/kanbanColumn:\s*(.+)/); if (km) { kanbanColumn = km[1].trim(); } }
+                    if (fm) {
+                        const km = fm[1].match(/kanbanColumn:\s*(.+)/); if (km) { kanbanColumn = km[1].trim(); }
+                        const cm = fm[1].match(/^created:\s*(.+)$/m); if (cm) { dateCreated = cm[1].trim(); }
+                    }
                     const h1 = content.match(/^#\s+(.+)$/m);
                     if (h1) { title = h1[1].trim(); }
                 } catch { }
-                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '' });
+                // Fallback to file mtime when no `created:` frontmatter, so the sidebar's
+                // newest-first sort still has a usable key.
+                if (!dateCreated) {
+                    try { dateCreated = nfs.statSync(fullPath).mtime.toISOString(); } catch {}
+                }
+                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '', dateCreated });
             }
         }
     }

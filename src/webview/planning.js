@@ -257,6 +257,14 @@
     // ClickUp state
     let clickUpProjectIssues = [];
     let selectedClickUpIssue = null;
+    // Tickets sidebar: status-accordion + subtask drill-down state. Module-level so
+    // they survive the string-compare re-renders (and tab switches) within a session.
+    let _collapsedTicketStatuses = new Set();   // status names whose accordion is collapsed
+    let _sidebarDrillDownParentId = null;       // null = normal list; parent id = showing its subtasks
+    let _drillDownSubtasks = null;              // cached subtask array for drill-down (survives subtask-detail loads)
+    let _drillDownParentTitle = '';            // parent title for the drill-down header
+    let _drillDownProvider = null;             // 'clickup' | 'linear' — isolates drill-down to the active provider
+    let _pendingDrillDownParentId = null;      // parent id awaiting subtask data before drill-down can activate
     // Tracks parents whose subtasks were already embedded this session (progressive
     // subtask import), so opening a ticket repeatedly doesn't re-import each time.
     let _subtasksEnrichedFor = new Set();
@@ -1203,6 +1211,10 @@
 
 
     wireSidebarSearch('tickets-search', (value) => {
+        // Search targets the top-level list — exit drill-down first, otherwise the
+        // typed term is invisibly ignored while drilled in, then unexpectedly applied
+        // (hiding tickets) the moment the user clicks "Back to all tickets".
+        _resetSidebarDrillDown();
         if (lastIntegrationProvider === 'linear') {
             linearProjectSearchValue = value;
             renderTicketsLinearList();
@@ -4327,6 +4339,30 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'switchboardThemeChanged':
                 handleThemeChanged(msg.theme);
                 break;
+            case 'projectPrdSaved':
+                if (msg.ok) {
+                    const activeWorkspace = state.docsWorkspaceRootFilter || (window._workspaceItems && window._workspaceItems[0]?.workspaceRoot) || '';
+                    checkProjectContextEnabled(activeWorkspace, (enabled) => {
+                        let statusText = `Imported as PRD for ${msg.projectName}`;
+                        if (!enabled) {
+                            statusText += ' — enable Project Context in the Projects tab to activate it for agent dispatch.';
+                        }
+                        showStatus(statusText);
+                    });
+                } else {
+                    showStatus('Failed to save PRD.', true);
+                }
+                break;
+            case 'fileSaved':
+                // Check if this was a constitution save (msg.tab === 'constitution')
+                if (msg.tab === 'constitution') {
+                    if (msg.success) {
+                        showStatus('Imported as Constitution.');
+                    } else {
+                        showStatus(`Failed to save Constitution: ${msg.error || 'unknown error'}`, true);
+                    }
+                }
+                break;
             case 'filteredDocsReady':
                 handleFilteredDocsReady(msg);
                 break;
@@ -4479,7 +4515,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
                         status: t.status || '', assignees: [], filePath: t.filePath,
-                        syncStatus: t.syncStatus, url: t.url
+                        syncStatus: t.syncStatus, url: t.url,
+                        dateCreated: t.dateCreated
                     }));
                     clickUpProjectStatus = 'loaded';
                     clickUpProjectMessage = '';
@@ -4488,7 +4525,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     linearProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
                         state: { name: t.status || '' }, assignee: null, description: '', filePath: t.filePath,
-                        syncStatus: t.syncStatus, url: t.url
+                        syncStatus: t.syncStatus, url: t.url,
+                        dateCreated: t.dateCreated
                     }));
                     linearProjectStatus = 'loaded';
                     linearProjectMessage = '';
@@ -5072,6 +5110,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     detailsFetched: true
                 };
                 linearIssueDetailCache.set(msg.issue.id, selectedLinearIssue);
+                // Subtask data has now arrived — activate drill-down if the user clicked
+                // this parent and it has subtasks.
+                _maybeEnterDrillDown('linear', msg.issue.id);
                 if (!ticketsEditMode) renderTicketsTab();
                 break;
             }
@@ -5214,6 +5255,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     detailsFetched: true
                 };
                 clickUpTaskDetailCache.set(msg.task.id, selectedClickUpIssue);
+                // Subtask data has now arrived — activate drill-down if the user clicked
+                // this parent and it has subtasks.
+                _maybeEnterDrillDown('clickup', msg.task.id);
                 if (!ticketsEditMode) renderTicketsTab();
                 break;
             }
@@ -6728,6 +6772,218 @@ Return ONLY the drafted prompt with no additional commentary.`;
         setupTextareaTabInterceptor(markdownEditorDesign);
     }
 
+    // Wire up Set as Requirements (PRD) and Set as Constitution buttons
+    const btnSetPrd = document.getElementById('btn-set-prd');
+    const btnSetConstitution = document.getElementById('btn-set-constitution');
+
+    function checkProjectContextEnabled(workspaceRoot, callback) {
+        // We listen to the projectContextEnabled echo message
+        const listener = (event) => {
+            const msg = event.data;
+            if (msg.type === 'projectContextEnabled' && msg.workspaceRoot === workspaceRoot) {
+                window.removeEventListener('message', listener);
+                callback(!!msg.enabled);
+            }
+        };
+        window.addEventListener('message', listener);
+        vscode.postMessage({ type: 'getProjectContextEnabled', workspaceRoot });
+    }
+
+    if (btnSetPrd) {
+        btnSetPrd.addEventListener('click', () => {
+            if (!state.activeDocContent) {
+                showStatus('Wait for document preview to load.', true);
+                return;
+            }
+            const activeWorkspace = state.docsWorkspaceRootFilter || (window._workspaceItems && window._workspaceItems[0]?.workspaceRoot) || '';
+            if (!activeWorkspace) {
+                showStatus('Select a workspace root first.', true);
+                return;
+            }
+
+            // Get projects for active workspace
+            const projects = _kanbanAllWorkspaceProjects[activeWorkspace] || [];
+            if (projects.length === 0) {
+                showStatus('No projects found in this workspace. Create one in the Projects tab first.', true);
+                return;
+            }
+
+            // Simple project picker modal
+            const existingPicker = document.getElementById('prd-project-picker-modal');
+            if (existingPicker) existingPicker.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'prd-project-picker-modal';
+            modal.className = 'folder-modal';
+            modal.style.display = 'flex';
+            
+            // Pre-select active project if possible
+            const selectedProj = kanbanFilters.project || projects[0] || '';
+            const optionsHtml = projects.map(p => `<option value="${p}" ${p === selectedProj ? 'selected' : ''}>${p}</option>`).join('');
+
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Select Project for PRD</h3>
+                        <button class="modal-close-btn" onclick="document.getElementById('prd-project-picker-modal').remove()">&times;</button>
+                    </div>
+                    <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                        <select id="prd-modal-project-select" class="workspace-filter-select" style="width:100%;">
+                            ${optionsHtml}
+                        </select>
+                        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                            <button class="strip-btn" onclick="document.getElementById('prd-project-picker-modal').remove()">Cancel</button>
+                            <button id="btn-prd-picker-confirm" class="planning-button" style="margin: 0; padding: 4px 12px;">Confirm</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            modal.querySelector('#btn-prd-picker-confirm').addEventListener('click', () => {
+                const projectName = modal.querySelector('#prd-modal-project-select').value;
+                modal.remove();
+                
+                // Check if project PRD already exists to handle collision
+                vscode.postMessage({ type: 'getProjectPrd', workspaceRoot: activeWorkspace, projectName });
+                
+                const prdListener = (event) => {
+                    const msg = event.data;
+                    if (msg.type === 'projectPrdContent' && msg.projectName === projectName) {
+                        window.removeEventListener('message', prdListener);
+                        if (msg.exists && msg.rawContent && msg.rawContent.trim()) {
+                            // Collision! Show 3-way modal
+                            const collModal = document.getElementById('prd-collision-modal');
+                            const collText = document.getElementById('prd-collision-text');
+                            if (collModal && collText) {
+                                collText.textContent = `A PRD already exists for project "${projectName}". Choose an action:`;
+                                collModal.style.display = 'flex';
+                                
+                                const setupCollisionBtn = (btnId, mode) => {
+                                    const btn = document.getElementById(btnId);
+                                    btn.replaceWith(btn.cloneNode(true)); // remove old listeners
+                                    document.getElementById(btnId).addEventListener('click', () => {
+                                        collModal.style.display = 'none';
+                                        if (mode === 'keep') {
+                                            showStatus('PRD import canceled; existing kept.');
+                                            return;
+                                        }
+                                        vscode.postMessage({
+                                            type: 'saveProjectPrd',
+                                            workspaceRoot: activeWorkspace,
+                                            projectName,
+                                            content: state.activeDocContent,
+                                            mode: mode // replace or append
+                                        });
+                                    });
+                                };
+                                setupCollisionBtn('btn-prd-collision-keep', 'keep');
+                                setupCollisionBtn('btn-prd-collision-append', 'append');
+                                setupCollisionBtn('btn-prd-collision-replace', 'replace');
+                                
+                                const closeBtn = document.getElementById('btn-close-prd-collision-modal');
+                                closeBtn.replaceWith(closeBtn.cloneNode(true));
+                                document.getElementById('btn-close-prd-collision-modal').addEventListener('click', () => {
+                                    collModal.style.display = 'none';
+                                });
+                            }
+                        } else {
+                            // No collision, save directly
+                            vscode.postMessage({
+                                type: 'saveProjectPrd',
+                                workspaceRoot: activeWorkspace,
+                                projectName,
+                                content: state.activeDocContent
+                            });
+                        }
+                    }
+                };
+                window.addEventListener('message', prdListener);
+            });
+
+            document.body.appendChild(modal);
+        });
+    }
+
+    if (btnSetConstitution) {
+        btnSetConstitution.addEventListener('click', () => {
+            if (!state.activeDocContent) {
+                showStatus('Wait for document preview to load.', true);
+                return;
+            }
+            const activeWorkspace = state.docsWorkspaceRootFilter || (window._workspaceItems && window._workspaceItems[0]?.workspaceRoot) || '';
+            if (!activeWorkspace) {
+                showStatus('Select a workspace root first.', true);
+                return;
+            }
+
+            // Check if constitution already exists (using loadConstitutionFiles or readConstitutionFile concept)
+            vscode.postMessage({ type: 'loadConstitutionFiles', workspaceRoot: activeWorkspace });
+            
+            const constListener = (event) => {
+                const msg = event.data;
+                if (msg.type === 'constitutionFilesReady' || msg.type === 'constitutionFileRead') {
+                    window.removeEventListener('message', constListener);
+                    // Check if content exists
+                    const exists = msg.exists || (msg.files && msg.files.some(f => f.key === 'constitution' && f.exists));
+                    if (exists) {
+                        const collModal = document.getElementById('constitution-collision-modal');
+                        const collText = document.getElementById('constitution-collision-text');
+                        if (collModal && collText) {
+                            collText.textContent = `A constitution already exists for this workspace. Choose an action:`;
+                            collModal.style.display = 'flex';
+                            
+                            const setupCollisionBtn = (btnId, mode) => {
+                                const btn = document.getElementById(btnId);
+                                btn.replaceWith(btn.cloneNode(true));
+                                document.getElementById(btnId).addEventListener('click', () => {
+                                    collModal.style.display = 'none';
+                                    if (mode === 'keep') {
+                                        showStatus('Constitution import canceled; existing kept.');
+                                        return;
+                                    }
+                                    vscode.postMessage({
+                                        type: 'saveConstitutionFile',
+                                        workspaceRoot: activeWorkspace,
+                                        content: state.activeDocContent,
+                                        mode: mode
+                                    });
+                                });
+                            };
+                            setupCollisionBtn('btn-constitution-collision-keep', 'keep');
+                            setupCollisionBtn('btn-constitution-collision-append', 'append');
+                            setupCollisionBtn('btn-constitution-collision-replace', 'replace');
+                            
+                            const closeBtn = document.getElementById('btn-close-constitution-collision-modal');
+                            closeBtn.replaceWith(closeBtn.cloneNode(true));
+                            document.getElementById('btn-close-constitution-collision-modal').addEventListener('click', () => {
+                                collModal.style.display = 'none';
+                            });
+                        }
+                    } else {
+                        vscode.postMessage({
+                            type: 'saveConstitutionFile',
+                            workspaceRoot: activeWorkspace,
+                            content: state.activeDocContent
+                        });
+                    }
+                }
+            };
+            window.addEventListener('message', constListener);
+        });
+    }
+
+    function showStatus(text, isError = false) {
+        const statusSpan = document.getElementById('status');
+        if (statusSpan) {
+            statusSpan.style.display = 'inline';
+            statusSpan.style.color = isError ? 'var(--vscode-errorForeground, #ff6b6b)' : 'var(--accent-teal)';
+            statusSpan.textContent = text;
+            setTimeout(() => {
+                statusSpan.style.display = 'none';
+            }, 6000);
+        }
+    }
+
     // Planning-context setting has moved to the Project panel's Epics tab.
     // (The former "Set as Active Planning Context" button has been removed from this panel.)
 
@@ -7723,6 +7979,7 @@ Instructions:
 
         // State filter (Linear)
         stateFilter?.addEventListener('change', (e) => {
+            _resetSidebarDrillDown(); // filter targets the top-level list, not the subtask view
             linearProjectStateFilterValue = e.target.value;
             renderTicketsLinearList();
             saveTicketsState();
@@ -7823,6 +8080,41 @@ Instructions:
 
         // Issue card clicks (delegated)
         document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
+            // Accordion status-group header toggle — checked first, so clicking a header
+            // never selects a ticket. Re-renders only the list (cheap); selection intact.
+            const statusHeader = e.target.closest('.ticket-status-group-header');
+            if (statusHeader) {
+                e.stopPropagation();
+                // decodeURIComponent so the key matches the raw status name stored in
+                // _collapsedTicketStatuses (encodeURIComponent round-trips losslessly,
+                // unlike escapeAttr which leaves `&`-entity names to be HTML-decoded).
+                const statusName = decodeURIComponent(statusHeader.dataset.statusName || '');
+                if (_collapsedTicketStatuses.has(statusName)) _collapsedTicketStatuses.delete(statusName);
+                else _collapsedTicketStatuses.add(statusName);
+                if (lastIntegrationProvider === 'linear') renderTicketsLinearList();
+                else renderTicketsClickUpList();
+                return;
+            }
+            // Drill-down "back to all tickets" header — exit drill-down and restore the
+            // parent as the selected ticket so the detail pane + meta-bar agree with the
+            // now-top-level sidebar (otherwise they keep showing the buried subtask).
+            // Full *Panel render (not the bare *List) so the detail/meta-bar re-render too.
+            const backHeader = e.target.closest('.sidebar-drilldown-header');
+            if (backHeader) {
+                e.stopPropagation();
+                const parentId = _sidebarDrillDownParentId;
+                _resetSidebarDrillDown();
+                if (lastIntegrationProvider === 'linear') {
+                    const cached = parentId && linearIssueDetailCache.get(parentId);
+                    if (cached && cached.detailsFetched) selectedLinearIssue = cached;
+                    renderTicketsLinearPanel();
+                } else {
+                    const cached = parentId && clickUpTaskDetailCache.get(parentId);
+                    if (cached && cached.detailsFetched) selectedClickUpIssue = cached;
+                    renderTicketsClickUpPanel();
+                }
+                return;
+            }
             const importPlanBtn = e.target.closest('[data-import-plan-id]');
             const linkTicketBtn = e.target.closest('[data-link-ticket-id]');
             if (importPlanBtn) {
@@ -7844,11 +8136,13 @@ Instructions:
                 let title = '';
                 let description = '';
                 if (provider === 'linear') {
-                    const issue = linearProjectIssues.find(i => i.id === id);
+                    const issue = linearProjectIssues.find(i => i.id === id)
+                        || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === id));
                     title = issue?.title || issue?.identifier || '';
                     description = issue?.description || '';
                 } else {
-                    const task = clickUpProjectIssues.find(t => t.id === id);
+                    const task = clickUpProjectIssues.find(t => t.id === id)
+                        || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === id));
                     title = task?.title || task?.identifier || '';
                     description = task?.markdownDescription || task?.description || '';
                 }
@@ -7876,6 +8170,14 @@ Instructions:
             if (card) {
                 const linearId = card.dataset.linearIssueId;
                 const clickUpId = card.dataset.clickupTaskId;
+                // Drill-down intent: only when clicking from the NORMAL list (not when
+                // clicking a subtask card already inside drill-down). Enters synchronously
+                // if subtasks are already cached; otherwise the detail-loaded handler
+                // activates it once the subtask data arrives.
+                if (!_sidebarDrillDownParentId) {
+                    _pendingDrillDownParentId = clickUpId || linearId || null;
+                    _maybeEnterDrillDown(linearId ? 'linear' : 'clickup', linearId || clickUpId);
+                }
                 if (linearId) {
                     const cachedLinear = linearIssueDetailCache.get(linearId);
                     // Only skip the API fetch when full details were actually fetched.
@@ -8069,6 +8371,31 @@ Instructions:
             const confirmBtn = document.getElementById('btn-confirm-convert-subtask');
             if (confirmBtn) confirmBtn.disabled = true;
             _populateParentPicker(ticketId);
+        });
+
+        // Navigate from a subtask back to its parent ticket. Uses the same cache-or-fetch
+        // pattern as a sidebar card click. Drill-down (if active) is left untouched so the
+        // sidebar keeps showing the sibling list while the parent loads in the detail pane.
+        document.getElementById('btn-to-parent-task')?.addEventListener('click', () => {
+            const parentId = _getSelectedParentId();
+            if (!parentId) return;
+            if (lastIntegrationProvider === 'linear') {
+                const cached = linearIssueDetailCache.get(parentId);
+                if (cached && cached.detailsFetched) {
+                    selectedLinearIssue = cached;
+                    renderTicketsLinearPanel();
+                } else {
+                    loadLinearTaskDetails(parentId);
+                }
+            } else {
+                const cached = clickUpTaskDetailCache.get(parentId);
+                if (cached && cached.detailsFetched) {
+                    selectedClickUpIssue = cached;
+                    renderTicketsClickUpPanel();
+                } else {
+                    loadClickUpTaskDetails(parentId);
+                }
+            }
         });
 
         // Convert subtask modal close/cancel
@@ -8450,7 +8777,7 @@ Instructions:
         const search = String(linearProjectSearchValue || '').trim().toLowerCase();
         const stateFilter = String(linearProjectStateFilterValue || '').trim();
         const projectFilter = String(linearProjectPickerValue || '').trim();
-        return linearProjectIssues.filter((issue) => {
+        const filtered = linearProjectIssues.filter((issue) => {
             if (issue?.parentId) return false;
             if (stateFilter && String(issue?.state?.name || '') !== stateFilter) return false;
             if (projectFilter && String(issue?.project?.name || '') !== projectFilter) return false;
@@ -8463,6 +8790,14 @@ Instructions:
                 issue.assignee?.email
             ].join('\n').toLowerCase();
             return haystack.includes(search);
+        });
+        // Newest-first by creation date, with a stable title tiebreak so the order
+        // doesn't flicker across re-renders. Missing dates sort last (treated as 0).
+        return filtered.sort((a, b) => {
+            const aTime = a.dateCreated ? new Date(a.dateCreated).getTime() : 0;
+            const bTime = b.dateCreated ? new Date(b.dateCreated).getTime() : 0;
+            if (bTime !== aTime) return bTime - aTime;
+            return (a.title || '').localeCompare(b.title || '');
         });
     }
 
@@ -8478,6 +8813,189 @@ Instructions:
         if (/(block|hold|stuck|waiting|paused|cancel)/.test(s)) { return '#f85149'; }
         if (/(backlog|todo|to do|open|created|new|triage|planned|ready)/.test(s)) { return '#d29922'; }
         return '#8a8a8a';
+    }
+
+    // Logical ordering for status-group accordion headers (To Do → In Progress →
+    // Blocked → Review → Done). Unrecognised custom statuses fall to 50 so they sit
+    // between the known buckets and 'No Status' (99), then sort alphabetically.
+    function _ticketStatusOrder(statusName) {
+        const s = String(statusName || '').toLowerCase();
+        if (!s) return 99;
+        // Test most-specific / latest-stage buckets FIRST so phrases like
+        // "Ready for Review" / "Ready for QA" classify as Review (3), not To Do (0) —
+        // the broad `ready` token in the To Do bucket is checked last on purpose.
+        if (/(done|complete|closed|resolved|merged|shipped|deployed|archived|live)/.test(s)) return 4;
+        if (/(review|qa|testing|verify|approval)/.test(s)) return 3;
+        if (/(block|hold|stuck|waiting|paused)/.test(s)) return 2;
+        if (/(progress|doing|active|started|develop|dev|wip|implement|build)/.test(s)) return 1;
+        if (/(backlog|todo|to do|open|created|new|triage|planned|ready)/.test(s)) return 0;
+        return 50;
+    }
+
+    // Groups an already-sorted ticket array by status name, preserving each group's
+    // internal order (newest-first from getFiltered*), then orders the groups by the
+    // logical status order. Returns [[statusName, tickets], ...].
+    function _groupTicketsByStatus(tickets, statusGetter) {
+        const groups = new Map();
+        for (const t of tickets) {
+            const status = statusGetter(t) || 'No Status';
+            if (!groups.has(status)) groups.set(status, []);
+            groups.get(status).push(t);
+        }
+        return Array.from(groups.entries()).sort((a, b) => {
+            const orderDiff = _ticketStatusOrder(a[0]) - _ticketStatusOrder(b[0]);
+            if (orderDiff !== 0) return orderDiff;
+            return a[0].localeCompare(b[0]);
+        });
+    }
+
+    // Renders a single ClickUp sidebar card. Shared by the grouped normal list and
+    // the subtask drill-down list so the markup (and its buttons) stays identical.
+    function _renderClickUpTicketCard(task) {
+        const isSelected = selectedClickUpIssue && selectedClickUpIssue.task && selectedClickUpIssue.task.id === task.id;
+        const syncBadge = _ticketSyncBadge(task.syncStatus);
+        const statusName = task.status || '';
+        const statusColor = task.statusColor || _ticketStatusLightColor(statusName);
+        const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
+        const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
+        const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
+        return `
+        <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
+            ${statusLight}
+            <div class="tickets-issue-title">${escapeHtml(task.title || task.name || task.identifier || task.id)}</div>
+            <div class="tickets-issue-meta ticket-status-row">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
+            <div class="tickets-issue-meta">${task.assignees && task.assignees.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
+            <div class="card-actions">
+                <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
+                <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
+                <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Refine</button>
+                ${openBtn}
+            </div>
+        </div>
+        `;
+    }
+
+    // Renders a single Linear sidebar card. Shared by the grouped normal list and the
+    // subtask drill-down list.
+    function _renderLinearTicketCard(issue) {
+        const isSelected = selectedLinearIssue && selectedLinearIssue.issue && selectedLinearIssue.issue.id === issue.id;
+        const syncBadge = _ticketSyncBadge(issue.syncStatus);
+        const statusName = issue.state?.name || '';
+        const statusColor = issue.state?.color || _ticketStatusLightColor(statusName);
+        const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
+        const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
+        const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
+        return `
+        <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
+            ${statusLight}
+            <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
+            <div class="tickets-issue-meta ticket-status-row">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}</div>
+            <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
+            <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
+            <div class="card-actions">
+                <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
+                <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
+                <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Refine</button>
+                ${openBtn}
+            </div>
+        </div>
+        `;
+    }
+
+    // Renders one status-group accordion section (header + collapsible body).
+    function _renderTicketStatusGroup(statusName, cards, count) {
+        const isCollapsed = _collapsedTicketStatuses.has(statusName);
+        const statusColor = _ticketStatusLightColor(statusName);
+        const headerHtml = `
+            <div class="ticket-status-group-header" data-status-name="${encodeURIComponent(statusName)}" style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;user-select:none;border-bottom:1px solid var(--border-color);background:var(--panel-bg2,#1a1a2e);font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-secondary);">
+                <span class="accordion-arrow" style="${isCollapsed ? '' : 'transform:rotate(90deg);'}">▶</span>
+                <span class="ticket-status-light" style="background:${escapeAttr(statusColor)};position:relative;top:0;right:0;"></span>
+                <span>${escapeHtml(statusName)}</span>
+                <span style="margin-left:auto;opacity:0.6;font-weight:400;">${count}</span>
+            </div>`;
+        const bodyHtml = `<div class="ticket-status-group-body"${isCollapsed ? ' style="display:none;"' : ''}>${isCollapsed ? '' : cards}</div>`;
+        return `<div class="ticket-status-group">${headerHtml}${bodyHtml}</div>`;
+    }
+
+    // Header shown atop the sidebar when in subtask drill-down mode.
+    function _renderDrillDownHeader(parentTitle) {
+        return `
+            <div class="sidebar-drilldown-header" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border-color);background:var(--panel-bg2,#1a1a2e);font-size:11px;font-weight:600;color:var(--accent-teal,#00ffcc);user-select:none;">
+                <span style="font-size:14px;">←</span>
+                <span>Back to all tickets</span>
+            </div>
+            <div style="padding:6px 10px;font-size:10px;color:var(--text-secondary);border-bottom:1px solid var(--border-color);">
+                Subtasks of: ${escapeHtml(parentTitle || '')}
+            </div>
+        `;
+    }
+
+    // True when the sidebar should render the drill-down (subtask) list for `provider`.
+    function _isDrillDownActive(provider) {
+        return !!(_sidebarDrillDownParentId && _drillDownSubtasks && _drillDownProvider === provider);
+    }
+
+    // Activates drill-down once subtask data for `id` has actually loaded. Called both
+    // synchronously on a cache-hit card click and asynchronously from the detail-loaded
+    // handlers. Only acts on the parent the user clicked (_pendingDrillDownParentId);
+    // waits (leaves pending intact) until full details are fetched so a file stub with
+    // subtasks:[] never cancels a pending drill-down.
+    function _maybeEnterDrillDown(provider, id) {
+        if (!id || _pendingDrillDownParentId !== id) return;
+        const detail = provider === 'linear' ? linearIssueDetailCache.get(id) : clickUpTaskDetailCache.get(id);
+        if (!detail || !detail.detailsFetched) return; // not loaded yet — decide when details arrive
+        _pendingDrillDownParentId = null;
+        const subs = detail.subtasks;
+        if (subs && subs.length > 0) {
+            _sidebarDrillDownParentId = id;
+            _drillDownSubtasks = subs;
+            _drillDownProvider = provider;
+            _drillDownParentTitle = provider === 'linear'
+                ? ((detail.issue && (detail.issue.title || detail.issue.identifier)) || '')
+                : ((detail.task && (detail.task.title || detail.task.name)) || '');
+        }
+    }
+
+    // Clears all drill-down state (back to the normal grouped list).
+    function _resetSidebarDrillDown() {
+        _sidebarDrillDownParentId = null;
+        _drillDownSubtasks = null;
+        _drillDownParentTitle = '';
+        _drillDownProvider = null;
+        _pendingDrillDownParentId = null;
+    }
+
+    // Parent id of the currently-selected ticket, or null for a top-level ticket.
+    // The backend already normalises ClickUp's `parent` (flat string) and Linear's
+    // `parent.id` (nested object) into a flat `parentId` on the sidebar/detail objects;
+    // the raw fields are kept as fallbacks for resilience.
+    function _getSelectedParentId() {
+        if (lastIntegrationProvider === 'linear') {
+            const issue = selectedLinearIssue?.issue;
+            return issue?.parentId || issue?.parent?.id || null;
+        } else {
+            const task = selectedClickUpIssue?.task;
+            return task?.parentId || task?.parent || null;
+        }
+    }
+
+    // Meta-bar button swap: a subtask shows "To parent task" and hides the subtask-
+    // creation buttons (which would otherwise create a sub-subtask / re-parent the
+    // subtask — confusing). A top-level ticket shows the subtask buttons.
+    function _toggleSubtaskMetaButtons() {
+        const parentId = _getSelectedParentId();
+        const btnAddSubtask = document.getElementById('btn-add-subtask');
+        const btnConvertSubtask = document.getElementById('btn-convert-subtask');
+        const btnToParent = document.getElementById('btn-to-parent-task');
+        if (parentId) {
+            if (btnAddSubtask) btnAddSubtask.style.display = 'none';
+            if (btnConvertSubtask) btnConvertSubtask.style.display = 'none';
+            if (btnToParent) btnToParent.style.display = '';
+        } else {
+            if (btnAddSubtask) btnAddSubtask.style.display = '';
+            if (btnConvertSubtask) btnConvertSubtask.style.display = '';
+            if (btnToParent) btnToParent.style.display = 'none';
+        }
     }
 
     // Resolves the external URL for a ticket so the "Open" action works for every
@@ -8528,6 +9046,20 @@ Instructions:
             return;
         }
 
+        // Drill-down mode: show the selected parent's subtasks as full cards.
+        if (_isDrillDownActive('linear')) {
+            emptyState.style.display = 'none';
+            const subtasks = _drillDownSubtasks || [];
+            const drillHtml = _renderDrillDownHeader(_drillDownParentTitle) + (subtasks.length === 0
+                ? `<div class="empty-state">No subtasks found for this ticket.</div>`
+                : subtasks.map(_renderLinearTicketCard).join(''));
+            if (_lastTicketsIssuesContainerHtml !== drillHtml) {
+                issuesContainer.innerHTML = drillHtml;
+                _lastTicketsIssuesContainerHtml = drillHtml;
+            }
+            return;
+        }
+
         const filteredIssues = getFilteredLinearIssues();
         if (filteredIssues.length === 0) {
             const emptyText = linearProjectIssues.length === 0
@@ -8546,30 +9078,18 @@ Instructions:
 
         emptyState.style.display = 'none';
 
-        const newHtml = filteredIssues.map((issue) => {
-            const isSelected = selectedLinearIssue && selectedLinearIssue.issue.id === issue.id;
-            const syncBadge = _ticketSyncBadge(issue.syncStatus);
-            const statusName = issue.state?.name || '';
-            const statusColor = issue.state?.color || _ticketStatusLightColor(statusName);
-            const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
-            const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
-            const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
-            return `
-            <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
-                ${statusLight}
-                <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
-                <div class="tickets-issue-meta ticket-status-row">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}</div>
-                <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
-                <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
-                <div class="card-actions">
-                    <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
-                    <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
-                    <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Refine</button>
-                    ${openBtn}
-                </div>
-            </div>
-            `;
+        // Normal mode: group by status into collapsible accordion sections. Issues are
+        // already newest-first from getFilteredLinearIssues, so each group stays sorted.
+        const groups = _groupTicketsByStatus(filteredIssues, i => i.state?.name || '');
+        let newHtml = groups.map(([statusName, groupIssues]) => {
+            if (groupIssues.length === 0) return '';
+            const cards = groupIssues.map(_renderLinearTicketCard).join('');
+            return _renderTicketStatusGroup(statusName, cards, groupIssues.length);
         }).join('');
+        // Encode collapsed state into the cache string so collapse/expand always
+        // invalidates the DOM-guard (defends against future card-markup that might
+        // otherwise hash identically between collapsed and expanded).
+        newHtml += `<!-- collapsed:${Array.from(_collapsedTicketStatuses).sort().join(',')} -->`;
 
         if (_lastTicketsIssuesContainerHtml !== newHtml) {
             issuesContainer.innerHTML = newHtml;
@@ -8616,6 +9136,7 @@ Instructions:
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
+            _toggleSubtaskMetaButtons();
             const { btnViewAttachments, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0;
@@ -8981,6 +9502,7 @@ Instructions:
     // so selecting a closed status triggers a one-off import that INCLUDES closed
     // (the "don't import closed until I switch the dropdown to closed" behavior).
     function _onClickUpStatusFilterChanged(value) {
+        _resetSidebarDrillDown(); // filter targets the top-level list, not the subtask view
         clickUpProjectStatusFilterValue = value;
         if (_isClickUpClosedStatus(value) && clickUpSelectedListId) {
             vscode.postMessage({
@@ -9022,7 +9544,7 @@ Instructions:
     function getFilteredClickUpTasks() {
         const search = String(clickUpProjectSearchValue || '').trim().toLowerCase();
         const statusFilter = String(clickUpProjectStatusFilterValue || '').trim();
-        return clickUpProjectIssues.filter(task => {
+        const filtered = clickUpProjectIssues.filter(task => {
             if (task?.parentId) return false;
             if (statusFilter && task.status !== statusFilter) return false;
             if (!search) return true;
@@ -9034,6 +9556,14 @@ Instructions:
                 task.assignees?.map(a => a.username || a.email).join(' ')
             ].join('\n').toLowerCase();
             return haystack.includes(search);
+        });
+        // Newest-first by creation date, with a stable title tiebreak so the order
+        // doesn't flicker across re-renders. Missing dates sort last (treated as 0).
+        return filtered.sort((a, b) => {
+            const aTime = a.dateCreated ? new Date(a.dateCreated).getTime() : 0;
+            const bTime = b.dateCreated ? new Date(b.dateCreated).getTime() : 0;
+            if (bTime !== aTime) return bTime - aTime;
+            return (a.title || '').localeCompare(b.title || '');
         });
     }
 
@@ -9059,32 +9589,31 @@ Instructions:
 
         if (emptyState) emptyState.style.display = 'none';
 
-        const tasks = getFilteredClickUpTasks();
-        const html = tasks.length === 0
-            ? `<div class="empty-state">No tasks found.</div>`
-            : tasks.map(task => {
-                const isSelected = selectedClickUpIssue && selectedClickUpIssue.task.id === task.id;
-                const syncBadge = _ticketSyncBadge(task.syncStatus);
-                const statusName = task.status || '';
-                const statusColor = task.statusColor || _ticketStatusLightColor(statusName);
-                const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
-                const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
-                const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
-                return `
-                <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
-                    ${statusLight}
-                    <div class="tickets-issue-title">${escapeHtml(task.title || task.identifier)}</div>
-                    <div class="tickets-issue-meta ticket-status-row">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
-                    <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
-                    <div class="card-actions">
-                        <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
-                        <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
-                        <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Refine</button>
-                        ${openBtn}
-                    </div>
-                </div>
-                `;
-            }).join('');
+        let html;
+        if (_isDrillDownActive('clickup')) {
+            // Drill-down mode: show the selected parent's subtasks as full cards.
+            const subtasks = _drillDownSubtasks || [];
+            html = _renderDrillDownHeader(_drillDownParentTitle) + (subtasks.length === 0
+                ? `<div class="empty-state">No subtasks found for this ticket.</div>`
+                : subtasks.map(_renderClickUpTicketCard).join(''));
+        } else {
+            const tasks = getFilteredClickUpTasks();
+            if (tasks.length === 0) {
+                html = `<div class="empty-state">No tasks found.</div>`;
+            } else {
+                // Normal mode: group by status into collapsible accordion sections. Tasks
+                // are already newest-first from getFilteredClickUpTasks.
+                const groups = _groupTicketsByStatus(tasks, t => t.status || '');
+                html = groups.map(([statusName, groupTasks]) => {
+                    if (groupTasks.length === 0) return '';
+                    const cards = groupTasks.map(_renderClickUpTicketCard).join('');
+                    return _renderTicketStatusGroup(statusName, cards, groupTasks.length);
+                }).join('');
+                // Encode collapsed state into the cache string so collapse/expand always
+                // invalidates the DOM-guard.
+                html += `<!-- collapsed:${Array.from(_collapsedTicketStatuses).sort().join(',')} -->`;
+            }
+        }
 
         if (_lastTicketsClickUpIssuesContainerHtml !== html) {
             issuesContainer.innerHTML = html;
@@ -9092,7 +9621,8 @@ Instructions:
         }
 
         if (loadMoreButton) {
-            loadMoreButton.style.display = clickUpProjectHasMore ? '' : 'none';
+            // Pagination doesn't apply to the fixed subtask list in drill-down mode.
+            loadMoreButton.style.display = (!_isDrillDownActive('clickup') && clickUpProjectHasMore) ? '' : 'none';
         }
     }
 
@@ -9135,6 +9665,7 @@ Instructions:
 
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
+            _toggleSubtaskMetaButtons();
             const { btnViewAttachments, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0;
@@ -9456,6 +9987,8 @@ Instructions:
         _ticketsEditBackupHtml = null;
         linearIssueDetailCache.clear();
         clickUpTaskDetailCache.clear();
+        _resetSidebarDrillDown();
+        _collapsedTicketStatuses.clear();
         linearProjectIssues = [];
         selectedLinearIssue = null;
         linearProjectStatus = 'idle';

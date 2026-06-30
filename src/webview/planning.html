@@ -2819,6 +2819,19 @@
             border: 1px solid color-mix(in srgb, var(--panel-bg) 40%, transparent);
         }
 
+        .ticket-status-group-header:hover,
+        .sidebar-drilldown-header:hover {
+            background: var(--panel-bg, #2a2a3e) !important;
+        }
+        .accordion-arrow {
+            display: inline-block;
+            font-size: 10px;
+            transition: transform 0.2s ease;
+        }
+        .ticket-status-group-body {
+            transition: max-height 0.2s ease;
+        }
+
         .ticket-sync-badge {
             font-size: 9px;
             letter-spacing: 0.02em;
@@ -3424,6 +3437,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button id="btn-edit" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-set-prd" class="strip-btn" style="background: var(--accent-teal-dim); border-color: var(--accent-teal);" title="Set the open document as Project Requirements (PRD)">Set as Requirements (PRD)</button>
+                <button id="btn-set-constitution" class="strip-btn" style="background: var(--accent-teal-dim); border-color: var(--accent-teal);" title="Set the open document as Workspace Constitution">Set as Constitution</button>
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
                 <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status" style="margin-left: 0; display: none;"></span>
@@ -3672,6 +3687,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="btn-diagram-prompt" class="strip-btn" style="display:none;" title="Copy a diagram prompt for this ticket">Diagram</button>
                             <button id="btn-add-subtask" class="strip-btn" title="Create a subtask under this ticket">+ Subtask</button>
                             <button id="btn-convert-subtask" class="strip-btn" title="Convert this ticket to a subtask of another ticket">To subtask</button>
+                            <button id="btn-to-parent-task" class="strip-btn" title="Navigate to the parent task" style="display:none;">To parent task</button>
                         </div>
 
                         <div id="tickets-comment-manager" style="display:none; flex: 1; flex-direction: column; overflow: hidden; border-top: 1px solid var(--border-color); background: var(--panel-bg2); margin: 0;">
@@ -3966,6 +3982,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
                     <button id="btn-cancel-tickets-delete" class="strip-btn">Cancel</button>
                     <button id="btn-confirm-tickets-delete" class="planning-button" style="margin: 0; padding: 4px 12px;">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="prd-collision-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="prd-collision-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="prd-collision-modal-title">PRD Already Exists</h3>
+                <button class="modal-close-btn" id="btn-close-prd-collision-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <p id="prd-collision-text" style="font-size: 13px; margin: 0;"></p>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-prd-collision-keep" class="strip-btn">Keep Existing</button>
+                    <button id="btn-prd-collision-append" class="strip-btn" style="background: var(--accent-teal-dim); border-color: var(--accent-teal);">Append</button>
+                    <button id="btn-prd-collision-replace" class="planning-button" style="margin: 0; padding: 4px 12px;">Replace & Backup</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="constitution-collision-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="constitution-collision-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="constitution-collision-modal-title">Constitution Already Exists</h3>
+                <button class="modal-close-btn" id="btn-close-constitution-collision-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <p id="constitution-collision-text" style="font-size: 13px; margin: 0;"></p>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-constitution-collision-keep" class="strip-btn">Keep Existing</button>
+                    <button id="btn-constitution-collision-append" class="strip-btn" style="background: var(--accent-teal-dim); border-color: var(--accent-teal);">Append</button>
+                    <button id="btn-constitution-collision-replace" class="planning-button" style="margin: 0; padding: 4px 12px;">Replace & Backup</button>
                 </div>
             </div>
         </div>

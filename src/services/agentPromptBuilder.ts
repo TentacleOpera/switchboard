@@ -313,6 +313,10 @@ export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote 
  * Gated by `options.prdEnabled` (the project-context toggle + an active PRD).
  */
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
+    if (role === 'tester') {
+        // tester owns its own acceptance-baseline block (see buildAcceptanceBaselineBlock); suppress the shared-prefix PRD to avoid double-injection.
+        return '';
+    }
     if (!options?.prdEnabled) return '';
     const link = options.prdLink?.trim();
     const content = options.prdContent?.trim();
@@ -351,7 +355,8 @@ export const EPIC_ORCHESTRATION_DIRECTIVE = (epicTopic: string, count: number) =
     `Use your native subagent or orchestration capabilities to handle each subtask. ` +
     `If your tool supports worktree-per-plan isolation, activate it now. ` +
     `If you do not support subagents, handle each subtask sequentially in the order listed below. ` +
-    `All subtasks are part of a single delivery unit — do not treat them as independent tickets.`;
+    `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
+    `Before starting, briefly tell the user how you are using the workflow to handle these subtasks (e.g. parallel vs sequential and why, how they are grouped, and any review/verification pass you plan to run).`;
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
     `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
@@ -706,20 +711,22 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
 
     if (role === 'tester') {
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
-        const designDocContent = options?.designDocContent?.trim();
-        const designDocLink = options?.designDocLink?.trim();
         const safeguardsBlock = switchboardSafeguardsEnabled
             ? `${batchExecutionRules}`
             : '';
 
         const testerBase = `Mode:
-- You are the acceptance-tester-executor for this task.
+- You are the Product Acceptance / Intent Reviewer for this task.
 - Do not start any auxiliary workflow; execute this task directly.
-- Use the attached Design Doc / PRD as the authoritative requirements baseline.
-- For ${planTarget}, assess the actual code changes against the product requirements, fix material requirement gaps in code when needed, then verify.
+- The reviewer already checked code-vs-plan; you check code-vs-intent.
+- Treat the PRD as the primary intent baseline, the constitution as inviolate invariants, and the plan as the implementation record (not the yardstick).
+- For ${planTarget}, judge whether the change delivers the product intent and the spirit of the plan, as experienced by the end user — not whether it matches the plan line-by-line.
+- Flag both directions: requirements/intent not met, and code that satisfies the plan's letter but misses the product's intent.
+- Permit implementation deviations from the plan that still satisfy intent (do not "fix" these); before accepting a deviation as intent-satisfying, verify it still meets the plan's stated acceptance criteria. Fix only genuine intent/requirement gaps; then verify.
+- If the PRD and constitution conflict, the constitution's invariants take precedence; flag the conflict to the user in the review summary.
 
 For each plan:
-1. Use the plan file and Design Doc / PRD as the source of truth for acceptance criteria.
+1. Use the PRD, constitution, and plan file to assess intent conformance and acceptance criteria.
 2. Identify any missing, incomplete, or incorrect implementation of product requirements.
 3. Apply code fixes for valid requirement gaps.
 4. Run verification checks as applicable and include results.
@@ -731,8 +738,8 @@ For each plan:
         }
 
         const intro = plans.length <= 1
-            ? 'The implementation for this plan passed code review. Execute a direct acceptance test against the product requirements document in-place.'
-            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct acceptance test against the product requirements document in-place for each plan.`;
+            ? 'The implementation for this plan passed code review. Execute a direct product acceptance / intent review against the product requirements document in-place.'
+            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct product acceptance / intent review against the product requirements document in-place for each plan.`;
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
@@ -740,12 +747,28 @@ For each plan:
             .filter(Boolean)
             .join('\n\n');
 
-        let designDocBlock = '';
-        if (designDocContent) {
-            designDocBlock = `PLANNING EPIC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as the authoritative requirements baseline for acceptance testing:\n\n${designDocContent}`;
-        } else if (designDocLink) {
-            designDocBlock = `PLANNING EPIC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
+        // Precedence-ordered acceptance-baseline block builder
+        const blocks: string[] = [];
+        
+        if (options?.prdContent) {
+            blocks.push(`PRODUCT REQUIREMENTS (PRD) — primary acceptance baseline:\n\n${options.prdContent.trim()}`);
+        } else if (options?.prdLink) {
+            blocks.push(`PRODUCT REQUIREMENTS (PRD) — primary acceptance baseline:\n${options.prdLink.trim()}`);
         }
+
+        if (options?.constitutionContent) {
+            blocks.push(`PROJECT CONSTITUTION — inviolate invariants:\n\n${options.constitutionContent.trim()}`);
+        } else if (options?.constitutionLink) {
+            blocks.push(`PROJECT CONSTITUTION — inviolate invariants:\n${options.constitutionLink.trim()}`);
+        }
+
+        if (options?.designDocContent) {
+            blocks.push(`LEGACY DESIGN DOC (fallback baseline):\n\n${options.designDocContent.trim()}`);
+        } else if (options?.designDocLink) {
+            blocks.push(`LEGACY DESIGN DOC (fallback baseline):\n${options.designDocLink.trim()}`);
+        }
+
+        const acceptanceBaselineBlock = blocks.join('\n\n');
 
         const promptParts = [
             intro,
@@ -754,7 +777,7 @@ For each plan:
             baseInstructions,
             suffixBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            designDocBlock
+            acceptanceBaselineBlock
         ].filter(Boolean).join('\n\n');
 
         return normalizeNewlines(promptParts);

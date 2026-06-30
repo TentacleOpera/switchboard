@@ -18,6 +18,6 @@ Two reinforcing workstreams:
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Rework the Acceptance Tester into an Intent-Conformance Reviewer](../plans/feature_plan_20260628212519_acceptance-tester-intent-conformance-rework.md) — **PLAN REVIEWED**
-- [ ] [Bridge planning.html Docs → Project Context (Set as Requirements / Constitution)](../plans/feature_plan_20260628213500_docs-to-project-context-bridge.md) — **PLAN REVIEWED**
+- [ ] [Rework the Acceptance Tester into an Intent-Conformance Reviewer](../plans/feature_plan_20260628212519_acceptance-tester-intent-conformance-rework.md) — **CODER CODED**
+- [ ] [Bridge planning.html Docs → Project Context (Set as Requirements / Constitution)](../plans/feature_plan_20260628213500_docs-to-project-context-bridge.md) — **CODER CODED**
 <!-- END SUBTASKS -->

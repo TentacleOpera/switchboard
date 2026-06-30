@@ -3249,10 +3249,15 @@ export class KanbanProvider implements vscode.Disposable {
             // doc remains a back-compat fallback. Throw ONLY when neither exists.
             const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
             if (!designDocLink && !resolvedOptions.prdEnabled) {
-                throw new Error('Acceptance Tester requires a product requirements document (PRD) for the active project (enable "Project Context" and author a PRD in the Projects tab), or a Planning Epic enabled and attached in Setup.');
+                throw new Error('Acceptance review requires a product requirements baseline: author a PRD for the active project (Projects tab) or attach a legacy Planning Epic in Setup. The workspace constitution, if present, will be enforced as supplementary invariants.');
             }
             resolvedOptions.designDocLink = designDocLink;
             resolvedOptions.designDocContent = designDocContent;
+
+            // Resolve the workspace constitution for the tester regardless of planner.constitutionEnabled (always-included supplementary invariants when the file exists)
+            const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, true);
+            resolvedOptions.constitutionLink = constitutionLink;
+            resolvedOptions.constitutionContent = constitutionContent;
         } else if (role === 'researcher') {
             resolvedOptions.researchDepth = promptsConfig.researchDepth;
             resolvedOptions.saveToLocalDocs = promptsConfig.saveToLocalDocs;
@@ -5519,7 +5524,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     this._autobanState = { ...this._autobanState, enabled };
                 }
                 this._markConfigDirty();
-                await vscode.commands.executeCommand('switchboard.setAutobanEnabledFromKanban', enabled);
+                try {
+                    await vscode.commands.executeCommand('switchboard.setAutobanEnabledFromKanban', enabled);
+                } catch (e) {
+                    console.error('[KanbanProvider] toggleAutoban failed:', e);
+                    if (this._autobanState) {
+                        this._autobanState = { ...this._autobanState, enabled: !enabled };
+                    }
+                }
+                this._panel?.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
                 break;
             }
             case 'resetAutobanTimers': {
@@ -5595,21 +5608,35 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'startRemoteControl': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    await rc.start();
-                    this._remoteControlActive = rc.isActive;
-                    this._panel?.webview.postMessage({ type: 'remoteControlState', active: rc.isActive });
+                    try {
+                        const rc = this._getRemoteControl(workspaceRoot);
+                        await rc.start();
+                        this._remoteControlActive = rc.isActive;
+                    } catch (e) {
+                        console.error('[KanbanProvider] startRemoteControl failed:', e);
+                        this._remoteControlActive = false;
+                    }
+                } else {
+                    this._remoteControlActive = false;
                 }
+                this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
                 break;
             }
             case 'stopRemoteControl': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    rc.stop();
-                    this._remoteControlActive = rc.isActive;
-                    this._panel?.webview.postMessage({ type: 'remoteControlState', active: rc.isActive });
+                    try {
+                        const rc = this._getRemoteControl(workspaceRoot);
+                        rc.stop();
+                        this._remoteControlActive = rc.isActive;
+                    } catch (e) {
+                        console.error('[KanbanProvider] stopRemoteControl failed:', e);
+                        this._remoteControlActive = false;
+                    }
+                } else {
+                    this._remoteControlActive = false;
                 }
+                this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
                 break;
             }
             case 'triggerAction': {
