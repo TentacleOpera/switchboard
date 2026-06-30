@@ -238,3 +238,12 @@ No automated tests will be run as part of this plan (per session directive — t
 ## Recommendation
 
 Complexity 4 → **Send to Coder**.
+
+## Review Findings
+
+Reviewed the implemented changes across `src/services/TaskViewerProvider.ts` (`launchMcpMonitorTerminal` + `setVisibleAgent`), `src/extension.ts` (command registration), `src/services/KanbanProvider.ts` (message handler), and `src/webview/kanban.html` (status line + launch button). Implementation matches the plan; all referenced helpers (`_resolveWorkspaceRoot`, `_suffixedName`, `_normalizeAgentKey`, `_stripIdeSuffix`, `getAgentStartupCommand`, `_registeredTerminals`, `_postMcpMonitorConfig`, `GlobalIntegrationConfigService`) exist and are used correctly.
+
+**CRITICAL fix applied:** `src/webview/kanban.html:6678` read `msg.isMcpMonitorRunning` but `_postMcpMonitorConfig` (`TaskViewerProvider.ts:20355`) sends the field as `isMonitorRunning`. The mismatch meant `isMcpMonitorTerminalRunning` was always `false`, so the status line would never flip to 🟢 and the launch button would never disappear after a successful launch — breaking the plan's verification step 6. Renamed the read to `msg.isMonitorRunning`. This was a pre-existing bug in the status-push pipe that this feature depends on; fixing it is required for the feature to deliver its core UX loop.
+
+No compilation or tests run (per session directives). Remaining risks: (1) the `workbench.action.terminal.moveToTerminalPanel` command acts on the active terminal and is best-effort inside a try/catch — if the new terminal is not yet active the move is a no-op, but `terminal.show()` precedes it so this is low-risk; (2) if terminal creation throws, `_postMcpMonitorConfig` is never reached and the button stays disabled at "Launching…" until the next periodic kanban refresh re-renders the panel — acceptable for a rarely-failing operation; (3) the `setVisibleAgent('mcp_monitor', true)` global config mutation is intentional and documented in the plan's User Review Required section.
+

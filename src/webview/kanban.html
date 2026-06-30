@@ -6675,7 +6675,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'updateMcpMonitorConfig': {
                   mcpMonitorConfig = msg.config || mcpMonitorConfig;
-                  isMcpMonitorTerminalRunning = !!msg.isMcpMonitorRunning;
+                  isMcpMonitorTerminalRunning = !!msg.isMonitorRunning;
                   mcpMonitorPresets = msg.presets || mcpMonitorPresets;
                   if (!isAutobanPanelInteracting) {
                       renderAutobanPanel();

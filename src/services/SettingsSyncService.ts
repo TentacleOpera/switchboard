@@ -24,8 +24,16 @@ const DBSYNC_TOGGLE_KEY = 'settings.dbSyncEnabled';
 /**
  * Hardcoded list of in-scope (Workspace-targeted) setting keys that the bulk
  * push migrates from VS Code config into the DB on first opt-in. Derived from
- * the `package.json` configuration schema plus the two undeclared keys that the
- * codebase writes (`aggressivePairProgramming.enabled`, `planner.gitProhibitionEnabled`).
+ * the `package.json` configuration schema, restricted to genuinely
+ * Workspace-scoped settings.
+ *
+ * Intentionally EXCLUDED: the workflow toggles written by
+ * `KanbanProvider._savePromptsConfig` (`accurateCoding.enabled`,
+ * `reviewer.advancedMode`, `leadCoder.inlineChallenge`,
+ * `aggressivePairProgramming.enabled`, `planner.designDocEnabled`,
+ * `planner.designDocLink`, `planner.gitProhibitionEnabled`). Those ship as
+ * Global (user) settings (`config.update(..., true)`), and per Scope
+ * Clarification #2 Global settings are not DB-synced.
  *
  * Maintenance: when a new Workspace-scoped `switchboard.*` setting is added to
  * `package.json`, append its dotpath here.
@@ -33,13 +41,6 @@ const DBSYNC_TOGGLE_KEY = 'settings.dbSyncEnabled';
 const SYNCABLE_KEYS: readonly string[] = [
     'excludeReviewedBacklogFromDropdown',
     'protocol.target',
-    'accurateCoding.enabled',
-    'reviewer.advancedMode',
-    'leadCoder.inlineChallenge',
-    'aggressivePairProgramming.enabled',
-    'planner.designDocEnabled',
-    'planner.designDocLink',
-    'planner.gitProhibitionEnabled',
     'workspace.ignoreStrategy',
     'workspace.ignoreRules',
     'statusBar.showTerminalControls',

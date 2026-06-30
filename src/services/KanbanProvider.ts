@@ -3676,7 +3676,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     private async _savePromptsConfig(workspaceRoot: string, msg: any): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        const target = vscode.ConfigurationTarget.Workspace;
+        // These workflow toggles have always shipped as Global (user) settings —
+        // `config.update(key, value, true)` writes to Global, NOT Workspace (see the
+        // else-branch fallbacks below). Keep them Global to avoid silently migrating
+        // ~4,000 installs to Workspace scope. Global settings are intentionally NOT
+        // DB-synced (SettingsSyncService.isInScope returns false for non-Workspace
+        // targets; see plan Scope Clarification #2), so routing them through the
+        // service is a no-op mirror of the original write.
+        const target = vscode.ConfigurationTarget.Global;
         try {
             if (typeof msg.accurateCodingEnabled === 'boolean') {
                 if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('accurateCoding.enabled', msg.accurateCodingEnabled, target); }
