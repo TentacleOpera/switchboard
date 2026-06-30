@@ -5310,6 +5310,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const db = this._getKanbanDb(workspaceRoot);
                 const created = await db.addProject(workspaceId, projectName);
                 this._allWorkspaceProjectsCache = null; // Invalidate cache
+
+                // Make the just-created project the active filter. This is the create-project
+                // button path (no dropdown switch), so without this the active project would
+                // stay on the previous value and plans created right after would land in the
+                // wrong project. setProjectFilter writes the kanban.activeProjectFilter config
+                // key the watcher reads. The project now exists (newly created, or already
+                // existed on a duplicate), so making it active is correct either way.
+                this.setProjectFilter(projectName);
+
                 await this._refreshBoard(workspaceRoot);
 
                 // addProject returns false on duplicate (UNIQUE constraint) — report it

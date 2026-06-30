@@ -232,3 +232,50 @@ In `renderTicketsClickUpTaskDetail` and `renderTicketsLinearTaskDetail`, attachm
 - N/A (webview UI changes; manual verification via VS Code extension host). Per session directives, automated tests are skipped and will be run separately by the user.
 
 **Recommendation:** Send to Coder
+
+---
+
+## Reviewer Pass — Completed 2026-06-30
+
+### Implementation Status: COMPLETE
+
+All proposed changes implemented. Change #1 (redundant `webviewUri` on `attachmentDownloaded`) correctly DROPPED per plan recommendation. Change #2 (backend `viewAttachments` URI conversion), Change #3 (frontend inline image rendering + click handler), Changes #4/#5 (no-change decisions) all verified in code.
+
+### Files Changed
+- `src/services/PlanningPanelProvider.ts` — `viewAttachments` case (lines 5776-5817): added `targetPanel` pattern + `webviewUri` conversion for downloaded image attachments.
+- `src/webview/planning.js` — `renderAttachmentsList` (lines 8346-8360): added inline `<img>` rendering for downloaded images with `webviewUri`; click handler (lines 8413-8422) reuses existing `openAttachment` message.
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|---|---|---|
+| NIT-1 | NIT | Frontend re-derives image extension from `filename` via `.split('.').pop()` while backend gates on `path.extname(localPath)`. Divergent code paths; worst case is a missed render (not a broken image) in an implausible edge case where filename/localPath extensions differ. `if (att.webviewUri)` guard prevents broken-image rendering. | `src/webview/planning.js:8348` vs `PlanningPanelProvider.ts:5789` |
+| NIT-2 | NIT | `openAttachment` case posts `attachmentOpened` to `this._panel` not `targetPanel`. Pre-existing, out of scope, currently unreachable from project panel (viewAttachments only sent from planning.js). Asymmetry with `viewAttachments` which uses `targetPanel`. | `PlanningPanelProvider.ts:5827` |
+
+### Stage 2 — Balanced Synthesis
+
+No CRITICAL or MAJOR findings. Both NITs deferred:
+- NIT-1: Backend `webviewUri` presence is the real gatekeeper; frontend ext check is redundant defense-in-depth. Not worth the churn.
+- NIT-2: Pre-existing, out of scope, unreachable today. Tech-debt if tickets migrate to project panel.
+
+### Code Fixes Applied
+None. Implementation is correct as-is.
+
+### Verification Results
+Per session directives: compilation (`tsc`/webpack) and automated tests skipped — run separately by user.
+
+Static verification performed:
+- `path` import confirmed (`PlanningPanelProvider.ts:3`).
+- `vscode.Uri` / `webview.asWebviewUri` available (used elsewhere in file).
+- CSP allows `vscode-webview:` for `img-src` (`planning.html:6`). No CSP change needed.
+- `localResourceRoots` includes all workspace folders (`PlanningPanelProvider.ts:6942`). Attachments under `.switchboard/` covered.
+- `escapeAttr` / `escapeHtml` helpers exist (`planning.js:536`, `:330`). Applied to `src` and `data-local-path` attributes.
+- `attachmentDownloaded` → `viewAttachments` re-fetch chain intact (`planning.js:4741`). Inline image appears after re-fetch.
+- `_handleMessage(msg, isProject)` signature confirmed (`PlanningPanelProvider.ts:2007`). `targetPanel` pattern correct.
+- `viewAttachments` only sent from `planning.js` (both call sites: `:4742`, `:7639`). `isProject` always false in practice — `targetPanel` defensive but correct.
+- Change #1 dropped: `downloadAttachment` case (`PlanningPanelProvider.ts:5749-5775`) has no `webviewUri` field. No dead code.
+
+### Remaining Risks
+1. **NIT-1 (deferred):** If a provider ever returns a `filename` whose extension differs from the saved `localPath` extension, the inline image will silently not render (no broken image, just absent). Probability: very low (providers preserve filename on download).
+2. **NIT-2 (deferred):** If tickets tab is ever added to the project panel, `openAttachment` response will go to the wrong panel. Fix: upgrade `openAttachment` case to `targetPanel` pattern at that time.
+3. **Large image performance:** Very large images (e.g., 50MB PNGs) will be loaded inline via webview URI. `max-height: 300px` constrains display but the full image is still decoded. Acceptable for typical attachment sizes; could add a size guard if users report lag.

@@ -349,15 +349,16 @@
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
         }
         .kanban-sub-bar .strip-icon-btn.is-active {
-            background: transparent;
-            box-shadow: none;
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+            box-shadow: var(--glow-teal);
         }
         .kanban-sub-bar .strip-icon-btn.is-active:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
             box-shadow: var(--glow-teal);
         }
         .kanban-sub-bar .strip-icon-btn.is-active img {
-            filter: brightness(1.2);
+            filter: brightness(1.25);
         }
         .kanban-sub-bar .strip-icon-btn.is-off {
             opacity: 0.5;
@@ -565,18 +566,18 @@
         }
 
         .strip-icon-btn.is-active {
-            border-color: transparent;
-            background: transparent;
-            box-shadow: none;
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+            box-shadow: var(--glow-teal);
             opacity: 1;
         }
         .strip-icon-btn.is-active:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
             box-shadow: var(--glow-teal);
         }
 
         .strip-icon-btn.is-active img {
-            filter: brightness(1.2);
+            filter: brightness(1.25);
         }
 
         .strip-icon-btn.is-off {
