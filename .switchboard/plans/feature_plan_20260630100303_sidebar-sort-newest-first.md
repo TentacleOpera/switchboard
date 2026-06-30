@@ -211,3 +211,7 @@ No change needed here — the field already exists. The fix is purely in parsing
 7. Verify: both ClickUp and Linear providers show correct sort order.
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+**Reviewer pass:** Implementation is complete and correct. Files changed: `src/services/PlanningPanelProvider.ts` (parse `created:` frontmatter with file-mtime fallback in both `listLocalTicketFiles` and `_scanLocalTicketFiles`, pass `dateCreated` through on ticket objects), `src/webview/planning.js` (pass `dateCreated` through `localTicketFilesListed` handler for both ClickUp and Linear mappings, sort by `dateCreated` descending with stable title tiebreak in `getFilteredClickUpTasks` and `getFilteredLinearIssues`). Implementation matches plan exactly — no deviations. No CRITICAL or MAJOR findings. Verification: compilation and tests skipped per session instructions; code trace confirms missing dates sort to end (treated as 0), equal dates get stable title tiebreak, and sort runs before grouping (Plan 1 compatibility). Remaining risk: tickets with corrupt/invalid `created:` values (not ISO dates) would produce `NaN` from `new Date()` and sort unpredictably — but this is an edge case with no user impact since such files would also fail to render correctly elsewhere.

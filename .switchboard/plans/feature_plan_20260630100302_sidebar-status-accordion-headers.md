@@ -243,3 +243,7 @@ In the `<style>` section, after the existing `.ticket-status-light` styles (arou
 9. Verify: tickets with no status are grouped under "No Status".
 
 **Recommendation:** Send to Coder
+
+## Review Findings
+
+**Reviewer pass:** Implementation is complete and correct. Files changed: `src/webview/planning.js` (state variable `_collapsedTicketStatuses`, helpers `_ticketStatusOrder`/`_groupTicketsByStatus`/`_renderTicketStatusGroup`/`_renderClickUpTicketCard`/`_renderLinearTicketCard`, grouped rendering in both `renderTicketsClickUpList` and `renderTicketsLinearList`, accordion click handler, cache-key encoding, clear in `resetTicketsInMemoryState`), `src/webview/planning.html` (CSS for hover/arrow/body). Notable improvements over plan: `encodeURIComponent`/`decodeURIComponent` used instead of `escapeAttr` for `data-status-name` (lossless round-trip), status-order checks reversed to classify "Ready for Review" as Review not To Do, shared card rendering functions extracted for DRY between normal and drill-down modes. One NIT: `.ticket-status-group-body` declares `transition: max-height 0.2s ease` but collapse uses `display:none` not `max-height`, so the transition never fires (dead CSS, no visual impact). No CRITICAL or MAJOR findings. Verification: compilation and tests skipped per session instructions; code trace confirms correct event-delegation ordering (accordion header → drill-down back → card click), cache-string invalidation on collapse toggle, and state reset on provider switch.
