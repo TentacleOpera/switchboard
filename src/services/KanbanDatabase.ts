@@ -1144,7 +1144,7 @@ export class KanbanDatabase {
     public get onColumnChanged(): any {
         if (!this._onColumnChanged) {
             try {
-                const vscode = require('vscode');
+                const vscode = require('vscode') as typeof import('vscode');
                 this._onColumnChanged = new vscode.EventEmitter<{ workspaceId: string; planFile: string; column: string }>();
             } catch {
                 return () => ({ dispose: () => {} });

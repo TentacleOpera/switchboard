@@ -1858,6 +1858,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (themeRadio) themeRadio.checked = true;
                     updateAnimationSectionVisibility(savedTheme);
                 },
+                'status-bar': () => {
                     vscode.postMessage({ type: 'getStatusShowTerminalsSetting' });
                     vscode.postMessage({ type: 'getStatusShowKanbanSetting' });
                     vscode.postMessage({ type: 'getStatusShowArtifactsSetting' });

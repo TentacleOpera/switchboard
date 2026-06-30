@@ -221,8 +221,8 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
                 return [column, {
                     enabled: typeof rule?.enabled === 'boolean' ? rule.enabled : fallback.enabled,
                     intervalMinutes,
-                    triggerMode: rule?.triggerMode === 'watch' ? 'watch' : 'drain'
-                }];
+                    triggerMode: (rule?.triggerMode === 'watch' ? 'watch' : 'drain') as AutobanTriggerMode
+                }] as [string, AutobanRuleState];
             })
     );
 

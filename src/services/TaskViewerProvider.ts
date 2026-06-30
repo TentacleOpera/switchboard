@@ -20401,7 +20401,7 @@ What would you like to find?`;
         const terminal = vscode.window.createTerminal({
             name: targetName,
             location: vscode.TerminalLocation.Panel,
-            cwd: this._resolveWorkspaceRoot()
+            cwd: this._resolveWorkspaceRoot() ?? undefined
         });
         
         if (!this._registeredTerminals) this._registeredTerminals = new Map();

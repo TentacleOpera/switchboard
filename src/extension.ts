@@ -2061,7 +2061,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // SettingsSync catch-all: mirror in-scope switchboard.* changes to the
         // active workspace kanban.db. No-op when sync disabled or during restore.
         try {
-            await settingsSyncService.syncChangedSettings(e);
+            await settingsSyncService?.syncChangedSettings(e);
         } catch (err) {
             console.warn('[Switchboard] SettingsSync listener skipped:', err);
         }

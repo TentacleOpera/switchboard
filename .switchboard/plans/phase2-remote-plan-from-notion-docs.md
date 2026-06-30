@@ -50,8 +50,16 @@ a cloned repo, or a local Claude Code session to write a code-grounded plan.
 
 ### To plan from the docs
 1. Open the Codebase Docs database. Read the **overview** to locate the relevant modules.
-2. Query file pages by `Path` (or `Module`) for the files your change touches; read their
-   source blocks to ground the plan in real symbols, signatures, and call sites.
+2. **Find the file pages your change touches.** Navigation depends on your Notion tier:
+   - **Business/Enterprise + Notion AI:** use `notion-query-data-sources` with a SQL filter
+     on `Path` (e.g. `WHERE Path LIKE 'src/services/%'`) or `Doc Kind = 'file'` for precise,
+     server-side retrieval.
+   - **Free/Plus or no Notion AI:** `notion-query-data-sources` returns an upgrade prompt.
+     Fall back to `notion-search` with the file path as keywords, or `notion-fetch` the
+     database and scan rows client-side (slower on large repos — narrow via the overview's
+     module tree first).
+   Read the matched file pages' source blocks to ground the plan in real symbols,
+   signatures, and call sites.
 3. Author the plan in a **new plans-DB page** (not a doc page), following the standard
    Switchboard plan structure (Goal + problem/root-cause, Tasks, Edge Cases, Out of Scope).
    Cite concrete file paths from the doc pages so the local executing agent can find them.
@@ -99,11 +107,23 @@ No new skill row is needed (the `switchboard_remote_notion` row already exists a
 
 ## Adversarial Synthesis
 
-Key risks: (1) the original plan coordinated around a nonexistent `/sw-remote` workflow — corrected to edit `switchboard_remote_notion.md` directly, eliminating the drift risk; (2) the Notion MCP connector's query/filter capability is unverified — if it can't filter by property, the agent falls back to scanning, which works but is slower on large repos; (3) the read-only warning is reframed as a consequence (edits overwritten) rather than a prohibition, improving agent compliance. The orientation prose is sound; the only material uncertainty is the MCP query capability.
+Key risks: (1) the original plan coordinated around a nonexistent `/sw-remote` workflow — corrected to edit `switchboard_remote_notion.md` directly, eliminating the drift risk; (2) the Notion MCP connector's query/filter capability is **tier-gated** (confirmed via research — see below) — the skill must document the fallback path for lower tiers; (3) the read-only warning is reframed as a consequence (edits overwritten) rather than a prohibition, improving agent compliance. The orientation prose is sound; the tier-gating is now a documented constraint, not an open uncertainty.
 
 ## Uncertain Assumptions
 
-- **Notion MCP connector can query/filter a database by property values (`Path`, `Module`, `Doc Kind`).** The skill instructs the remote agent to "query file pages by `Path`." If the connector only supports fetching pages by ID or returning the entire database, the agent cannot efficiently navigate overview→module→file and must scan all file pages. The orientation remains *correct* either way (the fallback is scanning), but the efficiency claim is unverified. The user was advised to run web research to confirm the Notion MCP connector's query/filter capabilities before implementation.
+None remaining. The Notion MCP connector's query/filter capability was confirmed via web research (see "Resolved: Notion MCP Query Capability" below). All other plan claims are code-verified.
+
+## Resolved: Notion MCP Query Capability
+
+The official hosted Notion MCP server (`https://mcp.notion.com/mcp`) **can** query/filter a database by property values, but the capability is **tier-gated** by the Notion workspace subscription + Notion AI add-on:
+
+- **Enterprise + Notion AI:** full `notion-query-data-sources` (SQLite-style SQL against data sources, e.g. `SELECT * FROM "collection://[id]" WHERE Path = 'src/services/Foo.ts'`).
+- **Business + Notion AI:** single data source / view query via SQL or `notion-query-database-view` (queries a pre-defined view's filters/sorts).
+- **Free / Plus / no Notion AI:** query tools return an *upgrade prompt*. The agent falls back to:
+  1. `notion-search` — keyword/semantic workspace search (no precise property filtering).
+  2. `notion-fetch` — retrieve the database by ID/URL and scan rows client-side (high token overhead on a large codebase DB; risks context exhaustion).
+
+**Implication for the skill text:** the "query file pages by `Path`" instruction is the *primary* path (works on Business+/AI tiers) but the skill must document the fallback: if `notion-query-data-sources` returns an upgrade prompt, use `notion-search` with the file path as keywords, or `notion-fetch` the database and scan. The orientation remains correct on all tiers; only efficiency varies. The skill's "To plan from the docs" step 2 should be updated to reflect this tier-aware navigation (see Proposed Changes).
 
 ## Edge-Case & Dependency Audit
 
@@ -111,7 +131,7 @@ Key risks: (1) the original plan coordinated around a nonexistent `/sw-remote` w
 - **Stale docs:** the skill tells the agent docs reflect the last sync and how to request a fresh one. Prevents the agent silently planning against outdated code.
 - **Agent edits a doc page:** the skill frames this as a consequence (edits are overwritten on next sync); even if it happens, plan 2/4's full-clobber repairs it (doc pages are owned artifacts).
 - **Mirror correctness:** editing `.agents/` source (not `.claude/`) means the next mirror run regenerates the Claude Code copy — no manual `.claude/` edit, no drift.
-- **Notion MCP connector query capability (UNCERTAIN):** the skill instructs the agent to "query file pages by `Path` (or `Module`)." This assumes the Notion MCP connector can filter a database by property values. If the connector can only fetch pages by ID or return the whole database, the agent must scan all file pages to find relevant ones — feasible but slow on a large repo. See "Uncertain Assumptions" below.
+- **Notion MCP tier-gating (RESOLVED):** on Free/Plus/no-AI tiers, the agent cannot filter by `Path`/`Module` server-side and must fall back to `notion-search` (keyword) or `notion-fetch` + client-side scan. The skill documents both paths. On Business+/AI tiers, `notion-query-data-sources` enables precise SQL filtering by property.
 
 ## Verification Plan
 
@@ -119,7 +139,7 @@ Key risks: (1) the original plan coordinated around a nonexistent `/sw-remote` w
 
 ### `.agents/skills/switchboard_remote_notion.md`
 - **Context:** The skill (lines 33-39) currently treats the plan-card text as the sole source of truth; no codebase access.
-- **Logic:** Append a "Planning from Codebase Docs (no repo)" section after the existing pre-flight content: doc organisation (overview/module/file), plan-authoring steps (read overview → query file pages by `Path` → author plan in plans DB → set trigger column), the "edits overwritten" consequence warning, and the no-docs-DB fallback.
+- **Logic:** Append a "Planning from Codebase Docs (no repo)" section after the existing pre-flight content: doc organisation (overview/module/file), tier-aware plan-authoring steps (read overview → find file pages via `notion-query-data-sources` on Business+/AI, or `notion-search`/`notion-fetch` fallback on lower tiers → author plan in plans DB → set trigger column), the "edits overwritten" consequence warning, and the no-docs-DB fallback.
 - **Implementation:** Append-only markdown edit to the `.agents/` source. The `ClaudeCodeMirrorService` mirror run regenerates the `.claude/` copy.
 - **Edge Cases:** No docs DB → fallback paragraph keeps old behavior. Stale docs → skill tells the agent to request a fresh sync.
 
