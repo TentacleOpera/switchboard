@@ -37,7 +37,7 @@ function makePlan(overrides) {
     }, overrides);
 }
 
-const BASE_CONFIG = { provider: 'linear', boards: ['proj'], silentSync: false, pingMode: 'manual', pingFrequencySeconds: 60 };
+const BASE_CONFIG = { provider: 'linear', boards: ['proj'], silentSync: false, pingFrequencySeconds: 60 };
 
 function makeService(db, provider, sinks) {
     return new RemoteControlService({

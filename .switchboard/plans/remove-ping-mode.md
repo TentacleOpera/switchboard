@@ -215,3 +215,7 @@ Skipped per session directive — the user runs the test suite separately.
 ## Recommendation
 
 Complexity 3 → **Send to Coder**. Mechanical deletion across three files plus one plan-doc edit; the only non-trivial coordination is the `restoreFromConfig()` caller removal in `KanbanProvider.ts` and the Plan 3/3 contract update.
+
+## Review Findings
+
+Core implementation across `RemoteControlService.ts`, `KanbanProvider.ts`, and `kanban.html` is correct and complete — `pingMode` removed from interface/default/getConfig/setConfig/start, `restoreFromConfig()` and its `webviewReady` caller block deleted, radio group HTML removed, JS functions cleaned, reconciling-poll guard collapsed to `!config.silentSync`. Review caught four stale-reference gaps: (1) Plan 3/3 contract still listed `pingMode` at lines 88/90 — fixed; (2) `docs/switchboard_user_manual.md:1525` and `docs/remote_sync_architecture_refactor_analysis.md:48,120` still documented `pingMode` — fixed; (3) test fixture `remote-control-service.test.js:40` had stale `pingMode: 'manual'` in `BASE_CONFIG` — fixed; (4) orphaned `.remote-radio-row` CSS in `kanban.html:769-780` — removed. No code logic regressions; `setConfig()` reschedule and `_scheduleTimer` clear-first ordering verified safe. Remaining risk: historical plan documents in `.switchboard/plans/` still mention `pingMode` (archived artifacts, out of scope).

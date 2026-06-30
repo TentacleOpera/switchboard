@@ -1,5 +1,6 @@
 ## CODE REVIEWED
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-ping-mode.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/remove-ping-mode.md) — Remove Ping Mode (Constant / Manual Radio) <!-- planId:dedd512e-aa93-40ad-b952-cbbae36a78e9 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630154140_remove-agent-file-open-guard.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630154140_remove-agent-file-open-guard.md) — Remove the Agent File Open Guard from Switchboard <!-- planId:4fbd35cb-c57b-47cc-b78e-8a0bebe4a78c -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/db-settings-sync.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/db-settings-sync.md) — DB Settings Sync — Optionally Persist VS Code Settings to Kanban DB <!-- planId:89470480-a1ea-4b79-bf47-256df0f42782 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630164847_mcp-monitor-help-text-rewrite.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630164847_mcp-monitor-help-text-rewrite.md) — Rewrite Confusing MCP Monitor Help Text in Automation Tab <!-- planId:55716709-e7fb-47fa-ba1b-ad8d8943d384 -->

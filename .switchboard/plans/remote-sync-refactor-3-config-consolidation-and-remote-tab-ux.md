@@ -85,9 +85,9 @@ Key risks: (1) the two pull loops serve different purposes (state mirroring vs. 
 ## Proposed Changes
 
 ### `src/services/RemoteControlService.ts` (`:34-45`, `:288`, `:316`)
-- **Context**: `RemoteConfig` interface at `:34-45` defines `{ provider, boards, silentSync, pingMode, pingFrequencySeconds }`. `_applyStateMirror` at `:288` mirrors remote state changes. `_pollComments` at `:316` polls comments. `getConfig()` at `:92` reads from DB key `'remote.config'`.
+- **Context**: `RemoteConfig` interface at `:34-45` defines `{ provider, boards, silentSync, pingFrequencySeconds }`. `_applyStateMirror` at `:288` mirrors remote state changes. `_pollComments` at `:316` polls comments. `getConfig()` at `:92` reads from DB key `'remote.config'`.
 - **Logic**:
-  1. **Extend `RemoteConfig`** to include `mode: 'ingest' | 'full'`, `push: boolean`, `comments: boolean`. Keep existing fields. The new shape: `{ provider, boards, silentSync, pingMode, pingFrequencySeconds, mode, push, comments }`.
+  1. **Extend `RemoteConfig`** to include `mode: 'ingest' | 'full'`, `push: boolean`, `comments: boolean`. Keep existing fields. The new shape: `{ provider, boards, silentSync, pingFrequencySeconds, mode, push, comments }`.
   2. **Gate `_applyStateMirror`** (`:288`): Add `if (config.mode === 'ingest') { return; }` at the top of `_pollState` (or before calling `_applyStateMirror`). In Ingest mode, state *import* (`_pollState` → `importRemotePlan`) still runs, but state *mirror* (column move + agent dispatch) is skipped.
   3. **Gate `_pollComments`** (`:316`): Add `if (!config.comments) { return; }` at the top of `_pollComments`.
   4. **Gate push at trigger sites**: The `push` flag is checked at the push trigger sites (see KanbanProvider and ContinuousSyncService changes below), not in `RemoteControlService`.

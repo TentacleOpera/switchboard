@@ -1522,7 +1522,7 @@ Toggle remote control on/off from the toolbar remote control button.
 - **Per-poll card cap** — 100 cards (most-recently-updated first; remainder deferred to the next cycle).
 
 ### Config Storage
-Stored in the Kanban DB `config` table (key `remote.config`), **not** in `settings.json`. The `RemoteConfig` fields: `boards` (string[]), `silentSync` (boolean), `pingMode` (`constant` | `manual`), `pingFrequencySeconds` (30–120, default 60).
+Stored in the Kanban DB `config` table (key `remote.config`), **not** in `settings.json`. The `RemoteConfig` fields: `boards` (string[]), `silentSync` (boolean), `pingFrequencySeconds` (30–120, default 60). The poll loop runs when the toolbar toggle is on and stops when it's off.
 
 ---
 

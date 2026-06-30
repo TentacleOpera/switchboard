@@ -45,7 +45,7 @@ Provider-agnostic via the `RemoteProvider` interface (`src/services/remote/Remot
 | **State mirror** | `_applyStateMirror` (`:288`) | Remote status change → move local column **+ dispatch that column's agent** + post a dispatch-ack comment back. |
 | **Comment polling** | `_pollComments` (`:316`) | Remote comment → route to the current column's agent. |
 
-Configured by the **Remote tab** (`kanban.html:2547`), persisted to DB config key `remote.config`: `{ provider, boards, silentSync, pingMode, pingFrequencySeconds }`.
+Configured by the **Remote tab** (`kanban.html:2547`), persisted to DB config key `remote.config`: `{ provider, boards, silentSync, pingFrequencySeconds }`.
 
 The only **write-back** this subsystem performs is `provider.postComment` — the dispatch acknowledgement. **It never pushes plan content or status back.**
 
@@ -117,7 +117,7 @@ At least **four** separate surfaces currently touch sync, with no single source 
 
 | Surface | Where | Controls |
 |---|---|---|
-| `remote.config` | Remote tab | provider, boards, silentSync, pingMode, ping frequency (pull) |
+| `remote.config` | Remote tab | provider, boards, silentSync, ping frequency (pull) |
 | `realTimeSyncEnabled` | Setup (per Linear/ClickUp service config) | whether push B + C run at all |
 | `completeSyncEnabled` | Setup / Linear config | whether terminal-column status push runs |
 | Auto-Pull modal | `integration-settings-modal` (`kanban.html:3077`) | a *separate* background pull + interval, distinct from the Remote tab's ping loop |
