@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { showTemporaryNotification } from '../utils/showTemporaryNotification';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
@@ -5464,7 +5465,7 @@ Please format the updated output document strictly as follows:
                         break;
                     }
                     await vscode.env.clipboard.writeText(prompt);
-                    vscode.window.showInformationMessage('Diagram prompt copied to clipboard');
+                    showTemporaryNotification('Diagram prompt copied to clipboard');
                 } catch (err) {
                     vscode.window.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
                 }
@@ -5521,7 +5522,7 @@ ${localFilePath ? `- **Local file path (write the refined content here):** ${loc
 Read the existing ticket content from the local file if it exists. Determine what's missing. Produce a complete ticket following the skill instructions above. Write the refined markdown directly to the local file path, preserving any YAML frontmatter. Report back with a summary of what you added or changed.`;
 
                     await vscode.env.clipboard.writeText(prompt);
-                    vscode.window.showInformationMessage('Refine prompt copied to clipboard');
+                    showTemporaryNotification('Refine prompt copied to clipboard');
                 } catch (err) {
                     vscode.window.showErrorMessage(`Failed to copy refine prompt: ${String(err)}`);
                 }
@@ -5576,7 +5577,7 @@ ${existingContent ? existingContent : '(file is empty or does not exist yet — 
 Read the current content above. Determine what's missing. Produce a complete epic following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown. Write the refined markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary and the proposed subtask list.`;
 
                     await vscode.env.clipboard.writeText(prompt);
-                    vscode.window.showInformationMessage('Refine-epic prompt copied to clipboard. Paste it into your agent.');
+                    showTemporaryNotification('Refine-epic prompt copied to clipboard. Paste it into your agent.');
                 } catch (err) {
                     vscode.window.showErrorMessage(`Failed to copy refine-epic prompt: ${String(err)}`);
                 }
@@ -6364,7 +6365,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 const wsRoot = String(msg.workspaceRoot || '');
                 const planFiles = await this._resolveTuningPlanFiles(wsRoot, allRoots);
                 if (planFiles.length === 0) {
-                    vscode.window.showInformationMessage('No plans with adversarial review sections found.');
+                    showTemporaryNotification('No plans with adversarial review sections found.');
                     this._projectPanel?.webview.postMessage({ type: 'tuningExtractComplete', planCount: 0 });
                     break;
                 }
@@ -6393,7 +6394,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 }
                 const extractPrompt = `Run the tuning skill in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
                 await vscode.env.clipboard.writeText(extractPrompt);
-                vscode.window.showInformationMessage('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
+                showTemporaryNotification('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
                 this._projectPanel?.webview.postMessage({ type: 'tuningExtractComplete', planCount: planFiles.length });
                 break;
             }
@@ -6402,7 +6403,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
                 const governancePrompt = `Run the tuning skill in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
                 await vscode.env.clipboard.writeText(governancePrompt);
-                vscode.window.showInformationMessage('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
+                showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
                 this._projectPanel?.webview.postMessage({ type: 'tuningGovernanceComplete' });
                 break;
             }
@@ -6604,7 +6605,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
 
             const docRef = docPath;
             await vscode.env.clipboard.writeText(docRef);
-            vscode.window.showInformationMessage(`Document path copied to clipboard: ${docRef}`);
+            showTemporaryNotification(`Document path copied to clipboard: ${docRef}`);
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to link to document: ${String(err)}`);
         }
@@ -6668,7 +6669,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 throw new Error('Folder does not exist');
             }
             await vscode.env.clipboard.writeText(resolvedFolder);
-            vscode.window.showInformationMessage(`Folder path copied to clipboard: ${resolvedFolder}`);
+            showTemporaryNotification(`Folder path copied to clipboard: ${resolvedFolder}`);
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to link to folder: ${String(err)}`);
         }

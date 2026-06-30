@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { showTemporaryNotification } from '../utils/showTemporaryNotification';
 import { applyThemeBodyClass } from './themeBodyClass';
 import { KanbanDatabase } from './KanbanDatabase';
 import { LocalFolderService } from './LocalFolderService';
@@ -1578,7 +1579,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const prompt = String(message.prompt || '');
                 if (!prompt) break;
                 await vscode.env.clipboard.writeText(prompt);
-                vscode.window.showInformationMessage('Copied Claude import prompt to clipboard.');
+                showTemporaryNotification('Copied Claude import prompt to clipboard.');
                 break;
             }
 
@@ -1593,7 +1594,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     : linkRelativePath;
                 const linkRef = linkPath;
                 vscode.env.clipboard.writeText(linkRef);
-                vscode.window.showInformationMessage(`Copied document path to clipboard: ${linkRef}`);
+                showTemporaryNotification(`Copied document path to clipboard: ${linkRef}`);
                 break;
             }
 
@@ -1633,7 +1634,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const auth = await this._setupStitchAuth();
                     this.postMessage({ type: 'stitchApiKeyStatus', configured: auth.valid });
                     this.postMessage({ type: 'stitchAuthStatus', configured: auth.valid, valid: auth.valid });
-                    vscode.window.showInformationMessage('Stitch API Key saved successfully.');
+                    showTemporaryNotification('Stitch API Key saved successfully.');
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Failed to save API key: ' + err.message);
                 }
@@ -1657,7 +1658,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         valid: auth.valid,
                         apiKey: auth.apiKey
                     });
-                    vscode.window.showInformationMessage('Stitch Authentication settings saved successfully.');
+                    showTemporaryNotification('Stitch Authentication settings saved successfully.');
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Failed to save settings: ' + err.message);
                 }
@@ -2268,7 +2269,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const targetPath = path.join(outputDir, 'design-tokens.json');
                     await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), Buffer.from(JSON.stringify(tokens, null, 2), 'utf8'));
 
-                    vscode.window.showInformationMessage(`Downloaded design tokens to ${path.basename(outputDir)}/design-tokens.json`);
+                    showTemporaryNotification(`Downloaded design tokens to ${path.basename(outputDir)}/design-tokens.json`);
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Download failed: ' + err.message);
                 }
@@ -2828,7 +2829,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         }
                     }
 
-                    vscode.window.showInformationMessage(`Downloaded ${safeFilename} to ${path.basename(outputDir)}/`);
+                    showTemporaryNotification(`Downloaded ${safeFilename} to ${path.basename(outputDir)}/`);
                     // Tell the webview where the file landed so it can offer "Open on web"
                     // (for HTML) without re-deriving the path.
                     this.postMessage({
@@ -3228,7 +3229,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 throw new Error('Folder does not exist');
             }
             await vscode.env.clipboard.writeText(resolvedFolder);
-            vscode.window.showInformationMessage(`Folder path copied to clipboard: ${resolvedFolder}`);
+            showTemporaryNotification(`Folder path copied to clipboard: ${resolvedFolder}`);
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to link to folder: ${String(err)}`);
         }

@@ -54,8 +54,12 @@ The `fullSync` call on reveal is therefore **redundant defensive code** — it r
 
 Only `KanbanProvider.open()` awaits a full disk-to-DB sync before sending the tab-switch message.
 
+## User Review Required
+
+No user review required for the approach — the root cause is verified against source (`KanbanProvider.ts:930-938`, `TaskViewerProvider.refreshUI` at line 2748, `_refreshRunSheetsImpl` at line 15258) and the fix is a localized removal + reorder. The user should confirm the manual verification checklist passes after implementation (especially the instant-reveal behavior on the AGENT SETUP button).
+
 ## Metadata
-- **Tags:** [performance, frontend, UX, kanban, backend]
+- **Tags:** [performance, frontend, ux, backend]
 - **Complexity:** 2
 
 ## Complexity Audit
@@ -80,13 +84,21 @@ Only `KanbanProvider.open()` awaits a full disk-to-DB sync before sending the ta
 - **Security:** No new user input, no new data paths. The `tab` parameter is a hardcoded string from the implementation sidebar.
 - **Dependencies & Conflicts:** No test currently asserts the ordering of `fullSync` vs `switchToTab`. The change is a removal + reorder with no external API impact.
 
+## Dependencies
+
+- `agent-setup-button-change.md` — prior plan that introduced the AGENT SETUP button and wired `{ type: 'openKanban', tab: 'agents' }` → `KanbanProvider.open('agents')`. This plan fixes the lag introduced by the reveal-path `fullSync` that the prior plan's wiring exposed.
+
+## Adversarial Synthesis
+
+Key risks: (1) the plan's "<10ms" claim for `refreshUI` is an unmeasured assertion — `_refreshRunSheetsImpl` runs three DB queries (`getBoard`, `getCompletedPlans`, `getProjects`), not one, and cost scales with board size; (2) the `void refreshUI` call is fire-and-forget, swallowing any errors. Mitigations: the critical safety property — `switchToTab` is posted synchronously *before* the `void refreshUI` fires — makes the fix robust regardless of `refreshUI`'s actual latency, so the tab switch stays instant even if the DB read takes longer than claimed; `_refreshRunSheetsImpl` has its own internal try/catch, so fire-and-forget error swallowing is bounded. The "<10ms" figure should be softened to "lightweight DB read, no file-system scan" (verified at line 15290), and the `void` should be explicitly labeled as intentional fire-and-forget in the code comment.
+
 ## Proposed Changes
 
 ### `/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts`
 
 **Context:** The `open()` method (line 926) reveals the panel, then blocks on `fullSync` before sending the tab-switch message. The `fullSync` is redundant because `TaskViewerProvider`'s file watchers already keep the DB synced proactively.
 
-**Logic:** Remove the blocking `fullSync` call from the reveal path. Send the `switchToTab` message immediately after `reveal()`. Replace the heavy `fullSync` with a lightweight `refreshUI` (single DB read, no disk I/O) as a cheap safety net to push current DB state to the webview.
+**Logic:** Remove the blocking `fullSync` call from the reveal path. Send the `switchToTab` message immediately after `reveal()` — this is the critical change: the tab switch becomes synchronous and can no longer be gated by async work. Replace the heavy `fullSync` with a lightweight `refreshUI` (DB read via `_refreshRunSheetsImpl` — `getBoard`/`getCompletedPlans`/`getProjects`, no file-system scan) as a fire-and-forget safety net to push current DB state to the webview. The `void` prefix is intentional: we do NOT await it, so any DB-read latency cannot delay the already-sent tab switch.
 
 **Implementation:**
 
@@ -112,20 +124,23 @@ if (this._panel) {
     // The DB is kept in sync proactively by TaskViewerProvider's file watchers
     // (plan watcher, brain watcher, etc.), which call refreshUI on every file
     // change. A fullSync here is redundant and blocks for seconds while scanning
-    // all session files from disk. Use lightweight refreshUI (single DB read) as
-    // a cheap safety net to push current DB state to the webview.
+    // all session files from disk.
     if (this._pendingTab) {
         this._panel.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
         this._pendingTab = undefined;
     }
+    // Fire-and-forget: push current DB state to the webview without blocking the
+    // tab switch above. refreshUI is a lightweight DB read (no file-system scan);
+    // it has its own internal try/catch so errors here are bounded.
     void vscode.commands.executeCommand('switchboard.refreshUI');
     return;
 }
 ```
 
 **Edge Cases:**
-- If `_pendingTab` is undefined (no tab requested), only the lightweight `refreshUI` runs — pushes current DB state to the board without any disk scan.
-- `refreshUI` is a single DB read (<10ms) that feeds both sidebar and kanban. It does NOT scan files from disk. The watchers handle file→DB sync.
+- If `_pendingTab` is undefined (no tab requested), only the fire-and-forget `refreshUI` runs — pushes current DB state to the board without any disk scan.
+- `refreshUI` resolves the workspace root internally and runs DB queries (`getBoard`, `getCompletedPlans`, `getProjects`) — no file-system scan. The watchers handle file→DB sync. Cost scales with board size but is orders of magnitude lighter than `fullSync`'s full session-file disk scan.
+- The `switchToTab` postMessage is sent synchronously before the `void refreshUI` fires, so tab-switch latency is independent of `refreshUI`'s actual DB-read cost.
 - If a watcher event was genuinely missed, the board will show slightly stale data until the next watcher event or a manual "Sync Board" click. This is the same tradeoff every other panel already makes (they don't sync on reveal at all).
 
 ### No other files require changes
@@ -138,6 +153,10 @@ if (this._panel) {
 The entire fix is a removal of one blocking `await` + reorder + lightweight replacement in a single method.
 
 ## Verification Plan
+
+### Automated Tests
+
+No automated tests run as part of this session (per session directives: skip compilation, skip tests). The test suite will be run separately by the user. No new unit/integration tests are required for this change — it is a removal + reorder with no new API surface. If the user wishes to add a regression test, it should assert that `KanbanProvider.open('agents')` posts `switchToTab` without first awaiting `switchboard.fullSync` (e.g. spy on `vscode.commands.executeCommand` and verify `fullSync` is not awaited on the reveal path).
 
 ### Manual Verification
 - [ ] Open the implementation sidebar, go to the Terminals tab, click **AGENT SETUP** — the Kanban panel should reveal and switch to the Agents tab **instantly** (sub-second)
@@ -153,3 +172,7 @@ The entire fix is a removal of one blocking `await` + reorder + lightweight repl
 - [ ] "Sync Board" button still triggers a full `fullSync` (manual rescan path untouched)
 - [ ] File watchers still push updates to the board on plan file changes (add/modify a plan file while board is visible, confirm card appears/updates without manual sync)
 - [ ] No console errors in the developer tools for either the implementation sidebar or kanban webview
+
+## Recommendation
+
+Complexity 2 — **Send to Intern**. Single-method change (removal of one blocking `await` + reorder + fire-and-forget replacement), no new files, no new APIs, no schema changes, reuses the existing `switchboard.refreshUI` command. All claims verified against source.

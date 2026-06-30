@@ -1321,9 +1321,13 @@ export class KanbanDatabase {
 
     /**
      * Insert a plan record using only file-derived fields.
-     * DB-owned columns (is_epic, epic_id, kanban_column, status, worktree_id, etc.)
+     * DB-owned columns (epic_id, kanban_column, status, worktree_id, etc.)
      * are left at their schema DEFAULT values — the file has no business setting them.
-     * Use this for file-watcher imports and registry saves that don't own DB state.
+     * is_epic is the ONE exception: epic files set record.isEpic=1 before calling,
+     * and the ON CONFLICT clause makes it sticky (once 1, only updateEpicStatus
+     * can clear it) so re-imports of existing epics preserve is_epic=1 even when
+     * the caller didn't set it. Use this for file-watcher imports and registry
+     * saves that don't own DB state.
      */
     public async insertFileDerivedPlan(record: KanbanPlanRecord): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
