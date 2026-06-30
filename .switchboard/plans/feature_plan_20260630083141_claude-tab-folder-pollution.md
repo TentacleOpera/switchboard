@@ -391,3 +391,73 @@ Automated tests are skipped per session directive. The test suite will be run se
 ## Recommendation
 
 Complexity is 5 (multi-file, moderate modal logic). **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You copied a reference implementation and STILL managed to misread it. Let me be specific."*
+
+**[MAJOR] Aggregate hint condition contradicts the cited reference — `design.js:3726`**
+
+The plan step 3d says "matching planning.js lines 2149-2155." Let me read those lines for you: `if (isAggregate)` — UNCONDITIONAL on folder count. The hint shows whenever aggregate mode is active, so users staring at a list of folders with greyed-out Remove buttons actually KNOW WHY the buttons are greyed out. You implemented `if (isAggregate && folderPaths.length === 0)` — so the second a folder exists in aggregate mode, the hint vanishes and the user is left looking at disabled buttons with zero explanation. You literally cited the line numbers and then implemented the opposite condition. The plan's prose description (`isAggregate && folderPaths.length === 0`) contradicted its own citation. When the citation and the prose disagree, the working reference code wins. Always.
+
+**[NIT] Refresh button in aggregate mode refreshes only the primary workspace — `design.js:3862-3883`**
+
+Click Refresh in "All Workspaces" mode → sends `listDesignFolders` with `workspaceRoot: ''` → backend falls back to `_getWorkspaceRoot()` (primary) → response updates `state.designFolderPathsByRoot[<primary root>]`. The modal re-renders via `getCurrentFolderPaths(folderMap, '')` and still aggregates, so the map isn't corrupted — but only the primary workspace's folder list actually got refreshed. Other workspaces' entries stay stale. This is a pre-existing limitation (before the fix, refresh sent the stitch root, which was equally wrong for non-stitch workspaces). Not a regression, not in scope, but worth a follow-up: either gate Refresh in aggregate mode (force the user to pick a workspace) or have the backend iterate all roots when `workspaceRoot` is empty. Defer.
+
+**[NIT] Add-folder handler lacks the defense-in-depth guard the toggle handler has — `design.js:3885`**
+
+The Stitch HTML preview toggle handler (line 3909-3911) has `const root = getHtmlModalRoot(); if (!root) return;` — a belt-and-suspenders guard beyond the disabled-attribute gate. The `btn-add-folder-modal` click handler relies solely on `addBtn.disabled = isAggregate` to prevent firing in aggregate mode. Disabled buttons don't fire click events in any sane browser, so this is safe — but the asymmetry is mildly annoying. Not a bug. Defer or ignore.
+
+**What was done RIGHT (so you don't repeat the mistake of not checking):**
+- Migration function `_migrateClaudeFoldersOnce` fully deleted from `DesignPanelProvider.ts` — both call sites (former lines 134, 231) gone, function body gone. Grep confirms zero residual references. Clean break, correct per the unreleased-dev-work rule in CLAUDE.md.
+- All 16 `|| state.stitchWorkspaceRoot` fallback occurrences removed from non-stitch scopes (render, refresh, add, `getClaudeWorkspaceRootFallback`, `getHtmlModalRoot`). The only remaining `|| state.stitchWorkspaceRoot` in the file (line 1953) is a comparison, not a fallback. Stitch scope itself (`state.stitchWorkspaceRoot || ''`) correctly preserved at lines 3710, 3877, 3900.
+- `renderFolderListModal` correctly switched from direct key lookup to `getCurrentFolderPaths(folderMap || {}, root)` — aggregate mode now resolves folders across all roots instead of yielding `[]`.
+- Remove button gate (lines 3765-3786) correctly wraps the `addEventListener` in an `else` branch, preventing the `workspaceRoot: ''` dispatch that would target the wrong backend workspace.
+- `syncStitchHtmlPreviewToggle` correctly gated behind `getHtmlModalRoot()` truthiness (line 3682) — toggle hidden in aggregate mode, visible only with a specific workspace selected.
+- Toggle change handler has the bonus `if (!root) return;` guard (line 3910) — defense-in-depth, preserves the gate/handler dependency the plan flagged.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Verdict |
+|---|---|---|
+| Aggregate hint condition contradicts planning.js reference | MAJOR | **Fix now** — the plan's citation is the source of truth, the prose was self-contradictory, and the UX impact (disabled buttons with no explanation) is user-visible. |
+| Refresh in aggregate mode refreshes only primary workspace | NIT | **Defer** — pre-existing limitation, not a regression, not in plan scope. Worth a follow-up issue. |
+| Add-folder handler missing `if (!root) return` guard | NIT | **Defer/ignore** — disabled-attribute gate is sufficient; asymmetry is cosmetic. |
+
+### Code Fixes Applied
+
+1. **`src/webview/design.js:3726`** — Changed `if (isAggregate && folderPaths.length === 0)` to `if (isAggregate)` so the "Viewing all workspaces…" hint shows whenever aggregate mode is active, matching `planning.js:2149-2155`. This ensures users see an explanation for disabled Add/Remove buttons regardless of whether folders are present.
+
+### Verification Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive.
+- **Static verification performed:**
+  - `grep _migrateClaudeFoldersOnce src/` → 0 matches (migration fully removed).
+  - `grep '|| state.stitchWorkspaceRoot' src/webview/design.js` → 1 match (line 1953, a comparison, not a fallback — correct).
+  - `grep claudeFolderPaths.*htmlFolderPaths src/services/DesignPanelProvider.ts` → 0 matches (no residual cross-seeding).
+  - Confirmed `getCurrentFolderPaths` (design.js:497) aggregates all roots when `filterRoot` is empty — modal resolution now matches main tree pane behavior.
+  - Confirmed `designFoldersListed` handler (design.js:3038-3040) updates the map keyed by `msg.workspaceRoot` (the primary root, not `''`), so refresh-in-aggregate does not corrupt the map with an empty-string key.
+  - Confirmed both `renderFolderListModal` return paths (empty-state at line 3741, normal at line 3793) call `syncStitchHtmlPreviewToggle()`.
+
+### Files Changed
+
+- `src/webview/design.js` — line 3726: aggregate hint condition corrected (`isAggregate && folderPaths.length === 0` → `isAggregate`).
+
+### Remaining Risks
+
+1. **Refresh-in-aggregate staleness (NIT, deferred):** Refreshing in "All Workspaces" mode only refreshes the primary workspace's folder list. Other workspaces' entries in `state.xxxFolderPathsByRoot` remain stale until the user selects them individually and refreshes. Not a data-corruption risk, but a UX wart. Follow-up: either gate Refresh in aggregate mode or extend the backend to iterate all roots when `workspaceRoot` is empty.
+2. **No per-folder workspace attribution badges (deferred per plan):** The plan explicitly deferred the full `getFolderModalEntries` / `labelForWorkspaceRoot` attribution-badge port from planning.js. In aggregate mode, folder rows show raw paths with no indication of which workspace each belongs to. Acceptable for correctness; enhancement for a future pass.
+3. **Manual testing pending:** The manual checklist in the Verification Plan section above has not been executed in this session (per session directives). The user should run through it, with the corrected hint behavior now showing in both aggregate-empty AND aggregate-with-folders cases.
+
+### Summary
+
+| Severity | Finding | Location | Fix |
+|---|---|---|---|
+| MAJOR | Aggregate hint gated on empty folder list, contradicting planning.js reference (hint absent when folders exist in aggregate mode) | `src/webview/design.js:3726` | Condition changed to `if (isAggregate)` — applied |
+| NIT | Refresh in aggregate mode refreshes only primary workspace | `src/webview/design.js:3862-3883` | Deferred — pre-existing, not a regression |
+| NIT | Add-folder handler lacks `if (!root) return` defense-in-depth guard | `src/webview/design.js:3885` | Deferred — disabled-attribute gate is sufficient |

@@ -3723,7 +3723,7 @@
             addBtn.style.opacity = isAggregate ? '0.5' : '';
         }
 
-        if (isAggregate && folderPaths.length === 0) {
+        if (isAggregate) {
             const hint = document.createElement('div');
             hint.className = 'folder-list-hint';
             hint.style.cssText = 'padding: 8px 4px; font-size: 11px; color: var(--text-secondary); opacity: 0.85;';
