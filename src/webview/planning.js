@@ -4411,9 +4411,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
 
             case 'artifactPromptCopied': {
-                const isDownload = msg.kind === 'download';
-                const btnId = isDownload ? 'btn-copy-artifact-download' : 'btn-copy-artifact-upload';
-                const btn = document.getElementById(btnId);
+                const btn = document.getElementById('btn-copy-artifact-prompt');
                 if (btn) {
                     const originalText = btn.textContent;
                     btn.textContent = 'Copied!';
@@ -4422,9 +4420,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             }
             case 'artifactPromptSent': {
-                const isDownload = msg.kind === 'download';
-                const btnId = isDownload ? 'btn-send-artifact-download' : 'btn-send-artifact-upload';
-                const btn = document.getElementById(btnId);
+                const btn = document.getElementById('btn-send-artifact-prompt');
                 if (btn) {
                     const originalText = btn.textContent;
                     btn.textContent = 'Sent ✓';
@@ -7259,53 +7255,52 @@ Return ONLY the drafted prompt with no additional commentary.`;
         return (input ? input.value.trim() : '');
     };
 
-    const btnCopyDownload = document.getElementById('btn-copy-artifact-download');
-    if (btnCopyDownload) {
-        btnCopyDownload.addEventListener('click', () => {
-            const url = getArtifactUrlInput();
+    let artifactDirectionIsDownload = true; // default: download
+
+    const directionBtn = document.getElementById('btn-artifact-direction');
+    function updateDirectionLabel() {
+        if (directionBtn) {
+            directionBtn.textContent = artifactDirectionIsDownload ? '⇅ Download' : '⇅ Upload';
+            directionBtn.title = artifactDirectionIsDownload
+                ? 'Download: fetch artifact from claude.ai → save locally. Click to switch to Upload.'
+                : 'Upload: publish local file → claude.ai. Click to switch to Download.';
+        }
+    }
+    if (directionBtn) {
+        directionBtn.addEventListener('click', () => {
+            artifactDirectionIsDownload = !artifactDirectionIsDownload;
+            updateDirectionLabel();
+        });
+    }
+    updateDirectionLabel();
+
+    function buildArtifactPrompt() {
+        const url = getArtifactUrlInput();
+        if (artifactDirectionIsDownload) {
             const folder = getHtmlFolderFallback();
-            const prompt = ARTIFACT_DOWNLOAD_PROMPT({ url, folder });
-            vscode.postMessage({ type: 'copyArtifactPrompt', prompt, kind: 'download' });
+            return { prompt: ARTIFACT_DOWNLOAD_PROMPT({ url, folder }), kind: 'download' };
+        }
+        const folder = state.activeDocSourceFolder || getHtmlFolderFallback();
+        const filename = state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html');
+        return { prompt: ARTIFACT_UPLOAD_PROMPT({ url, folder, filename }), kind: 'upload' };
+    }
+
+    const btnCopyPrompt = document.getElementById('btn-copy-artifact-prompt');
+    if (btnCopyPrompt) {
+        btnCopyPrompt.addEventListener('click', () => {
+            const { prompt, kind } = buildArtifactPrompt();
+            vscode.postMessage({ type: 'copyArtifactPrompt', prompt, kind });
         });
     }
 
-    const btnSendDownload = document.getElementById('btn-send-artifact-download');
-    if (btnSendDownload) {
-        btnSendDownload.addEventListener('click', () => {
-            const url = getArtifactUrlInput();
-            const folder = getHtmlFolderFallback();
-            const prompt = ARTIFACT_DOWNLOAD_PROMPT({ url, folder });
+    const btnSendPrompt = document.getElementById('btn-send-artifact-prompt');
+    if (btnSendPrompt) {
+        btnSendPrompt.addEventListener('click', () => {
+            const { prompt, kind } = buildArtifactPrompt();
             vscode.postMessage({
                 type: 'sendArtifactPromptToTerminal',
                 prompt,
-                kind: 'download',
-                workspaceRoot: state.planningHtmlWorkspaceRootFilter || undefined
-            });
-        });
-    }
-
-    const btnCopyUpload = document.getElementById('btn-copy-artifact-upload');
-    if (btnCopyUpload) {
-        btnCopyUpload.addEventListener('click', () => {
-            const url = getArtifactUrlInput();
-            const folder = state.activeDocSourceFolder || getHtmlFolderFallback();
-            const filename = state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html');
-            const prompt = ARTIFACT_UPLOAD_PROMPT({ url, folder, filename });
-            vscode.postMessage({ type: 'copyArtifactPrompt', prompt, kind: 'upload' });
-        });
-    }
-
-    const btnSendUpload = document.getElementById('btn-send-artifact-upload');
-    if (btnSendUpload) {
-        btnSendUpload.addEventListener('click', () => {
-            const url = getArtifactUrlInput();
-            const folder = state.activeDocSourceFolder || getHtmlFolderFallback();
-            const filename = state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html');
-            const prompt = ARTIFACT_UPLOAD_PROMPT({ url, folder, filename });
-            vscode.postMessage({
-                type: 'sendArtifactPromptToTerminal',
-                prompt,
-                kind: 'upload',
+                kind,
                 workspaceRoot: state.planningHtmlWorkspaceRootFilter || undefined
             });
         });

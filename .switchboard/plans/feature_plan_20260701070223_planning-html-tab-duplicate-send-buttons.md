@@ -2,6 +2,8 @@
 
 ## Goal
 
+Flatten the HTML tab's two-row controls strip into a single row and collapse the four artifact buttons (two of which are identically labeled "⇨ Send to Claude") into a direction toggle plus two buttons ("Copy prompt" and "⇨ Send to Claude"), eliminating the duplicate-label confusion and matching the Design panel's leaner Claude-tab convention.
+
 ### Problem
 The **HTML** tab of `planning.html` has a bloated controls strip with **two rows** and **four artifact buttons**, including **two identical "⇨ Send to Claude" buttons** (one for download, one for upload). This is inconsistent with the Design panel's Claude tab (which has a single "Copy import prompt" button) and is unnecessarily bulky.
 
@@ -18,22 +20,63 @@ The second row is the "bulky" part the user objects to. The two "⇨ Send to Cla
 The JS handlers (`src/webview/planning.js`, lines ~7262–7312) wire each button to either `ARTIFACT_DOWNLOAD_PROMPT` or `ARTIFACT_UPLOAD_PROMPT`, and either `copyArtifactPrompt` (clipboard) or `sendArtifactPromptToTerminal` (direct send). The "Copy" and "Send" variants differ only in the message type — the prompt text is identical.
 
 ## Metadata
-- **Tags**: `planning-panel`, `html-tab`, `ux-consistency`, `ui-cleanup`, `artifact-roundtrip`
-- **Complexity**: 3/10
+- **Tags:** `ui`, `ux`, `refactor`
+- **Complexity:** 3/10
+
+## User Review Required
+- **Direction toggle UX**: The toggle button ("⇅ Download" / "⇅ Upload") replaces 4 explicit buttons with a stateful control. Confirm this discoverability tradeoff is acceptable — the tooltip explains the toggle, but a first-time user must click to discover the upload direction.
+- **Primary button styling**: The "⇨ Send to Claude" button uses a `stitch-btn-primary` class (ported from `design.html`) to give it visual prominence over "Copy prompt". Confirm the teal accent is desired in the Planning panel.
 
 ## Complexity Audit
-- **Routine**: Removing redundant buttons from HTML, removing their JS event listeners, and flattening the two-row controls strip into one row.
-- **Complex/Risky**: Deciding which button to keep. The "Copy" and "Send" variants serve different workflows (clipboard vs direct-to-terminal). The user's complaint is specifically about the **two "Send to Claude" buttons** and the **second row**. The cleanest fix: collapse to one row with a single artifact URL input, a direction toggle (Download ⇅ Upload), and two buttons: "Copy prompt" and "⇨ Send to Claude". This halves the button count and eliminates the duplicate "Send" labels.
+
+### Routine
+- Removing the second `controls-strip-row` wrapper and its 4 buttons from `planning.html` (lines 3536–3542).
+- Removing the 4 corresponding `addEventListener` blocks in `planning.js` (lines 7262–7312).
+- Adding a direction toggle button + 2 unified buttons to the single row.
+- Adding 2 unified click handlers that branch on `artifactDirectionIsDownload`.
+- Updating the 2 confirmation handlers (`artifactPromptCopied` / `artifactPromptSent`) to target the new unified button IDs.
+- Porting the 4-line `.stitch-btn-primary` CSS rule from `design.html` into `planning.html`.
+
+### Complex / Risky
+- None. Single-pass frontend refactor across two files, no backend changes, no data/state migration, no breaking changes to message contracts.
 
 ## Edge-Case & Dependency Audit
-- **Download vs Upload semantics**: Download fetches from a URL and saves locally; Upload reads a local file and publishes to claude.ai. They use different prompt templates and different state (`getHtmlFolderFallback` vs `state.activeDocSourceFolder` + `state.activeDocName`). The direction toggle must switch both the prompt template and the state inputs.
-- **`artifactPromptCopied` / `artifactPromptSent` message handlers** (lines ~4413–4434): These look up buttons by ID (`btn-copy-artifact-download` / `btn-copy-artifact-upload` / `btn-send-artifact-download` / `btn-send-artifact-upload`). If button IDs change, these handlers must be updated to target the new single pair of buttons.
-- **Backend message types**: `copyArtifactPrompt` and `sendArtifactPromptToTerminal` both carry a `kind: 'download' | 'upload'` field. The backend uses `kind` to route the confirmation message back. This is unchanged — we just send the right `kind` based on the toggle.
-- **`isShareLink(url)` guard**: `ARTIFACT_DOWNLOAD_PROMPT` (line ~7218) checks for share links and returns a warning. This logic stays in the prompt function — no change needed.
-- **No folder configured**: When no HTML folder is configured, `getHtmlFolderFallback()` returns `''`. The prompt handles this case (tells the user to configure a folder). No change needed.
-- **Other tabs**: The `controls-strip-row` class is also used by the Research tab (line ~3648). Removing the second row from the HTML tab does not affect Research.
+- **Race Conditions**: None. The direction toggle is synchronous UI state (`artifactDirectionIsDownload` boolean). Click handlers read it at click time. No async races.
+- **Security**: No new surface. Prompt text is generated from existing templates (`ARTIFACT_DOWNLOAD_PROMPT` / `ARTIFACT_UPLOAD_PROMPT`) and sent via existing `vscode.postMessage` channels. No injection vectors introduced.
+- **Side Effects**: The `artifactDirectionIsDownload` closure variable resets to `true` (download) on every webview reload. This is acceptable — download is the sensible default and webview reloads are infrequent. Not persisted to `state`.
+- **Dependencies & Conflicts**:
+  - **Download vs Upload semantics**: Download fetches from a URL and saves locally; Upload reads a local file and publishes to claude.ai. They use different prompt templates and different state (`getHtmlFolderFallback` vs `state.activeDocSourceFolder` + `state.activeDocName`). The direction toggle must switch both the prompt template and the state inputs — handled by `buildArtifactPrompt()`.
+  - **`artifactPromptCopied` / `artifactPromptSent` message handlers** (planning.js lines ~4413–4434): These look up buttons by direction-specific IDs. Must be updated to target the new unified IDs (`btn-copy-artifact-prompt` / `btn-send-artifact-prompt`).
+  - **Backend message types**: `copyArtifactPrompt` and `sendArtifactPromptToTerminal` both carry a `kind: 'download' | 'upload'` field. The backend uses `kind` to route the confirmation message back. Unchanged — we send the right `kind` based on the toggle.
+  - **`isShareLink(url)` guard**: `ARTIFACT_DOWNLOAD_PROMPT` (line ~7218) checks for share links and returns a warning. Stays in the prompt function — no change needed.
+  - **No folder configured**: When no HTML folder is configured, `getHtmlFolderFallback()` returns `''`. The prompt handles this case. No change needed.
+  - **Other tabs**: The `controls-strip-row` class is also used by the **Tickets tab** (line ~3648, `id="tickets-content"`). The Research tab (line 3581) uses a card-based layout and does **not** use `controls-strip-row`. Removing the second row from the HTML tab does not affect Tickets or Research.
+  - **`stitch-btn-primary` CSS**: Defined in `design.html` (lines 3325–3334) but **not** in `planning.html`. Must be ported into `planning.html` for the primary send button to render with its teal accent. Uses `--accent-teal-dim` / `--accent-teal` CSS variables, which are already available in `planning.html` (shared theme variables).
+
+## Dependencies
+- None. This plan is self-contained within `src/webview/planning.html` and `src/webview/planning.js`. No backend, no other webview, no external session dependency.
+
+## Adversarial Synthesis
+Key risks: (1) the `stitch-btn-primary` class is not defined in `planning.html`, so the primary send button would render unstyled unless the CSS is ported; (2) the Edge-Case audit originally mislabeled the Tickets tab as "Research." Mitigations: port the 4-line CSS rule from `design.html` into `planning.html`; correct the tab citation. No backend or data-consistency risks — the `kind` field contract is preserved.
 
 ## Proposed Changes
+
+### `src/webview/planning.html` — Add `.stitch-btn-primary` CSS rule (after line ~2732)
+
+Port the class from `design.html` so the primary send button renders with a teal accent. Insert after the `.controls-strip-row` rule (line 2732).
+
+```css
+.stitch-btn-primary {
+    background: var(--accent-teal-dim);
+    border-color: var(--accent-teal);
+    color: var(--accent-teal);
+    font-weight: 600;
+}
+.stitch-btn-primary:hover:not(:disabled) {
+    background: var(--accent-teal);
+    color: #000;
+}
+```
 
 ### `src/webview/planning.html` — Flatten HTML tab controls strip (lines ~3527–3543)
 
@@ -75,10 +118,10 @@ Replace the two-row controls strip with a single row containing a direction togg
 ```
 
 Key changes:
-- **Single row** — no `controls-strip-row` wrappers. The `controls-strip` is already `display: flex; flex-wrap: nowrap; overflow-x: auto`, so it handles overflow gracefully.
+- **Single row** — no `controls-strip-row` wrappers. The `controls-strip` is already `display: flex; flex-wrap: nowrap; overflow-x: auto` (planning.html lines 185–195), so it handles overflow gracefully.
 - **Direction toggle button** (`btn-artifact-direction`): cycles between "⇅ Download" and "⇅ Upload". Replaces the 4-button matrix with a 2-button pair + toggle.
 - **One "Copy prompt" button** (`btn-copy-artifact-prompt`): replaces `btn-copy-artifact-download` and `btn-copy-artifact-upload`.
-- **One "⇨ Send to Claude" button** (`btn-send-artifact-prompt`): replaces `btn-send-artifact-download` and `btn-send-artifact-upload`.
+- **One "⇨ Send to Claude" button** (`btn-send-artifact-prompt`): replaces `btn-send-artifact-download` and `btn-send-artifact-upload`. Uses `stitch-btn-primary` for visual prominence (CSS ported above).
 
 ### `src/webview/planning.js` — Direction toggle state + unified handlers (lines ~7257–7312)
 
@@ -160,14 +203,22 @@ case 'artifactPromptCopied': {
     const isDownload = msg.kind === 'download';
     const btnId = isDownload ? 'btn-copy-artifact-download' : 'btn-copy-artifact-upload';
     const btn = document.getElementById(btnId);
-    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = originalText; }, 2000); }
+    if (btn) {
+        const originalText = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = originalText; }, 2000);
+    }
     break;
 }
 case 'artifactPromptSent': {
     const isDownload = msg.kind === 'download';
     const btnId = isDownload ? 'btn-send-artifact-download' : 'btn-send-artifact-upload';
     const btn = document.getElementById(btnId);
-    if (btn) { btn.textContent = 'Sent ✓'; setTimeout(() => { btn.textContent = originalText; }, 2000); }
+    if (btn) {
+        const originalText = btn.textContent;
+        btn.textContent = 'Sent ✓';
+        setTimeout(() => { btn.textContent = originalText; }, 2000);
+    }
     break;
 }
 ```
@@ -187,11 +238,21 @@ case 'artifactPromptSent': {
 ```
 
 ## Verification Plan
+
+### Automated Tests
+- None. This is a webview UI refactor with no unit-test coverage in the repo for webview DOM handlers. Verification is manual via the installed VSIX.
+
+### Manual Verification
 1. **Visual**: Open the Planning panel, switch to the HTML tab. Confirm the controls strip is a **single row** with: workspace filter, search, status, direction toggle, artifact URL input, "Copy prompt", "⇨ Send to Claude". No second row.
 2. **Direction toggle**: Click the "⇅ Download" button. Confirm it switches to "⇅ Upload" and the tooltip updates. Click again — switches back.
 3. **Download flow**: With direction = Download, paste an artifact URL, click "Copy prompt". Confirm the clipboard contains `ARTIFACT_DOWNLOAD_PROMPT` output (mentions "Download a claude.ai artifact"). Click "⇨ Send to Claude". Confirm the prompt is sent to the terminal.
 4. **Upload flow**: Switch direction to Upload. Click "Copy prompt". Confirm the clipboard contains `ARTIFACT_UPLOAD_PROMPT` output (mentions "Publish a local document back to claude.ai"). Click "⇨ Send to Claude". Confirm the prompt is sent.
 5. **Confirmation feedback**: After copying, confirm the "Copy prompt" button briefly shows "Copied!". After sending, confirm the "⇨ Send to Claude" button briefly shows "Sent ✓".
-6. **Share-link warning**: Paste a `claude.ai/share/` URL with direction = Download, click "Copy prompt". Confirm the warning text about share links is in the clipboard.
-7. **Other tabs unaffected**: Switch to Local, Online, Kanban, Tickets, Research tabs. Confirm their controls strips are unchanged.
-8. **Sidebar collapse**: Collapse the sidebar. Confirm the single-row controls strip does not overflow or break layout (it should scroll horizontally via `overflow-x: auto`).
+6. **Primary button styling**: Confirm the "⇨ Send to Claude" button renders with the teal accent (`stitch-btn-primary`) and is visually distinct from "Copy prompt".
+7. **Share-link warning**: Paste a `claude.ai/share/` URL with direction = Download, click "Copy prompt". Confirm the warning text about share links is in the clipboard.
+8. **Other tabs unaffected**: Switch to Local, Online, Kanban, Tickets, Research tabs. Confirm their controls strips are unchanged.
+9. **Sidebar collapse**: Collapse the sidebar. Confirm the single-row controls strip does not overflow or break layout (it should scroll horizontally via `overflow-x: auto`).
+
+---
+
+**Recommendation:** Complexity 3/10 → **Send to Coder.**

@@ -588,7 +588,7 @@
         return { headerContainer, contentDiv };
     }
 
-    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll, tabKey, searchActive = false) {
+    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll, tabKey, searchActive = false, folderActionsFn = undefined) {
         const folderIdMap = new Map();
         subfolderNodes.forEach(f => folderIdMap.set(f.id, f));
 
@@ -612,18 +612,19 @@
             if (folderDocs.length === 0 && !showAll) return;
 
             const hasSelectedDoc = folderDocs.some(d => state.activeSource === 'local-folder' && state.activeDocId === d.id);
+            const actions = folderActionsFn
+                ? folderActionsFn(folder.id)
+                : [{
+                    label: 'Link',
+                    title: 'Copy subfolder path to clipboard',
+                    onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: folder.id })
+                }];
             const { headerContainer, contentDiv } = buildAccordionFolderHeader({
                 folderPath: folder.id,
                 folderName: folder.name,
                 docCount: folderDocs.length,
                 tabKey,
-                actions: [
-                    {
-                        label: 'Link',
-                        title: 'Copy subfolder path to clipboard',
-                        onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: folder.id })
-                    }
-                ],
+                actions,
                 subheader: true,
                 forceOpen: hasSelectedDoc || searchActive
             });
@@ -639,7 +640,7 @@
         });
     }
 
-    function renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, createCardFn, tabKey = 'folder-grouped') {
+    function renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, createCardFn, tabKey = 'folder-grouped', folderActionsFn = undefined) {
         const folderPathsList = folderPaths || [];
 
         const foldersBySourceFolder = new Map();
@@ -649,6 +650,14 @@
             if (!foldersBySourceFolder.has(sf)) foldersBySourceFolder.set(sf, []);
             foldersBySourceFolder.get(sf).push(f);
         });
+
+        const makeFolderActions = (fp) => folderActionsFn
+            ? folderActionsFn(fp)
+            : [{
+                label: 'Link',
+                title: 'Copy folder path to clipboard',
+                onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: fp })
+            }];
 
         if (search) {
             const byFolder = new Map();
@@ -664,17 +673,11 @@
                     folderName: sf.split(/[\\/]/).filter(Boolean).pop() || sf,
                     docCount: docs.length,
                     tabKey,
-                    actions: [
-                        {
-                            label: 'Link',
-                            title: 'Copy folder path to clipboard',
-                            onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: sf })
-                        }
-                    ],
+                    actions: makeFolderActions(sf),
                     forceOpen: true
                 });
                 docList.appendChild(headerContainer);
-                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false, tabKey, true);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false, tabKey, true, folderActionsFn);
             });
         } else {
             const docsByFolder = new Map();
@@ -693,17 +696,11 @@
                     folderName: fp.split(/[\\/]/).filter(Boolean).pop() || fp,
                     docCount: docs.length,
                     tabKey,
-                    actions: [
-                        {
-                            label: 'Link',
-                            title: 'Copy folder path to clipboard',
-                            onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: fp })
-                        }
-                    ],
+                    actions: makeFolderActions(fp),
                     forceOpen: hasSelectedDoc
                 });
                 docList.appendChild(headerContainer);
-                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(fp) || [], createCardFn, true, tabKey, false);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(fp) || [], createCardFn, true, tabKey, false, folderActionsFn);
             });
             const configuredSet = new Set(folderPathsList);
             docsByFolder.forEach((docs, sf) => {
@@ -714,17 +711,11 @@
                         folderName: sf.split(/[\\/]/).filter(Boolean).pop() || sf,
                         docCount: docs.length,
                         tabKey,
-                        actions: [
-                            {
-                                label: 'Link',
-                                title: 'Copy folder path to clipboard',
-                                onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: sf })
-                            }
-                        ],
+                        actions: makeFolderActions(sf),
                         forceOpen: hasSelectedDoc
                     });
                     docList.appendChild(headerContainer);
-                    renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true, tabKey, false);
+                    renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true, tabKey, false, folderActionsFn);
                 }
             });
         }
@@ -4548,6 +4539,24 @@
         return state.claudeWorkspaceRootFilter || '';
     }
 
+    function createClaudeDocCard(doc, sourceId, rootEntry) {
+        const ext = doc.name.substring(doc.name.lastIndexOf('.')).toLowerCase();
+        const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext);
+        return renderDocCard({
+            title: doc.name || doc.id,
+            subtitle: isImage ? 'Image' : 'HTML',
+            sourceId,
+            nodeId: doc.id,
+            nodeMetadata: doc.metadata,
+            actions: [],
+            isSelected: state.activeClaudeDocId === doc.id,
+            clickHandler: () => {
+                loadClaudePreview(sourceId, doc.id, doc.name);
+                renderClaudeDocs(rootEntry);
+            }
+        });
+    }
+
     function renderClaudeDocs(rootEntry) {
         const { sourceId, nodes, folderPaths } = rootEntry;
         const treePaneClaude = document.getElementById('tree-pane-claude');
@@ -4578,87 +4587,40 @@
         docList.dataset.sourceId = sourceId;
         treePaneClaude.appendChild(docList);
 
-        if (!nodes || nodes.length === 0) {
-            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No files or folders found.</div>';
-            return;
-        }
-
-        let docNodes = (nodes || []).filter(n => {
-            if (n.kind === 'folder') return true;
-            const ext = n.name.substring(n.name.lastIndexOf('.')).toLowerCase();
+        let docNodes = (nodes || []).filter(n => n.kind === 'document');
+        docNodes = docNodes.filter(d => {
+            const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
             return ['.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext);
         });
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
 
         const search = String(state.claudeDocsSearch || '').trim().toLowerCase();
         if (search) {
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
-        if (docNodes.length === 0) {
-            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching files or folders found.</div>';
+        if (docNodes.length === 0 && (search || !folderPaths || folderPaths.length === 0)) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching files found.</div>';
             return;
         }
 
-        // Partition the nodes by type so each group renders under its own subheader
-        // (Folders / HTML / Images), matching the HTML Previews and Images tabs.
-        const getFileExt = (name) => {
-            const i = name.lastIndexOf('.');
-            return i >= 0 ? name.substring(i).toLowerCase() : '';
-        };
-        const folderNodes = docNodes.filter(n => n.kind === 'folder');
-        const htmlNodes = docNodes.filter(n => n.kind !== 'folder' && ['.html', '.htm'].includes(getFileExt(n.name)));
-        const imageNodes = docNodes.filter(n => n.kind !== 'folder' && ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(getFileExt(n.name)));
-
-        function renderGroup(subheaderText, groupNodes, isImageGroup) {
-            if (groupNodes.length === 0) return;
-
-            const hasSelectedDoc = groupNodes.some(d => !d.kind || d.kind !== 'folder' ? state.activeClaudeDocId === d.id : false);
-            const { headerContainer, contentDiv } = buildAccordionFolderHeader({
-                folderPath: `claude-type::${subheaderText}`,
-                folderName: subheaderText,
-                docCount: groupNodes.length,
-                tabKey: 'claude',
-                actions: [],
-                subheader: true,
-                forceOpen: hasSelectedDoc || !!search
-            });
-            docList.appendChild(headerContainer);
-
-            groupNodes.forEach(doc => {
-                const isFolder = doc.kind === 'folder';
-                const card = renderDocCard({
-                    title: doc.name || doc.id,
-                    subtitle: isFolder ? 'Folder' : (isImageGroup ? 'Image' : 'HTML'),
-                    sourceId,
-                    nodeId: doc.id,
-                    nodeMetadata: doc.metadata,
-                    actions: [],
-                    isSelected: isFolder ? false : (state.activeClaudeDocId === doc.id),
-                    clickHandler: () => {
-                        if (isFolder) {
-                            let relativePath = doc.id.includes(':') ? doc.id.substring(doc.id.indexOf(':') + 1) : doc.id;
-                            state.claudeTargetFolder = relativePath;
-
-                            const pane = document.getElementById('tree-pane-claude');
-                            if (pane) {
-                                pane.querySelectorAll('.tree-node.selected').forEach(el => el.classList.remove('selected'));
-                            }
-                            const wrapper = findTreeNodeInPane('tree-pane-claude', doc.id);
-                            if (wrapper) {
-                                wrapper.classList.add('selected');
-                            }
-                        } else {
-                            loadClaudePreview(sourceId, doc.id, doc.name);
-                        }
-                    }
-                });
-                contentDiv.appendChild(card);
-            });
-        }
-
-        renderGroup('Folders', folderNodes, false);
-        renderGroup('HTML', htmlNodes, false);
-        renderGroup('Images', imageNodes, true);
+        renderFolderGroupedDocs(
+            docList,
+            docNodes,
+            folderNodes,
+            folderPaths,
+            search,
+            (doc) => createClaudeDocCard(doc, sourceId, rootEntry),
+            'claude',
+            (folderPath) => [{
+                label: state.claudeTargetFolder === folderPath ? '✓ Target' : 'Set target',
+                title: 'Set this folder as the import target',
+                onClick: () => {
+                    state.claudeTargetFolder = folderPath;
+                    renderClaudeDocs(rootEntry);
+                }
+            }]
+        );
     }
 
     function applySidebarState() {
