@@ -130,3 +130,47 @@ This:
 ---
 
 **Recommendation:** Complexity is 2/10 → **Send to Intern**.
+
+---
+
+## Reviewer Pass — Completed
+
+### Files Changed (Verified In-Place)
+
+- `src/webview/planning.js` — `ticketLinkCopied` handler (lines 4407-4412): replaced `flashCopyBtn` with `flashIconBtn`, removed both `showTicketsStatus` calls (success + partial-success warning). `ticketLinkFailed` handler (lines 4413-4419) preserved unchanged. `flashCopyBtn` function (line 9280) retained for Refine button (line 7789). No other files modified.
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | MAJOR | Partial-success warning on "Link all" silently suppressed — clipboard receives available links but user gets no indication N tickets were skipped. Plan documented this under "User Review Required" as a deliberate scope decision, but no explicit user confirmation was recorded before implementation. | planning.js:4407-4412 (the removed `missingCount > 0` branch) |
+| 2 | NIT | No regression assertion locks in the new behavior (`showTicketsStatus` absent from `ticketLinkCopied`, `flashIconBtn` used). Existing test only checks the case label exists. A future edit could silently revert this. | test gap, deferred per skip-tests directive |
+| 3 | NIT | `_lastLinkTicketBtn.disabled = false` in the failure path (line 4416) is now partly dead defensive code — the success path no longer sets `disabled = true` (that was `flashCopyBtn`'s job). Harmless no-op on an already-enabled button. | planning.js:4416 |
+
+No CRITICAL findings.
+
+### Stage 2 — Balanced Synthesis & Disposition
+
+- **Finding 1 (MAJOR):** Keep as-is. This is a documented UX scope decision, not a code defect. The total-failure path (`ticketLinkFailed`) is preserved and still surfaces errors. The clipboard still receives the available links — no data loss. No code fix warranted. **Process note:** the unconfirmed-approval gap should be closed with the user out-of-band, but it does not block this review.
+- **Finding 2 (NIT):** Defer. Plan explicitly defers the test addition to a future session per the skip-tests directive.
+- **Finding 3 (NIT):** Keep. Harmless defensive reset on a shared error path. Touching it risks the failure path for zero benefit.
+
+**Verdict:** No CRITICAL or MAJOR *code* findings to fix. Implementation is correct, minimal, and matches the plan exactly. No code changes applied by this review.
+
+### Validation Results
+
+Per review directives: **no compilation run, no automated tests run.** Static verification performed:
+
+- `ticketLinkCopied` handler (planning.js:4407-4412): uses `flashIconBtn`, no `showTicketsStatus` call ✓
+- `ticketLinkFailed` handler (planning.js:4413-4419): preserved, still surfaces errors via `showTicketsStatus` ✓
+- `flashCopyBtn` (planning.js:9280): retained, still called by Refine button (line 7789) ✓
+- `flashIconBtn` (planning.js:9298): exists, toggles `.flash` class ✓
+- `.flash` / `iconFlash` CSS (planning.html:1801-1808): present ✓
+- "Link all" button (planning.js:7383): shares `_lastLinkTicketBtn` handler path, consistent behavior ✓
+- `showTicketsStatus` (planning.js:540): still defined, 40+ other call sites intact — no orphaning ✓
+
+### Remaining Risks
+
+1. **Partial-success silent suppression (MAJOR, accepted):** "Link all" with missing local files no longer warns the user. Deliberate per plan scope. If user feedback later rejects this, the fix is to re-add a *non-footer* indicator (e.g., a transient inline badge on the "Link all" button) rather than restoring the footer — the footer was the actual complaint.
+2. **No regression test for new behavior (NIT, deferred):** Recommended future assertion in `tickets-link-to-ticket-regression.test.js`: the `ticketLinkCopied` case block must NOT contain `showTicketsStatus` and MUST contain `flashIconBtn`.
+3. **Dead `disabled = false` in failure path (NIT, kept):** Cosmetic only; no functional impact.
