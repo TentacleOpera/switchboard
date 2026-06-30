@@ -188,3 +188,7 @@ Automated tests and project compilation are NOT run as part of this plan session
 ## Recommendation
 
 Complexity 4/10 → **Send to Coder**.
+
+## Review Findings
+
+Reviewer pass found the core removal (extension.ts, setup.html, TaskViewerProvider.ts, SetupPanelProvider.ts, package.json, docs, README, .vscode/settings.json) fully applied and grep-clean. One CRITICAL orphan was missed by the plan: `src/services/SettingsSyncService.ts` still listed `'preventAgentFileOpening'` and `'statusBar.showAgentOpenToggle'` in `SYNCABLE_KEYS`, which would have caused `bulkPushCurrentSettings` to write stale rows into users' shared `kanban.db` and `restoreFromDb` to replay old DB rows back into VS Code config as unknown workspace settings (cross-IDE sync would re-seed the dead keys). Fix applied: removed both entries from `SYNCABLE_KEYS` (file: `src/services/SettingsSyncService.ts:34,46`). Post-fix grep sweep across `src docs package.json README.md .vscode/settings.json` returns zero matches for all guard identifiers. Compilation/tests skipped per session directives. Remaining risk: pre-existing `setting.preventAgentFileOpening` / `setting.statusBar.showAgentOpenToggle` rows already in users' DBs from before upgrade are harmless unknowns (VS Code ignores them on read) but are not purged by this change — a one-shot DB cleanup is out of scope.

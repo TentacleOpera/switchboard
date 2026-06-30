@@ -31,7 +31,6 @@ const DBSYNC_TOGGLE_KEY = 'settings.dbSyncEnabled';
  * `package.json`, append its dotpath here.
  */
 const SYNCABLE_KEYS: readonly string[] = [
-    'preventAgentFileOpening',
     'excludeReviewedBacklogFromDropdown',
     'protocol.target',
     'accurateCoding.enabled',
@@ -43,7 +42,6 @@ const SYNCABLE_KEYS: readonly string[] = [
     'planner.gitProhibitionEnabled',
     'workspace.ignoreStrategy',
     'workspace.ignoreRules',
-    'statusBar.showAgentOpenToggle',
     'statusBar.showTerminalControls',
     'statusBar.showKanbanButton',
     'statusBar.showArtifactsButton',
