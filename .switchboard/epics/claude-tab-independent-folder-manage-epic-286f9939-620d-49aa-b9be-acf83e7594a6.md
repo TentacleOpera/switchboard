@@ -10,11 +10,11 @@ Improvements to the Claude tab of design.html
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Claude Tab: Independent Folder Management (Not Shared with HTML Previews)](../plans/feature_plan_20260625104014_claude-tab-independent-folder-management.md) — **PLAN REVIEWED**
-- [ ] [Move Claude Tab to Second Position (After Stitch)](../plans/feature_plan_20260625104015_claude-tab-move-to-second-position.md) — **PLAN REVIEWED**
-- [ ] [Separate Images and HTML in Claude Tab with Subheaders](../plans/feature_plan_20260625104016_claude-tab-separate-images-html-subheaders.md) — **PLAN REVIEWED**
-- [ ] [Remove Invented "Repo Folders & Files" Subheader from Claude Tab](../plans/feature_plan_20260625104017_claude-tab-remove-repo-folders-files-subheader.md) — **PLAN REVIEWED**
-- [ ] [Remove Confusing "Target" and "Active Terminal" from Claude Tab Function Bar](../plans/feature_plan_20260625104018_claude-tab-remove-target-active-terminal-function-bar.md) — **PLAN REVIEWED**
+- [ ] [Claude Tab: Independent Folder Management (Not Shared with HTML Previews)](../plans/feature_plan_20260625104014_claude-tab-independent-folder-management.md) — **CODE REVIEWED**
+- [ ] [Move Claude Tab to Second Position (After Stitch)](../plans/feature_plan_20260625104015_claude-tab-move-to-second-position.md) — **CODE REVIEWED**
+- [ ] [Separate Images and HTML in Claude Tab with Subheaders](../plans/feature_plan_20260625104016_claude-tab-separate-images-html-subheaders.md) — **CODE REVIEWED**
+- [ ] [Remove Invented "Repo Folders & Files" Subheader from Claude Tab](../plans/feature_plan_20260625104017_claude-tab-remove-repo-folders-files-subheader.md) — **CODE REVIEWED**
+- [ ] [Remove Confusing "Target" and "Active Terminal" from Claude Tab Function Bar](../plans/feature_plan_20260625104018_claude-tab-remove-target-active-terminal-function-bar.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Implementation Status — Implemented 2026-06-25 (Epic Orchestrator)

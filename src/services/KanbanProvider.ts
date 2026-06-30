@@ -4661,6 +4661,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
             )[0];
             if (resolved === 'BACKLOG') resolved = 'CREATED';
             const current = this._normalizeLegacyKanbanColumn(epic.kanbanColumn) || 'CREATED';
+            // An epic is a container: once it has a real column, that column is
+            // authoritative and must NOT be re-derived from its subtasks. This
+            // function's ONLY job is to self-heal the 'CREATED' clobber that
+            // insertFileDerivedPlan forces on a fresh INSERT (re-import after the
+            // registerPendingCreation window, or the atomic-write DELETE->re-INSERT
+            // race). Re-deriving a non-'CREATED' column yanks an epic the user
+            // advanced (e.g. to CODE REVIEWED) back down to its least-progressed
+            // subtask on every epic-file re-import — the exact regression this guard
+            // prevents. Subtask progress never drags the epic backward.
+            if (current !== 'CREATED') return;
             if (resolved === current) return; // already correct, skip the write
             const workspaceId = await db.getWorkspaceId();
             if (!workspaceId) return;
