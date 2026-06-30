@@ -209,3 +209,73 @@ Additionally, the research confirmed that the ready-handshake pattern is the **c
 ## Recommendation
 
 Complexity is 7 (High — new async pattern, cross-webview state synchronization, multiple race windows). **Send to Lead Coder.**
+
+---
+
+## Code Review Results (Reviewer Pass — 2026-06-30)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| NIT-1 | NIT | `PlanningPanelProvider.ts:3017,3028` | `fetchKanbanPlans` response + error case still use direct `this._projectPanel?.webview.postMessage(...)` instead of `postMessageToProjectWebview(...)`. Safe — webview initiates fetch so it's guaranteed ready — but inconsistent with the 4 proactive pushes that were routed through the queue. |
+| NIT-2 | NIT | `project.js:458` | Epics workspace filter intent uses bare `opts.includes(epicWs)` without `normalizeRoot`, while the kanban twin at lines 448-449 correctly normalizes both sides. Out of scope per plan but inconsistent. |
+| NIT-3 | NIT | `project.js:1633` | `tryResolvePendingEpicSelection` still has the `!itemDiv` bare `return` dead-end (no force-clear, no retry increment). Explicitly deferred to Future section. |
+| NIT-4 | NIT | `project.js:1565-1570` | `!match` 3-retry fallback clears `workspaceRoot`/`project`/`column` but not `complexity`/`search`. Pre-existing and moot — `_pendingKanbanSelection` is set to `null` at line 1571 before the re-fetch, so the re-fetched data won't trigger a selection anyway. |
+
+**No CRITICAL findings. No MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+All four findings are NIT-level. No code fixes were applied:
+- NIT-1: Defer — safe because the webview initiates `fetchKanbanPlans`; routing through the queue is cosmetic consistency only.
+- NIT-2: Defer — out of scope (epics path); file as follow-up alongside NIT-3.
+- NIT-3: Defer — explicitly out of scope per plan's Future section.
+- NIT-4: Defer — pre-existing, moot because selection is abandoned before re-fetch.
+
+### Implementation Audit (all requirements verified present)
+
+| Requirement | Status | Location |
+|-------------|--------|----------|
+| `_projectPanelReady` + `_pendingProjectMessages` fields | ✅ | `PlanningPanelProvider.ts:69-70` |
+| `_projectPanelReadyTimer` (10s timeout safeguard) | ✅ | `PlanningPanelProvider.ts:71,347-352` |
+| `postMessageToProjectWebview` queues if not ready | ✅ | `PlanningPanelProvider.ts:756-762` |
+| `_flushPendingProjectMessages` helper | ✅ | `PlanningPanelProvider.ts:764-774` |
+| `case 'webviewReady'` before allRoots guard | ✅ | `PlanningPanelProvider.ts:2011-2013` |
+| `_projectPanelReady = false` after early return in `openProject()` | ✅ | `PlanningPanelProvider.ts:338` (after early return at 326) |
+| `onDidDispose` cleanup | ✅ | `PlanningPanelProvider.ts:374-379` |
+| `vscode.postMessage({ type: 'webviewReady' })` after listener | ✅ | `project.js:1090` (listener at 385) |
+| Force-clear on `!itemDiv` when match exists | ✅ | `project.js:1578-1612` |
+| Force-clear clears complexity filter too | ✅ | `project.js:1591-1592` |
+| `_pendingKanbanFilterIntent = null` to break re-narrow loop | ✅ | `project.js:1593` |
+| Re-render + re-query after force-clear | ✅ | `project.js:1594-1595` |
+| Retry counter incremented if still hidden | ✅ | `project.js:1608` |
+| `normalizeRoot` on filter-intent workspaceRoot check | ✅ | `project.js:448-449` |
+| `normalizeRoot` on `getFilteredKanbanPlans` comparison | ✅ | `project.js:1386` |
+| No lower-casing added to `normalizeRoot` | ✅ | `project.js:1196-1200` |
+| `resolveEffectiveWorkspaceRoot` in `reviewPlan` | ✅ | `KanbanProvider.ts:6917-6918` |
+| `resolveEffectiveWorkspaceRoot` in `activatePlanInProjectPanel` | ✅ | `KanbanProvider.ts:212-213` |
+| Empty workspaceRoot guard (`getCurrentWorkspaceRoot` fallback) | ✅ | `KanbanProvider.ts:6917,212` |
+| Both paths route through `postMessageToProjectWebview` | ✅ | `KanbanProvider.ts:6919,214` |
+| 4 proactive pushes routed through queue | ✅ | `PlanningPanelProvider.ts:3204,3317,3334,3360` |
+| Optional `normalizeWorkspaceRoot` helper | ❌ Deferred | Plan says "optional" — acceptable |
+| `tryResolvePendingEpicSelection` force-clear | ❌ Deferred | Plan says "out of scope" / "Future" |
+
+### Files Changed (Implementation)
+
+- `src/services/PlanningPanelProvider.ts` — ready-handshake + outbound queue, 10s timeout, `openProject()`/`onDidDispose` reset, `_flushPendingProjectMessages`, 4 proactive pushes routed through queue
+- `src/webview/project.js` — `webviewReady` emission (line 1090), force-clear on `!itemDiv` in `tryResolvePendingKanbanSelection` (lines 1578-1612), `normalizeRoot` on filter-intent and `getFilteredKanbanPlans` (lines 448-449, 1386)
+- `src/services/KanbanProvider.ts` — `resolveEffectiveWorkspaceRoot` + empty-root guard in `reviewPlan` (lines 6917-6918) and `activatePlanInProjectPanel` (lines 212-213), both routing through `postMessageToProjectWebview`
+
+### Validation Results
+
+- **Compilation:** Skipped per session directives.
+- **Tests:** Skipped per session directives.
+- **Code audit:** Complete — all in-scope requirements verified present and correctly implemented.
+- **Manual repro:** To be run via installed VSIX by the user (see Verification Plan steps 1-7).
+
+### Remaining Risks
+
+1. **Epics review path** (`tryResolvePendingEpicSelection`, project.js:1621-1639) — same `!itemDiv` dead-end and missing `normalizeRoot` on workspace filter intent. Deferred to Future. Will manifest if an epic is hidden by a filter when Review is clicked.
+2. **`fetchKanbanPlans` response bypasses queue** (PlanningPanelProvider.ts:3017,3028) — safe because webview initiates fetch, but if the panel is disposed and recreated between fetch and response, the response is silently dropped (mitigated by the new webview sending its own `fetchKanbanPlans` on load).
+3. **`!match` 3-retry fallback** (project.js:1564-1574) — sets `_pendingKanbanSelection = null` before re-fetch, making the re-fetch useless for selection. Pre-existing; selection is abandoned after 3 retries.

@@ -172,9 +172,6 @@ export class KanbanProvider implements vscode.Disposable {
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
     private _projectFilterSaveTimeout: NodeJS.Timeout | null = null;
-    // resolvedWorkspaceRoot -> last active-project name written to that DB's config table.
-    // In-memory guard so we only write (and re-serialize the DB) when the value changes.
-    private _lastSyncedActiveProject = new Map<string, string>();
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
@@ -322,9 +319,9 @@ export class KanbanProvider implements vscode.Disposable {
             if (persistedFilter !== null) {
                 this._projectFilter = persistedFilter;
                 this._projectFilterNeedsValidation = true;
-                // The restored filter is persisted into the DB `kanban.activeProjectFilter`
-                // config key by the first _refreshBoardImpl (which also validates it against
-                // the live project list); the watcher reads it from there at import time.
+                // The DB `kanban.activeProjectFilter` row that the watcher reads was already
+                // written by setProjectFilter the last time the user picked this project and
+                // persists across reloads, so no write is needed here on restore.
             }
         }
         this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
@@ -2159,25 +2156,8 @@ export class KanbanProvider implements vscode.Disposable {
                     if (this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER && !projects.includes(this._projectFilter ?? '')) {
                         this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
                     }
-                    // The restored-and-validated filter is persisted into the DB config key
-                    // by the activeProjectName write just below, so a plan imported while a
-                    // restored project board is open is stamped correctly on first refresh.
                 }
                 const projectFilter = this._projectFilter;
-                // Persist the displayed project name into this DB's config table. The plan
-                // watcher reads it straight back when importing a new plan, so a watcher-
-                // imported plan gets stamped with the active project — exactly like the
-                // manual "Assign to project" button — with NO in-memory mirror, live
-                // resolver, or workspace-root comparison that can drift out of sync. This
-                // is the single source of truth for "what project is the board showing".
-                // See GlobalPlanWatcherService._handlePlanFile.
-                const activeProjectName = (projectFilter && projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
-                    ? projectFilter
-                    : '';
-                if (this._lastSyncedActiveProject.get(resolvedWorkspaceRoot) !== activeProjectName) {
-                    this._lastSyncedActiveProject.set(resolvedWorkspaceRoot, activeProjectName);
-                    void db.setConfig('kanban.activeProjectFilter', activeProjectName);
-                }
                 const repoScope = this._repoScopeFilter;
                 const dbRows = (projectFilter !== null || repoScope)
                     ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
@@ -4640,8 +4620,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * explicit control-plane root all match the same board.
      *
      * NOTE: the plan watcher does NOT use this — it stamps imported plans from the DB
-     * `kanban.activeProjectFilter` config key (persisted by _refreshBoardImpl), which has
-     * no dependency on live in-memory provider state at the moment of import.
+     * `kanban.activeProjectFilter` config key (written by setProjectFilter on every project
+     * dropdown switch), which has no dependency on live in-memory state at import time.
      */
     public getDisplayedProjectForRoot(watchedRoot: string): string | null {
         if (!this._currentWorkspaceRoot) return null;
@@ -4719,21 +4699,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
         this._projectFilter = filter;
         if (this._currentWorkspaceRoot) {
             const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
-            // Persist the active project into the DB `kanban.activeProjectFilter` config key
-            // the INSTANT the filter changes — the plan watcher reads it from there at import
-            // time. This does NOT depend on a later board refresh or the webview being
-            // resolved, so a plan created right after selecting a project is still stamped.
+
+            // Write the active project to the DB the moment the filter changes (this method
+            // is called on every project-dropdown switch, via the setProjectFilter /
+            // selectWorkspace message handlers). The plan watcher reads this key when it
+            // imports a new plan and stamps it — exactly like the manual Assign button.
+            // The row persists in the DB across reloads, so it also covers the case where a
+            // plan is created after a reload without re-touching the dropdown.
             const activeProjectName = (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? filter : '';
-            try {
-                const effRoot = this.resolveEffectiveWorkspaceRoot(this._currentWorkspaceRoot);
-                this._lastSyncedActiveProject.set(effRoot, activeProjectName);
-                void this._getKanbanDb(this._currentWorkspaceRoot)
-                    .setConfig('kanban.activeProjectFilter', activeProjectName)
-                    .catch(e => console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e));
-            } catch (e) {
-                // DB not ready yet (e.g. during construction) — _refreshBoardImpl will persist it.
-                console.warn('[KanbanProvider] setProjectFilter: DB unavailable to persist active project:', e);
-            }
+            void this._getKanbanDb(this._currentWorkspaceRoot)
+                .setConfig('kanban.activeProjectFilter', activeProjectName)
+                .catch(e => console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e));
 
             if (this._projectFilterSaveTimeout) {
                 clearTimeout(this._projectFilterSaveTimeout);
@@ -8566,9 +8542,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // project_id=NULL and is filtered off any project-specific board view — the
         // epic card never appears, which is the reported "not appearing as epic" bug.
         // For blank epics (zero subtasks), fall back to the board's active project filter
-        // (persisted in the DB config table by _refreshBoardImpl) so the epic shows up on
-        // the board the user was looking at when they created it. This mirrors how the
-        // file watcher stamps imported plans (GlobalPlanWatcherService._handlePlanFile).
+        // (the DB config key setProjectFilter writes on every dropdown switch) so the epic
+        // shows up on the board the user was looking at when they created it. This mirrors
+        // how the file watcher stamps imported plans (GlobalPlanWatcherService._handlePlanFile).
         let epicProject = subtasks.find(st => st.project)?.project || '';
         let epicProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
         if (!epicProject) {

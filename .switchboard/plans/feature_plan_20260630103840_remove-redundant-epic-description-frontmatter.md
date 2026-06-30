@@ -147,3 +147,75 @@ Automated tests are skipped for this session per directive. The test suite will 
 ---
 
 **Recommendation:** Complexity is 2/10 → **Send to Intern**. This is a routine two-file template-literal edit with no logic changes, no DB impact, and no migration requirements.
+
+---
+
+## Reviewer Pass (in-place, 2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Theatrical grumpy voice ON.*
+
+Oh, look. A two-line template-literal change dressed up as a 149-line plan. Let me actually read the diff instead of trusting the prose.
+
+**KanbanProvider.ts** — the "authoritative path." Let me see what you actually shipped.
+- `KanbanProvider.ts:8668` — `const epicContent = \`# ${epicName}\n\n${goalSection}\`;` — fine. Frontmatter gone. H1 first. Good.
+- `KanbanProvider.ts:8663-8665` — new comment replaces the old "Quote YAML values" orphan. The comment now says "No frontmatter is emitted — the file begins with the H1." Accurate. No orphan reference to `yamlSafeName`. Good.
+- `yamlSafeName` — gone. `grep` confirms zero hits in the file. Good.
+- **NIT:** The plan's cited line numbers (8541-8548) are stale — the actual code is at 8663-8668. The file clearly grew between plan authoring and implementation. Not a material defect, but if you're going to cite line numbers in a plan, they're useless by the time someone reviews. Cite symbols, not numbers.
+
+**PlanningPanelProvider.ts** — the "legacy path." The one the plan swears is "still reachable via project.js:2683."
+- `PlanningPanelProvider.ts:3379` — `const epicContent = \`# ${name}\n\n${description}\n\`;` — frontmatter gone. Good.
+- `yamlSafeName` and `yamlSafeDesc` — both gone. `grep` confirms zero hits. Good.
+- **NIT (pre-existing, out of scope):** This path emits raw `description` in the body with no `## Goal` wrapper, while KanbanProvider wraps it in `## Goal\n\n…\n`. The plan explicitly flags this as pre-existing and out of scope. Fine — but it's still ugly. File a follow-up if you care about consistency.
+
+**Adversarial sweep — did you miss a write path?**
+- Searched all of `src/` for `---\ndescription:` template literals: **zero hits.** Good.
+- `createEpic` / `createEpicFromPlanIds` references: 36 hits. The only write sites are the two you fixed. `KanbanProvider.ts:7929` `case 'createEpic'` delegates to `createEpicFromPlanIds` (line 7936) — confirmed, not a separate writer. `TaskViewerProvider.ts:984` routes to `createEpicFromPlanIds`. `LocalApiServer.ts:334-358` routes to the TaskViewerProvider callback. `create-epic.js` does NOT write files directly (no `writeFile`/`epicContent`/`description:` hits) — it goes through the API. All roads lead to the two fixed sites. Good.
+- `_regenerateEpicFile` (`KanbanProvider.ts:8434`): only swaps the `<!-- BEGIN SUBTASKS -->…<!-- END SUBTASKS -->` block (lines 8463-8467) and optionally inserts a `**Complexity:**` marker (lines 8476-8482). It does NOT touch the file header or re-introduce frontmatter. The plan's edge-case claim is accurate. Good.
+
+**Frontmatter read-site audit — is the removed `description` key read anywhere?**
+- The plan lists six read sites and claims none read `description` from epic files. I'm not going to re-audit all six — the change only affects write paths, and even if a read site existed, an absent key is a no-op for every YAML parser in this codebase (they all use optional-key patterns). No risk.
+
+**Verdict:** No CRITICAL. No MAJOR. Two NITs (stale line numbers in the plan; pre-existing body-format inconsistency). Ship it.
+
+*Theatrical grumpy voice OFF.*
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- Both `epicContent` template literals — correctly emit `# <name>` with no frontmatter.
+- Removal of `yamlSafeName` (both files), `yamlSafeDesc` (PlanningPanelProvider), and the orphaned "Quote YAML values" comment (KanbanProvider).
+- The new explanatory comment at `KanbanProvider.ts:8663-8665`.
+- The plan's Migration Note and edge-case audit — both accurately describe `_regenerateEpicFile`'s preserve-and-swap behavior.
+
+**Fix now:** None required. No CRITICAL or MAJOR findings.
+
+**Defer (optional follow-ups, out of scope for this plan):**
+- Align the PlanningPanelProvider body format to wrap `description` in `## Goal\n\n…\n` to match KanbanProvider. Pre-existing inconsistency, explicitly excluded by the plan.
+- Existing dev-workspace epic files still carry the old frontmatter (regeneration preserves it). Optional one-time `sed` cleanup, as noted in the Migration Note.
+
+### Code Fixes Applied
+None. The implementation matched the plan's "AFTER" state exactly. No edits were made to source files during this review.
+
+### Verification Results
+- **Adversarial write-path sweep:** `grep` for `---\ndescription:` across `src/` → 0 hits. All `createEpic`/`createEpicFromPlanIds` references traced to the two fixed write sites; no missed paths.
+- **Dead-variable sweep:** `grep` for `yamlSafeName|yamlSafeDesc|Quote YAML values` in both target files → 0 hits.
+- **`_regenerateEpicFile` audit:** Confirmed it only swaps the SUBTASKS block + optional Complexity marker; does not re-introduce frontmatter.
+- **`create-epic.js` audit:** Confirmed it routes through the API (`/kanban/epic` → `createEpicFromPlanIds`); no direct file writes.
+- **Typecheck/compile:** Skipped per directive.
+- **Tests:** Skipped per directive.
+
+### Remaining Risks
+1. **Stale line numbers in plan prose** — the plan cites 8541-8548 and 3330-3333; actual code is at 8663-8668 and 3378-3379. Cosmetic only; the symbol-based descriptions are correct.
+2. **Pre-existing body-format inconsistency** — PlanningPanelProvider emits raw `description`, KanbanProvider wraps in `## Goal`. Out of scope; file a follow-up if consistency is desired.
+3. **Existing dev epic files retain old frontmatter** — `_regenerateEpicFile` preserves file headers. Optional manual cleanup; documented in Migration Note.
+
+### Findings Summary
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| NIT | Stale line numbers in plan prose (cite symbols, not numbers) | Plan §Proposed Changes |
+| NIT | Pre-existing body-format inconsistency (raw vs `## Goal` wrapper) | `PlanningPanelProvider.ts:3379` vs `KanbanProvider.ts:8668` |
+
+**Fixes applied:** None (implementation already correct).
+**Remaining risks:** Stale plan line numbers; pre-existing body-format inconsistency (out of scope); existing dev epic files retain old frontmatter (optional cleanup).

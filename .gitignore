@@ -85,11 +85,9 @@ list_output.txt
 # Notion page content cache
 .switchboard/notion-cache.md
 
-# kanban.db is machine-local state that differs per developer — never commit it.
-# The recursive globs also block a stray SQLite DB accidentally created in a
-# subdir (e.g. plans/ or epics/) when sqlite3 is run from the wrong cwd.
+# kanban.db is already excluded by .switchboard/* above — explicit entry for documentation clarity.
+# Never commit the kanban database: it contains machine-local state that differs per developer.
 .switchboard/kanban.db
-.switchboard/**/*.db
-.switchboard/**/*.db-shm
-.switchboard/**/*.db-wal
+.switchboard/*.db-shm
+.switchboard/*.db-wal
 # <<< Switchboard managed exclusions <<<
