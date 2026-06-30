@@ -2725,9 +2725,12 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
-     * Read epic_workflow_mode from the per-workspace DB config table and push
+     * Read the epic workflow toggle state (epic_ultracode_enabled /
+     * epic_goal_enabled) from the per-workspace DB config table and push
      * the current state to the webview so the sticky toggle buttons reflect
-     * the persisted mode on board load/refresh.
+     * the persisted booleans on board load/refresh. On first load (or after a
+     * partial-migration crash) the legacy epic_workflow_mode tri-state key is
+     * used as the source of truth and the new boolean keys are persisted.
      */
     private async _postEpicWorkflowModeState(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
@@ -4716,8 +4719,22 @@ This step is what moves the plan forward in the Switchboard pipeline.
         this._projectFilter = filter;
         if (this._currentWorkspaceRoot) {
             const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
-            // The DB `kanban.activeProjectFilter` config key (read by the plan watcher) is
-            // written by _refreshBoardImpl, which runs immediately after every filter change.
+            // Persist the active project into the DB `kanban.activeProjectFilter` config key
+            // the INSTANT the filter changes — the plan watcher reads it from there at import
+            // time. This does NOT depend on a later board refresh or the webview being
+            // resolved, so a plan created right after selecting a project is still stamped.
+            const activeProjectName = (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? filter : '';
+            try {
+                const effRoot = this.resolveEffectiveWorkspaceRoot(this._currentWorkspaceRoot);
+                this._lastSyncedActiveProject.set(effRoot, activeProjectName);
+                void this._getKanbanDb(this._currentWorkspaceRoot)
+                    .setConfig('kanban.activeProjectFilter', activeProjectName)
+                    .catch(e => console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e));
+            } catch (e) {
+                // DB not ready yet (e.g. during construction) — _refreshBoardImpl will persist it.
+                console.warn('[KanbanProvider] setProjectFilter: DB unavailable to persist active project:', e);
+            }
+
             if (this._projectFilterSaveTimeout) {
                 clearTimeout(this._projectFilterSaveTimeout);
             }

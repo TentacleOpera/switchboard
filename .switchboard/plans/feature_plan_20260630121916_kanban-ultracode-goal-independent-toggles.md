@@ -232,3 +232,59 @@ No automated tests are run as part of this session (test suite will be run separ
 ---
 
 **Recommendation:** Complexity is 5 (mixed: majority routine webview/boolean changes with one moderate, well-scoped risk — the data migration). **Send to Coder.**
+
+---
+
+## Reviewer Pass (2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Steps into the room, slams a stack of printouts on the desk, adjusts glasses theatrically.*
+
+Alright. Let's see what we've got here. You were asked to convert a tri-state string into two independent booleans across three layers, migrate a shipped config key for 4,000 installs, and keep `/goal` at position-zero. Let's tear this apart.
+
+**CRITICAL — none found.** I looked. Hard. The migration is self-healing, the prompt ordering is correct, the legacy fallbacks are in place on both message directions. Annoying. I wanted to find something to yell about.
+
+**MAJOR — none found.** The state model conversion is clean. `epicUltracodeEnabled` / `epicGoalEnabled` are independent. `toggleEpicUltracode` and `toggleEpicGoal` each flip their own boolean and send the *combined* state — so the backend always gets the full picture, not a partial delta. The click listeners call the right functions. The message handler accepts both the new `{ ultracode, goal }` shape and the legacy `{ mode }` shape. The prompt builder reads both config keys independently and concatenates with `/goal` first. The `role !== 'planner'` guard is preserved. `VALID_EPIC_WORKFLOW_MODES` is gone (grep confirms zero matches). All three `_postEpicWorkflowModeState` call sites (lines 1382, 2312, 2460) pass `resolvedWorkspaceRoot` unchanged. The migration branch triggers when *either* new key is absent — so a partial-write crash between the two `setConfig` calls re-derives from the legacy key on next load. I traced every edge case in the plan's verification list against the code; they all hold.
+
+**NIT-1** — `KanbanProvider.ts:2728` (original line): The JSDoc on `_postEpicWorkflowModeState` still read "Read epic_workflow_mode from the per-workspace DB config table" — but the function no longer reads a single tri-state key. It reads two booleans with a legacy-key fallback. Misleading documentation on a migration-critical function is a future-maintainer trap. **Fixed** (see below).
+
+**NIT-2** — The message type string `'setEpicWorkflowMode'` and the state-push type `'epicWorkflowModeState'` were kept as-is for protocol compatibility. Sensible choice (avoids breaking any in-flight messages), but the names are now slightly misleading since "mode" implies a single value. Not worth a protocol-breaking rename. Defer.
+
+**NIT-3** — `getConfig` returns `''` (empty string) for a stored empty value, not `null` (KanbanDatabase.ts:3098: `String(stmt.getAsObject().value ?? '')`). This is irrelevant here because we only ever store `'true'` or `'false'`, but worth noting if someone later stores an empty string as a sentinel. Not a bug in this implementation.
+
+*Slams printouts down again, softer this time.* This is... actually solid work. The migration is the scary part and it's handled correctly. The prompt ordering is right. I hate to say it, but I don't have a CRITICAL or MAJOR for you. Get out of my office.
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- All 9 proposed changes are implemented and faithful to the plan.
+- Webview state model, toggle functions, UI update, click listeners, message handler — all correct.
+- Backend migration logic, message handler, prompt-building prepend — all correct.
+- `VALID_EPIC_WORKFLOW_MODES` fully removed.
+
+**Fix now:**
+- NIT-1: Updated the stale JSDoc on `_postEpicWorkflowModeState` to accurately describe the two-boolean read with legacy-key migration fallback. Applied.
+
+**Defer:**
+- NIT-2: Message type name `'setEpicWorkflowMode'` / `'epicWorkflowModeState'` retained for compatibility. A rename would be protocol-breaking for negligible benefit. Defer indefinitely.
+- NIT-3: `getConfig` empty-string behavior — not relevant to this feature. Note only.
+
+### Code Fixes Applied
+- `src/services/KanbanProvider.ts:2727-2734` — Updated JSDoc comment on `_postEpicWorkflowModeState` to reflect the new two-boolean read with legacy migration fallback (was stale, referencing only the old tri-state `epic_workflow_mode` key).
+
+### Validation Results
+- **Grep verification**: `VALID_EPIC_WORKFLOW_MODES` — 0 matches (confirmed removed). `epic_workflow_mode` — only in migration read-back path (line 2750) and the updated JSDoc. No stray references.
+- **Call-site verification**: All 3 `_postEpicWorkflowModeState` call sites (lines 1382, 2312, 2460) pass `resolvedWorkspaceRoot` — no changes needed, confirmed.
+- **Prefix constant verification**: `GOAL_EPIC_PREFIX = '/goal'` (line 53), `ULTRACODE_EPIC_PREFIX` (line 52) — both present and used correctly in prompt builder.
+- **getConfig null behavior**: Confirmed `KanbanDatabase.ts:3097` returns `null` for absent keys — migration absence detection is reliable.
+- **Compilation**: Skipped per session directives.
+- **Tests**: Skipped per session directives.
+
+### Files Changed (Review Pass)
+- `src/services/KanbanProvider.ts` — JSDoc comment fix on `_postEpicWorkflowModeState` (NIT-1).
+
+### Remaining Risks
+- **Low**: The legacy `epic_workflow_mode` key is never deleted from the config table (by design — enables rollback). If a future migration assumes it's absent, it could mis-read stale state. The current code treats it as source-of-truth only when new keys are absent, so this is safe for now.
+- **Low**: Manual verification steps 1–10 in the Verification Plan have not been executed in this session (per directives). They should be run by the user after installing the VSIX.
+- **None at CRITICAL/MAJOR level.**

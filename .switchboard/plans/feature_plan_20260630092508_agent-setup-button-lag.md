@@ -176,3 +176,56 @@ No automated tests run as part of this session (per session directives: skip com
 ## Recommendation
 
 Complexity 2 — **Send to Intern**. Single-method change (removal of one blocking `await` + reorder + fire-and-forget replacement), no new files, no new APIs, no schema changes, reuses the existing `switchboard.refreshUI` command. All claims verified against source.
+
+---
+
+## Code Review Results (Reviewer Pass — 2026-06-30)
+
+### Stage 1: Adversarial Findings (Grumpy Principal Engineer)
+
+| # | Severity | Finding | Location |
+|---|---|---|---|
+| 1 | NIT | Code comment says "lightweight DB read" (singular) but `refreshUI` → `_refreshRunSheetsImpl` issues three DB queries (`getBoard`, `getCompletedPlans`, `getProjects`). Directionally correct, fire-and-forget makes exact latency irrelevant. | `KanbanProvider.ts:952` |
+| 2 | NIT | `void refreshUI` is fire-and-forget with no top-level try/catch in `refreshUI` itself; unhandled rejections from `_activateWorkspaceContext`/`_refreshConfigurationState` are swallowed. Established project convention (7+ existing `void refreshUI` sites) — not a regression. | `KanbanProvider.ts:954`, `TaskViewerProvider.ts:2748` |
+| 3 | NIT (non-issue) | New-panel `ready` handler still awaits `fullSync` before dispatching `_pendingTab`. By design — initial load needs data; HTML load dominates first-open latency. | `KanbanProvider.ts:5055` |
+| 4 | Non-issue | `_pendingTab` race: verified safe — reveal-path block (lines 940–955) has no `await` before `void refreshUI`; synchronous read+clear of `_pendingTab` in single tick. | `KanbanProvider.ts:940–955` |
+| 5 | Non-issue | `switchboard.refreshUI` command registered and implemented; `switchToTab` handler in kanban.html clicks target tab. Full chain wired. | `extension.ts:1157`, `kanban.html:6008` |
+| 6 | Non-issue | Other callers (status bar, command palette) pass no `tab` → no `_pendingTab` → only `void refreshUI` runs. Instant reveal, no behavior change. | `extension.ts:1909,2195` |
+
+### Stage 2: Balanced Synthesis
+
+- **Keep (no fix):** All findings. No CRITICAL or MAJOR issues. Findings 1–2 are project-wide conventions outside this plan's scope. Finding 3 is by design.
+- **Fix now:** None.
+- **Defer:** Findings 1–2 (would require refactoring `refreshUI` error handling project-wide — separate task).
+
+### Stage 3: Code Fixes Applied
+
+None. The implementation at `KanbanProvider.ts:940–956` matches the plan's specified replacement verbatim. No code changes were needed.
+
+### Stage 4: Validation Results
+
+Per session directives: compilation skipped, automated tests skipped. Static verification:
+
+| Check | Result |
+|---|---|
+| `KanbanProvider.open()` reveal-path matches plan spec | PASS — lines 940–956 verbatim |
+| `await fullSync` removed from reveal path | PASS |
+| `switchToTab` posted synchronously before `void refreshUI` | PASS — lines 947–950 before 954 |
+| `switchboard.refreshUI` command registered | PASS — `extension.ts:1157` |
+| `refreshUI` is DB-only (no disk scan) | PASS — `_refreshRunSheetsImpl:15277–15311` |
+| `_refreshRunSheetsImpl` has internal try/catch | PASS — line 15277 |
+| New-panel path unchanged | PASS — `ready` handler line 5055 |
+| `switchToTab` handler in kanban.html | PASS — line 6008 |
+| `openKanban` message handler passes `data.tab` | PASS — `TaskViewerProvider.ts:8818` |
+| Other callers unaffected | PASS |
+| Change is committed | PASS — commit `6e77f85` |
+
+### Files Changed
+
+- `src/services/KanbanProvider.ts` — `open()` method, lines 940–956 (reveal path): removed blocking `await fullSync`, reordered `switchToTab` postMessage to fire synchronously after `reveal()`, added fire-and-forget `void refreshUI`.
+
+### Remaining Risks
+
+1. **Stale data on missed watcher events:** If a VS Code file watcher event is missed (rare; native `fs.watch` fallback at `TaskViewerProvider.ts:10430` mitigates), the board could show stale data on reveal until the next watcher event or manual "Sync Board" click. This is the same tradeoff every other panel (Design, Planning, Project) already makes — they don't sync on reveal at all. The fire-and-forget `refreshUI` pushes current DB state, so staleness is bounded to "DB hasn't been updated by watchers", not "DB is empty".
+2. **Unhandled rejection in `refreshUI`:** If `_activateWorkspaceContext` or `_refreshConfigurationState` throws, the `void` swallows it. Bounded by `_refreshRunSheetsImpl`'s internal try/catch for the board-data path. Project-wide convention; not introduced by this plan.
+3. **Manual verification still required:** The instant-reveal behavior on the AGENT SETUP button (and the onboarding-state variant) must be confirmed manually per the Manual Verification checklist above — static review cannot verify perceived UI latency.
