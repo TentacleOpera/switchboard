@@ -20336,6 +20336,86 @@ What would you like to find?`;
         void this._postMcpMonitorConfig();
     }
 
+    public async launchMcpMonitorTerminal(): Promise<void> {
+        const targetName = 'MCP Monitor';
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
+
+        // Dispose any zombie (exited) terminal with the same name
+        const existing = vscode.window.terminals.find(t => {
+            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
+            return tName === strippedTarget;
+        });
+        if (existing && existing.exitStatus !== undefined) {
+            existing.dispose();
+        }
+
+        // If a live terminal already exists, just reveal it
+        const live = vscode.window.terminals.find(t => {
+            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
+            return tName === strippedTarget && t.exitStatus === undefined;
+        });
+        if (live) {
+            live.show();
+            return;
+        }
+
+        // Auto-enable mcp_monitor visibility so createAgentGrid doesn't dispose it
+        await this.setVisibleAgent('mcp_monitor', true);
+
+        // Create the terminal
+        const terminal = vscode.window.createTerminal({
+            name: targetName,
+            location: vscode.TerminalLocation.Panel,
+            cwd: this._resolveWorkspaceRoot()
+        });
+        
+        if (!this._registeredTerminals) this._registeredTerminals = new Map();
+        this._registeredTerminals.set(this._suffixedName(targetName), terminal);
+
+        terminal.show();
+        try {
+            await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
+        } catch { /* ignore */ }
+
+        // Register in state
+        await this.updateState(async (state: any) => {
+            if (!state.terminals) state.terminals = {};
+            const key = this._suffixedName(targetName);
+            if (!state.terminals[key]) state.terminals[key] = {};
+            state.terminals[key].purpose = 'agent-grid';
+            state.terminals[key].role = 'mcp_monitor';
+            state.terminals[key].friendlyName = targetName;
+            state.terminals[key].lastSeen = new Date().toISOString();
+            state.terminals[key].ideName = vscode.env.appName;
+        });
+        this.refresh();
+
+        // Wait for shell readiness, then send startup command
+        const cmd = await this.getAgentStartupCommand('mcp_monitor');
+        if (cmd && cmd.trim()) {
+            const shellReady = new Promise<void>((resolve) => {
+                const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+                    if (e.terminal === terminal) {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+                setTimeout(() => { disposable.dispose(); resolve(); }, 5000);
+            });
+            await shellReady;
+            terminal.sendText(cmd.trim(), true);
+        }
+
+        // Push updated status to kanban
+        await this._postMcpMonitorConfig();
+    }
+
+    public async setVisibleAgent(role: string, visible: boolean): Promise<void> {
+        const config = await GlobalIntegrationConfigService.getAgentConfig<Record<string, boolean>>('visibleAgents') || {};
+        config[role] = visible;
+        await GlobalIntegrationConfigService.setAgentConfig('visibleAgents', config);
+    }
+
     private _isMcpMonitorTerminalRunning(targetRole: string): boolean {
         const openTerminals = vscode.window.terminals || [];
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('MCP Monitor'));

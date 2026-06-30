@@ -10,7 +10,7 @@ The original request was a lightweight remote model — an *ingest-biased* mode 
 
 The blocker this plan removes is **config fragmentation** — at least four surfaces touch sync with no single source of truth:
 
-- `remote.config` (Remote tab, per-workspace DB) — provider, boards, silentSync, pingMode, ping frequency (pull).
+- `remote.config` (Remote tab, per-workspace DB) — provider, boards, silentSync, ping frequency (poll).
 - `realTimeSyncEnabled` (Setup, global JSON `~/.switchboard/integration-config.json`) — whether push runs at all, per Linear/ClickUp service.
 - `completeSyncEnabled` (Setup / Linear config, global JSON) — whether terminal-column status push runs.
 - Auto-Pull modal (`kanban.html:3069`) — a **separate** background pull + interval, distinct from the Remote-tab ping loop.
@@ -134,7 +134,7 @@ Key risks: (1) the two pull loops serve different purposes (state mirroring vs. 
 - **Logic**:
   1. **On extension activation** (in `KanbanProvider` or `RemoteControlService` init), check if `syncContractMigrated` flag exists in DB.
   2. **If not migrated**:
-     a. Read old `remote.config` from DB: `db.getConfig('remote.config')` → parse to get `{ provider, boards, silentSync, pingMode, pingFrequencySeconds }`.
+     a. Read old `remote.config` from DB: `db.getConfig('remote.config')` → parse to get `{ provider, boards, silentSync, pingFrequencySeconds }`.
      b. Read `realTimeSyncEnabled` from global JSON: `GlobalIntegrationConfigService.loadConfig('linear')` / `loadConfig('clickup')` → get `realTimeSyncEnabled` for the board's provider.
      c. Read `completeSyncEnabled` from global JSON: same service config.
      d. Read Auto-Pull config from global JSON: `autoPullEnabled`, `pullIntervalMinutes`.
@@ -142,14 +142,14 @@ Key risks: (1) the two pull loops serve different purposes (state mirroring vs. 
         - `mode`: if `realTimeSyncEnabled === true` → `'full'` (preserve push behavior); else → `'ingest'`.
         - `push`: `realTimeSyncEnabled === true`.
         - `comments`: `true` (comments were always on — no existing toggle to read from).
-        - Keep `provider`, `boards`, `silentSync`, `pingMode`, `pingFrequencySeconds` from old `remote.config`.
+        - Keep `provider`, `boards`, `silentSync`, `pingFrequencySeconds` from old `remote.config`.
         - Add `autoPullEnabled`, `pullIntervalMinutes` from Auto-Pull config (or keep separate).
      f. **Write new contract** to DB: `db.setConfig('remote.config', JSON.stringify(newContract))`.
      g. **Set migration flag**: `db.setConfig('syncContractMigrated', 'true')`.
      h. **Archive legacy keys**: Do NOT delete `realTimeSyncEnabled` / `completeSyncEnabled` from global JSON. Mark them as migrated by setting a `migrated` flag in the global JSON, or simply leave them — the code now reads from the contract, not from these keys.
   3. **If already migrated**: Read the unified contract from DB. Ignore legacy keys.
-- **Edge Cases**:
-  - **No existing `remote.config`**: User never configured the Remote tab. Create a default contract: `{ provider: 'linear', boards: [], silentSync: false, pingMode: 'manual', pingFrequencySeconds: 60, mode: 'ingest', push: false, comments: true }`.
+  4. **Edge Cases**:
+  - **No existing `remote.config`**: User never configured the Remote tab. Create a default contract: `{ provider: 'linear', boards: [], silentSync: false, pingFrequencySeconds: 60, mode: 'ingest', push: false, comments: true }`.
   - **`realTimeSyncEnabled` set on both Linear and ClickUp**: Use the flag from the service matching the board's `provider` field. If provider is `'notion'`, default `push: false` (Notion push didn't exist before this refactor).
   - **Multiple workspaces**: Each workspace has its own DB, so the migration runs per-workspace. The global JSON is shared, but the migration reads the relevant service's flag based on each workspace's `provider`.
   - **Corrupt or missing global JSON**: If `GlobalIntegrationConfigService.loadConfig()` returns null, default `push: false`, `mode: 'ingest'`.

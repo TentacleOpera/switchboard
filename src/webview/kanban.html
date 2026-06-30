@@ -7770,7 +7770,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (isMcpMonitorTerminalRunning) {
                 statusLine.innerHTML = '🟢 <strong>Monitor terminal:</strong> running';
             } else {
-                statusLine.innerHTML = '🔴 <strong>No monitor terminal running:</strong> launch one as the <code>mcp_monitor</code> role with a cheap/local model and permission-bypass flags (e.g. <code>claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"</code>).';
+                statusLine.innerHTML = '🔴 <strong>No monitor terminal running.</strong>';
+                const launchBtn = document.createElement('button');
+                launchBtn.textContent = 'Launch Monitor Terminal';
+                launchBtn.style.cssText = 'display:block; margin-top:6px; padding:4px 10px; font-family:var(--font-mono); font-size:10px; cursor:pointer; background:var(--accent-teal); color:var(--bg-primary); border:none; border-radius:3px;';
+                guardInteraction(launchBtn);
+                launchBtn.addEventListener('click', () => {
+                    launchBtn.disabled = true;
+                    launchBtn.textContent = 'Launching…';
+                    postKanbanMessage({ type: 'launchMcpMonitorTerminal' });
+                });
+                statusLine.appendChild(launchBtn);
             }
             mcpConfigPanel.appendChild(statusLine);
 

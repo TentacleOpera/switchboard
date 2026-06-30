@@ -1280,6 +1280,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(removeAutobanTerminalDisposable);
 
+    const launchMcpMonitorTerminalDisposable = vscode.commands.registerCommand('switchboard.launchMcpMonitorTerminal', async () => {
+        await taskViewerProvider.launchMcpMonitorTerminal();
+    });
+    context.subscriptions.push(launchMcpMonitorTerminalDisposable);
+
     const resetAutobanPoolsDisposable = vscode.commands.registerCommand('switchboard.resetAutobanPoolsFromKanban', async () => {
         await taskViewerProvider.resetAutobanPoolsFromKanban();
     });

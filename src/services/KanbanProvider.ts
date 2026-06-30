@@ -5149,19 +5149,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // when _panel is undefined (extension activation), so we
                 // re-request it here once the webview is live.
                 this._taskViewerProvider?.postMcpMonitorConfig();
-                // §10 — Constant-mode remote control auto-starts on load.
-                {
-                    const rcRoot = this._resolveWorkspaceRoot(undefined);
-                    if (rcRoot) {
-                        try {
-                            const rc = this._getRemoteControl(rcRoot);
-                            await rc.restoreFromConfig();
-                            this._remoteControlActive = rc.isActive;
-                        } catch (e) {
-                            this._outputChannel?.appendLine(`[RemoteControl] restore failed: ${e}`);
-                        }
-                    }
-                }
                 break;
             case 'selectPlan': {
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
@@ -5510,6 +5497,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (this._taskViewerProvider && msg.config) {
                     await this._taskViewerProvider.setMcpMonitorConfigFromKanban(msg.config);
                 }
+                break;
+            }
+            case 'launchMcpMonitorTerminal': {
+                await vscode.commands.executeCommand('switchboard.launchMcpMonitorTerminal');
                 break;
             }
             case 'updateAutobanConfig': {
