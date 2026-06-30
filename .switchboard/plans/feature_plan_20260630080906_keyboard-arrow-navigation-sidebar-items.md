@@ -165,4 +165,40 @@ Tests are skipped per session directive. When tests are authored, they should co
 
 ---
 
+## Reviewer Pass (2026-06-30)
+
+### Stage 1 — Grumpy Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | **CRITICAL** | `planning.js:6814` (`loadPlanningHtmlPreview`) | The planning HTML tab's preview loader does NOT set the `.selected` class or update `state.selectedEl`. Arrow navigation relies on `pane.querySelector('.tree-node.selected')` to find the current position — without `.selected` being set on click, `current` is always null/stale, `idx` is always -1, and Right arrow is stuck on index 0 forever. The feature is completely non-functional in this tab. The plan incorrectly assumed all planning.js tabs use `loadDocumentPreview` (which manages `.selected`); the HTML tab uses a separate `loadPlanningHtmlPreview` that doesn't. |
+| 2 | NIT | `design.js:1154`, `planning.js:2068` | Button-focused arrow keys trigger navigation (BUTTON passes the input guard). Mildly surprising but harmless — defer. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Fix #1 (CRITICAL):** Applied. Added `.selected` class management and `state.selectedEl` update to `loadPlanningHtmlPreview`, mirroring `loadDocumentPreview` (planning.js:2087-2098). This fixes both the arrow navigation AND a pre-existing visual bug where clicking a planning HTML card didn't highlight it.
+- **#2 (NIT):** Defer — harmless, low-frequency edge case.
+- All other implementation details verified correct: input guard includes `[role="textbox"]`, `offsetParent !== null` visibility check, circular wrapping, `scrollIntoView({ block: 'nearest' })`, no confirm() gates, design.js 5 tabs all route through `loadDocumentPreview` or `loadClaudePreview` (both manage `.selected`).
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/webview/planning.js` | **Fix:** `loadPlanningHtmlPreview` (line 6814) now manages `.selected` class + `state.selectedEl` before loading preview, matching `loadDocumentPreview` pattern. |
+| `src/webview/design.js` | No changes needed — implementation matches plan exactly. |
+
+### Validation Results
+
+- Compilation: Skipped per session directive.
+- Tests: Skipped per session directive.
+- Manual verification: Code review confirms `findTreeNode(sourceId, docId)` (planning.js:1576) will locate the clicked card's `.tree-node` wrapper, set `.selected`, and update `state.selectedEl`. `handleSidebarArrowKeydown` (planning.js:2065) will now correctly find the current node via `pane.querySelector('.tree-node.selected')` and advance to the next/previous visible document node.
+
+### Remaining Risks
+
+1. **Key-repeat flicker** (noted in plan): Holding arrow key fires `loadPlanningHtmlPreview` at key-repeat speed. Synchronous DOM + iframe src change won't crash but may flicker. Debounce as future optimization.
+2. **Button focus triggers nav** (NIT): Tabbing to a card action button then pressing arrow keys navigates the list. Harmless — defer.
+3. **`state.selectedEl` cross-tab sharing**: `state.selectedEl` is a single reference shared across planning.js tabs (Docs, HTML). Selecting a card in one tab clears `.selected` in the other. Pre-existing behavior — not introduced by this change.
+
+---
+
 **Recommendation: Send to Intern**

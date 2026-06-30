@@ -4,6 +4,8 @@ description: 'Tickets tab improvements'
 
 # Tickets tab improvements
 
+The tickets tab needs to be actually usable for subtasks and better sidebar navigation.
+
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Sidebar Status Subheaders with Accordion Collapses in Tickets Tab](../plans/feature_plan_20260630100302_sidebar-status-accordion-headers.md) — **CREATED**

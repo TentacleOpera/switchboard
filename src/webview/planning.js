@@ -6812,6 +6812,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     function loadPlanningHtmlPreview(sourceId, docId, docName, sourceFolder) {
+        // Update selection highlighting (mirrors loadDocumentPreview so arrow-key
+        // navigation can locate the current node via .tree-node.selected)
+        if (state.selectedEl) {
+            state.selectedEl.classList.remove('selected');
+        }
+        const wrapper = findTreeNode(sourceId, docId);
+        if (wrapper) {
+            wrapper.classList.add('selected');
+            state.selectedEl = wrapper;
+        }
+
         const initialState = document.getElementById('planning-html-initial-state');
         const loadingState = document.getElementById('planning-html-loading-state');
         const previewWrapper = document.getElementById('planning-html-preview-wrapper');
@@ -8232,20 +8243,13 @@ Instructions:
             renderTicketsLinearPanel();
         } else if (lastIntegrationProvider === 'clickup') {
             renderTicketsClickUpPanel();
-        } else {
-            // No integration configured — disable create button
-            const { createButton } = getTicketsTabElements();
-            if (createButton) {
-                createButton.disabled = true;
-                createButton.title = 'Configure an integration in Setup first';
-            }
         }
     }
 
     function renderTicketsLinearPanel() {
         if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyPreview, createButton, hierarchyNav } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyPreview, hierarchyNav } = getTicketsTabElements();
 
         // Show Linear toolbar elements
         if (searchInput) searchInput.style.display = '';
@@ -8254,11 +8258,6 @@ Instructions:
         if (clickUpStatusFilter) clickUpStatusFilter.style.display = 'none';
         if (refreshButton) refreshButton.style.display = '';
         if (hierarchyNav) hierarchyNav.style.display = 'none';
-
-        if (createButton) {
-            createButton.disabled = false;
-            createButton.title = 'Create New Ticket';
-        }
 
         renderTicketsLinearStateFilterOptions();
         renderTicketsLinearProjectPickerOptions();
@@ -8711,7 +8710,7 @@ Instructions:
     function renderTicketsClickUpPanel() {
         if (lastIntegrationProvider !== 'clickup' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, emptyPreview, createButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, emptyPreview } = getTicketsTabElements();
 
         // Hide Linear toolbar elements, show ClickUp hierarchy
         if (searchInput) searchInput.style.display = '';
@@ -8722,16 +8721,6 @@ Instructions:
         }
         if (refreshButton) refreshButton.style.display = '';
         if (hierarchyNav) hierarchyNav.style.display = '';
-
-        if (createButton) {
-            if (clickUpSelectedListId) {
-                createButton.disabled = false;
-                createButton.title = 'Create New Ticket';
-            } else {
-                createButton.disabled = true;
-                createButton.title = 'Select a list first';
-            }
-        }
 
         const importAsPlansBtn = document.getElementById('tickets-import-all-kanban');
         if (importAsPlansBtn) importAsPlansBtn.style.display = clickUpSelectedListId ? '' : 'none';
