@@ -1354,15 +1354,16 @@ export class KanbanDatabase {
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                 repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
                 brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                clickup_task_id, linear_issue_id, notion_page_id, workspace_name
-            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?)
+                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_epic
+            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
                 complexity = excluded.complexity,
                 tags = excluded.tags,
                 project = COALESCE(NULLIF(excluded.project, ''), plans.project),
                 project_id = COALESCE(excluded.project_id, plans.project_id),
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epic END
         `;
         try {
             this._db.run('BEGIN');
@@ -1379,7 +1380,8 @@ export class KanbanDatabase {
                 record.createdAt,
                 record.updatedAt,
                 record.sourceType,
-                record.workspaceName || ''
+                record.workspaceName || '',
+                record.isEpic ?? 0
             ]);
             this._db.run('COMMIT');
         } catch (error) {
@@ -1515,18 +1517,29 @@ export class KanbanDatabase {
         }
     }
 
-    /** @deprecated session_id lookup risk; callers should migrate to plan_id-based updates */
     public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
         const oldEpicId = plan.epicId;
         const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
-        const ok = await this._persistedUpdate(
-            'UPDATE plans SET is_epic = ?, epic_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [isEpic, epicId, new Date().toISOString(), relativePlanFile, plan.workspaceId]
-        );
-        // Recompute affected epics' derived complexity on membership change.
-        // Covers creation linking (createEpicFromPlanIds), assign, and remove.
+        let affected = 0;
+        if (await this.ensureReady() && this._db) {
+            try {
+                this._db.run(
+                    'UPDATE plans SET is_epic = ?, epic_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                    [isEpic, epicId, new Date().toISOString(), relativePlanFile, plan.workspaceId]
+                );
+                affected = this._db.getRowsModified();
+                await this._persist();
+            } catch (error) {
+                console.error('[KanbanDatabase] updateEpicStatus failed:', error);
+                return false;
+            }
+        }
+        if (affected === 0) {
+            console.warn(`[KanbanDatabase] updateEpicStatus: 0 rows affected for planId=${planId} (race with delete?)`);
+        }
+        const ok = affected > 0;
         if (ok) {
             if (oldEpicId && oldEpicId !== epicId) { await this.recomputeEpicComplexity(oldEpicId); }
             if (epicId && isEpic === 0) { await this.recomputeEpicComplexity(epicId); }

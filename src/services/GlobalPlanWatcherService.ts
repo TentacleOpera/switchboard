@@ -552,10 +552,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     linearIssueId: importLinearIssueId
                 };
                 newRecord.sourceType = importSourceType;
+                if (relativePath.startsWith('.switchboard/epics/')) {
+                    newRecord.isEpic = 1;
+                }
                 await db.insertFileDerivedPlan(newRecord);
                 if (relativePath.startsWith('.switchboard/epics/')) {
                     await db.updateEpicStatus(newRecord.planId, 1, '');
-                    newRecord.isEpic = 1;
                     // Re-assert kanban_column from subtasks: insertFileDerivedPlan
                     // hardcodes 'CREATED' on fresh INSERT, so a re-import (after the
                     // 3000ms suppression window) would clobber the epic's resolved
@@ -611,6 +613,9 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     project: resolvedProject,
                     updatedAt: fileMtime
                 };
+                if (relativePath.startsWith('.switchboard/epics/')) {
+                    updatedRecord.isEpic = 1;
+                }
                 await db.insertFileDerivedPlan(updatedRecord);
                 // Always assert is_epic=1 for epic files. The conditional check on
                 // !plan.isEpic is unsafe: plan was fetched before insertFileDerivedPlan,
@@ -621,7 +626,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 // Unconditional update is idempotent and cheap.
                 if (relativePath.startsWith('.switchboard/epics/')) {
                     await db.updateEpicStatus(updatedRecord.planId, 1, '');
-                    updatedRecord.isEpic = 1;
                     // Same clobber vector as above (the atomic-write DELETE->re-INSERT
                     // race hits this branch: _handlePlanDelete deletes the row, then
                     // this branch's insertFileDerivedPlan re-INSERTs with
