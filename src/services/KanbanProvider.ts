@@ -26,6 +26,7 @@ import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexi
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
+import { SettingsSyncService } from './SettingsSyncService';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
 import { ClickUpSyncService, type ClickUpConfig, type ClickUpSyncResult } from './ClickUpSyncService';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
@@ -177,6 +178,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _routingMapConfig: { lead: number[]; coder: number[]; intern: number[] } | null = null;
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
+    private _settingsSyncService?: SettingsSyncService;
     private _repoScopeFilter: string | null = null;
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
@@ -192,6 +194,10 @@ export class KanbanProvider implements vscode.Disposable {
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
         this._reloadSettingsFromStore();
+    }
+
+    public setSettingsSyncService(service: SettingsSyncService) {
+        this._settingsSyncService = service;
     }
 
     private _planningPanelProvider?: import('./PlanningPanelProvider').PlanningPanelProvider;
@@ -3670,27 +3676,35 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     private async _savePromptsConfig(workspaceRoot: string, msg: any): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
+        const target = vscode.ConfigurationTarget.Workspace;
         try {
             if (typeof msg.accurateCodingEnabled === 'boolean') {
-                await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, true);
+                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('accurateCoding.enabled', msg.accurateCodingEnabled, target); }
+                else { await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, true); }
             }
             if (typeof msg.advancedReviewerEnabled === 'boolean') {
-                await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, true);
+                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('reviewer.advancedMode', msg.advancedReviewerEnabled, target); }
+                else { await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, true); }
             }
             if (typeof msg.leadChallengeEnabled === 'boolean') {
-                await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, true);
+                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('leadCoder.inlineChallenge', msg.leadChallengeEnabled, target); }
+                else { await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, true); }
             }
             if (typeof msg.aggressivePairProgramming === 'boolean') {
-                await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true);
+                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, target); }
+                else { await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true); }
             }
             if (typeof msg.designDocEnabled === 'boolean') {
-                await config.update('planner.designDocEnabled', msg.designDocEnabled, true);
+                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('planner.designDocEnabled', msg.designDocEnabled, target); }
+                else { await config.update('planner.designDocEnabled', msg.designDocEnabled, true); }
             }
             if (typeof msg.designDocLink === 'string') {
-                await config.update('planner.designDocLink', msg.designDocLink, true);
+                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('planner.designDocLink', msg.designDocLink, target); }
+                else { await config.update('planner.designDocLink', msg.designDocLink, true); }
             }
             if (typeof msg.gitProhibitionEnabled === 'boolean') {
-                await config.update('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, true);
+                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, target); }
+                else { await config.update('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, true); }
             }
         } catch (err) {
             console.error('[KanbanProvider] Failed to save prompts config:', err);

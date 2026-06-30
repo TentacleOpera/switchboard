@@ -604,13 +604,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     WORKFLOW SETTINGS
                 </div>
-                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
-                    <input id="prevent-agent-file-opening-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                    <div style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Agent File Opening Prevention</span>
-                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Auto-close any file that gets opened in the editor. Use "Override Open" right-click to bypass.</span>
-                    </div>
-                </label>
 
                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
                     <input id="auto-commit-code-review-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
@@ -635,8 +628,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </label>
 
                 <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-dim);">
-                    <div style="font-size: 11px; color: var(--text-primary); font-weight: 600; margin-bottom: 8px;">PROMPT SETTINGS EXPORT / IMPORT</div>
-                    <div style="font-size: 10px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 12px;">
+                    <div style="font-size: 11px; color: var(--text-primary); font-weight: 600; margin-bottom: 8px;">SAVE SETTINGS TO DATABASE</div>
+                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-bottom:6px;">
+                        <input id="db-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                        <div style="display:flex; flex-direction:column; gap:4px;">
+                            <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Sync VS Code settings to Kanban database</span>
+                            <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Syncs workspace-scoped settings (status bar, theme, workflow toggles). Global and per-folder settings are not synced.</span>
+                        </div>
+                    </label>
+                    <div style="display: flex; gap: 8px; margin: 10px 0 12px;">
+                        <button id="btn-bulk-push-settings" class="secondary-btn" style="flex: 1;">Import current settings to DB</button>
+                    </div>
+                    <div id="db-sync-status" style="font-size: 10px; line-height: 1.4; display: none; margin-bottom: 10px;"></div>
+                    <div style="font-size: 10px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
                         Export writes current prompt configurations to <code>.switchboard/settings.json</code>. Import reads from that file and updates your VS Code settings.
                     </div>
                     <div style="display: flex; gap: 8px; margin-bottom: 8px;">
@@ -1282,13 +1286,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 Control what gets shown on the bottom status bar for quick access.
             </div>
 
-            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
-                <input id="status-show-agent-open-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                    <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Show Agent Open Toggle</span>
-                    <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the shield toggle on the status bar to block/allow agent file opening.</span>
-                </div>
-            </label>
 
             <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
                 <input id="status-show-terminals-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
@@ -1820,10 +1817,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const tabLoadCallbacks = {
                 'setup': () => {
                     vscode.postMessage({ type: 'getGitIgnoreConfig' });
-                    vscode.postMessage({ type: 'getPreventAgentFileOpeningSetting' });
                     vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
                     vscode.postMessage({ type: 'getExcludeReviewedBacklogSetting' });
                     vscode.postMessage({ type: 'getPersistPanelsSetting' });
+                    vscode.postMessage({ type: 'getDbSyncEnabled' });
                     vscode.postMessage({ type: 'getProtocolTarget' });
                 },
                 'database': () => {
@@ -1861,8 +1858,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (themeRadio) themeRadio.checked = true;
                     updateAnimationSectionVisibility(savedTheme);
                 },
-                'status-bar': () => {
-                    vscode.postMessage({ type: 'getStatusShowAgentOpenSetting' });
                     vscode.postMessage({ type: 'getStatusShowTerminalsSetting' });
                     vscode.postMessage({ type: 'getStatusShowKanbanSetting' });
                     vscode.postMessage({ type: 'getStatusShowArtifactsSetting' });
@@ -3894,13 +3889,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'copyDbSettingsToGlobal' });
         });
  
-        document.getElementById('prevent-agent-file-opening-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'setPreventAgentFileOpeningSetting', enabled: e.target.checked });
-        });
- 
-        document.getElementById('status-show-agent-open-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'setStatusShowAgentOpenSetting', enabled: e.target.checked });
-        });
+
 
         document.getElementById('status-show-terminals-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setStatusShowTerminalsSetting', enabled: e.target.checked });
@@ -3988,6 +3977,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         document.getElementById('persist-panels-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setPersistPanelsSetting', enabled: e.target.checked });
+        });
+
+        document.getElementById('db-sync-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setDbSyncEnabled', enabled: e.target.checked });
+        });
+
+        document.getElementById('btn-bulk-push-settings')?.addEventListener('click', () => {
+            const statusEl = document.getElementById('db-sync-status');
+            if (statusEl) {
+                statusEl.style.display = 'block';
+                statusEl.style.color = 'var(--text-secondary)';
+                statusEl.textContent = 'Pushing current settings to DB…';
+            }
+            vscode.postMessage({ type: 'bulkPushSettingsToDb' });
         });
 
         document.getElementById('protocol-target')?.addEventListener('change', (e) => {
@@ -4544,13 +4547,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
-                case 'preventAgentFileOpeningSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('prevent-agent-file-opening-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
-                    });
-                    break;
-                }
+
 
                 case 'autoCommitOnCodeReviewSetting': {
                     runSetupHydration(() => {
@@ -4573,6 +4570,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
+                case 'dbSyncEnabledSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('db-sync-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'bulkPushSettingsResult': {
+                    const statusEl = document.getElementById('db-sync-status');
+                    if (statusEl) {
+                        statusEl.style.display = 'block';
+                        if (message.success) {
+                            statusEl.style.color = 'var(--text-secondary)';
+                            statusEl.textContent = `Pushed ${message.pushedCount || 0} setting(s) to DB.`;
+                        } else {
+                            statusEl.style.color = 'var(--accent-orange)';
+                            statusEl.textContent = 'Push failed — DB sync service unavailable.';
+                        }
+                    }
+                    break;
+                }
                 case 'protocolTarget': {
                     runSetupHydration(() => {
                         const select = document.getElementById('protocol-target');
@@ -4580,13 +4598,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
-                case 'statusShowAgentOpenSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('status-show-agent-open-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
-                    });
-                    break;
-                }
+
                 case 'statusShowTerminalsSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('status-show-terminals-toggle');

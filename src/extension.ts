@@ -11,6 +11,7 @@ import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
+import { SettingsSyncService } from './services/SettingsSyncService';
 import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
 import { sendRobustText } from './services/terminalUtils';
 import { importPlanFiles } from './services/PlanFileImporter';
@@ -41,9 +42,6 @@ import { MigrationService } from './services/MigrationService';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
-
-// Status bar item for file opening prevention toggle
-let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
 let terminalOpenStatusBarItem: vscode.StatusBarItem;
 let terminalClearStatusBarItem: vscode.StatusBarItem;
 let terminalResetStatusBarItem: vscode.StatusBarItem;
@@ -58,14 +56,9 @@ let memoStatusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel | null = null;
 let kanbanProvider: KanbanProvider | null = null;
 let activeTaskViewerProvider: TaskViewerProvider | null = null;
+let settingsSyncService: SettingsSyncService | null = null;
 
-// Agent File Opening Prevention: URIs explicitly allowed to stay open
-const allowedUrisToOpen = new Set<string>();
 
-// Sync context key for menu visibility. The context key name uses an "Enabled" suffix
-// to distinguish it from the configuration property "switchboard.preventAgentFileOpening".
-const preventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
-void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileOpeningEnabled', preventAgentFileOpening);
 
 function getWorkspaceSourceServicesDirectory(workspaceRoot: string): string {
     return path.join(workspaceRoot, 'src', 'services');
@@ -430,6 +423,13 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
+    // SettingsSyncService — optional mirror of workspace-scoped VS Code settings
+    // into the active workspace kanban.db. Instantiated early so restoreFromDb()
+    // can replay DB values before config-dependent init (updateStatusBarVisibility).
+    settingsSyncService = new SettingsSyncService(
+        () => kanbanProvider?.getCurrentWorkspaceRoot() ?? null
+    );
+
     // Migrate any cards stranded in deprecated columns (CONTEXT GATHERER, CODE_RESEARCHER, SPLITTER)
     // to PLAN REVIEWED. Runs once at activation; idempotent (no-op once no cards remain).
     if (workspaceRoot) {
@@ -780,9 +780,12 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(setupPanelProvider);
     taskViewerProvider.setKanbanProvider(kanbanProvider);
     taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
+    taskViewerProvider.setSettingsSyncService(settingsSyncService);
     kanbanProvider!.setTaskViewerProvider(taskViewerProvider);
+    kanbanProvider!.setSettingsSyncService(settingsSyncService);
     setupPanelProvider.setTaskViewerProvider(taskViewerProvider);
     setupPanelProvider.setKanbanProvider(kanbanProvider!);
+    setupPanelProvider.setSettingsSyncService(settingsSyncService);
     const resolveEffectiveStateRoot = (candidateWorkspaceRoot?: string): string | null => {
         const selectedWorkspaceRoot = candidateWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
@@ -1735,49 +1738,12 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         }));
 
-        // Auto-close opened files (Agent File Opening Prevention)
-        context.subscriptions.push(
-            vscode.window.tabGroups.onDidChangeTabs((event) => {
-                const config = vscode.workspace.getConfiguration('switchboard');
-                if (!config.get<boolean>('preventAgentFileOpening')) {
-                    return;
-                }
 
-                for (const tab of event.opened) {
-                    if (tab.input instanceof vscode.TabInputText) {
-                        const uriString = tab.input.uri.toString();
-                        if (allowedUrisToOpen.has(uriString)) {
-                            allowedUrisToOpen.delete(uriString);
-                            continue;
-                        }
-                        vscode.window.tabGroups.close(tab);
-                    }
-                }
-            })
-        );
 
         // 9. LEASE SYSTEM: Heartbeat removed (no longer needed).
     }
 
-    // Register file-opening commands unconditionally — they do not depend on workspaceRoot
-    context.subscriptions.push(
-        vscode.commands.registerCommand('switchboard.forceOpenFile', async (uri: vscode.Uri) => {
-            if (!uri) {
-                return;
-            }
-            allowedUrisToOpen.add(uri.toString());
-            await vscode.commands.executeCommand('vscode.open', uri);
-        })
-    );
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('switchboard.togglePreventAgentFileOpening', async () => {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const current = config.get<boolean>('preventAgentFileOpening', false);
-            await config.update('preventAgentFileOpening', !current, vscode.ConfigurationTarget.Workspace);
-            // UI refresh is handled by the configuration change listener.
-        })
-    );
 
     async function _syncTerminalRegistryWithStateImpl(workspaceRoot: string) {
         outputChannel?.appendLine(`[Extension] syncTerminalRegistryWithState called for ${workspaceRoot}`);
@@ -1886,17 +1852,6 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
 
-
-    // Initialize file opening prevention status bar item (visibility controlled by statusBar.showAgentOpenToggle)
-    fileOpeningPreventionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 102);
-    const currentPreventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
-    fileOpeningPreventionStatusBarItem.text = currentPreventAgentFileOpening ? '$(shield) Guard: On' : '$(shield) Guard: Off';
-    fileOpeningPreventionStatusBarItem.tooltip = currentPreventAgentFileOpening
-        ? 'Agent file opening is blocked. Click to allow agent file opening.'
-        : 'Agent file opening is allowed. Click to block agent file opening.';
-    fileOpeningPreventionStatusBarItem.command = 'switchboard.togglePreventAgentFileOpening';
-    context.subscriptions.push(fileOpeningPreventionStatusBarItem);
-
     // Initialize terminal grid status bar items
     terminalOpenStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
     terminalOpenStatusBarItem.text = '$(hubot) Agents';
@@ -1955,7 +1910,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
     function updateStatusBarVisibility() {
         const config = vscode.workspace.getConfiguration('switchboard');
-        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', true);
         const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
@@ -1965,7 +1919,6 @@ export async function activate(context: vscode.ExtensionContext) {
         const compactMode = config.get<boolean>('statusBar.compactMode', true);
 
         if (compactMode) {
-            fileOpeningPreventionStatusBarItem.hide();
             terminalOpenStatusBarItem.hide();
             terminalClearStatusBarItem.hide();
             terminalResetStatusBarItem.hide();
@@ -1976,9 +1929,6 @@ export async function activate(context: vscode.ExtensionContext) {
             memoStatusBarItem.hide();
 
             let enabledCount = 0;
-            if (showAgentOpenToggle) {
-                enabledCount++;
-            }
             if (showTerminalControls) {
                 enabledCount += 3;
             }
@@ -2005,12 +1955,6 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         } else {
             switchboardHubStatusBarItem.hide();
-
-            if (showAgentOpenToggle) {
-                fileOpeningPreventionStatusBarItem.show();
-            } else {
-                fileOpeningPreventionStatusBarItem.hide();
-            }
 
             if (showTerminalControls) {
                 terminalOpenStatusBarItem.show();
@@ -2056,6 +2000,15 @@ export async function activate(context: vscode.ExtensionContext) {
         updateHubTooltip();
     }
 
+    // Replay DB-synced settings into VS Code config before config-dependent init.
+    // No-op when dbSyncEnabled is false. The _isRestoring guard inside the service
+    // prevents the onDidChangeConfiguration listener below from re-syncing these.
+    try {
+        await settingsSyncService.restoreFromDb();
+    } catch (e) {
+        console.warn('[Switchboard] SettingsSync restoreFromDb skipped:', e);
+    }
+
     updateStatusBarVisibility();
 
     function updateHubTooltip() {
@@ -2063,7 +2016,6 @@ export async function activate(context: vscode.ExtensionContext) {
         const compactMode = config.get<boolean>('statusBar.compactMode', true);
         if (!compactMode) return;
 
-        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', true);
         const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
@@ -2072,11 +2024,6 @@ export async function activate(context: vscode.ExtensionContext) {
         const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
 
         const lines: string[] = ['**Switchboard Actions**', ''];
-
-        if (showAgentOpenToggle) {
-            const isOn = config.get<boolean>('preventAgentFileOpening', false);
-            lines.push(`[$(shield) Guard: ${isOn ? 'On' : 'Off'}](command:switchboard.togglePreventAgentFileOpening)`);
-        }
 
         if (showTerminalControls) {
             if (lines.length > 2) lines.push('---');
@@ -2111,19 +2058,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Listen for configuration changes
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async e => {
-        if (e.affectsConfiguration('switchboard.preventAgentFileOpening')) {
-            const value = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
-            void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileOpeningEnabled', value);
-            if (fileOpeningPreventionStatusBarItem) {
-                fileOpeningPreventionStatusBarItem.text = value ? '$(shield) Guard: On' : '$(shield) Guard: Off';
-                fileOpeningPreventionStatusBarItem.tooltip = value
-                    ? 'Agent file opening is blocked. Click to allow agent file opening.'
-                    : 'Agent file opening is allowed. Click to block agent file opening.';
-            }
-            updateStatusBarVisibility();
+        // SettingsSync catch-all: mirror in-scope switchboard.* changes to the
+        // active workspace kanban.db. No-op when sync disabled or during restore.
+        try {
+            await settingsSyncService.syncChangedSettings(e);
+        } catch (err) {
+            console.warn('[Switchboard] SettingsSync listener skipped:', err);
         }
         if (
-            e.affectsConfiguration('switchboard.statusBar.showAgentOpenToggle') ||
             e.affectsConfiguration('switchboard.statusBar.showTerminalControls') ||
             e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
             e.affectsConfiguration('switchboard.statusBar.showArtifactsButton') ||
@@ -2152,7 +2094,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const openHubDisposable = vscode.commands.registerCommand('switchboard.openHub', async () => {
         const config = vscode.workspace.getConfiguration('switchboard');
-        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', true);
         const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
@@ -2165,15 +2106,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         const items: CommandQuickPickItem[] = [];
-
-        if (showAgentOpenToggle) {
-            const currentPreventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
-            items.push({
-                label: `$(shield) Guard: ${currentPreventAgentFileOpening ? 'On' : 'Off'}`,
-                description: 'Toggle agent file opening guard',
-                command: 'switchboard.togglePreventAgentFileOpening'
-            });
-        }
 
         if (showTerminalControls) {
             if (items.length > 0) {

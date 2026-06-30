@@ -2644,19 +2644,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
                 </label>
 
-                <!-- Ping mode: radio group -->
-                <div style="margin-bottom:10px;">
-                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping mode</span>
-                    <label class="remote-radio-row">
-                        <input type="radio" name="remote-ping-mode" value="manual" checked>
-                        <span>Manual — ping only while the toolbar toggle is on</span>
-                    </label>
-                    <label class="remote-radio-row">
-                        <input type="radio" name="remote-ping-mode" value="constant">
-                        <span>Constant — always pinging when configured</span>
-                    </label>
-                </div>
-
                 <label style="display:block; margin-bottom:12px;">
                     <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
                     <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60">
@@ -7070,9 +7057,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (providerEl) providerEl.value = config.provider === 'notion' ? 'notion' : 'linear';
                 const silent = document.getElementById('remote-silent-sync');
                 if (silent) silent.checked = config.silentSync === true;
-                const mode = config.pingMode === 'constant' ? 'constant' : 'manual';
-                const radio = document.querySelector(`input[name="remote-ping-mode"][value="${mode}"]`);
-                if (radio) radio.checked = true;
                 const freq = document.getElementById('remote-ping-frequency');
                 if (freq) freq.value = config.pingFrequencySeconds || 60;
             }
@@ -7083,13 +7067,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const boards = Array.from(
                 document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
             ).map(cb => cb.value);   // keeps '' — do NOT filter by truthiness
-            const modeEl = document.querySelector('input[name="remote-ping-mode"]:checked');
             const providerEl = document.getElementById('remote-provider');
             return {
                 provider: providerEl && providerEl.value === 'notion' ? 'notion' : 'linear',
                 boards,
                 silentSync: document.getElementById('remote-silent-sync')?.checked === true,
-                pingMode: modeEl && modeEl.value === 'constant' ? 'constant' : 'manual',
                 pingFrequencySeconds: Math.min(120, Math.max(30,
                     parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
             };

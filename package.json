@@ -140,16 +140,6 @@
         "title": "Switchboard: Open Design Panel",
         "category": "Switchboard"
       },
-
-      {
-        "command": "switchboard.forceOpenFile",
-        "title": "Override Open"
-      },
-      {
-        "command": "switchboard.togglePreventAgentFileOpening",
-        "title": "Switchboard: Toggle Agent File Opening Prevention",
-        "category": "Switchboard"
-      },
       {
         "command": "switchboard.clearAllTerminals",
         "title": "Switchboard: Clear Agent Terminals"
@@ -509,11 +499,6 @@
           "description": "Automatically archive plans when moved to COMPLETED column.",
           "scope": "resource"
         },
-        "switchboard.preventAgentFileOpening": {
-          "type": "boolean",
-          "default": false,
-          "description": "Auto-close any file that gets opened in the editor."
-        },
         "switchboard.excludeReviewedBacklogFromDropdown": {
           "type": "boolean",
           "default": true,
@@ -623,12 +608,7 @@
           "default": true,
           "description": "Automatically select the first workspace folder on activation if no kanban workspace is selected."
         },
-        "switchboard.statusBar.showAgentOpenToggle": {
-          "type": "boolean",
-          "default": true,
-          "description": "Controls visibility of the existing agent-open toggle on the status bar.",
-          "scope": "window"
-        },
+
         "switchboard.statusBar.showTerminalControls": {
           "type": "boolean",
           "default": true,
@@ -724,22 +704,14 @@
           "default": true,
           "description": "Show a dedicated memo button in the status bar.",
           "scope": "window"
+        },
+        "switchboard.settings.dbSyncEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Mirror workspace-scoped Switchboard settings (status bar, theme, workflow toggles) to the active workspace kanban.db so they sync across IDEs that share the .switchboard folder. Global and per-folder settings are not synced. Default off to avoid surprise writes to shared DBs.",
+          "scope": "window"
         }
       }
-    },
-    "menus": {
-      "editor/context": [
-        {
-          "command": "switchboard.forceOpenFile",
-          "when": "switchboard.preventAgentFileOpeningEnabled"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "switchboard.forceOpenFile",
-          "when": "switchboard.preventAgentFileOpeningEnabled"
-        }
-      ]
     }
   },
   "scripts": {

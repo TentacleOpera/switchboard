@@ -265,7 +265,7 @@ Settings:
   ![Research panel — Local Docs](docs/TODO_research_panel.png)
   Settings: `switchboard.research.localFolderPaths`, `switchboard.research.htmlFolderPaths`, `switchboard.research.designFolderPaths`, `switchboard.research.antigravityBrainEnabled`
 - **Status Bar Hub** (`switchboard.openHub`) — Grouped actions dropdown.
-  Settings: `switchboard.statusBar.showAgentOpenToggle`, `switchboard.statusBar.showTerminalControls`, `switchboard.statusBar.showKanbanButton`, `switchboard.statusBar.showArtifactsButton`, `switchboard.statusBar.showDesignButton`, `switchboard.statusBar.showProjectButton`, `switchboard.statusBar.compactMode`
+  Settings: `switchboard.statusBar.showTerminalControls`, `switchboard.statusBar.showKanbanButton`, `switchboard.statusBar.showArtifactsButton`, `switchboard.statusBar.showDesignButton`, `switchboard.statusBar.showProjectButton`, `switchboard.statusBar.compactMode`
 
 ### Themes
 Skin the UI to taste. Settings: `switchboard.theme.name` (`afterburner` | `claudify`), `switchboard.theme.disableCyberAnimation` (turn off the animated cyber background).

@@ -38,8 +38,6 @@ export interface RemoteConfig {
     boards: string[];
     /** Stay synced with the provider even while pinging is off. */
     silentSync: boolean;
-    /** Constant = always pinging; Manual = only while the toolbar toggle is on. */
-    pingMode: 'constant' | 'manual';
     /** Poll cadence, 30–120s. */
     pingFrequencySeconds: number;
 }
@@ -48,7 +46,6 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     provider: 'linear',
     boards: [],
     silentSync: false,
-    pingMode: 'manual',
     pingFrequencySeconds: 60
 };
 
@@ -100,7 +97,6 @@ export class RemoteControlService {
                 provider: parsed.provider === 'notion' ? 'notion' : 'linear',
                 boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
-                pingMode: parsed.pingMode === 'constant' ? 'constant' : 'manual',
                 pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds)
             };
         } catch {
@@ -115,14 +111,10 @@ export class RemoteControlService {
             provider: config.provider === 'notion' ? 'notion' : 'linear',
             boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
-            pingMode: config.pingMode === 'constant' ? 'constant' : 'manual',
             pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds)
         };
         await db.setConfig(REMOTE_CONFIG_KEY, JSON.stringify(normalized));
-        // Constant mode keeps the ping loop running whenever configured.
-        if (normalized.pingMode === 'constant' && normalized.boards.length > 0) {
-            await this.start();
-        } else if (normalized.pingMode === 'manual' && this._active) {
+        if (this._active) {
             // Restart the timer with the new cadence.
             this._scheduleTimer(normalized.pingFrequencySeconds);
         }
@@ -147,20 +139,20 @@ export class RemoteControlService {
 
     // ── Lifecycle ───────────────────────────────────────────────────
 
-    /** Start pinging. In Manual mode with silentSync off, run a reconciling sync first. */
+    /** Start pinging. If silentSync is off, run a reconciling sync first. */
     public async start(): Promise<void> {
         const config = await this.getConfig();
         if (config.boards.length === 0) {
             this._log('No boards selected — not starting.');
             return;
         }
-        if (config.pingMode === 'manual' && !config.silentSync) {
-            this._log('Manual start with silent-sync off — running a reconciling poll first.');
+        if (!config.silentSync) {
+            this._log('Silent sync off — running a reconciling poll before starting loop.');
             await this._poll(); // one-time reconcile before the loop
         }
         this._active = true;
         this._scheduleTimer(config.pingFrequencySeconds);
-        this._log(`Started (provider=${config.provider}, mode=${config.pingMode}, every ${config.pingFrequencySeconds}s, ${config.boards.length} board(s)).`);
+        this._log(`Started (provider=${config.provider}, every ${config.pingFrequencySeconds}s, ${config.boards.length} board(s)).`);
     }
 
     /** Stop pinging. Silent sync, when on, continues elsewhere; the ping loop stops here. */
@@ -177,14 +169,6 @@ export class RemoteControlService {
     private _scheduleTimer(frequencySeconds: number): void {
         if (this._timer) { clearInterval(this._timer); }
         this._timer = setInterval(() => { void this._poll(); }, frequencySeconds * 1000);
-    }
-
-    /** Apply ping state on startup based on persisted config (Constant auto-starts). */
-    public async restoreFromConfig(): Promise<void> {
-        const config = await this.getConfig();
-        if (config.pingMode === 'constant' && config.boards.length > 0) {
-            await this.start();
-        }
     }
 
     // ── Poll cycle (provider-agnostic) ──────────────────────────────

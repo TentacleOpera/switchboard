@@ -473,8 +473,6 @@ Use the `/archive` IDE chat command to search the DuckDB plan archive.
 
 A grouped actions dropdown in the VS Code status bar. When `compactMode` is enabled, all visible Switchboard status bar actions are grouped into a single hub dropdown. When disabled, individual buttons are shown.
 
-### Settings
-- `switchboard.statusBar.showAgentOpenToggle` (default: false) — Show the agent file-open guard toggle
 - `switchboard.statusBar.showTerminalControls` (default: false) — Show Agents/Clear/Reset terminal buttons
 - `switchboard.statusBar.showKanbanButton` (default: false) — Show Open Kanban button
 - `switchboard.statusBar.showArtifactsButton` (default: false) — Show Open Artifacts Panel button
@@ -518,11 +516,6 @@ Testing failed? Press **Report** to return cards with logs to the Coder column f
 ### Cross-IDE Workflows
 Copy links and prompts to share state between Antigravity, Windsurf, and Cursor. Terminal registry supports cross-IDE gating — terminals registered by one IDE are not claimed by another.
 
-### Agent File Opening Prevention
-When enabled, Switchboard auto-closes any file that gets opened in the editor (prevents agents from opening files that clutter your workspace). Use `switchboard.forceOpenFile` to override and open a specific file.
-
-Settings: `switchboard.preventAgentFileOpening` (default: false)
-Command: `switchboard.togglePreventAgentFileOpening`
 
 ---
 
@@ -605,7 +598,6 @@ All settings are defined in `package.json` contributes.configuration. Scope: `ap
 | `switchboard.workspace.ignoreRules` | array | `[]` | resource | Stored ignore rules |
 | `switchboard.archive.dbPath` | string | `""` | resource | DuckDB archive database path |
 | `switchboard.archive.autoArchiveCompleted` | boolean | true | resource | Auto-archive completed plans |
-| `switchboard.preventAgentFileOpening` | boolean | false | — | Auto-close opened files |
 | `switchboard.excludeReviewedBacklogFromDropdown` | boolean | true | — | Hide reviewed/backlog plans from sidebar dropdown |
 | `switchboard.planWatcher.periodicScanEnabled` | boolean | true | resource | Enable periodic plan file scanning |
 | `switchboard.planWatcher.scanIntervalMs` | integer | 10000 | resource | Scan interval (2000–300000 ms) |
@@ -620,7 +612,6 @@ All settings are defined in `package.json` contributes.configuration. Scope: `ap
 | `switchboard.planScanner.chatPlanDestinations` | array | `[]` | resource | Directories for chat agent plan output |
 | `switchboard.notionBackup` | object | `{}` | — | Notion database backup configuration |
 | `switchboard.autoSelectFirstWorkspace` | boolean | true | — | Auto-select first workspace on activation |
-| `switchboard.statusBar.showAgentOpenToggle` | boolean | false | window | Show agent-open guard toggle |
 | `switchboard.statusBar.showTerminalControls` | boolean | false | window | Show terminal control buttons |
 | `switchboard.statusBar.showKanbanButton` | boolean | false | window | Show Open Kanban button |
 | `switchboard.statusBar.showArtifactsButton` | boolean | false | window | Show Open Artifacts button |
@@ -782,11 +773,6 @@ All commands registered in `extension.ts` and declared in `package.json`:
 | `switchboard.analystMapFromKanban` | Analyst context map (single) |
 | `switchboard.analystMapFromKanbanBatch` | Analyst context map (batch) |
 
-### File Opening
-| Command ID | Title |
-|------------|-------|
-| `switchboard.forceOpenFile` | Override file open prevention |
-| `switchboard.togglePreventAgentFileOpening` | Toggle agent file opening prevention |
 
 ### Workspace
 | Command ID | Title |
@@ -1396,7 +1382,6 @@ Hosted by `SetupPanelProvider`. Ten tabs:
 - **Switchboard Guide** — **Copy Tutorial Prompt** (copies prompt referencing the user manual) and **Open Docs** (opens manual in markdown preview).
 - **Git Ignore Strategy** — Dropdown (targetedGitignore / localExclude / custom / none) with read-only rules preview.
 - **Workflow Settings**:
-  - **Agent File Opening Prevention** — Auto-close files opened by agents.
   - **Auto-commit When Moving to Code Review** — Commit uncommitted changes before a plan enters Code Review.
   - **Exclude Reviewed & Backlog from Sidebar** — Hide reviewed/backlog plans from sidebar dropdown.
   - **Persist Switchboard Panels Across IDE Restarts** — Reopen Kanban, Project, Planning, and Design panels on restart.
@@ -1449,7 +1434,6 @@ Hosted by `SetupPanelProvider`. Ten tabs:
 - **Animation** — Enable/disable animated CRT sweep beam in planning panel preview.
 
 **Status Bar Tab**
-- **Show Agent Open Toggle** — Shield toggle for agent file opening guard.
 - **Show Terminal Controls** — Agents/Clear/Reset terminal buttons.
 - **Show Kanban Open Button** — Open Kanban from status bar.
 - **Show Artifacts Panel Open Button** — Open Artifacts panel from status bar.
@@ -1580,9 +1564,6 @@ A: Verify the corresponding preset is enabled (`switchboard.planScanner.presets.
 **Q: I changed the theme but the UI looks the same**
 A: Close and reopen any open Switchboard panels (Kanban, Setup, Planning). The theme applies on panel load.
 
-### Agent File Opening
-**Q: Files keep auto-closing when I'm trying to work**
-A: `switchboard.preventAgentFileOpening` is enabled. Disable it via the status bar toggle or run `switchboard.togglePreventAgentFileOpening`. To open a specific file while the guard is active, right-click and select "Override Open" (`switchboard.forceOpenFile`).
 
 ## 32. Using Switchboard with claude.ai
 

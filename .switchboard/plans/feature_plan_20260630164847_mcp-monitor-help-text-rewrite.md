@@ -117,3 +117,7 @@ No automated tests required or applicable. This change alters only display-only 
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern**. Pure copy change, two string literals, no logic or state impact. Line numbers verified against current source.
+
+## Review Findings
+
+Reviewer pass executed in-place against `src/webview/kanban.html`. Both string literals were replaced exactly as proposed: `mcpHelp.textContent` (now line 7772) carries the longer "how it works" explanation; `mcpDesc.textContent` (now line 7818) carries the short always-visible summary — the deliberate summary/detail split is preserved. The source list (Slack, Gmail, Google Calendar, custom) matches the preset keys `slack`/`gmail`/`gcal`/`custom` at lines 7700-7704. Both nodes still use `textContent` (no innerHTML injection surface); apostrophes are correctly escaped with `\'`. A repo-wide grep confirms zero remaining instances of "flat subscription" or "programmatic token billing". No CRITICAL/MAJOR findings; one NIT: actual line numbers drifted ~30 lines from the plan (7742→7772, 7788→7818) because a "Launch Monitor Terminal" button was added above in the same commit — content-based location makes this a non-issue. No code fixes required. Remaining risk: none — pure display-only copy change with no logic, state, or behavioral impact.

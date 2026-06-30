@@ -23,7 +23,6 @@
 
 	"switchboard.research.localFolderPath": "/Users/patrickvuleta/Documents/Claude/Projects",
 	"switchboard.planner.designDocLink": "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/docs/technical_documentation_gaps_c3c1aa74.md",
-	"switchboard.preventAgentFileOpening": false,
 	"switchboard.research.htmlFolderPaths": [
 		"/Users/patrickvuleta/Documents/GitHub/patrickwork/designs"
 	],
@@ -33,7 +32,6 @@
 	"switchboard.theme.name": "afterburner",
 	"switchboard.statusBar.showDesignButton": true,
 	"switchboard.theme.disableCyberAnimation": true,
-	"switchboard.statusBar.showAgentOpenToggle": true,
 	"switchboard.statusBar.showProjectButton": true,
 	"switchboard.statusBar.showMemoButton": true
 }
