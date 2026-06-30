@@ -588,7 +588,7 @@
         return { headerContainer, contentDiv };
     }
 
-    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll, tabKey) {
+    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll, tabKey, searchActive = false) {
         const folderIdMap = new Map();
         subfolderNodes.forEach(f => folderIdMap.set(f.id, f));
 
@@ -625,7 +625,7 @@
                     }
                 ],
                 subheader: true,
-                forceOpen: hasSelectedDoc
+                forceOpen: hasSelectedDoc || searchActive
             });
 
             docList.appendChild(headerContainer);
@@ -674,7 +674,7 @@
                     forceOpen: true
                 });
                 docList.appendChild(headerContainer);
-                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false, tabKey);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false, tabKey, true);
             });
         } else {
             const docsByFolder = new Map();
@@ -703,7 +703,7 @@
                     forceOpen: hasSelectedDoc
                 });
                 docList.appendChild(headerContainer);
-                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(fp) || [], createCardFn, true, tabKey);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(fp) || [], createCardFn, true, tabKey, false);
             });
             const configuredSet = new Set(folderPathsList);
             docsByFolder.forEach((docs, sf) => {
@@ -724,7 +724,7 @@
                         forceOpen: hasSelectedDoc
                     });
                     docList.appendChild(headerContainer);
-                    renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true, tabKey);
+                    renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true, tabKey, false);
                 }
             });
         }
@@ -1135,6 +1135,34 @@
             });
         }
         return wrapper;
+    }
+
+    function getVisibleDocNodes(pane) {
+        return Array.from(pane.querySelectorAll('.tree-node[data-kind="document"]'))
+            .filter(n => n.offsetParent !== null); // skip nodes hidden by collapsed accordions / display:none
+    }
+
+    function activateDocNode(node) {
+        if (!node) return;
+        node.click(); // re-uses the existing clickHandler -> loadDocumentPreview
+        node.scrollIntoView({ block: 'nearest' });
+    }
+
+    function handleSidebarArrowKeydown(e, pane) {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable || t.getAttribute?.('role') === 'textbox')) return;
+        const nodes = getVisibleDocNodes(pane);
+        if (nodes.length === 0) return;
+        const current = pane.querySelector('.tree-node.selected');
+        let idx = current ? nodes.indexOf(current) : -1;
+        if (e.key === 'ArrowRight') {
+            idx = idx < 0 ? 0 : (idx + 1) % nodes.length;
+        } else { // ArrowLeft
+            idx = idx < 0 ? nodes.length - 1 : (idx - 1 + nodes.length) % nodes.length;
+        }
+        activateDocNode(nodes[idx]);
+        e.preventDefault();
     }
 
     // ── Load Previews ──
@@ -3897,6 +3925,18 @@
         }
     });
 
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const panes = ['tree-pane-design', 'tree-pane-briefs', 'tree-pane-html', 'tree-pane-claude', 'tree-pane-images'];
+        for (const id of panes) {
+            const pane = document.getElementById(id);
+            if (pane && pane.offsetParent !== null) {
+                handleSidebarArrowKeydown(e, pane);
+                return;
+            }
+        }
+    });
+
     // Manage Folders buttons now live in each tab's sidebar toggle row (wired in the
     // render* functions), matching planning.html — no top-bar buttons to bind here.
 
@@ -4544,10 +4584,18 @@
 
         function renderGroup(subheaderText, groupNodes, isImageGroup) {
             if (groupNodes.length === 0) return;
-            const subheader = document.createElement('div');
-            subheader.className = 'type-subheader';
-            subheader.textContent = subheaderText;
-            docList.appendChild(subheader);
+
+            const hasSelectedDoc = groupNodes.some(d => !d.kind || d.kind !== 'folder' ? state.activeClaudeDocId === d.id : false);
+            const { headerContainer, contentDiv } = buildAccordionFolderHeader({
+                folderPath: `claude-type::${subheaderText}`,
+                folderName: subheaderText,
+                docCount: groupNodes.length,
+                tabKey: 'claude',
+                actions: [],
+                subheader: true,
+                forceOpen: hasSelectedDoc || !!search
+            });
+            docList.appendChild(headerContainer);
 
             groupNodes.forEach(doc => {
                 const isFolder = doc.kind === 'folder';
@@ -4577,7 +4625,7 @@
                         }
                     }
                 });
-                docList.appendChild(card);
+                contentDiv.appendChild(card);
             });
         }
 

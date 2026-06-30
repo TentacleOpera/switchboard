@@ -1,0 +1,13 @@
+---
+description: 'Tickets tab improvements'
+---
+
+# Tickets tab improvements
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Sidebar Status Subheaders with Accordion Collapses in Tickets Tab](../plans/feature_plan_20260630100302_sidebar-status-accordion-headers.md) — **CREATED**
+- [ ] [Fix Sidebar Sort Order in Tickets Tab (Newest First Within Each Status)](../plans/feature_plan_20260630100303_sidebar-sort-newest-first.md) — **CREATED**
+- [ ] [Sidebar Subtask Drill-Down When Parent Task is Selected in Tickets Tab](../plans/feature_plan_20260630100304_sidebar-subtask-drill-down.md) — **CREATED**
+- [ ] [Replace Subtask Top-Row Buttons with "To Parent Task" Navigation in Tickets Tab](../plans/feature_plan_20260630100305_subtask-top-row-buttons-to-parent.md) — **CREATED**
+<!-- END SUBTASKS -->

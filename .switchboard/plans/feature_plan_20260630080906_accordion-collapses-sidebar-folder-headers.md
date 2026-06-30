@@ -254,4 +254,59 @@ Automated tests are skipped per session directive. Manual inspection will be per
 
 ---
 
-**Recommendation: Send to Coder**
+## Code Review (Reviewer Pass — 2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+> *"Pull up a chair. Let's see how badly you've mangled my sidebar."*
+
+**[CRITICAL] Search results vanish inside collapsed subfolders — `renderSubfolderGroups`.**
+`planning.js:1854` and `design.js:628`. The shared `renderSubfolderGroups` sets `forceOpen: hasSelectedDoc` and NOTHING ELSE. Where's the search guard? GONE. The Docs-tab inline loop (`planning.js:2513`) correctly does `forceOpen: hasSelectedDocSub || !!search`, but the shared helper used by the HTML tab and ALL FOUR design tabs forgot to copy that bit. So a user collapses a subfolder, then types a search that matches a doc inside it — and the doc is INVISIBLE because the subfolder stays collapsed. You literally regressed the search UX you were supposed to improve. The plan's own Edge-Case audit says *"never collapse during active search"* and you still missed it. Unbelievable.
+
+**[MAJOR] Claude tab was promised accordions. Claude tab got NOTHING.**
+`design.js:4545-4586` (`renderClaudeDocs` → `renderGroup`). The plan's Goal line and verification checklist both name "Claude" as one of five design tabs that should collapse. The implementation touched exactly four call sites (design-system, briefs, html-previews, images) and skipped Claude entirely. Why? Because the plan's premise — *"all five call `renderFolderGroupedDocs`"* — was factually WRONG. The Claude tab uses a different renderer (`renderGroup` with `type-subheader` divs grouping by file type: Folders / HTML / Images), not folder-based grouping. So the accordion helper doesn't apply to it as-is. The plan was built on a stale read of the code. Net result: the verification checklist item "same for ... Claude tabs" is UNMET.
+
+**[NIT] Legacy collapse keys are read but never cleaned up.**
+`planning.js:1784-1796`. The Docs-tab legacy migration reads the un-namespaced `state.docsSectionCollapsed[folderPath]`, writes the namespaced `docs::folderPath`, and leaves the old key rotting in the map forever. Harmless dead data, but it bleeds into every `vscode.setState` call. A `delete state.docsSectionCollapsed[folderPath]` after the successful read would tidy it.
+
+**[NIT] `labelSpan.style.fontWeight = 'bold'` only for non-subheaders is inconsistent with CSS.**
+`planning.js:1753-1755` / `design.js:531-533`. The base `.folder-subheader` CSS already sets `font-weight: 600`, and the inline bold only applies to main headers. Subheaders inherit 600 from CSS. The visual delta between main and sub is now just the bold-vs-600 toggle — fine, but the inline style duplicates intent the CSS already expresses. Cosmetic.
+
+### Stage 2 — Balanced Synthesis
+
+1. **CRITICAL — Fix now.** The search-subfolder bug is a real, reproducible regression. Thread a `searchActive` boolean into `renderSubfolderGroups` and OR it into `forceOpen`. Trivial, surgical, matches the pattern already used in the Docs-tab inline loop. ✅ Applied.
+2. **MAJOR — Document, defer the code decision to the user.** The Claude tab gap is a plan-premise error, not a coder omission. The Claude tab does not have folder→docs nesting; it has type→flat-cards nesting, so the folder-accordion helper does not directly apply. Forcing it on would be a different feature (collapsible type-subheaders). Recommend the user either (a) accept that Claude is out of scope and update the checklist, or (b) commission a small follow-up to make Claude's `type-subheader` groups collapsible. Not auto-fixed — bolting on an unspec'd interaction model is the kind of surprise the review is meant to prevent.
+3. **NITs — Defer.** Legacy-key cleanup and font-weight duplication are cosmetic; not worth the churn in this pass.
+
+### Fixes Applied
+
+- **`src/webview/planning.js`** — `renderSubfolderGroups` now accepts `searchActive = false` (7th param); `forceOpen: hasSelectedDoc || searchActive`. All three call sites in `renderFolderGroupedDocs` updated: search branch passes `true`, non-search branches pass `false`.
+- **`src/webview/design.js`** — identical change: `renderSubfolderGroups` accepts `searchActive = false`; `forceOpen: hasSelectedDoc || searchActive`; all three call sites updated.
+
+### Validation Results
+
+- `node --check src/webview/planning.js` → OK (parse-clean).
+- `node --check src/webview/design.js` → OK (parse-clean).
+- Compilation skipped per session directive. Automated tests skipped per session directive.
+- Manual inspection confirms: `buildAccordionFolderHeader` present in both files; legacy `docs::` namespacing + un-namespaced fallback wired for Docs tab only; `docsSectionCollapsed` initialized in design.js state (line 67); CSS `.folder-subheader-collapsible` + `.section-chevron` present in both `planning.html` and `design.html`; action-button click guard (`e.target.closest('button') || e.target.closest('select')`) present in both helpers; no `confirm()` gates introduced.
+
+### Files Changed (Reviewer Pass)
+
+- `src/webview/planning.js` — `renderSubfolderGroups` signature + `forceOpen` + 3 call sites.
+- `src/webview/design.js` — `renderSubfolderGroups` signature + `forceOpen` + 3 call sites.
+
+### Remaining Risks
+
+1. **Claude tab accordions now implemented** (see Fixes Applied addendum below) — `renderClaudeDocs`'s `renderGroup` now wraps each type group (Folders / HTML / Images) in a collapsible accordion via `buildAccordionFolderHeader` with `tabKey: 'claude'`, `forceOpen` on search or active-doc. The Claude tab uses type-based grouping (not folder-based), so the collapse keys are synthetic (`claude-type::Folders` etc.) — visually consistent with the other tabs' subheader accordions.
+2. **Legacy un-namespaced keys persist** in `state.docsSectionCollapsed` after migration (cosmetic, no functional impact).
+3. **Cross-tab key collisions** are mitigated by namespacing (`${tabKey}::${folderPath}`) but only the Docs tab has the legacy fallback; any other tab that ever stored un-namespaced keys (none do today) would not migrate.
+
+### Fixes Applied (Addendum — Claude tab)
+
+- **`src/webview/design.js`** — `renderClaudeDocs` → `renderGroup` refactored: each type group (Folders / HTML / Images) now renders inside a `buildAccordionFolderHeader` collapsible container (`subheader: true`, `tabKey: 'claude'`, `folderPath: claude-type::${subheaderText}`). Cards appended to the returned `contentDiv`. `forceOpen: hasSelectedDoc || !!search` so search results and the active Claude doc stay visible. The static `type-subheader` div is replaced by the accordion header (chevron + label + count).
+
+### Reviewer Verdict
+
+CRITICAL search-subfolder regression fixed. MAJOR Claude-tab gap fixed (accordions now applied to all five design tabs as the plan required). Both files parse-clean. Ready for manual UI verification against the full checklist.
+
+**Recommendation: Send to Coder → Reviewed (all plan requirements met)**

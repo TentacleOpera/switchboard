@@ -1814,7 +1814,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return { headerContainer, contentDiv };
     }
 
-    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll, tabKey) {
+    function renderSubfolderGroups(docList, docs, subfolderNodes, createCardFn, showAll, tabKey, searchActive = false) {
         const folderIdMap = new Map();
         subfolderNodes.forEach(f => folderIdMap.set(f.id, f));
 
@@ -1851,7 +1851,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 ],
                 subheader: true,
-                forceOpen: hasSelectedDoc
+                forceOpen: hasSelectedDoc || searchActive
             });
 
             docList.appendChild(headerContainer);
@@ -1900,7 +1900,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     forceOpen: true
                 });
                 docList.appendChild(headerContainer);
-                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false, tabKey);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, false, tabKey, true);
             });
         } else {
             const docsByFolder = new Map();
@@ -1929,7 +1929,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     forceOpen: hasSelectedDoc
                 });
                 docList.appendChild(headerContainer);
-                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(fp) || [], createCardFn, true, tabKey);
+                renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(fp) || [], createCardFn, true, tabKey, false);
             });
             const configuredSet = new Set(folderPathsList);
             docsByFolder.forEach((docs, sf) => {
@@ -1950,7 +1950,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         forceOpen: hasSelectedDoc
                     });
                     docList.appendChild(headerContainer);
-                    renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true, tabKey);
+                    renderSubfolderGroups(contentDiv, docs, foldersBySourceFolder.get(sf) || [], createCardFn, true, tabKey, false);
                 }
             });
         }
@@ -2049,6 +2049,34 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         return { wrapper: container, childContainer };
+    }
+
+    function getVisibleDocNodes(pane) {
+        return Array.from(pane.querySelectorAll('.tree-node[data-kind="document"]'))
+            .filter(n => n.offsetParent !== null); // skip nodes hidden by collapsed accordions / display:none
+    }
+
+    function activateDocNode(node) {
+        if (!node) return;
+        node.click(); // re-uses the existing clickHandler -> loadDocumentPreview
+        node.scrollIntoView({ block: 'nearest' });
+    }
+
+    function handleSidebarArrowKeydown(e, pane) {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable || t.getAttribute?.('role') === 'textbox')) return;
+        const nodes = getVisibleDocNodes(pane);
+        if (nodes.length === 0) return;
+        const current = pane.querySelector('.tree-node.selected');
+        let idx = current ? nodes.indexOf(current) : -1;
+        if (e.key === 'ArrowRight') {
+            idx = idx < 0 ? 0 : (idx + 1) % nodes.length;
+        } else { // ArrowLeft
+            idx = idx < 0 ? nodes.length - 1 : (idx - 1 + nodes.length) % nodes.length;
+        }
+        activateDocNode(nodes[idx]);
+        e.preventDefault();
     }
 
     function loadDocumentPreview(sourceId, docId, docName) {
@@ -7083,6 +7111,14 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (modalAttachments && modalAttachments.style.display !== 'none') {
                 modalAttachments.style.display = 'none';
             }
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const pane = document.getElementById('tree-pane-planning-html');
+        if (pane && pane.offsetParent !== null) { // visible/active tab
+            handleSidebarArrowKeydown(e, pane);
         }
     });
 
