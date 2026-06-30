@@ -28,10 +28,10 @@ The codebase already documents the intended convention at `PlanningPanelProvider
 
 Two levels often get conflated into one setting pair:
 
-1. **"Whether" — behavior/preference toggles** (do I want X to happen, how should the agent behave): these are **user preferences → Global**. Examples: `designDocEnabled`, `designSystemDocEnabled`, `accurateCoding.enabled`, `reviewer.advancedMode`, theme/status-bar prefs.
-2. **"What" — project-specific resource identity** (the actual path, link, or doc reference that only makes sense for one project): these are **per-project → Workspace**. Examples: `designDocLink`, `designSystemDocLink`, `kanban.dbPath`, `kanban.controlPlaneRoot`.
+1. **"Whether" — behavior/preference toggles** (do I want X to happen, how should the agent behave): these are **user preferences → Global**. Examples: `designSystemDocEnabled`, `accurateCoding.enabled`, `reviewer.advancedMode`, theme/status-bar prefs.
+2. **"What" — project-specific resource identity** (the actual path, link, or doc reference that only makes sense for one project): these are **per-project → Workspace**. Examples: `designSystemDocLink`, `kanban.dbPath`, `kanban.controlPlaneRoot`.
 
-The two stay orthogonal at read time (e.g. `KanbanProvider.ts:3030`: `designDocEnabled ? config.get('designDocLink') : undefined` — the toggle *gates*, the link *provides*), so an `enabled=true` preference in a project with no link simply no-ops. Every target decision below follows this principle.
+The two stay orthogonal at read time (the toggle *gates*, the link *provides*), so an `enabled=true` preference in a project with no link simply no-ops. Every target decision below follows this principle.
 
 ## Findings (audit recap)
 
@@ -75,14 +75,12 @@ The two stay orthogonal at read time (e.g. `KanbanProvider.ts:3030`: `designDocE
 
    **"Whether" toggles → Global:**
    - `accurateCoding.enabled`, `reviewer.advancedMode`, `leadCoder.inlineChallenge` — Kanban already Global; align the Setup-panel Workspace writes (`TaskViewerProvider.ts:7930/7937/7944`) to Global.
-   - `planner.designDocEnabled` — Kanban already Global (`KanbanProvider.ts:3687`); the bugs are the **Workspace** writes at `TaskViewerProvider.ts:7976`, `PlanningPanelProvider.ts:6564`, `DesignPanelProvider.ts:1488` → change to Global.
    - `planner.designSystemDocEnabled` — currently **Workspace** at `DesignPanelProvider.ts:1473/1489` → change to Global.
 
    **"What" resource pointers → Workspace:**
-   - `planner.designDocLink` — Setup/Planning/Design already Workspace (correct); the bug is the **Global** write at `KanbanProvider.ts:3690` → change to `ConfigurationTarget.Workspace`.
    - `planner.designSystemDocLink` — already Workspace at `DesignPanelProvider.ts:1470/1492` (correct); no change, but verify no other site writes it Global.
 
-   Context on the design-doc pair: `planner.designDoc*` is the *legacy* project-wide design-doc/PRD pointer (labeled "PLANNING EPIC REFERENCE" in the planner prompt, "LEGACY DESIGN DOC (fallback baseline)" in the acceptance-review prompt — `agentPromptBuilder.ts:564`/`:766`), largely superseded by the per-project PRD. The link is project-specific (Workspace); the enable toggle is a planner-behavior preference (Global).
+   > **Note:** `planner.designDoc*` (the legacy planner design-doc pointer) is **not** in this plan's scope — it is being **removed entirely** by `feature_plan_20260630_remove-legacy-planner-design-doc.md`. Do that removal first; do not migrate `designDoc*` scopes here.
 
 ### Phase 3 — Aggressive-pair cleanup (Findings C) — Kanban is the sole owner
 5. **Remove the dead Setup-panel path entirely:**
@@ -100,7 +98,7 @@ The two stay orthogonal at read time (e.g. `KanbanProvider.ts:3030`: `designDocE
    - Grep the tree for the removed identifiers (`pairProgramming.aggressive` orphan reads, `getAggressivePairSetting`, `aggressive-pair-toggle`) → no stragglers.
 
 ## Resolved Decisions
-- **D1 — `planner.designDoc*` split by the "whether vs what" principle.** The *toggle* `planner.designDocEnabled` is a planner-behavior preference → **Global** (Kanban already correct; fix the Setup/Planning/Design Workspace writes). The *link* `planner.designDocLink` is a project-specific resource → **Workspace** (Setup/Planning/Design already correct; the Kanban's Global write `KanbanProvider.ts:3690` is the bug). Same split applied to `designSystemDocEnabled` (→ Global) / `designSystemDocLink` (→ Workspace). *(Aside: the legacy design-doc is largely superseded by the per-project PRD `prd.md`, now only a fallback acceptance baseline — a future deprecation candidate, out of scope here.)*
+- **D1 — `planner.designDoc*` is removed, not re-scoped.** Superseded by the per-project PRD; full removal is covered by `feature_plan_20260630_remove-legacy-planner-design-doc.md` (run first). The "whether vs what" split therefore applies here only to the design-*system* doc: `designSystemDocEnabled` → **Global**, `designSystemDocLink` → **Workspace**.
 - **D2 — aggressive-pair canonical key → `pairProgramming.aggressive`** (the registered name), Global, with a one-time read fallback from the retired `aggressivePairProgramming.enabled`.
 
 ## Migration Considerations (published extension, ~4k installs)
@@ -114,5 +112,5 @@ The two stay orthogonal at read time (e.g. `KanbanProvider.ts:3030`: `designDocE
 - `src/services/TaskViewerProvider.ts` — target changes (theme.name, status-bar group, workflow flags), remove dead aggressive-pair setter/getter.
 - `src/services/KanbanProvider.ts` — workflow-flag target alignment, aggressive-pair key rename + read fallback.
 - `src/services/SetupPanelProvider.ts` — remove `getAggressivePairSetting`/`aggressivePairSetting` plumbing.
-- `src/services/PlanningPanelProvider.ts`, `src/services/DesignPanelProvider.ts` — `*Enabled` toggles → Global, `*Link` pointers stay/go Workspace (per "whether vs what").
+- `src/services/DesignPanelProvider.ts` — `designSystemDocEnabled` → Global; `designSystemDocLink` stays Workspace (per "whether vs what").
 - `src/webview/setup.html` — remove orphaned aggressive-pair message handler + element reference.
