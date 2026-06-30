@@ -327,3 +327,15 @@ been removed as factually incorrect.
 logic: focus-acquire retry loop, throw-on-failure error handling, pass-through
 parameter threading. No new architectural patterns, but the error-handling
 trade-off requires care to avoid reintroducing the slash-command bug.)
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome to the review, mortal. I came looking for a focus-stealing disaster and instead found... competent code. The retry loop throws instead of falling back to `sendText` — correct, because `sendText('/clear')` would resurrect the slash-command concatenation demon. The clipboard restore on the throw path is present. The `sendRobustText` pass-through is wired. The broadcast path is untouched (confirmed: `extension.ts:2305` sends `/clear` via `sendRobustText` with 6 chars < 100 threshold → `sendText` direct, never touches clipboard paste). The call site at `TaskViewerProvider.ts:16159` is explicit with `{ acquireFocus: true }`. The catch block at 16165-16169 correctly does NOT fall back to `sendText('/clear')`. No orphaned references. No double-trigger. The `_clipboardLock` serializes pastes across terminals, preventing focus-steal races between concurrent dispatches. I found zero CRITICAL or MAJOR issues. Disappointing — I was ready to yell.
+
+- **NIT:** `show(true)` steals focus on every `/clear` + prompt dispatch, changing UX from the old `show(false)` preserve-focus behavior. This is documented in the plan's "User Review Required" section and is the correct trade-off, but users relying on background dispatches will notice focus jumping. Not a bug — just a behavior change worth noting.
+
+**Stage 2 (Balanced):** All plan requirements are correctly implemented. No code fixes needed. The focus-acquire retry loop (3 attempts, 20ms+30ms backoff), throw-on-failure with clipboard restore, `sendRobustText` pass-through, and explicit call site all match the plan. The broadcast path is confirmed unaffected. Regression analysis traced all callers of `pasteTextViaClipboard` (2 sites: `TaskViewerProvider.ts:16159` and `terminalUtils.ts:140` inside `sendRobustText`) and all callers of `sendRobustText` with `/clear` (`extension.ts:2305` — broadcast, unaffected). No double-trigger bugs, no race conditions, no orphaned references.
+
+**Files changed:** `src/services/terminalUtils.ts` (lines 51-92, 118-150), `src/services/TaskViewerProvider.ts` (line 16159).
+**Validation:** Compilation and tests skipped per session directive. Manual verification path confirmed via code trace.
+**Remaining risks:** Focus-stealing UX change on every dispatch (documented, accepted). The ~1ms verify-to-paste race is inherent to the VS Code API and mitigated by the retry loop — not fully eliminated but practically bounded.

@@ -20,7 +20,7 @@ Fix terminal targeting reliability and improve the Implementation panel's Agents
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Bug: Clipboard Paste Targets Wrong Terminal During Send-to-Terminal Actions](../plans/feature_plan_20260626100852_clipboard_paste_wrong_terminal.md) — **CODER CODED**
-- [ ] [Right-Justify and Group the Per-Terminal Locate/Clear Buttons](../plans/feature_plan_20260626124053_terminal_locate_clear_buttons_right_justified.md) — **CODER CODED**
-- [ ] [Make the Implementation Panel Agents Tab Track Extra Planner Terminals](../plans/feature_plan_20260626130005_implementation_tab_track_planner_terminals.md) — **CODER CODED**
+- [ ] [Bug: Clipboard Paste Targets Wrong Terminal During Send-to-Terminal Actions](../plans/feature_plan_20260626100852_clipboard_paste_wrong_terminal.md) — **CODE REVIEWED**
+- [ ] [Right-Justify and Group the Per-Terminal Locate/Clear Buttons](../plans/feature_plan_20260626124053_terminal_locate_clear_buttons_right_justified.md) — **CODE REVIEWED**
+- [ ] [Make the Implementation Panel Agents Tab Track Extra Planner Terminals](../plans/feature_plan_20260626130005_implementation_tab_track_planner_terminals.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->

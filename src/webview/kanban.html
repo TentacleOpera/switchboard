@@ -5049,9 +5049,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const autobanBtn = document.getElementById('btn-autoban');
             if (!autobanBtn) return;
             const isEnabled = !!(autobanConfig && autobanConfig.enabled);
+            let watchCount = 0;
+            if (isEnabled && autobanConfig) {
+                if (currentAutomationMode === 'single-column') {
+                    const sc = autobanConfig.singleColumnConfig;
+                    if (sc && sc.enabled && sc.triggerMode === 'watch') {
+                        watchCount = 1;
+                    }
+                } else if (currentAutomationMode === 'multi-column') {
+                    if (autobanConfig.rules) {
+                        for (const [column, rule] of Object.entries(autobanConfig.rules)) {
+                            const isColTransition = ['CREATED', 'PLAN REVIEWED', 'INTERN CODED', 'LEAD CODED', 'CODER CODED'].includes(column);
+                            if (isColTransition && rule && rule.enabled && rule.triggerMode === 'watch') {
+                                watchCount += 1;
+                            }
+                        }
+                    }
+                }
+            }
             autobanBtn.classList.toggle('is-active', isEnabled);
-            autobanBtn.setAttribute('data-tooltip', isEnabled ? 'Stop automation engine' : 'Start automation engine');
-            autobanBtn.title = isEnabled ? 'Stop automation engine' : 'Start automation engine';
+            const tooltipText = isEnabled 
+                ? (watchCount > 0 ? `Stop automation engine (Watching ${watchCount} column(s))` : 'Stop automation engine')
+                : 'Start automation engine';
+            autobanBtn.setAttribute('data-tooltip', tooltipText);
+            autobanBtn.title = tooltipText;
             const img = autobanBtn.querySelector('img');
             if (img) {
                 img.alt = isEnabled ? 'Stop Automation' : 'Start Automation';
@@ -7561,6 +7582,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             const state = autobanConfig;
+            let hasWatchActive = false;
+            if (currentAutomationMode === 'single-column') {
+                const sc = state.singleColumnConfig;
+                if (sc && sc.enabled && sc.triggerMode === 'watch') {
+                    hasWatchActive = true;
+                }
+            } else if (currentAutomationMode === 'multi-column') {
+                if (state.rules) {
+                    for (const [column, rule] of Object.entries(state.rules)) {
+                        const isColTransition = ['CREATED', 'PLAN REVIEWED', 'INTERN CODED', 'LEAD CODED', 'CODER CODED'].includes(column);
+                        if (isColTransition && rule && rule.enabled && rule.triggerMode === 'watch') {
+                            hasWatchActive = true;
+                            break;
+                        }
+                    }
+                }
+            }
             const autobanSelectStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
             const autobanNumberInputStyle = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
             const chipStyle = 'display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-color); border-radius:999px; padding:1px 6px; font-size:9px; color:var(--text-secondary);';
@@ -7739,7 +7777,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Help text
             const mcpHelp = document.createElement('div');
             mcpHelp.style.cssText = 'margin-top:8px; font-size:9px; color:var(--text-secondary); line-height:1.3; border-top:1px solid var(--border-color); padding-top:6px;';
-            mcpHelp.textContent = 'On this interval, Switchboard asks your monitor terminal to check the selected sources via your claude.ai MCP servers. Checks run unattended using flat subscription interactive terminal sessions (saving programmatic token billing costs).';
+            mcpHelp.textContent = 'How it works: every selected interval, Switchboard sends a prompt to your monitor terminal asking it to check the selected sources (Slack, Gmail, Google Calendar, or a custom instruction) via your claude.ai MCP servers. The terminal reports what\'s new in its pane.';
             mcpConfigPanel.appendChild(mcpHelp);
 
             const saveMonitorConfig = () => {
@@ -7785,7 +7823,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // MCP description text always visible below dropdown
             const mcpDesc = document.createElement('div');
             mcpDesc.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            mcpDesc.textContent = 'On this interval, Switchboard asks your monitor terminal to check the selected sources via your claude.ai MCP servers. Checks run unattended using flat subscription interactive terminal sessions (saving programmatic token billing costs).';
+            mcpDesc.textContent = 'The MCP Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
 
             // Append MCP Monitor components after safety note
             container.appendChild(mcpRow);
@@ -7814,6 +7852,45 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
 
             const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            const createTriggerModeToggle = (currentValue, onChange) => {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'display:inline-flex; border:1px solid var(--border-color); border-radius:3px; overflow:hidden; font-family:var(--font-mono); font-size:9px; height:18px; align-items:center; vertical-align:middle;';
+                
+                const drainBtn = document.createElement('button');
+                drainBtn.textContent = 'DRAIN';
+                drainBtn.title = 'Drain: process current cards, then stop.';
+                
+                const watchBtn = document.createElement('button');
+                watchBtn.textContent = 'WATCH';
+                watchBtn.title = 'Watch: fire on arrival, never auto-stop.';
+                
+                const updateStyles = (val) => {
+                    if (val === 'watch') {
+                        drainBtn.style.cssText = 'background:transparent; color:var(--text-secondary); border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-family:var(--font-mono);';
+                        watchBtn.style.cssText = 'background:var(--accent-teal); color:#fff; border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-weight:bold; font-family:var(--font-mono);';
+                    } else {
+                        drainBtn.style.cssText = 'background:var(--accent-teal); color:#fff; border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-weight:bold; font-family:var(--font-mono);';
+                        watchBtn.style.cssText = 'background:transparent; color:var(--text-secondary); border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-family:var(--font-mono);';
+                    }
+                };
+                
+                drainBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    updateStyles('drain');
+                    onChange('drain');
+                });
+                
+                watchBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    updateStyles('watch');
+                    onChange('watch');
+                });
+                
+                updateStyles(currentValue);
+                wrapper.appendChild(drainBtn);
+                wrapper.appendChild(watchBtn);
+                return wrapper;
+            };
             const resolveTerminalLiveness = (terminalName) => {
                 const terminal = lastTerminals[terminalName];
                 if (!terminal) {
@@ -7857,7 +7934,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 singleColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
                 container.appendChild(singleColumnContainer);
 
-                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 10, batchSize: 1, complexityFilter: 'all', terminalPools: {}, sourceColumn: 'PLAN REVIEWED', sourceColumnRole: 'lead' };
+                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 10, batchSize: 1, complexityFilter: 'all', terminalPools: {}, sourceColumn: 'PLAN REVIEWED', sourceColumnRole: 'lead', triggerMode: 'drain' };
 
                 // Client-side column→role mapping (mirrors backend columnToPromptRole)
                 const scColumnRoleMap = {
@@ -7920,7 +7997,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         complexityFilter: singleColumnConfig.complexityFilter,
                         terminalPools: singleColumnConfig.terminalPools,
                         sourceColumn: singleColumnConfig.sourceColumn,
-                        routingMode: state.routingMode || 'dynamic'
+                        routingMode: state.routingMode || 'dynamic',
+                        triggerMode: singleColumnConfig.triggerMode || 'drain'
                     });
                     renderAutobanPanel();
                 });
@@ -7980,7 +8058,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         complexityFilter: singleColumnConfig.complexityFilter,
                         terminalPools: singleColumnConfig.terminalPools,
                         sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED',
-                        routingMode: state.routingMode || 'dynamic'
+                        routingMode: state.routingMode || 'dynamic',
+                        triggerMode: singleColumnConfig.triggerMode || 'drain'
                     });
                 });
 
@@ -7992,12 +8071,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 ruleRowSc.appendChild(everyLblSc);
                 ruleRowSc.appendChild(minInputSc);
                 ruleRowSc.appendChild(minLblSc);
+
+                const triggerToggleSc = createTriggerModeToggle(singleColumnConfig.triggerMode || 'drain', (newVal) => {
+                    singleColumnConfig.triggerMode = newVal;
+                    state.singleColumnConfig = { ...singleColumnConfig };
+                    postKanbanMessage({
+                        type: 'setAutomationMode',
+                        mode: 'single-column',
+                        enabled: singleColumnConfig.enabled,
+                        intervalMinutes: singleColumnConfig.intervalMinutes,
+                        batchSize: singleColumnConfig.batchSize,
+                        complexityFilter: singleColumnConfig.complexityFilter,
+                        terminalPools: singleColumnConfig.terminalPools,
+                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED',
+                        routingMode: state.routingMode || 'dynamic',
+                        triggerMode: newVal
+                    });
+                    renderAutobanPanel();
+                });
+                ruleRowSc.appendChild(triggerToggleSc);
                 columnRulesSectionSc.appendChild(ruleRowSc);
 
                 const poolBannerSc = document.createElement('div');
                 poolBannerSc.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 4px 8px; line-height:1.4;';
                 poolBannerSc.innerHTML = '💡 <strong>Terminal Pools:</strong> Using terminal pools allows you to lower this value, since instructions will be rotated among terminals.';
                 columnRulesSectionSc.appendChild(poolBannerSc);
+
+                if (hasWatchActive) {
+                    const watchWarningBannerSc = document.createElement('div');
+                    watchWarningBannerSc.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:#d97706; border-left:3px solid #d97706; border-radius:4px; background:color-mix(in srgb, #d97706 8%, transparent); margin:4px 8px; line-height:1.4;';
+                    watchWarningBannerSc.innerHTML = '⚠️ <strong>Watch mode runs agents automatically.</strong> Columns set to <strong>Watch</strong> never stop on their own. Every plan that lands in a watch column is dispatched to its agent <strong>immediately and unattended</strong> — no batch delay, no review step. Each dispatch starts a real agent run in a terminal, which spends that agent\'s tokens doing the work. While any watch column is active, the engine will <strong>not</strong> auto-stop when the board empties, so a stream of incoming plans becomes a stream of automatic agent runs until you stop it manually with the automation button. (Sitting idle costs nothing — the cost is per arrival, one agent run each.) Use <strong>Drain</strong> (default) for a finite batch that should stop when finished; use <strong>Watch</strong> for entry columns like CREATED or for remote-control hand-offs where plans arrive over time.';
+                    columnRulesSectionSc.appendChild(watchWarningBannerSc);
+                }
 
                 // --- Automation Rules Section (ordered second) ---
                 const automationRulesSectionSc = document.createElement('div');
@@ -8332,7 +8437,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 columnTransitions.forEach(({ column, label, defaultMin }) => {
                     const idSuffix = getAutobanRuleIdSuffix(column);
-                    const rule = state.rules?.[column] || { enabled: true, intervalMinutes: defaultMin };
+                    const rule = state.rules?.[column] || { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
                     const ruleRow = document.createElement('div');
                     ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
 
@@ -8343,7 +8448,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     checkbox.addEventListener('change', () => {
                         if (!state.rules) state.rules = {};
                         if (!state.rules[column]) {
-                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
                         }
                         state.rules[column].enabled = checkbox.checked;
                         emitAutobanState();
@@ -8368,7 +8473,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     minInput.addEventListener('change', () => {
                         if (!state.rules) state.rules = {};
                         if (!state.rules[column]) {
-                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
                         }
                         const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
                         state.rules[column].intervalMinutes = val;
@@ -8385,6 +8490,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     ruleRow.appendChild(everyLbl);
                     ruleRow.appendChild(minInput);
                     ruleRow.appendChild(minLbl);
+
+                    const triggerToggle = createTriggerModeToggle(rule.triggerMode || 'drain', (newVal) => {
+                        if (!state.rules) state.rules = {};
+                        if (!state.rules[column]) {
+                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
+                        }
+                        state.rules[column].triggerMode = newVal;
+                        emitAutobanState();
+                        renderAutobanPanel();
+                    });
+                    ruleRow.appendChild(triggerToggle);
+
                     columnRulesSection.appendChild(ruleRow);
                 });
 
@@ -8392,6 +8509,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 poolBannerMc.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 4px 8px; line-height:1.4;';
                 poolBannerMc.innerHTML = '💡 <strong>Terminal Pools:</strong> Using terminal pools allows you to lower this value, since instructions will be rotated among terminals.';
                 columnRulesSection.appendChild(poolBannerMc);
+
+                if (hasWatchActive) {
+                    const watchWarningBannerMc = document.createElement('div');
+                    watchWarningBannerMc.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:#d97706; border-left:3px solid #d97706; border-radius:4px; background:color-mix(in srgb, #d97706 8%, transparent); margin:4px 8px; line-height:1.4;';
+                    watchWarningBannerMc.innerHTML = '⚠️ <strong>Watch mode runs agents automatically.</strong> Columns set to <strong>Watch</strong> never stop on their own. Every plan that lands in a watch column is dispatched to its agent <strong>immediately and unattended</strong> — no batch delay, no review step. Each dispatch starts a real agent run in a terminal, which spends that agent\'s tokens doing the work. While any watch column is active, the engine will <strong>not</strong> auto-stop when the board empties, so a stream of incoming plans becomes a stream of automatic agent runs until you stop it manually with the automation button. (Sitting idle costs nothing — the cost is per arrival, one agent run each.) Use <strong>Drain</strong> (default) for a finite batch that should stop when finished; use <strong>Watch</strong> for entry columns like CREATED or for remote-control hand-offs where plans arrive over time.';
+                    columnRulesSection.appendChild(watchWarningBannerMc);
+                }
 
                 // --- Automation Rules Section (ordered second) ---
                 const automationRulesSection = document.createElement('div');

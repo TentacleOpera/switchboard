@@ -23,19 +23,25 @@ The root cause of the sprawl is that the feature was bolted on in three places (
 
 ## Metadata
 
-- **Tags:** `cleanup`, `status-bar`, `setup-tab`, `feature-removal`, `extension-ts`
+- **Tags:** refactor, ui, docs
 - **Complexity:** 4/10
 - **Files touched:** 7 source files + 2 docs + 1 dev-settings file
 - **Risk:** Low–Medium. The change is mechanical (deletion), but touches the status bar visibility function which has many sibling controls — care is needed to not disturb the surrounding `showTerminalControls` / `showKanbanButton` etc. branches.
 
+## User Review Required
+
+No user review gate is required before implementation. This is a pure feature-removal with no data migration, no breaking API contract change, and no irreversible destructive operation. The user has already decided the feature should be removed. Proceed directly to implementation.
+
 ## Complexity Audit
 
-**Routine.** This is a well-bounded deletion across a known, finite set of call sites (enumerated below). There is no new logic, no new abstraction, and no data migration. The only "complex" aspect is that the status bar visibility function (`updateStatusBarVisibility`) and the hub tooltip builder (`updateHubTooltip`) interleave the guard's branch with sibling branches, so the edits must be surgical rather than wholesale block deletes.
-
-**Not complex/risky because:**
+### Routine
+- Well-bounded deletion across a known, finite set of call sites (enumerated in Proposed Changes). No new logic, no new abstraction, and no data migration.
 - No external API contracts change (the removed commands were internal Switchboard commands, not invoked by other extensions).
 - No persisted user data depends on the feature.
 - The `onDidChangeTabs` listener is self-contained and guarded by an early `return` when the config is off, so removing it cannot affect other tab-handling code.
+
+### Complex / Risky
+- The status bar visibility function (`updateStatusBarVisibility`) and the hub tooltip builder (`updateHubTooltip`) interleave the guard's branch with sibling branches, so the edits must be surgical rather than wholesale block deletes — care is needed to not disturb the surrounding `showTerminalControls` / `showKanbanButton` etc. branches.
 
 ## Edge-Case & Dependency Audit
 
@@ -52,6 +58,14 @@ The root cause of the sprawl is that the feature was bolted on in three places (
 | Docs (`switchboard_user_manual.md`, `README.md`) | Remove the "Agent File Opening Prevention" section, the two settings-table rows, the "File Opening" command table, the FAQ entry, and the README status-bar settings line item. |
 | Dev `.vscode/settings.json` | Remove the two dev-only setting lines (lines 26 and 36). This is repo-local dev config, not user-facing. |
 | `dist/` | Per workspace `CLAUDE.md`, `dist/` is NOT used during dev/testing and must NOT be audited. Only `src/` is the source of truth. |
+
+## Dependencies
+
+- None. This plan is a self-contained feature removal with no prerequisite plans.
+
+## Adversarial Synthesis
+
+Key risks: (1) the original docs edit list omitted `switchboard_user_manual.md:1399` (the Setup Tab walkthrough bullet "Agent File Opening Prevention — Auto-close files opened by agents."), which would leave an orphan reference; (2) surgical edits inside `updateStatusBarVisibility` / `updateHubTooltip` / `openHub` must preserve sibling-control separator logic; (3) the `package.json` `menus` object becomes empty after removal and must be handled explicitly. Mitigations: line 1399 is now enumerated in §6; the post-edit grep sweep backstops any remaining orphans; the existing `items.length > 0` / `lines.length > 2` guards already handle the now-empty initial collections; the `menus` key is deleted entirely (cleaner than leaving `{}`).
 
 ## Proposed Changes
 
@@ -123,14 +137,16 @@ void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileO
 - **Commands (lines 144–152):** delete the `switchboard.forceOpenFile` and `switchboard.togglePreventAgentFileOpening` command declarations.
 - **Settings (lines 512–516):** delete the `switchboard.preventAgentFileOpening` contribution.
 - **Settings (lines 626–631):** delete the `switchboard.statusBar.showAgentOpenToggle` contribution.
-- **Menus (lines 731–742):** delete the entire `editor/context` entry for `forceOpenFile` and the `explorer/context` entry for `forceOpenFile`. If no other menu entries remain, the `menus` object becomes empty `{}` — leave it as `{}` (do not delete the key) to keep the schema valid.
+- **Menus (lines 731–742):** delete the entire `editor/context` entry for `forceOpenFile` and the `explorer/context` entry for `forceOpenFile`. Verified: these are the *only* entries in the `menus` object, so after removal the whole `"menus"` key becomes empty — **delete the `"menus"` key entirely** (cleaner than leaving `{ "editor/context": [], "explorer/context": [] }` or `{}`; the schema treats a missing `menus` key as valid).
 
 ### 6. `docs/switchboard_user_manual.md` — remove all references
 
 - **Line 477:** remove the `switchboard.statusBar.showAgentOpenToggle` bullet from the Status Bar Hub settings list.
-- **Lines 521–525:** remove the entire "### Agent File Opening Prevention" subsection.
-- **Line 623:** remove the `switchboard.statusBar.showAgentOpenToggle` row from the settings table. (Also remove the `switchboard.preventAgentFileOpening` row if present in the same table — verify by searching the table region.)
+- **Lines 521–525:** remove the entire "### Agent File Opening Prevention" subsection (heading + body + `Settings:`/`Command:` lines). The trailing `---` separator at line 527 is a section divider for "## 18. Quota Economics" and should be kept.
+- **Line 608:** remove the `switchboard.preventAgentFileOpening` row from the settings table.
+- **Line 623:** remove the `switchboard.statusBar.showAgentOpenToggle` row from the settings table.
 - **Lines 785–790:** remove the entire "### File Opening" command table subsection.
+- **Line 1399:** remove the "**Agent File Opening Prevention** — Auto-close files opened by agents." bullet from the Setup Tab walkthrough (this reference was missing from the original plan and is added after verification).
 - **Line 1452:** remove the "Show Agent Open Toggle" bullet from the Status Bar Tab walkthrough.
 - **Lines 1583–1585:** remove the "### Agent File Opening" FAQ entry.
 
@@ -145,15 +161,19 @@ void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileO
 
 ## Verification Plan
 
+### Automated Tests
+
+Automated tests and project compilation are NOT run as part of this plan session (per session directives — the test suite and `npm run compile` are run separately by the user). No new unit/integration tests are required for a pure feature-removal. The user should separately: (a) re-run the existing test suite to confirm no regressions in status-bar or setup-panel coverage, and (b) run `npm run compile` (webpack) to confirm there are no dangling references to the deleted `fileOpeningPreventionStatusBarItem` variable (the grep sweep below confirms this statically).
+
+### Manual Verification
+
 1. **Grep sweep for orphans:** After edits, run
    ```
    rg -n "preventAgentFileOpening|togglePreventAgentFileOpening|forceOpenFile|showAgentOpenToggle|fileOpeningPrevention|allowedUrisToOpen|preventAgentFileOpeningEnabled" src docs package.json README.md .vscode/settings.json
    ```
    Expected: **zero matches** outside `.switchboard/plans/` (historical plan files are allowed to reference the old feature).
 
-2. **TypeScript compile:** Run `npm run compile` (webpack). Expected: no new errors. The deleted `fileOpeningPreventionStatusBarItem` variable must not leave any remaining references (the grep above confirms this).
-
-3. **Manual smoke test in a VS Code dev host (installed VSIX):**
+2. **Manual smoke test in a VS Code dev host (installed VSIX):**
    - Open the Setup tab → confirm the "Agent File Opening Prevention" checkbox is gone and the tab still loads without console errors.
    - Open the Status Bar tab → confirm the "Show Agent Open Toggle" checkbox is gone and the remaining toggles (Terminal, Kanban, Artifacts, Design, Project, Memo) still hydrate and persist.
    - Confirm the status bar no longer shows a `$(shield) Guard: On/Off` item in either compact or non-compact mode.
@@ -161,6 +181,10 @@ void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileO
    - Right-click a file in the editor/explorer → confirm the "Override Open" context-menu item is gone.
    - Open a file while a workspace is open → confirm it opens normally and is **not** auto-closed (the guard listener is gone).
 
-4. **Config-change listener sanity:** Toggle `switchboard.statusBar.showTerminalControls` at runtime and confirm `updateStatusBarVisibility` still re-renders the terminal buttons (proves the listener's `if` condition still fires after the `showAgentOpenToggle` clause was removed).
+3. **Config-change listener sanity:** Toggle `switchboard.statusBar.showTerminalControls` at runtime and confirm `updateStatusBarVisibility` still re-renders the terminal buttons (proves the listener's `if` condition still fires after the `showAgentOpenToggle` clause was removed).
 
-5. **No `dist/` audit:** Per workspace `CLAUDE.md`, do NOT check or rebuild `dist/`; testing is done via the installed VSIX only.
+4. **No `dist/` audit:** Per workspace `CLAUDE.md`, do NOT check or rebuild `dist/`; testing is done via the installed VSIX only.
+
+## Recommendation
+
+Complexity 4/10 → **Send to Coder**.

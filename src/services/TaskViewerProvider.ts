@@ -7261,6 +7261,7 @@ Each plan file must include:
             const sourceColumn = msg.sourceColumn || this._singleColumnAutobanState.sourceColumn || 'PLAN REVIEWED';
             const sourceColumnRole = columnToPromptRole(sourceColumn) || undefined;
             const routingMode = msg.routingMode || this._autobanState.routingMode || 'dynamic';
+            const triggerMode = msg.triggerMode || this._singleColumnAutobanState.triggerMode || 'drain';
 
             this._singleColumnAutobanState = {
                 enabled,
@@ -7269,12 +7270,13 @@ Each plan file must include:
                 complexityFilter,
                 terminalPools,
                 sourceColumn,
-                sourceColumnRole
+                sourceColumnRole,
+                triggerMode
             };
             await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
 
             const singleColumnSyntheticRules = {
-                [sourceColumn]: { enabled: true, intervalMinutes }
+                [sourceColumn]: { enabled: true, intervalMinutes, triggerMode }
             };
 
             this._autobanState = normalizeAutobanConfigState({
@@ -8454,12 +8456,25 @@ Each plan file must include:
 
             this._autobanTimers.set(column, timer);
         }
+
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (workspaceRoot) {
+            try {
+                const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                this._autobanWatchDisp = db.onColumnChanged((e: any) => {
+                    this._notifyAutobanWatchArrival(e.column, e.workspaceId);
+                });
+            } catch (err) {
+                console.error('[Autoban] Failed to subscribe to onColumnChanged:', err);
+            }
+        }
+
         // Safety-net: periodically check if all source columns are empty and auto-stop
         this._autobanEmptyColumnSweepTimer = setInterval(async () => {
             if (this._autobanState.enabled) {
-                const workspaceRoot = this._resolveWorkspaceRoot();
-                if (workspaceRoot) {
-                    await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
+                const workspaceRoot2 = this._resolveWorkspaceRoot();
+                if (workspaceRoot2) {
+                    await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot2);
                 }
             }
         }, 60_000);
@@ -8478,11 +8493,39 @@ Each plan file must include:
             clearInterval(this._autobanEmptyColumnSweepTimer);
             this._autobanEmptyColumnSweepTimer = undefined;
         }
+        if (this._autobanWatchDisp) {
+            try {
+                this._autobanWatchDisp.dispose();
+            } catch {}
+            this._autobanWatchDisp = undefined;
+        }
+        for (const timer of this._autobanWatchDebounceTimers.values()) {
+            clearTimeout(timer);
+        }
+        this._autobanWatchDebounceTimers.clear();
+
         this._autobanState.paused = false;
         delete this._autobanState.pausedRemainingMs;
         this._autobanLastTickAt.clear();
         this._activeDispatchSessions.clear();
         this._autobanTickQueue = Promise.resolve();
+    }
+
+    private _notifyAutobanWatchArrival(column: string, workspaceRoot: string): void {
+        if (!this._autobanState.enabled || this._autobanState.paused) { return; }
+        if (!this._getEnabledAutobanSourceColumns().includes(column)) { return; }
+        if (!isWatchColumn(this._autobanState.rules[column])) { return; }
+
+        const existingTimer = this._autobanWatchDebounceTimers.get(column);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+
+        const timer = setTimeout(() => {
+            this._autobanWatchDebounceTimers.delete(column);
+            this._enqueueAutobanTick(column, this._autobanState.batchSize);
+        }, 750);
+        this._autobanWatchDebounceTimers.set(column, timer);
     }
 
     /** Process one tick for a given column: find cards, batch-dispatch up to batchSize. */

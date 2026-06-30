@@ -23,6 +23,7 @@ export type SingleColumnAutobanConfig = {
     terminalPools: Record<string, string[]>;
     sourceColumn: string;  // NEW: the Kanban column to automate
     sourceColumnRole?: string; // NEW: dynamic role of the source column
+    triggerMode?: AutobanTriggerMode;
 };
 
 export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
@@ -32,7 +33,8 @@ export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
     complexityFilter: 'all',
     terminalPools: {},
     sourceColumn: 'PLAN REVIEWED',
-    sourceColumnRole: 'lead'
+    sourceColumnRole: 'lead',
+    triggerMode: 'drain'
 };
 
 export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
@@ -49,7 +51,8 @@ export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanC
         sourceColumn: (typeof state?.sourceColumn === 'string' && state!.sourceColumn!.trim().length > 0)
             ? state!.sourceColumn!.trim()
             : 'PLAN REVIEWED',
-        sourceColumnRole: typeof state?.sourceColumnRole === 'string' ? state.sourceColumnRole : undefined
+        sourceColumnRole: typeof state?.sourceColumnRole === 'string' ? state.sourceColumnRole : undefined,
+        triggerMode: state?.triggerMode === 'watch' ? 'watch' : 'drain'
     };
 }
 
