@@ -256,3 +256,26 @@ case 'artifactPromptSent': {
 ---
 
 **Recommendation:** Complexity 3/10 → **Send to Coder.**
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome, mortals, to the review dungeon. You flattened a button strip. Congratulations, you did the bare minimum. Let's see if you tripped on the way out.
+
+- **NIT** — `artifactDirectionIsDownload` resets to `true` on every webview reload; not persisted to `state`. Plan acknowledges this as acceptable (download is the sensible default), so I'll allow it — but a user who toggles to Upload and triggers a reload silently loses their intent. (planning.js:7258)
+- **NIT** — Confirmation handlers (`artifactPromptCopied`/`artifactPromptSent`) now ignore `msg.kind`; the backend (`PlanningPanelProvider.ts:2866,2873`) still forwards it. Dead field on the wire — harmless, but a future reader may wonder why `kind` is sent at all. (planning.js:4413–4430)
+- **NIT** — `updateDirectionLabel()` runs once at init (planning.js:7275), overwriting the static HTML `title` with the longer dynamic tooltip. Intentional and correct — the static title is the short version; this upgrades it. Not a bug, just noting the double-write.
+- **PASS** — No orphaned references to the 4 removed button IDs (`btn-copy-artifact-download`, etc.) anywhere in `src/webview`. Grep confirms zero hits.
+- **PASS** — `.stitch-btn-primary` CSS ported verbatim from `design.html`; `--accent-teal-dim`/`--accent-teal` variables resolve in `planning.html` (shared theme). Primary button will render.
+- **PASS** — `.controls-strip-row` CSS rule (planning.html:2727) retained; still used by the Tickets tab. Correctly not removed.
+- **PASS** — `buildArtifactPrompt()` correctly branches prompt template AND state inputs (`getHtmlFolderFallback` for download vs `state.activeDocSourceFolder`+`state.activeDocName` for upload). Matches the original per-direction logic.
+- **PASS** — `ARTIFACT_DOWNLOAD_PROMPT` share-link guard (planning.js:7214) intact; warning still emitted for `claude.ai/share/` URLs.
+
+**Stage 2 (Balanced):** No CRITICAL or MAJOR findings. All three NITs are either explicitly accepted by the plan (direction-state reset) or harmless dead-field/double-write artifacts that don't warrant a code change. The implementation is a faithful, clean execution of the plan. No fixes applied.
+
+**Files changed (per plan, verified in place):**
+- `src/webview/planning.html` — `.stitch-btn-primary` CSS (lines 2735–2744); HTML tab controls strip flattened to single row (lines 3540–3550).
+- `src/webview/planning.js` — direction toggle state + `buildArtifactPrompt()` + unified handlers (lines 7258–7307); confirmation handlers retargeted to unified IDs (lines 4413–4430).
+
+**Validation:** Compilation and automated tests skipped per session instructions. Static verification via grep confirms no orphaned references, no ID mismatches, backend message contract intact. Manual verification steps (plan §Manual Verification) remain for the user via installed VSIX.
+
+**Remaining risks:** None material. The direction-toggle discoverability tradeoff is flagged in the plan's "User Review Required" section and is a UX judgment, not a defect.

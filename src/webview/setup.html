@@ -628,19 +628,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </label>
 
                 <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-dim);">
-                    <div style="font-size: 11px; color: var(--text-primary); font-weight: 600; margin-bottom: 8px;">SAVE SETTINGS TO DATABASE</div>
-                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-bottom:6px;">
-                        <input id="db-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                        <div style="display:flex; flex-direction:column; gap:4px;">
-                            <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Sync VS Code settings to Kanban database</span>
-                            <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Syncs workspace-scoped settings (status bar, theme, workflow toggles). Global and per-folder settings are not synced.</span>
-                        </div>
-                    </label>
-                    <div style="display: flex; gap: 8px; margin: 10px 0 12px;">
-                        <button id="btn-bulk-push-settings" class="secondary-btn" style="flex: 1;">Import current settings to DB</button>
-                    </div>
-                    <div id="db-sync-status" style="font-size: 10px; line-height: 1.4; display: none; margin-bottom: 10px;"></div>
-                    <div style="font-size: 10px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
+                    <div style="font-size: 11px; color: var(--text-primary); font-weight: 600; margin-bottom: 8px;">PROMPT SETTINGS EXPORT / IMPORT</div>
+                    <div style="font-size: 10px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 12px;">
                         Export writes current prompt configurations to <code>.switchboard/settings.json</code>. Import reads from that file and updates your VS Code settings.
                     </div>
                     <div style="display: flex; gap: 8px; margin-bottom: 8px;">
@@ -1820,7 +1809,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
                     vscode.postMessage({ type: 'getExcludeReviewedBacklogSetting' });
                     vscode.postMessage({ type: 'getPersistPanelsSetting' });
-                    vscode.postMessage({ type: 'getDbSyncEnabled' });
                     vscode.postMessage({ type: 'getProtocolTarget' });
                 },
                 'database': () => {
@@ -3980,20 +3968,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'setPersistPanelsSetting', enabled: e.target.checked });
         });
 
-        document.getElementById('db-sync-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'setDbSyncEnabled', enabled: e.target.checked });
-        });
-
-        document.getElementById('btn-bulk-push-settings')?.addEventListener('click', () => {
-            const statusEl = document.getElementById('db-sync-status');
-            if (statusEl) {
-                statusEl.style.display = 'block';
-                statusEl.style.color = 'var(--text-secondary)';
-                statusEl.textContent = 'Pushing current settings to DB…';
-            }
-            vscode.postMessage({ type: 'bulkPushSettingsToDb' });
-        });
-
         document.getElementById('protocol-target')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setProtocolTarget', value: e.target.value });
         });
@@ -4569,27 +4543,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         const toggle = document.getElementById('persist-panels-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
                     });
-                    break;
-                }
-                case 'dbSyncEnabledSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('db-sync-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
-                    });
-                    break;
-                }
-                case 'bulkPushSettingsResult': {
-                    const statusEl = document.getElementById('db-sync-status');
-                    if (statusEl) {
-                        statusEl.style.display = 'block';
-                        if (message.success) {
-                            statusEl.style.color = 'var(--text-secondary)';
-                            statusEl.textContent = `Pushed ${message.pushedCount || 0} setting(s) to DB.`;
-                        } else {
-                            statusEl.style.color = 'var(--accent-orange)';
-                            statusEl.textContent = 'Push failed — DB sync service unavailable.';
-                        }
-                    }
                     break;
                 }
                 case 'protocolTarget': {

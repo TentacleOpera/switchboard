@@ -26,7 +26,6 @@ import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexi
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
-import { SettingsSyncService } from './SettingsSyncService';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
 import { ClickUpSyncService, type ClickUpConfig, type ClickUpSyncResult } from './ClickUpSyncService';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
@@ -178,7 +177,6 @@ export class KanbanProvider implements vscode.Disposable {
     private _routingMapConfig: { lead: number[]; coder: number[]; intern: number[] } | null = null;
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
-    private _settingsSyncService?: SettingsSyncService;
     private _repoScopeFilter: string | null = null;
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
@@ -194,10 +192,6 @@ export class KanbanProvider implements vscode.Disposable {
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
         this._reloadSettingsFromStore();
-    }
-
-    public setSettingsSyncService(service: SettingsSyncService) {
-        this._settingsSyncService = service;
     }
 
     private _planningPanelProvider?: import('./PlanningPanelProvider').PlanningPanelProvider;
@@ -3676,42 +3670,27 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     private async _savePromptsConfig(workspaceRoot: string, msg: any): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        // These workflow toggles have always shipped as Global (user) settings —
-        // `config.update(key, value, true)` writes to Global, NOT Workspace (see the
-        // else-branch fallbacks below). Keep them Global to avoid silently migrating
-        // ~4,000 installs to Workspace scope. Global settings are intentionally NOT
-        // DB-synced (SettingsSyncService.isInScope returns false for non-Workspace
-        // targets; see plan Scope Clarification #2), so routing them through the
-        // service is a no-op mirror of the original write.
-        const target = vscode.ConfigurationTarget.Global;
         try {
             if (typeof msg.accurateCodingEnabled === 'boolean') {
-                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('accurateCoding.enabled', msg.accurateCodingEnabled, target); }
-                else { await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, true); }
+                await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, true);
             }
             if (typeof msg.advancedReviewerEnabled === 'boolean') {
-                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('reviewer.advancedMode', msg.advancedReviewerEnabled, target); }
-                else { await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, true); }
+                await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, true);
             }
             if (typeof msg.leadChallengeEnabled === 'boolean') {
-                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('leadCoder.inlineChallenge', msg.leadChallengeEnabled, target); }
-                else { await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, true); }
+                await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, true);
             }
             if (typeof msg.aggressivePairProgramming === 'boolean') {
-                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, target); }
-                else { await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true); }
+                await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true);
             }
             if (typeof msg.designDocEnabled === 'boolean') {
-                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('planner.designDocEnabled', msg.designDocEnabled, target); }
-                else { await config.update('planner.designDocEnabled', msg.designDocEnabled, true); }
+                await config.update('planner.designDocEnabled', msg.designDocEnabled, true);
             }
             if (typeof msg.designDocLink === 'string') {
-                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('planner.designDocLink', msg.designDocLink, target); }
-                else { await config.update('planner.designDocLink', msg.designDocLink, true); }
+                await config.update('planner.designDocLink', msg.designDocLink, true);
             }
             if (typeof msg.gitProhibitionEnabled === 'boolean') {
-                if (this._settingsSyncService) { await this._settingsSyncService.updateSetting('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, target); }
-                else { await config.update('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, true); }
+                await config.update('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, true);
             }
         } catch (err) {
             console.error('[KanbanProvider] Failed to save prompts config:', err);

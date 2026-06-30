@@ -392,6 +392,28 @@
             case 'cyberAnimationSetting':
                 document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
                 break;
+            case 'planAutoFetchState': {
+                const autoFetchEnabledCb = document.getElementById('kanban-auto-fetch-enabled');
+                const autoFetchBranchLabel = document.getElementById('kanban-auto-fetch-branch');
+                const autoFetchStatusText = document.getElementById('kanban-auto-fetch-status');
+                
+                if (autoFetchEnabledCb) {
+                    autoFetchEnabledCb.checked = !!msg.enabled;
+                }
+                if (autoFetchBranchLabel) {
+                    autoFetchBranchLabel.textContent = msg.resolvedBranch || 'default branch';
+                }
+                if (autoFetchStatusText) {
+                    let text = msg.lastReason || '';
+                    if (msg.lastTimestamp) {
+                        const time = new Date(msg.lastTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        text += ` (at ${time})`;
+                    }
+                    autoFetchStatusText.textContent = text;
+                    autoFetchStatusText.title = text;
+                }
+                break;
+            }
             case 'cyberScanlinesSetting':
                 document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
                 break;
@@ -1807,6 +1829,21 @@
             vscode.postMessage({
                 type: 'copyChatPrompt',
                 workspaceRoot: kanbanWorkspaceFilter ? kanbanWorkspaceFilter.value : ''
+            });
+        });
+    }
+    const btnPlanAutoFetchNow = document.getElementById('btn-plan-auto-fetch-now');
+    if (btnPlanAutoFetchNow) {
+        btnPlanAutoFetchNow.addEventListener('click', () => {
+            vscode.postMessage({ type: 'planAutoFetchRunNow' });
+        });
+    }
+    const kanbanAutoFetchEnabled = document.getElementById('kanban-auto-fetch-enabled');
+    if (kanbanAutoFetchEnabled) {
+        kanbanAutoFetchEnabled.addEventListener('change', () => {
+            vscode.postMessage({
+                type: 'setPlanAutoFetchEnabled',
+                enabled: kanbanAutoFetchEnabled.checked
             });
         });
     }

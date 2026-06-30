@@ -518,6 +518,40 @@
           "description": "Interval in milliseconds between periodic scans for new plan files. Minimum 2s, maximum 5m.",
           "scope": "resource"
         },
+        "switchboard.planAutoFetch.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable auto-fetching and fast-forwarding of plans from the default branch on extension startup and periodically.",
+          "scope": "resource"
+        },
+        "switchboard.planAutoFetch.intervalSeconds": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 60,
+          "description": "Interval in seconds between periodic auto-fetches.",
+          "scope": "resource"
+        },
+        "switchboard.planAutoFetch.remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "The git remote to fetch plans from.",
+          "scope": "resource"
+        },
+        "switchboard.planAutoFetch.defaultBranch": {
+          "type": "string",
+          "default": "",
+          "description": "The default branch name (e.g. 'main', 'master'). If empty, auto-detect via origin/HEAD.",
+          "scope": "resource"
+        },
+        "switchboard.planAutoFetch.trustedAuthors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Optional list of trusted author emails. Defaults to local git config user.email.",
+          "scope": "resource"
+        },
         "switchboard.planScanner.enabled": {
           "type": "boolean",
           "default": true,
@@ -703,12 +737,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show a dedicated memo button in the status bar.",
-          "scope": "window"
-        },
-        "switchboard.settings.dbSyncEnabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Mirror workspace-scoped Switchboard settings (status bar, theme, workflow toggles) to the active workspace kanban.db so they sync across IDEs that share the .switchboard folder. Global and per-folder settings are not synced. Default off to avoid surprise writes to shared DBs.",
           "scope": "window"
         }
       }

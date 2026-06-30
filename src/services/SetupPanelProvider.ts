@@ -10,7 +10,6 @@ import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
-import type { SettingsSyncService } from './SettingsSyncService';
 
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
     handleGetControlPlaneStatus?: (workspaceRoot?: string) => Promise<any>;
@@ -23,7 +22,6 @@ export class SetupPanelProvider implements vscode.Disposable {
     private _panel?: vscode.WebviewPanel;
     private _taskViewerProvider?: TaskViewerProvider;
     private _kanbanProvider?: KanbanProvider;
-    private _settingsSyncService?: SettingsSyncService;
     private _disposables: vscode.Disposable[] = [];
     private _pendingSection?: string;
 
@@ -39,10 +37,6 @@ export class SetupPanelProvider implements vscode.Disposable {
 
     public setKanbanProvider(provider: KanbanProvider): void {
         this._kanbanProvider = provider;
-    }
-
-    public setSettingsSyncService(service: SettingsSyncService): void {
-        this._settingsSyncService = service;
     }
 
     public async open(section?: string): Promise<void> {
@@ -167,30 +161,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'importPromptSettings': {
                     const success = await this._taskViewerProvider.importPromptSettings();
                     this._panel.webview.postMessage({ type: 'importPromptSettingsResult', success });
-                    break;
-                }
-                case 'getDbSyncEnabled': {
-                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('settings.dbSyncEnabled', false);
-                    this._panel.webview.postMessage({ type: 'dbSyncEnabledSetting', enabled });
-                    break;
-                }
-                case 'setDbSyncEnabled': {
-                    const enabled = message.enabled === true;
-                    if (this._settingsSyncService) {
-                        await this._settingsSyncService.updateSetting('settings.dbSyncEnabled', enabled, vscode.ConfigurationTarget.Workspace);
-                    } else {
-                        await vscode.workspace.getConfiguration('switchboard').update('settings.dbSyncEnabled', enabled, vscode.ConfigurationTarget.Workspace);
-                    }
-                    this._panel.webview.postMessage({ type: 'dbSyncEnabledSetting', enabled });
-                    break;
-                }
-                case 'bulkPushSettingsToDb': {
-                    if (this._settingsSyncService) {
-                        const pushed = await this._settingsSyncService.bulkPushCurrentSettings();
-                        this._panel.webview.postMessage({ type: 'bulkPushSettingsResult', success: true, pushedCount: pushed });
-                    } else {
-                        this._panel.webview.postMessage({ type: 'bulkPushSettingsResult', success: false, pushedCount: 0 });
-                    }
                     break;
                 }
                 case 'copyDbSettingsToGlobal': {
@@ -624,12 +594,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'setProtocolTarget': {
                     const value = ['agents', 'claude', 'both'].includes(message.value) ? message.value : 'both';
-                    if (this._settingsSyncService) {
-                        await this._settingsSyncService.updateSetting('protocol.target', value, vscode.ConfigurationTarget.Workspace);
-                    } else {
-                        const config = vscode.workspace.getConfiguration('switchboard');
-                        await config.update('protocol.target', value, vscode.ConfigurationTarget.Workspace);
-                    }
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    await config.update('protocol.target', value, vscode.ConfigurationTarget.Workspace);
                     this._panel.webview.postMessage({ type: 'protocolTarget', value });
                     break;
                 }

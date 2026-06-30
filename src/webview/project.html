@@ -1444,6 +1444,14 @@
                 <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">CHAT PROMPT</button>
                 <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
             </div>
+            <div class="kanban-auto-fetch-strip" style="display: flex; align-items: center; gap: 10px; margin: 4px 0 10px 0; padding: 4px 10px; font-size: 11px; background: var(--vscode-editor-background); border: 1px solid var(--vscode-widget-border); border-radius: 4px;">
+                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; margin: 0;">
+                    <input type="checkbox" id="kanban-auto-fetch-enabled" style="margin: 0; cursor: pointer;" />
+                    <span>Auto-fetch plans from <strong id="kanban-auto-fetch-branch">default branch</strong></span>
+                </label>
+                <button id="btn-plan-auto-fetch-now" class="strip-btn" style="padding: 2px 6px; font-size: 10px;" title="Fetch and fast-forward now">Fetch now</button>
+                <span id="kanban-auto-fetch-status" style="opacity: 0.8; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+            </div>
             <div class="content-row">
                 <div id="kanban-list-pane">
                     <div class="sidebar-toggle-row">

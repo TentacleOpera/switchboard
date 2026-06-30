@@ -31,6 +31,7 @@ import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
 import { getProjectPrdPath } from './prdUtils';
+import { PlanAutoFetchService } from './PlanAutoFetchService';
 
 
 export interface PlanningPanelAdapterFactories {
@@ -131,6 +132,7 @@ export class PlanningPanelProvider {
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
     // Type-only reference (avoids a runtime circular import with KanbanProvider).
     private _kanbanProvider?: import('./KanbanProvider').KanbanProvider;
+    private _planAutoFetchService?: PlanAutoFetchService;
     // Type-only reference (avoids a runtime circular import with TaskViewerProvider).
     // Used to dispatch constitution builder/updater + system builder prompts through the planner rotation.
     private _taskViewerProvider?: import('./TaskViewerProvider').TaskViewerProvider;
@@ -168,6 +170,10 @@ export class PlanningPanelProvider {
 
     public setTaskViewerProvider(provider: import('./TaskViewerProvider').TaskViewerProvider): void {
         this._taskViewerProvider = provider;
+    }
+
+    public setPlanAutoFetchService(service: PlanAutoFetchService): void {
+        this._planAutoFetchService = service;
     }
 
     // Ensure adapters are registered for current workspace roots.
@@ -398,6 +404,16 @@ export class PlanningPanelProvider {
                     const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
                     this._projectPanel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
                 }
+                if (e.affectsConfiguration('switchboard.planAutoFetch') && this._planAutoFetchService && this._projectPanel) {
+                    const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+                    if (wsRoot) {
+                        const status = this._planAutoFetchService.getStatus(wsRoot);
+                        this._projectPanel.webview.postMessage({
+                            type: 'planAutoFetchState',
+                            ...status
+                        });
+                    }
+                }
             })
         );
 
@@ -407,6 +423,17 @@ export class PlanningPanelProvider {
         this._projectPanel.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
         const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
         this._projectPanel.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+
+        if (this._planAutoFetchService) {
+            const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+            if (wsRoot) {
+                const status = this._planAutoFetchService.getStatus(wsRoot);
+                this._projectPanel.webview.postMessage({
+                    type: 'planAutoFetchState',
+                    ...status
+                });
+            }
+        }
 
         await this._sendActiveDesignDocState();
     }
@@ -2966,6 +2993,39 @@ export class PlanningPanelProvider {
                         error: errMsg,
                         planFile
                     });
+                }
+                break;
+            }
+            case 'setPlanAutoFetchEnabled': {
+                try {
+                    const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+                    if (wsRoot) {
+                        await vscode.workspace.getConfiguration('switchboard.planAutoFetch', vscode.Uri.file(wsRoot))
+                            .update('enabled', msg.enabled, vscode.ConfigurationTarget.Workspace);
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanel] setPlanAutoFetchEnabled error:', err);
+                }
+                break;
+            }
+            case 'planAutoFetchRunNow': {
+                if (this._planAutoFetchService) {
+                    const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+                    if (wsRoot) {
+                        this._projectPanel?.webview.postMessage({
+                            type: 'planAutoFetchState',
+                            enabled: this._planAutoFetchService.getStatus(wsRoot).enabled,
+                            lastOutcome: 'idle',
+                            lastReason: 'Fetching now...',
+                            resolvedBranch: this._planAutoFetchService.getStatus(wsRoot).resolvedBranch
+                        });
+                        await this._planAutoFetchService.runCycle();
+                        const status = this._planAutoFetchService.getStatus(wsRoot);
+                        this._projectPanel?.webview.postMessage({
+                            type: 'planAutoFetchState',
+                            ...status
+                        });
+                    }
                 }
                 break;
             }

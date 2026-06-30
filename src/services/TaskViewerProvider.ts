@@ -13,7 +13,6 @@ let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
-import { SettingsSyncService } from './SettingsSyncService';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import { bundleWorkspaceContext } from './ContextBundler';
@@ -380,7 +379,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _kanbanProvider?: KanbanProvider;
     private _setupPanelProvider?: SetupPanelProvider;
-    private _settingsSyncService?: SettingsSyncService;
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _lastKanbanDbWarnings = new Map<string, string | null>();
     private _lastPlanIngestionValidationWarning: string | null = null;
@@ -2085,10 +2083,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setSetupPanelProvider(provider: SetupPanelProvider) {
         this._setupPanelProvider = provider;
-    }
-
-    public setSettingsSyncService(service: SettingsSyncService) {
-        this._settingsSyncService = service;
     }
 
     /**
@@ -4069,10 +4063,6 @@ Each plan file must include:
     }
 
     public async handleSetExcludeReviewedBacklogSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('excludeReviewedBacklogFromDropdown', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('excludeReviewedBacklogFromDropdown', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4084,10 +4074,6 @@ Each plan file must include:
     }
 
     public async handleSetStatusShowTerminalsSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('statusBar.showTerminalControls', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('statusBar.showTerminalControls', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4097,10 +4083,6 @@ Each plan file must include:
     }
 
     public async handleSetStatusShowKanbanSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('statusBar.showKanbanButton', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('statusBar.showKanbanButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4110,10 +4092,6 @@ Each plan file must include:
     }
 
     public async handleSetStatusShowArtifactsSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4123,10 +4101,6 @@ Each plan file must include:
     }
 
     public async handleSetStatusShowDesignSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4136,10 +4110,6 @@ Each plan file must include:
     }
 
     public async handleSetStatusShowProjectSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('statusBar.showProjectButton', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('statusBar.showProjectButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4149,10 +4119,6 @@ Each plan file must include:
     }
 
     public async handleSetStatusShowMemoSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('statusBar.showMemoButton', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('statusBar.showMemoButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4162,10 +4128,6 @@ Each plan file must include:
     }
 
     public async handleSetCyberAnimationDisabledSetting(disabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4175,10 +4137,6 @@ Each plan file must include:
     }
 
     public async handleSetCyberScanlinesDisabledSetting(disabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4188,10 +4146,6 @@ Each plan file must include:
     }
 
     public async handleSetColourKanbanIconsSetting(enabled: boolean): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         const config = vscode.workspace.getConfiguration('switchboard');
         await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Workspace);
     }
@@ -4415,14 +4369,9 @@ Each plan file must include:
         options: { emitApplyResult: boolean }
     ): Promise<void> {
         const { strategy, rules } = this._normalizeGitIgnoreConfig(rawStrategy, rawRules);
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('workspace.ignoreStrategy', strategy, vscode.ConfigurationTarget.Workspace);
-            await this._settingsSyncService.updateSetting('workspace.ignoreRules', rules, vscode.ConfigurationTarget.Workspace);
-        } else {
-            const config = vscode.workspace.getConfiguration('switchboard.workspace');
-            await config.update('ignoreStrategy', strategy, vscode.ConfigurationTarget.Workspace);
-            await config.update('ignoreRules', rules, vscode.ConfigurationTarget.Workspace);
-        }
+        const config = vscode.workspace.getConfiguration('switchboard.workspace');
+        await config.update('ignoreStrategy', strategy, vscode.ConfigurationTarget.Workspace);
+        await config.update('ignoreRules', rules, vscode.ConfigurationTarget.Workspace);
         this._postSharedWebviewMessage({
             type: 'gitIgnoreConfig',
             strategy,
@@ -4449,10 +4398,6 @@ Each plan file must include:
     }
 
     public async handleSetThemeSetting(theme: string): Promise<void> {
-        if (this._settingsSyncService) {
-            await this._settingsSyncService.updateSetting('theme.name', theme, vscode.ConfigurationTarget.Workspace);
-            return;
-        }
         await vscode.workspace.getConfiguration('switchboard').update('theme.name', theme, vscode.ConfigurationTarget.Workspace);
     }
 

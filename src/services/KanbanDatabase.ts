@@ -560,12 +560,6 @@ const MIGRATION_V35_SQL = [
     ) WHERE project != '' AND (project_id IS NULL OR project_id = 0)`,
 ];
 
-// V42: add nullable updated_at column to config table for SettingsSyncService
-// last-write-wins conflict resolution. Only `setting.*` rows populate it; other
-// config rows leave it NULL. Additive and guarded by column-existence check.
-const MIGRATION_V42_SQL = [
-    `ALTER TABLE config ADD COLUMN updated_at TEXT`,
-];
 
 
 
@@ -3182,79 +3176,6 @@ export class KanbanDatabase {
         return this.setConfig(key, JSON.stringify(value));
     }
 
-    /** Return all config rows whose key starts with `prefix` (e.g. `setting.`). */
-    public async getConfigByPrefix(prefix: string): Promise<{ key: string; value: string }[]> {
-        if (!(await this.ensureReady()) || !this._db) return [];
-        const stmt = this._db.prepare(
-            'SELECT key, value FROM config WHERE key LIKE ?',
-            [prefix + '%']
-        );
-        const out: { key: string; value: string }[] = [];
-        try {
-            while (stmt.step()) {
-                const row = stmt.getAsObject();
-                out.push({ key: String(row.key ?? ''), value: String(row.value ?? '') });
-            }
-        } finally {
-            stmt.free();
-        }
-        return out;
-    }
-
-    /** Delete a config row by key. No-op if the row does not exist. */
-    public async deleteConfig(key: string): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db) return false;
-        this._db.run('DELETE FROM config WHERE key = ?', [key]);
-        return this._persist();
-    }
-
-    /**
-     * Upsert a config row, stamping `updated_at` (ISO 8601) when the column
-     * exists. Used by SettingsSyncService for `setting.*` rows so last-write-wins
-     * conflict resolution has a timestamp. Falls back to a plain upsert if the
-     * V42 `updated_at` column is not present (older DBs pre-migration).
-     */
-    public async setConfigStamped(key: string, value: string): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db) return false;
-        const hasColumn = this._configHasUpdatedAtColumn();
-        if (hasColumn) {
-            this._db.run(
-                `INSERT INTO config (key, value, updated_at) VALUES (?, ?, ?)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-                [key, value, new Date().toISOString()]
-            );
-        } else {
-            this._db.run(
-                'INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-                [key, value]
-            );
-        }
-        return this._persist();
-    }
-
-    /** Cached check for the V42 `updated_at` column on the config table. */
-    private _configHasUpdatedAtColumnCache: boolean | null = null;
-    private _configHasUpdatedAtColumn(): boolean {
-        if (this._configHasUpdatedAtColumnCache !== null) return this._configHasUpdatedAtColumnCache;
-        if (!this._db) { this._configHasUpdatedAtColumnCache = false; return false; }
-        const stmt = this._db.prepare('PRAGMA table_info(config)');
-        try {
-            let has = false;
-            while (stmt.step()) {
-                if (String(stmt.getAsObject().name ?? '') === 'updated_at') {
-                    has = true;
-                    break;
-                }
-            }
-            this._configHasUpdatedAtColumnCache = has;
-            return has;
-        } catch {
-            this._configHasUpdatedAtColumnCache = false;
-            return false;
-        } finally {
-            stmt.free();
-        }
-    }
 
     /** True once the underlying SQLite handle is open (ensureReady completed). */
     public isOpen(): boolean {
@@ -5373,22 +5294,6 @@ export class KanbanDatabase {
             } catch { /* best effort */ }
             await this.setMigrationVersion(41);
             console.log('[KanbanDatabase] V41 migration completed: epic complexity backfilled to subtask max');
-        }
-
-        // V42: add nullable updated_at column to config table for SettingsSyncService
-        // last-write-wins conflict resolution. Additive; guarded by column-existence check.
-        const v42 = await this.getMigrationVersion();
-        if (v42 < 42) {
-            for (const sql of MIGRATION_V42_SQL) {
-                try { this._db.exec(sql); } catch (e) {
-                    const msg = e instanceof Error ? e.message : String(e);
-                    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
-                        console.warn('[KanbanDatabase] V42 migration step failed:', msg);
-                    }
-                }
-            }
-            await this.setMigrationVersion(42);
-            console.log('[KanbanDatabase] V42 migration completed: updated_at column added to config');
         }
     }
 

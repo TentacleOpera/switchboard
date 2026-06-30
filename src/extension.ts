@@ -11,7 +11,6 @@ import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
-import { SettingsSyncService } from './services/SettingsSyncService';
 import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
 import { sendRobustText } from './services/terminalUtils';
 import { importPlanFiles } from './services/PlanFileImporter';
@@ -38,6 +37,7 @@ import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
 import { showTemporaryNotification } from './utils/showTemporaryNotification';
+import { PlanAutoFetchService } from './services/PlanAutoFetchService';
 import { MigrationService } from './services/MigrationService';
 
 // Status bar item for setup notification
@@ -56,7 +56,6 @@ let memoStatusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel | null = null;
 let kanbanProvider: KanbanProvider | null = null;
 let activeTaskViewerProvider: TaskViewerProvider | null = null;
-let settingsSyncService: SettingsSyncService | null = null;
 
 
 
@@ -423,13 +422,6 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
-    // SettingsSyncService — optional mirror of workspace-scoped VS Code settings
-    // into the active workspace kanban.db. Instantiated early so restoreFromDb()
-    // can replay DB values before config-dependent init (updateStatusBarVisibility).
-    settingsSyncService = new SettingsSyncService(
-        () => kanbanProvider?.getCurrentWorkspaceRoot() ?? null
-    );
-
     // Migrate any cards stranded in deprecated columns (CONTEXT GATHERER, CODE_RESEARCHER, SPLITTER)
     // to PLAN REVIEWED. Runs once at activation; idempotent (no-op once no cards remain).
     if (workspaceRoot) {
@@ -503,6 +495,13 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     await globalPlanWatcher.initialize();
     context.subscriptions.push(globalPlanWatcher);
+
+    const planAutoFetchService = new PlanAutoFetchService(
+        () => kanbanProvider,
+        outputChannel
+    );
+    await planAutoFetchService.initialize();
+    context.subscriptions.push(planAutoFetchService);
 
     // Wire the watcher into the already-created KanbanProvider
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
@@ -780,12 +779,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(setupPanelProvider);
     taskViewerProvider.setKanbanProvider(kanbanProvider);
     taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
-    taskViewerProvider.setSettingsSyncService(settingsSyncService);
     kanbanProvider!.setTaskViewerProvider(taskViewerProvider);
-    kanbanProvider!.setSettingsSyncService(settingsSyncService);
     setupPanelProvider.setTaskViewerProvider(taskViewerProvider);
     setupPanelProvider.setKanbanProvider(kanbanProvider!);
-    setupPanelProvider.setSettingsSyncService(settingsSyncService);
     const resolveEffectiveStateRoot = (candidateWorkspaceRoot?: string): string | null => {
         const selectedWorkspaceRoot = candidateWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
@@ -877,6 +873,7 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
     planningPanelProvider.setKanbanProvider(kanbanProvider!);
     planningPanelProvider.setTaskViewerProvider(taskViewerProvider);
+    planningPanelProvider.setPlanAutoFetchService(planAutoFetchService);
 
     const designPanelProvider = new DesignPanelProvider(
         context.extensionUri,
@@ -2000,15 +1997,6 @@ export async function activate(context: vscode.ExtensionContext) {
         updateHubTooltip();
     }
 
-    // Replay DB-synced settings into VS Code config before config-dependent init.
-    // No-op when dbSyncEnabled is false. The _isRestoring guard inside the service
-    // prevents the onDidChangeConfiguration listener below from re-syncing these.
-    try {
-        await settingsSyncService.restoreFromDb();
-    } catch (e) {
-        console.warn('[Switchboard] SettingsSync restoreFromDb skipped:', e);
-    }
-
     updateStatusBarVisibility();
 
     function updateHubTooltip() {
@@ -2058,13 +2046,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Listen for configuration changes
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async e => {
-        // SettingsSync catch-all: mirror in-scope switchboard.* changes to the
-        // active workspace kanban.db. No-op when sync disabled or during restore.
-        try {
-            await settingsSyncService?.syncChangedSettings(e);
-        } catch (err) {
-            console.warn('[Switchboard] SettingsSync listener skipped:', err);
-        }
         if (
             e.affectsConfiguration('switchboard.statusBar.showTerminalControls') ||
             e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
