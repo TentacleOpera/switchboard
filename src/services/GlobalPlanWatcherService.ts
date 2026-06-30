@@ -558,33 +558,41 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 await db.insertFileDerivedPlan(newRecord);
                 if (relativePath.startsWith('.switchboard/epics/')) {
                     await db.updateEpicStatus(newRecord.planId, 1, '');
-                    // Re-assert kanban_column from subtasks: insertFileDerivedPlan
-                    // hardcodes 'CREATED' on fresh INSERT, so a re-import (after the
-                    // 3000ms suppression window) would clobber the epic's resolved
-                    // column. Mirror the is_epic re-assert above. No-op when the
-                    // epic has no subtasks yet (provider guards that case).
-                    await this._recomputeEpicColumn?.(newRecord.planId, workspaceRoot);
                 }
-                if (!relativePath.startsWith('.switchboard/epics/')) {
-                    const tombKey = `${relativePath}|${workspaceId}`;
-                    const tomb = this._recentlyDeletedColumns.get(tombKey);
-                    if (tomb && Date.now() - tomb.ts < 5000 && tomb.column && tomb.column !== 'CREATED') {
-                        // movePlanByPlanFile validates the column against VALID_KANBAN_COLUMNS + SAFE_COLUMN_NAME_RE
-                        // at KanbanDatabase.ts:1531 — if the column was removed since the delete, the move is
-                        // silently rejected and the plan stays at CREATED (status quo fallback).
-                        const moved = await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
-                        if (moved) {
-                            newRecord.kanbanColumn = tomb.column; // update in-memory record for ClickUp sync at :664
-                            this._outputChannel?.appendLine(
-                                `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for: ${relativePath}`
-                            );
-                        } else {
-                            this._outputChannel?.appendLine(
-                                `[GlobalPlanWatcher] Tombstone column '${tomb.column}' rejected by movePlanByPlanFile (invalid/removed), plan stays at CREATED: ${relativePath}`
-                            );
-                        }
+                // Restore the real pre-delete column from the delete-tombstone for ALL
+                // plans — epics included. insertFileDerivedPlan hardcodes 'CREATED' on a
+                // fresh INSERT, so the atomic-write DELETE->re-INSERT race re-inserts the
+                // row at CREATED; the tombstone (captured for every plan in
+                // _handlePlanDelete) holds the column it actually had. An epic is a
+                // container whose column is authoritative — restoring its true (DB-owned)
+                // column is preferred over re-deriving it from subtasks, which only yields
+                // the least-progressed subtask and yanks an advanced epic backward.
+                const tombKey = `${relativePath}|${workspaceId}`;
+                const tomb = this._recentlyDeletedColumns.get(tombKey);
+                let restoredFromTombstone = false;
+                if (tomb && Date.now() - tomb.ts < 5000 && tomb.column && tomb.column !== 'CREATED') {
+                    // movePlanByPlanFile validates the column against VALID_KANBAN_COLUMNS + SAFE_COLUMN_NAME_RE
+                    // at KanbanDatabase.ts:1531 — if the column was removed since the delete, the move is
+                    // silently rejected and the plan stays at CREATED (status quo fallback).
+                    const moved = await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
+                    if (moved) {
+                        newRecord.kanbanColumn = tomb.column; // update in-memory record for ClickUp sync at :664
+                        restoredFromTombstone = true;
+                        this._outputChannel?.appendLine(
+                            `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for: ${relativePath}`
+                        );
+                    } else {
+                        this._outputChannel?.appendLine(
+                            `[GlobalPlanWatcher] Tombstone column '${tomb.column}' rejected by movePlanByPlanFile (invalid/removed), plan stays at CREATED: ${relativePath}`
+                        );
                     }
-                    this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
+                }
+                this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
+                if (relativePath.startsWith('.switchboard/epics/') && !restoredFromTombstone) {
+                    // No tombstone (genuinely new epic, not a race re-insert): derive the
+                    // column from subtasks. recomputeEpicColumnFromSubtasks is itself guarded
+                    // to only touch a 'CREATED' column, so it never overrides a real one.
+                    await this._recomputeEpicColumn?.(newRecord.planId, workspaceRoot);
                 }
                 plan = newRecord;
 
@@ -629,9 +637,28 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     // Same clobber vector as above (the atomic-write DELETE->re-INSERT
                     // race hits this branch: _handlePlanDelete deletes the row, then
                     // this branch's insertFileDerivedPlan re-INSERTs with
-                    // kanban_column='CREATED'). Re-derive from subtasks so the
-                    // epic's column survives the race. No-op when no subtasks yet.
-                    await this._recomputeEpicColumn?.(updatedRecord.planId, workspaceRoot);
+                    // kanban_column='CREATED'). Prefer the tombstoned (DB-owned) column —
+                    // the epic's authoritative position — over re-deriving from subtasks,
+                    // which only yields the least-progressed subtask and pulls an advanced
+                    // epic backward. Fall back to subtask-derivation (itself guarded to
+                    // only touch a 'CREATED' column) only when no tombstone is available.
+                    const tombKey = `${relativePath}|${workspaceId}`;
+                    const tomb = this._recentlyDeletedColumns.get(tombKey);
+                    let restoredFromTombstone = false;
+                    if (tomb && Date.now() - tomb.ts < 5000 && tomb.column && tomb.column !== 'CREATED') {
+                        const moved = await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
+                        if (moved) {
+                            updatedRecord.kanbanColumn = tomb.column;
+                            restoredFromTombstone = true;
+                            this._outputChannel?.appendLine(
+                                `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for epic: ${relativePath}`
+                            );
+                        }
+                    }
+                    this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
+                    if (!restoredFromTombstone) {
+                        await this._recomputeEpicColumn?.(updatedRecord.planId, workspaceRoot);
+                    }
                 } else if (updatedRecord.epicId) {
                     // Subtask rescoring bubble-up: insertFileDerivedPlan writes the
                     // fresh complexity into the subtask's column (now full-fidelity

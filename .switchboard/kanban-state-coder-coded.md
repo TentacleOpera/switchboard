@@ -1,4 +1,4 @@
 ## CODER CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630105829_epic-complexity-rollup-db-backfill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630105829_epic-complexity-rollup-db-backfill.md) — Make the DB `complexity` Column Authoritative (Fix Epic Complexity Rollup at the Source) <!-- planId:cbabe67b-3156-4955-80fb-7d91ca9da20c -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630110754_inspect-measure-tool-design-tabs.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260630110754_inspect-measure-tool-design-tabs.md) — Add "Inspect / Measure" button to the Design panel's Images & Design System tabs <!-- planId:dbb6bbe3-d8a6-44bb-820b-1362c4d625ef -->
 

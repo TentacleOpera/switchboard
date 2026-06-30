@@ -2555,12 +2555,16 @@ export class KanbanProvider implements vscode.Disposable {
             }
 
             const touchedEpics = new Set<string>();
+            let scoredCount = 0;
             for (const row of unscored) {
                 if (!row.planFile) continue;
                 const score = await this.getComplexityFromPlan(workspaceRoot, row.planFile);
                 if (score === 'Unknown') continue;
                 const ok = await db.updateComplexityByPlanFile(row.planFile, workspaceId, score);
-                if (ok && row.epicId) touchedEpics.add(row.epicId);
+                if (ok) {
+                    scoredCount++;
+                    if (row.epicId) touchedEpics.add(row.epicId);
+                }
             }
 
             // Belt-and-suspenders: recompute every distinct parent epic once
@@ -2574,7 +2578,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             await db.setConfig('kanban.complexityBackfillV1Done', 'true');
             this._outputChannel?.appendLine(
-                `[KanbanProvider] complexity backfill V1 complete: scored ${unscored.length} row(s), recomputed ${touchedEpics.size} epic(s) for ${workspaceRoot}`
+                `[KanbanProvider] complexity backfill V1 complete: scored ${scoredCount}/${unscored.length} row(s), recomputed ${touchedEpics.size} epic(s) for ${workspaceRoot}`
             );
             this._scheduleBoardRefresh(workspaceRoot);
         } catch (err) {

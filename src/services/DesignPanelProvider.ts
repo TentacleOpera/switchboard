@@ -366,6 +366,11 @@ export class DesignPanelProvider implements vscode.Disposable {
         );
         htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
 
+        const inspectJsUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'inspect.js')
+        );
+        htmlContent = htmlContent.replace(/\{\{INSPECT_JS_URI\}\}/g, inspectJsUri.toString());
+
         const geistPixelFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );
@@ -1412,6 +1417,30 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     } else {
                         await this._stateStore.setPanelState(tabKey, state);
                     }
+                }
+                break;
+            }
+            case 'inspectRequestDataUrl': {
+                const filePath = message.filePath;
+                try {
+                    // Simple path verification helper (defense-in-depth)
+                    const isAllowed = this._getWorkspaceRoots().some(root => {
+                        const rel = path.relative(root, filePath);
+                        return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+                    });
+                    if (!isAllowed) {
+                        throw new Error("Access denied: File not in workspace roots.");
+                    }
+                    const buf = fs.readFileSync(filePath);
+                    const ext = path.extname(filePath).slice(1).toLowerCase();
+                    const mime = ext === 'jpg' ? 'jpeg' : (ext || 'png');
+                    this.postMessage({
+                        type: 'inspectDataUrl',
+                        dataUrl: `data:image/${mime};base64,${buf.toString('base64')}`,
+                        requestId: message.requestId
+                    });
+                } catch (e) {
+                    this.postMessage({ type: 'inspectDataUrlError', requestId: message.requestId, error: String(e) });
                 }
                 break;
             }

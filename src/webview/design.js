@@ -1406,19 +1406,24 @@
 
             const imageContainer = document.getElementById('image-preview-container-images');
             const imageImg = document.getElementById('image-preview-img-images');
+            const inspectBtn = document.getElementById('btn-inspect-images');
 
             if (isImage && webviewUri) {
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
                 const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
                 if (imgViewport) applyZoom('images', imgViewport);
                 if (imageImg) {
+                    imageImg.dataset.filePath = filePath || '';
                     imageImg.src = webviewUri + '?t=' + Date.now();
                     imageImg.onload = () => {
                         const container = document.getElementById('image-preview-container-images');
                         const viewport = container ? container.querySelector('.zoomable-viewport') : null;
                         if (container && viewport) fitToContainer('images', container, viewport);
+                        if (inspectBtn) inspectBtn.removeAttribute('disabled');
                     };
                 }
+            } else {
+                if (inspectBtn) inspectBtn.setAttribute('disabled', 'true');
             }
             const statusImages = document.getElementById('status-images');
             if (statusImages) {
@@ -1440,12 +1445,16 @@
             const imgImg = document.getElementById('image-preview-img-design');
             const jsonCont = document.getElementById('json-preview-container-design');
             const statusDesign = document.getElementById('status-design');
+            const inspectBtn = document.getElementById('btn-inspect-design');
 
             if (isImage && webviewUri) {
                 if (mdPrev) mdPrev.style.display = 'none';
                 if (jsonCont) jsonCont.style.display = 'none';
                 if (imgCont) imgCont.style.display = 'flex';
-                if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
+                if (imgImg) {
+                    imgImg.dataset.filePath = filePath || '';
+                    imgImg.src = webviewUri + '?t=' + Date.now();
+                }
                 const designImgViewport = imgCont ? imgCont.querySelector('.zoomable-viewport') : null;
                 if (designImgViewport) applyZoom('design', designImgViewport);
                 if (imgImg) {
@@ -1453,9 +1462,17 @@
                         const container = document.getElementById('image-preview-container-design');
                         const viewport = container ? container.querySelector('.zoomable-viewport') : null;
                         if (container && viewport) fitToContainer('design', container, viewport);
+                        // Only enable inspect if local docs subtab is showing (as checked by subtab active classes)
+                        const localSubtab = document.getElementById('btn-design-subtab-local');
+                        if (localSubtab && localSubtab.classList.contains('active')) {
+                            if (inspectBtn) inspectBtn.removeAttribute('disabled');
+                        }
                     };
                 }
-            } else if (msg.fileType === 'json') {
+            } else {
+                if (inspectBtn) inspectBtn.setAttribute('disabled', 'true');
+            }
+            if (msg.fileType === 'json') {
                 if (imgCont) imgCont.style.display = 'none';
                 if (mdPrev) mdPrev.style.display = 'none';
                 if (jsonCont) {
@@ -4070,6 +4087,13 @@
             if (localPanel) localPanel.style.display = 'flex';
             if (stitchPanel) stitchPanel.style.display = 'none';
             state.designSystemSubTab = 'local';
+            
+            // Re-evaluate inspect button state based on active doc
+            const inspectBtn = document.getElementById('btn-inspect-design');
+            const imgImg = document.getElementById('image-preview-img-design');
+            if (inspectBtn && imgImg && imgImg.src && !imgImg.src.includes('placeholder') && imgImg.style.display !== 'none' && document.getElementById('image-preview-container-design').style.display !== 'none') {
+                inspectBtn.removeAttribute('disabled');
+            }
         });
 
         btnStitch?.addEventListener('click', () => {
@@ -4079,6 +4103,9 @@
             if (stitchPanel) stitchPanel.style.display = 'flex';
             state.designSystemSubTab = 'stitch';
             
+            const inspectBtn = document.getElementById('btn-inspect-design');
+            if (inspectBtn) inspectBtn.setAttribute('disabled', 'true');
+
             // Refresh list
             refreshStitchDesignSystems();
         });

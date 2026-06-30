@@ -3603,6 +3603,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button id="btn-edit-design" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-design" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-design" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-inspect-design" class="strip-btn" disabled>Inspect</button>
                 <input type="text" id="design-docs-search" class="sidebar-search-input" placeholder="Search design..." />
                 <span id="status-design"></span>
             </div>
@@ -3793,6 +3794,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <option value="">All Workspaces</option>
                 </select>
                 <input type="text" id="images-docs-search" class="sidebar-search-input" placeholder="Search images..." />
+                <button id="btn-inspect-images" class="strip-btn" disabled>Inspect</button>
                 <span id="status-images" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
             </div>
             <div class="content-row">
@@ -4047,15 +4049,50 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div id="apply-screens-list" style="max-height: 250px; overflow-y: auto; border: 1px solid var(--border-color); padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--panel-bg2, #1a1a1a);">
                         <!-- Checklist of screens will be rendered here -->
                     </div>
-                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
-                        <button id="btn-cancel-apply" class="strip-btn">Cancel</button>
-                        <button id="btn-execute-apply" class="strip-btn stitch-btn-primary">Apply Design System</button>
+            </div>
+        </div>
+
+        <!-- Shared Inspect Overlay -->
+        <div id="inspect-overlay" style="display: none; position: absolute; inset: 0; z-index: 100; pointer-events: none; flex-direction: column;">
+            <!-- UI overlay strip -->
+            <div class="inspect-toolbar" style="pointer-events: auto; display: flex; align-items: center; justify-content: space-between; background: var(--panel-bg2, #1a1a1a); border-bottom: 1px solid var(--border-color); padding: 8px 16px;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="font-weight: bold; color: var(--accent-teal, #00f0ff); font-size: 11px; letter-spacing: 1px; text-transform: uppercase;">Inspector</span>
+                    <div class="inspect-mode-selectors" style="display: flex; gap: 4px;">
+                        <button id="btn-inspect-mode-eyedrop" class="strip-btn active" style="padding: 2px 8px; font-size: 10px;">Eyedrop</button>
+                        <button id="btn-inspect-mode-measure" class="strip-btn" style="padding: 2px 8px; font-size: 10px;">Measure</button>
+                        <button id="btn-inspect-mode-autodetect" class="strip-btn" style="padding: 2px 8px; font-size: 10px;">Auto-Detect</button>
                     </div>
                 </div>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <div id="inspect-readout" style="display: flex; align-items: center; gap: 12px; font-size: 12px; font-family: var(--font-mono);">
+                        <!-- Swatch and color/dimension values -->
+                    </div>
+                    <button id="btn-inspect-close" class="strip-btn" style="padding: 2px 8px; font-size: 10px; border-color: var(--accent-orange, #ff5f00); color: var(--accent-orange, #ff5f00);">Exit</button>
+                </div>
+            </div>
+            
+            <!-- Guardrail alert banner -->
+            <div id="inspect-guardrail-banner" style="display: none; pointer-events: auto; background: rgba(255, 95, 0, 0.15); border-bottom: 1px solid var(--accent-orange, #ff5f00); padding: 6px 16px; font-size: 11px; color: var(--accent-orange, #ff5f00); align-items: center; justify-content: space-between;">
+                <span>⚠️ [Screenshot Guard] Colours sampled from screenshots may be profile-shifted. Figma / spec tokens are authoritative.</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <label style="cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                        <input type="checkbox" id="inspect-force-screenshot" /> Treat as screenshot
+                    </label>
+                    <button id="btn-dismiss-guardrail" style="background: none; border: none; color: inherit; cursor: pointer; font-weight: bold; font-size: 14px;">×</button>
+                </div>
+            </div>
+
+            <!-- Drag interaction layer -->
+            <div id="inspect-interaction-layer" style="pointer-events: auto; flex: 1; position: relative; cursor: crosshair; overflow: hidden;">
+                <!-- Absolutely positioned SVG or div overlay for drawing crop boxes -->
+                <div id="inspect-selection-box" style="display: none; position: absolute; border: 1.5px dashed var(--accent-teal, #00f0ff); background: rgba(0, 240, 255, 0.1); pointer-events: none;"></div>
+                <div id="inspect-auto-detect-bounds" style="display: none; position: absolute; border: 1px solid var(--accent-green, #00ff66); pointer-events: none;"></div>
             </div>
         </div>
     </div>
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{DESIGN_JS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{INSPECT_JS_URI}}"></script>
 </body>
 </html>

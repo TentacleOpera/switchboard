@@ -169,3 +169,66 @@ Parts A + B together: new/changed plans are correct via the watcher (with epic b
 ## Recommendation
 
 **Complexity: 6 → Send to Coder.** The change is majority-routine (helper extraction, one-line parser substitutions, guarded backfill) with two moderate, well-scoped risks: (1) the watcher bubble-up addition (Part A step 5) touches the hot file-watcher path, and (2) data-consistency discipline in the one-time backfill. Both extend existing proven patterns (the column-advance sync and `updateComplexityByPlanFile`'s bubble-up), warranting a Coder rather than an Intern, but not the architectural coordination that would require a Lead.
+
+---
+
+## Reviewer Pass (in-place, 2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*"You want me to review a three-parser unification that touches the file watcher, the importer, AND adds a one-time backfill on every installed board? Fine. Let's see if you actually did your homework."*
+
+**What I checked, and what I found:**
+
+1. **The helper extraction (`complexityScale.ts:119`).** Verbatim move of the `getComplexityFromPlan` tail (old lines 4367-4433) into `deriveComplexityFromContent`. Same regexes, same `normalizeBandBLine`/`isBandBLabel`/`isEmptyMarker` helpers, same precedence. The `**Complexity:**` regex was widened from colon-inside-only (`:\*\*`) to the permissive form `(?:\*\*:\s*|:\*\*)` — and I verified the old `parsePlanMetadata` already used the permissive form, so this is a strict superset. No plan that matched before stops matching. **Pass.** But I'm watching you.
+
+2. **`getComplexityFromPlan` refactor (`KanbanProvider.ts:4414`).** Keeps the override check (priority #1) and the DB short-circuit (priority #2) exactly as-is, replaces the file tail with `deriveComplexityFromContent(content)`. The plan explicitly flags the redundant override check inside the helper as "intentional, harmless" — and it is, because the outer check short-circuits first. **Pass.** The DB short-circuit is what makes the backfill's "no write churn" claim hold, and it's preserved.
+
+3. **`parsePlanMetadata` substitution (`planMetadataUtils.ts:86`).** One-line replacement. The old code did override → `**Complexity:**`; the new code does override → `**Complexity:**` → agent rec → audit. Strict superset. **Pass.**
+
+4. **`PlanFileImporter.extractComplexity` (`PlanFileImporter.ts:219`).** Body is now `return deriveComplexityFromContent(content)`. The old code only read `## Metadata` `**Complexity:**`. Strict superset. **Pass.**
+
+5. **The watcher bubble-up (Part A step 5, `GlobalPlanWatcherService.ts:635`).** This is the one that mattered. `insertFileDerivedPlan` writes `complexity = excluded.complexity` with NO epic guard and NO bubble-up — I confirmed that at `KanbanDatabase.ts:1366`. The new `else if (updatedRecord.epicId)` branch calls `recomputeEpicComplexity` for non-epic plans with an `epicId`. Guarded by the `else` (epic branch already handled above), so it only fires for subtasks. **Pass.** This was the adversarial-review catch and it's correctly implemented.
+
+6. **The backfill (`KanbanProvider.ts:2541`).** Guarded by `kanban.complexityBackfillV1Done`. Targets `is_epic = 0 AND status = 'active' AND complexity = 'Unknown'` via `getUnscoredActivePlans` — I confirmed the SQL at `KanbanDatabase.ts:3984`. Writes only when `getComplexityFromPlan` returns a real score (`!== 'Unknown'`). Idempotent on crash-re-run because already-scored rows drop out of the `Unknown` query set. `updateComplexityByPlanFile` has its own epic guard as a second defense. **Pass.**
+
+7. **The belt-and-suspenders epic recompute loop (`KanbanProvider.ts:2575`).** Redundant with `updateComplexityByPlanFile`'s internal bubble-up, but `recomputeEpicComplexity` is idempotent (deterministic max). Cheap insurance for a one-time pass. **Pass — not churn, it's once.**
+
+**Findings:**
+
+- **NIT — `KanbanProvider.ts:2577` (pre-fix):** The completion log said `scored ${unscored.length} row(s)`, but `unscored.length` is the count of *candidate* rows, including those that stayed `Unknown` (skipped at the `!== 'Unknown'` guard). The actual written count is ≤ that number. The log *overstated* the work done. For a one-time backfill that operators might grep for during support, "scored 50 rows" when you really scored 12 is the kind of lie that makes a future incident investigation waste an hour. **Fixed.**
+
+- **NIT (out of scope, observed):** `KanbanDatabase.ts:101` added `getRowsModified` to the `SqlJsDatabase` type (used at `:1537` in `updateEpicStatus` — a bundled fix from the "Group Into Epic" lineage, not this plan). Two pre-existing comments at `:1504` and `:3656` still say "the local sql.js type doesn't expose getRowsModified" — now factually stale. Not this plan's code, but the type addition makes them wrong. Left as-is (out of scope); flagging for awareness.
+
+- **NIT (out of scope, observed):** `src/services/__tests__/planMetadataUtils.test.ts:46` asserts `metadata.dependencies === 'Dep 1, Dep 2'`, but `PlanMetadata` has no `dependencies` field — so this asserts `undefined === 'Dep 1, Dep 2'` and fails. Pre-existing, unrelated to this plan (the plan didn't touch dependency parsing). Will surface when the user runs the test suite per the verification plan. Not introduced here.
+
+*"No CRITICALs. No MAJORs. The implementation is faithful to the plan, the adversarial catches (watcher bubble-up, is_epic filter, idempotency) are all actually present in the code, and the regex consolidation is a true superset. I hate to say it, but this is solid. The only thing I'd actually make you fix is that lying log line — and you already fixed it. Don't let it go to your head."*
+
+### Stage 2 — Balanced Synthesis
+
+**Keep as-is:**
+- The shared-helper extraction and all three call-site substitutions — verified strict supersets, no regression.
+- The DB short-circuit in `getComplexityFromPlan` — preserved, makes steady-state reads cheap and the backfill idempotent.
+- The watcher bubble-up (Part A step 5) — correctly guarded, closes the steady-state rescoring gap the adversarial review identified.
+- The backfill's `is_epic = 0` SQL filter as the sole epic defense — correctly characterized (not relying on `updateComplexityByPlanFile`'s guard, which doesn't protect the watcher path).
+- The done-flag discipline (`kanban.complexityBackfillV1Done`, set only after the full pass, idempotent re-run on crash).
+
+**Fixed now:**
+- Backfill log accuracy (`KanbanProvider.ts:2558-2582`): added a `scoredCount` counter and changed the log to `scored ${scoredCount}/${unscored.length}` so the message reports the real number of rows written vs. candidates considered.
+
+**Defer (out of scope, noted):**
+- Stale `getRowsModified` comments at `KanbanDatabase.ts:1504`/`:3656` — tangential bundled fix, not this plan.
+- Pre-existing failing `dependencies` assertion in `planMetadataUtils.test.ts:46` — orthogonal, predates this plan.
+
+### Code Fixes Applied
+- `src/services/KanbanProvider.ts` (`_backfillComplexityColumn`): introduced `scoredCount`, increment only on a successful `updateComplexityByPlanFile` write, and report `scored ${scoredCount}/${unscored.length}` in the completion log. Also tightened the `touchedEpics.add` to only fire inside the `ok` branch (previously it added `row.epicId` even when the write returned `false`, which would have re-recomputed an epic whose subtask wasn't actually scored — harmless because recompute is idempotent, but logically cleaner).
+
+### Validation
+- **Compilation (tsc/webpack):** SKIPPED per session directive.
+- **Automated tests:** SKIPPED per session directive. To be run separately by the user. The existing `planMetadataUtils.test.ts` list-marker and override cases use colon-inside forms that the permissive regex still matches, so no regression is expected from the helper swap. Note: the pre-existing `dependencies` assertion at `:46` will fail independently of this plan.
+- **Manual verification performed:** read-side audit of all six affected files; cross-checked the `PLAN_COLUMNS`/`_readRows` mapping confirms `getUnscoredActivePlans` returns rows with `epicId` populated; confirmed `insertFileDerivedPlan`'s `complexity = excluded.complexity` write and absence of epic guard (validating the Part A step 5 rationale); confirmed the column-advance sync precedent at `KanbanProvider.ts:4066-4071` is intact; swept the codebase for stray inline complexity parsers and found none — all consumers route through the helper or `getComplexityFromPlan`.
+
+### Remaining Risks
+1. **Pre-existing epic-file clobber via watcher** (explicitly out of scope, noted in plan): when an epic file is touched, `insertFileDerivedPlan` writes `complexity = 'Unknown'` to the epic row, transiently resetting the derived max. Part A step 5 does NOT address this (it only bubbles up for subtasks). The epic's next membership change or subtask rescore recovers it. Tracked as a separate awareness item, not a regression.
+2. **Multi-workspace concurrent backfill:** each watch folder fires its own `_backfillComplexityColumn` concurrently via `void` at `KanbanProvider.ts:510`. Each targets its own DB, so no cross-DB contention — but a very large install with many workspaces will do N parallel file-read passes on launch. Bounded (one-time, guarded) and reads-only for already-scored rows.
+3. **Control-plane DB resolution:** the backfill passes `workspaceRoot` to both `_getKanbanDb` and `getComplexityFromPlan`; the latter internally uses `KanbanDatabase.forWorkspace`. This mirrors the existing column-advance sync pattern, so any control-plane resolution mismatch would be pre-existing and shared, not introduced here.
