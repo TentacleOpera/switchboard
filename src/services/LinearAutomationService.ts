@@ -275,6 +275,9 @@ export class LinearAutomationService {
         if (!config?.setupComplete) {
             return result;
         }
+        if (!(await this._linearService.hasApiToken())) {
+            return result;
+        }
 
         const activeRules = this._getRules(config);
         if (activeRules.length === 0) {

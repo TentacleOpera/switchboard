@@ -4765,6 +4765,7 @@ Each plan file must include:
         const trimmedToken = String(token || '').trim();
         if (trimmedToken) {
             await this._context.secrets.store('switchboard.clickup.apiToken', trimmedToken);
+            this._getClickUpService(resolvedRoot).clearApiTokenCache();
         }
         const columns = (await this.handleGetKanbanStructure(resolvedRoot))
             .filter((item) => item.visible !== false)
@@ -4932,6 +4933,7 @@ Each plan file must include:
         const trimmedToken = String(token || '').trim();
         if (trimmedToken) {
             await this._context.secrets.store('switchboard.linear.apiToken', trimmedToken);
+            this._getLinearService(resolvedRoot).clearApiTokenCache();
         }
         const result = await this._getLinearService(resolvedRoot).applyConfig(options);
         if (result.success) {
@@ -4972,6 +4974,7 @@ Each plan file must include:
                     await this._context.secrets.store('switchboard.clickup.apiToken', trimmed);
                 }
                 const svc = this._getClickUpService(resolvedRoot);
+                svc.clearApiTokenCache();
                 const config = await svc.loadConfig();
                 if (!config || !config.setupComplete) {
                     return { success: false, error: 'Connect ClickUp and select a list before enabling the triage pipeline.' };
@@ -5011,6 +5014,7 @@ Each plan file must include:
                     await this._context.secrets.store('switchboard.linear.apiToken', trimmed);
                 }
                 const svc = this._getLinearService(resolvedRoot);
+                svc.clearApiTokenCache();
                 const config = await svc.loadConfig();
                 if (!config || !config.setupComplete) {
                     return { success: false, error: 'Connect Linear and select a project before enabling the triage pipeline.' };

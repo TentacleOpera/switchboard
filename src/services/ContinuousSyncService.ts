@@ -257,14 +257,14 @@ export class ContinuousSyncService implements vscode.Disposable {
     if (plan.linearIssueId) {
       const linear = this._getLinearService(workspaceRoot);
       const linearConfig = await linear.loadConfig();
-      linearOK = linearConfig?.setupComplete === true && linearConfig.realTimeSyncEnabled === true;
+      linearOK = linearConfig?.setupComplete === true && linearConfig.realTimeSyncEnabled === true && (await linear.hasApiToken());
     }
 
     let clickupOK = false;
     if (plan.clickupTaskId) {
       const clickup = this._getClickUpService(workspaceRoot);
       const clickupConfig = await clickup.loadConfig();
-      clickupOK = clickupConfig?.setupComplete === true && clickupConfig.realTimeSyncEnabled === true;
+      clickupOK = clickupConfig?.setupComplete === true && clickupConfig.realTimeSyncEnabled === true && (await clickup.hasApiToken());
     }
 
     return linearOK || clickupOK;
@@ -707,7 +707,7 @@ export class ContinuousSyncService implements vscode.Disposable {
       if (plan.clickupTaskId) {
         const clickup = this._getClickUpService(workspaceRoot);
         const config = await clickup.loadConfig();
-        if (config?.setupComplete === true && config.realTimeSyncEnabled === true) {
+        if (config?.setupComplete === true && config.realTimeSyncEnabled === true && (await clickup.hasApiToken())) {
           const result = await clickup.httpRequest(
             'GET',
             `/task/${plan.clickupTaskId}`,
@@ -723,7 +723,7 @@ export class ContinuousSyncService implements vscode.Disposable {
       if (plan.linearIssueId) {
         const linear = this._getLinearService(workspaceRoot);
         const config = await linear.loadConfig();
-        if (config?.setupComplete === true && config.realTimeSyncEnabled === true) {
+        if (config?.setupComplete === true && config.realTimeSyncEnabled === true && (await linear.hasApiToken())) {
           const result = await linear.graphqlRequest(
             `query ($id: String!) { issue(id: $id) { description } }`,
             { id: plan.linearIssueId },
@@ -861,6 +861,9 @@ export class ContinuousSyncService implements vscode.Disposable {
     if (config.realTimeSyncEnabled !== true) {
       return { skipped: true, reason: 'Real-time sync disabled' };
     }
+    if (!(await clickup.hasApiToken())) {
+      return { skipped: true, reason: 'ClickUp API token not configured' };
+    }
     const result = await clickup.syncPlanContent(plan.clickupTaskId, content, signal);
     if (!result.success) {
       console.warn(`[ContinuousSync] ClickUp sync failed for ${plan.planFile}: ${result.error}`);
@@ -887,6 +890,9 @@ export class ContinuousSyncService implements vscode.Disposable {
     }
     if (config.realTimeSyncEnabled !== true) {
       return { skipped: true, reason: 'Real-time sync disabled' };
+    }
+    if (!(await linear.hasApiToken())) {
+      return { skipped: true, reason: 'Linear API token not configured' };
     }
     const result = await linear.syncPlanContent(plan.linearIssueId, content, signal);
     if (!result.success) {

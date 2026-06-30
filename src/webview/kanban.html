@@ -349,16 +349,15 @@
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
         }
         .kanban-sub-bar .strip-icon-btn.is-active {
-            border-color: var(--accent-teal);
-            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
-            box-shadow: var(--glow-teal);
+            background: transparent;
+            box-shadow: none;
         }
         .kanban-sub-bar .strip-icon-btn.is-active:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             box-shadow: var(--glow-teal);
         }
         .kanban-sub-bar .strip-icon-btn.is-active img {
-            filter: brightness(1.25);
+            filter: brightness(1.2);
         }
         .kanban-sub-bar .strip-icon-btn.is-off {
             opacity: 0.5;
@@ -566,18 +565,36 @@
         }
 
         .strip-icon-btn.is-active {
-            border-color: var(--accent-teal);
-            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
-            box-shadow: var(--glow-teal);
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
             opacity: 1;
         }
         .strip-icon-btn.is-active:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             box-shadow: var(--glow-teal);
         }
 
         .strip-icon-btn.is-active img {
-            filter: brightness(1.25);
+            filter: brightness(1.2);
+        }
+
+        /* Highlight ONLY the Remote Control & Automation buttons when active.
+           Scoped by ID so the generic .strip-icon-btn.is-active rule above
+           (shared by CLI Triggers, Epic Ultracode/Goal, Collapse Coders, etc.)
+           is NOT affected. No img filter here — the border + background tint
+           carry the cue, and an ID-scoped filter would clobber the Claudify
+           colour-icon opt-in rules (which rely on brightness(0)+recolour). */
+        #btn-remote-control.is-active,
+        #btn-autoban.is-active {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+        #btn-remote-control.is-active:hover:not(:disabled),
+        #btn-autoban.is-active:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
+            box-shadow: var(--glow-teal);
         }
 
         .strip-icon-btn.is-off {

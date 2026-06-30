@@ -32,7 +32,7 @@ Make epic parent/child relationships work round-trip across Linear, ClickUp, and
 ## Metadata
 
 **Tags:** [backend, api, database, feature, docs]
-**Complexity:** 8
+**Complexity:** 7
 *(No Repo line — single-repo workspace per session directive.)*
 
 **Subtask complexity rollup:**

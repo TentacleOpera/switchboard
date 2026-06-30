@@ -1969,6 +1969,9 @@ export class KanbanProvider implements vscode.Disposable {
         if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
             return;
         }
+        if (!(await clickUp.hasApiToken())) {
+            return;
+        }
 
         clickUp.debouncedSync(plan.planFile, {
             planId: plan.planId,
@@ -1994,6 +1997,9 @@ export class KanbanProvider implements vscode.Disposable {
         const linear = this._getLinearService(workspaceRoot);
         const config = await linear.loadConfig();
         if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
+            return;
+        }
+        if (!(await linear.hasApiToken())) {
             return;
         }
 

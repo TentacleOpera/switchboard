@@ -4,6 +4,8 @@ description: 'Project Panel Tab Reliability & Styling'
 
 # Project Panel Tab Reliability & Styling
 
+**Complexity:** 6
+
 ## Goal
 
 Fix the Project panel's tab state synchronization, filter navigation, and visual consistency. Today, the Project panel sometimes shows no projects (tab state desync), the Projects tab has inconsistent styling and uses the wrong UX pattern for project selection, the Review Plan button opens the widest filter instead of the narrowest (showing all plans instead of the specific plan being reviewed), and the Copy Prompt action doesn't update the DB column or kanban position (so the plan stays in CREATED after its prompt has been copied).

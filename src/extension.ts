@@ -1305,6 +1305,10 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (token) {
             await context.secrets.store('switchboard.clickup.apiToken', token.trim());
+            const workspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot();
+            if (workspaceRoot) {
+                (kanbanProvider as any)._getClickUpService(workspaceRoot)?.clearApiTokenCache();
+            }
             showTemporaryNotification('ClickUp API token saved securely.');
         }
     });
@@ -1431,6 +1435,10 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (token) {
             await context.secrets.store('switchboard.linear.apiToken', token.trim());
+            const workspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot();
+            if (workspaceRoot) {
+                (kanbanProvider as any)._getLinearService(workspaceRoot)?.clearApiTokenCache();
+            }
             showTemporaryNotification('Linear API token saved securely.');
         }
     });

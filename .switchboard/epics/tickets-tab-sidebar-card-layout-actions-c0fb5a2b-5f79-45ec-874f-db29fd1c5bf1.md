@@ -24,7 +24,7 @@ Two independent root causes drive the two subtasks:
 ## Metadata
 
 - **Tags:** frontend, ui, refactor, feature
-- **Complexity:** 6/10
+**Complexity:** 6
 
 ## User Review Required
 

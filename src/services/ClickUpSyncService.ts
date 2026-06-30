@@ -162,6 +162,7 @@ export class ClickUpSyncService {
 
   // Cache service for task caching
   private _cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService | null = null;
+  private _tokenPresentCache: boolean | null = null;
 
   // Reverse map: taskId -> listId for efficient cache invalidation on updates
   private _taskListIndex: Map<string, string> = new Map();
@@ -2147,6 +2148,17 @@ export class ClickUpSyncService {
     }
   }
 
+  async hasApiToken(): Promise<boolean> {
+    if (this._tokenPresentCache !== null) { return this._tokenPresentCache; }
+    const token = await this.getApiToken();
+    this._tokenPresentCache = !!token;
+    return this._tokenPresentCache;
+  }
+
+  clearApiTokenCache(): void {
+    this._tokenPresentCache = null;
+  }
+
   private async _promptForApiToken(): Promise<string | null> {
     const inputToken = await vscode.window.showInputBox({
       prompt: 'Enter your ClickUp API token (starts with pk_)',
@@ -2439,6 +2451,7 @@ export class ClickUpSyncService {
           return { success: false, error: 'Setup cancelled — ClickUp API token required.' };
         }
         await this._secretStorage.store('switchboard.clickup.apiToken', token);
+        this._tokenPresentCache = true;
       }
 
       const requestedColumns = this._normalizeColumns(options.columns, config);
@@ -2543,6 +2556,9 @@ export class ClickUpSyncService {
       if (!config || !config.setupComplete) {
         return { success: false, error: 'ClickUp not set up' };
       }
+      if (!(await this.hasApiToken())) {
+        return { success: false, error: 'ClickUp API token not configured' };
+      }
 
       // §4 — completeSyncEnabled gate. When off, automatic terminal-column transitions
       // are not pushed to ClickUp. Manual dispatch (changeTicketStatus) stays untouched.
@@ -2600,6 +2616,9 @@ export class ClickUpSyncService {
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
         return { success: false, error: 'ClickUp not set up' };
+      }
+      if (!(await this.hasApiToken())) {
+        return { success: false, error: 'ClickUp API token not configured' };
       }
 
       // Convert markdown to ClickUp description format (if needed)

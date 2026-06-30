@@ -68,7 +68,7 @@ Yes — visual design choices (teal tint opacity, border prominence) should be c
 - **Claudify theme**: `body.theme-claudify` intentionally kills neon glow (`--glow-teal: none`, kanban.html:39). The fix must rely on `var(--glow-teal)` (which is already `none` under Claudify) rather than a hardcoded glow, so the highlight degrades gracefully to a border + background tint under Claudify. The Claudify icon-filter rules (kanban.html:74-82) only adjust image brightness — they do not touch border/background, so adding border/background to `.is-active` will show through correctly under both themes.
 - **`kanban-icons-colour` opt-in**: When colour icons are enabled under Claudify (kanban.html:108-130), the active icon already gets a brighter terracotta filter. Adding a border/background tint complements this; no conflict.
 - **Sub-bar buttons**: The `.kanban-sub-bar .strip-icon-btn.is-active` rule (kanban.html:351-361) has the same invisible-active problem and must be updated in parallel for consistency (the pause button is the main consumer).
-- **`is-paused` vs `is-active` transition**: When `#btn-pause-autoban-timer` switches from `is-active` (not paused) to `is-paused` (paused), the JS toggles both classes oppositely (kanban.html:4990-4991). The `is-paused` rule (kanban.html:368-374) sets an orange background tint but does NOT set `border-color`, so when `is-active` is removed the border reverts to the base `.kanban-sub-bar .strip-icon-btn` transparent border (kanban.html:339). The orange background tint alone is the visual cue for paused — this is the existing, correct behavior and is not disrupted by the change.
+- **`is-paused` vs `is-active` transition**: When `#btn-pause-autoban-timer` switches from `is-active` (not paused) to `is-paused` (paused), the JS toggles both classes oppositely (kanban.html:4990-4991). The `is-paused` rule (kanban.html:368-374) sets an orange background tint AND explicitly sets `border-color: transparent` (kanban.html:370), so when `is-active` is removed the teal border is replaced by a transparent border. The orange background tint alone is the visual cue for paused — this is the existing, correct behavior and is not disrupted by the change. *(Corrected during reviewer pass 2026-06-30: original plan text incorrectly claimed `is-paused` did not set `border-color`; it does, to `transparent`.)*
 - **No `window.confirm` / dialogs**: This change adds no confirmation gates (per CLAUDE.md hard rule).
 
 ## Dependencies
@@ -81,12 +81,18 @@ Key risks: (1) CSS specificity fragility — `.is-active` border wins over `.con
 
 ### File: `src/webview/kanban.html`
 
-#### Change 1 — Make `.strip-icon-btn.is-active` visually distinct (main control strip)
+> **⚠️ UAT FAILURE — REVISED APPROACH (2026-06-30):** The original implementation (commit `4cee02e`) modified the **generic** `.strip-icon-btn.is-active` and `.kanban-sub-bar .strip-icon-btn.is-active` CSS rules. This was wrong: those rules are shared by ALL toggle buttons in the control strip (CLI Triggers, Epic Ultracode, Epic Goal, Collapse Coders, pause timer), so every toggle got the teal highlight — not just Remote Control and Automation. The user's UAT caught this: "the highlighting appears to be on the wrong buttons."
+>
+> A second bug was introduced during the fix attempt: ID-scoped `img` filter rules (`#btn-remote-control.is-active img { filter: brightness(1.25) }`) at specificity (1,1,1) overrode the Claudify colour-icon opt-in rules at (0,4,2), knocking the terracotta recolour off the two buttons and leaving them black (the Claudify filters work by `brightness(0)` + recolour; replacing that with just `brightness(1.25)` on the raw dark PNG produced black icons).
+>
+> **Revised approach:** Revert both generic rules to their original invisible-active state. Add new **ID-scoped** rules targeting only `#btn-remote-control` and `#btn-autoban` — border + background tint + glow only, **no `img` filter** (the icon colour is left to the theme rules, avoiding the Claudify specificity conflict).
 
-Replace the current invisible-active rule at kanban.html:567-580:
+#### Change 1 (REVISED) — Revert generic `.strip-icon-btn.is-active` to original; add ID-scoped highlight for RC & Automation only
+
+The generic `.strip-icon-btn.is-active` rule (kanban.html:567-580) stays at its **original** invisible-active state (unchanged from pre-plan):
 
 ```css
-/* BEFORE */
+/* UNCHANGED — original invisible active state */
 .strip-icon-btn.is-active {
     border-color: transparent;
     background: transparent;
@@ -102,35 +108,36 @@ Replace the current invisible-active rule at kanban.html:567-580:
 }
 ```
 
-with a clearly highlighted active state:
+**New scoped rules** added immediately after (kanban.html:582-598):
 
 ```css
-/* AFTER */
-.strip-icon-btn.is-active {
+/* Highlight ONLY the Remote Control & Automation buttons when active.
+   Scoped by ID so the generic .strip-icon-btn.is-active rule above
+   (shared by CLI Triggers, Epic Ultracode/Goal, Collapse Coders, etc.)
+   is NOT affected. No img filter here — the border + background tint
+   carry the cue, and an ID-scoped filter would clobber the Claudify
+   colour-icon opt-in rules (which rely on brightness(0)+recolour). */
+#btn-remote-control.is-active,
+#btn-autoban.is-active {
     border-color: var(--accent-teal);
     background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
     box-shadow: var(--glow-teal);
-    opacity: 1;
 }
-.strip-icon-btn.is-active:hover:not(:disabled) {
+#btn-remote-control.is-active:hover:not(:disabled),
+#btn-autoban.is-active:hover:not(:disabled) {
     background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
     box-shadow: var(--glow-teal);
 }
-.strip-icon-btn.is-active img {
-    filter: brightness(1.25);
-}
 ```
 
-This gives an "on" toggle a teal border, a persistent teal background tint, and the standard teal glow (which is already `none` under Claudify, so Claudify gets border + tint only — no neon). The hover state deepens the tint.
+Specificity: `#btn-remote-control.is-active` = (1,1,0) — beats the generic `.strip-icon-btn.is-active` (0,2,0) and `.controls-strip .strip-icon-btn` (0,2,0) by the ID column. No `img` filter rule is added, so the Claudify colour-icon opt-in (`body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-active img`, 0,4,2) and the Claudify grey-on-active (`body.theme-claudify .strip-icon-btn.is-active img`, 0,3,0) continue to control icon colour unimpeded.
 
-> **Clarification — Claudify icon filter:** The `filter: brightness(1.25)` line on `.strip-icon-btn.is-active img` has specificity (0,2,1). Under Claudify, `body.theme-claudify .strip-icon-btn.is-active img` (kanban.html:74-82, specificity 0,3,0) overrides it with `filter: brightness(0) invert(72%)`. This is expected and harmless — under Claudify the visual cue is carried by the border + background tint (which use `--accent-teal` = `#D97757` terracotta), not the icon filter. The `brightness(1.25)` line only takes effect under the default cyber theme.
+#### Change 2 (REVISED) — Revert sub-bar generic rule to original (no change needed)
 
-#### Change 2 — Mirror the highlight in the sub-bar variant
-
-Replace kanban.html:351-361:
+The `.kanban-sub-bar .strip-icon-btn.is-active` rule (kanban.html:351-361) is reverted to its **original** invisible-active state. The sub-bar pause timer button was never one of the two buttons the user asked to highlight, so no scoped rule is added for it.
 
 ```css
-/* BEFORE */
+/* UNCHANGED — original invisible active state */
 .kanban-sub-bar .strip-icon-btn.is-active {
     background: transparent;
     box-shadow: none;
@@ -144,30 +151,12 @@ Replace kanban.html:351-361:
 }
 ```
 
-with:
-
-```css
-/* AFTER */
-.kanban-sub-bar .strip-icon-btn.is-active {
-    border-color: var(--accent-teal);
-    background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
-    box-shadow: var(--glow-teal);
-}
-.kanban-sub-bar .strip-icon-btn.is-active:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-teal) 26%, transparent);
-    box-shadow: var(--glow-teal);
-}
-.kanban-sub-bar .strip-icon-btn.is-active img {
-    filter: brightness(1.25);
-}
-```
-
 #### Change 3 — Ensure `is-active` wins over `is-off` (defensive ordering)
 
-The `is-off` rule (kanban.html:582-589) sets `opacity: 0.5` and greys the icon. Since a button should never be both active and off simultaneously, no runtime conflict is expected, but to be defensive, add an explicit `is-active.is-off` disambiguator is unnecessary — instead, simply confirm via testing that an active button never has `is-off` applied. No code change required here beyond verifying the JS callers (`updateCliToggleUi` at 4196-4202, `updateEpicWorkflowToggleUi` at 4207-4218, `updateComplexityRoutingToggleUi` at 4231-4236, and the `#btn-collapse-coders` handler at 7343-7363) toggle BOTH classes oppositely, which is correct. The remote-control and autoban buttons only toggle `is-active` (never `is-off`), so they are already correct.
+The `is-off` rule (kanban.html:600+) sets `opacity: 0.5` and greys the icon. Since a button should never be both active and off simultaneously, no runtime conflict is expected. The remote-control and autoban buttons only toggle `is-active` (never `is-off`), so they are already correct. No code change required.
 
 #### No JS changes required
-`applyRemoteControlButtonState()` (kanban.html:6897-6900) and `updateAutobanButtonState()` (kanban.html:4966-4977) already toggle `is-active` correctly. No JS edits.
+`applyRemoteControlButtonState()` (kanban.html:6898-6901) and `updateAutobanButtonState()` (kanban.html:4967-4978) already toggle `is-active` correctly. No JS edits.
 
 ## Verification Plan
 
@@ -187,3 +176,107 @@ No automated tests required — this is a pure CSS visual change with no logic, 
 ---
 
 **Recommendation:** Complexity 2/10 → **Send to Intern** — this is a routine, CSS-only change to two existing rule blocks with no logic, no new state, and no migration. The pattern already exists in the codebase (`.is-paused`).
+
+---
+
+## Reviewer Pass (2026-06-30)
+
+### Stage 1 — Grumpy Principal Engineer
+
+*Slams chair. Squints at the diff. Sighs theatrically.*
+
+Alright, let's see what the intern shipped. A "make the button light up when it's on" ticket. Complexity two. CSS-only. How hard could it possibly be to screw this up?
+
+**The diff.** Two rule blocks changed. `.strip-icon-btn.is-active` (kanban.html:568-581) and `.kanban-sub-bar .strip-icon-btn.is-active` (kanban.html:351-362). Both swap `background: transparent` + `box-shadow: none` for `border-color: var(--accent-teal)` + `background: color-mix(... 18% ...)` + `box-shadow: var(--glow-teal)`. Hover deepens to 26%. Icon filter bumped from `brightness(1.2)` to `brightness(1.25)`. The `opacity: 1` line on the main rule was preserved. Fine. That's literally what the plan said. Verbatim. I'll give you that.
+
+**Specificity.** `.strip-icon-btn.is-active` is (0,2,0). `.controls-strip .strip-icon-btn` is also (0,2,0) and sets `border: 1px solid transparent` at line 544. The `is-active` rule wins ONLY because it's later in source order (568 > 544). The plan flagged this as "low risk, source order is stable." Sure. Today. Until some future intern decides to reorganize the stylesheet by "theme" and silently nukes every active border on the board with zero compile error and zero test catching it. **NIT** — not worth fixing now, but the fragility is real and the plan was honest about it.
+
+**The `is-off` tie-break.** `.strip-icon-btn.is-off` (line 583) is ALSO (0,2,0) and sits AFTER `is-active` (line 568). So if a button ever carried both classes, `is-off` would win — dimming the opacity to 0.5 and nuking the border to transparent, making an "on" button look broken and grey. The plan says "a button should never carry both" and verified the JS toggles them oppositely. I checked: `updateCliToggleUi` (4197-4202), `updateEpicWorkflowToggleUi` (4208-4218), `updateComplexityRoutingToggleUi` (4232-4237), the `#btn-collapse-coders` handler (7344-7349), and the pause-timer (4986-4992) ALL toggle `is-active` and `is-off`/`is-paused` as strict complements. `applyRemoteControlButtonState` (6898-6901) and `updateAutobanButtonState` (4967-4978) only ever touch `is-active`. So the invariant holds — today. **NIT** — the plan chose not to add a defensive `.is-active.is-off` disambiguator. Defensible call given the verified invariant, but it's a latent footgun if anyone ever writes a sloppy toggle.
+
+**The Claudify dead-code line.** `filter: brightness(1.25)` on `.strip-icon-btn.is-active img` (line 579, specificity 0,2,1) is overridden under Claudify by `body.theme-claudify .strip-icon-btn.is-active img` (line 74, specificity 0,3,0) which forces `filter: brightness(0) invert(72%)`. So under Claudify that line does literally nothing — the visual cue is carried entirely by the border + background tint (which resolve to terracotta `#D97757` + `box-shadow: none`). The plan documented this explicitly. It's harmless dead code, not a bug. **NIT** — already documented; no action.
+
+**Factual inaccuracy in the plan's own edge-case audit.** Plan line 71 states: "The `is-paused` rule (kanban.html:368-374) sets an orange background tint but does NOT set `border-color`." Wrong. The actual `is-paused` rule at line 369-372 explicitly sets `border-color: transparent` (line 370). The behavioral conclusion (border is transparent when paused) is still correct, so this is a documentation defect, not a code defect. **NIT** — plan text should be corrected.
+
+**Commit hygiene.** The auto-commit `4cee02e` bundled an unrelated `KanbanProvider.ts` change (+9 lines: `setProjectFilter` on project creation) into the same commit as this CSS fix. That backend change is NOT in this plan's scope (the plan explicitly says "No JS changes required" and "no backend changes"). It's harmless and arguably a legit separate fix, but it pollutes the commit's atomicity. **NIT** — observation only; not a code defect, and out of scope to fix here.
+
+**What I did NOT find.** No syntax errors. No unbalanced braces. No stray `window.confirm` gates (per CLAUDE.md hard rule — confirmed absent). No JS touched. No new DOM. No migration needed. The `--accent-teal` and `--glow-teal` variables resolve correctly in both the default cyber theme (teal + neon glow) and Claudify (terracotta + `none` glow). The `is-paused` ↔ `is-active` transition on the pause button is correct (mutually exclusive toggles at 4991-4992). The change follows the existing `.is-paused` pattern. Honestly? For a complexity-2 CSS ticket, this is clean.
+
+**Verdict:** No CRITICAL. No MAJOR. Four NITs, all either documented already or documentation-only. Ship it.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| Specificity fragility: `is-active` border wins over `.controls-strip .strip-icon-btn` only by source order | NIT | **Defer** — stable today, plan documented it, no silent-failure risk worth a specificity bump right now. |
+| `is-off` wins ties over `is-active` (later source order, same specificity) | NIT | **Defer** — verified invariant (mutually exclusive toggles) holds across all 6 callers; defensive disambiguator adds noise for no current benefit. |
+| `filter: brightness(1.25)` is dead code under Claudify | NIT | **Keep** — already documented in plan; harmless and correct under the default theme. |
+| Plan line 71 factual error: claims `is-paused` doesn't set `border-color` (it does, to `transparent`) | NIT | **Fix now** — correct the plan text (documentation accuracy). |
+| Unrelated `KanbanProvider.ts` change bundled in commit `4cee02e` | NIT | **Note only** — out of scope for this plan; commit hygiene observation, no code action. |
+
+**Code fixes applied:** None required. The implementation matches the plan exactly; no CRITICAL or MAJOR findings to fix.
+
+**Plan-text fix applied:** Corrected the factual inaccuracy at line 71 (see Files Changed below).
+
+### Verification Results
+
+- **Compilation:** Skipped per session directive.
+- **Automated tests:** Skipped per session directive (test suite run separately by user).
+- **Static verification performed:**
+  - `git show 4cee02e -- src/webview/kanban.html` confirms exactly the two CSS rule-block changes specified in Change 1 and Change 2, with `opacity: 1` preserved on the main rule. No other kanban.html lines touched.
+  - `--accent-teal` and `--glow-teal` confirmed defined in both themes (lines 26-28 default, 36/39 Claudify). Claudify resolves to terracotta border + tint + `box-shadow: none` (no neon) — matches plan intent.
+  - All 6 JS toggle callers verified to toggle `is-active`/`is-off` (or `is-paused`) as strict complements — the "never both classes" invariant holds.
+  - No `window.confirm` / confirmation gates introduced (CLAUDE.md hard rule satisfied).
+  - CSS braces and semicolons well-formed in both changed blocks.
+
+### Files Changed (by this review)
+
+- `src/webview/kanban.html` — **no changes by reviewer** (implementation already correct).
+- `.switchboard/plans/feature_plan_20260630123709_remote-control-automation-active-state-highlight.md` — corrected factual inaccuracy in edge-case audit (line 71: `is-paused` DOES set `border-color: transparent`); appended this Reviewer Pass section.
+
+### Remaining Risks
+
+1. **Specificity-by-source-order** (low): If the `.is-active` rule is ever moved above `.controls-strip .strip-icon-btn` (line 544), the teal border silently vanishes. No compile/test guard catches this. Mitigated only by the rule's current stable position.
+2. **`is-off` tie-break** (low): If a future toggle handler ever applies both `is-active` and `is-off` simultaneously, the button will look greyed-out despite being "on". No runtime guard; relies on the caller invariant.
+3. **Manual visual confirmation still required** (per plan's User Review Required): the teal tint opacity (18%) and border prominence should be confirmed by the user via the installed VSIX across both themes and the `kanban-icons-colour` setting.
+
+---
+
+## UAT Failure & Post-Review Fix (2026-06-30)
+
+### UAT Result: FAILED
+
+The user reported two bugs during UAT:
+
+1. **CRITICAL — Highlight on wrong buttons:** The original implementation modified the **generic** `.strip-icon-btn.is-active` CSS rule, which is shared by every toggle button in the control strip (CLI Triggers, Epic Ultracode, Epic Goal, Collapse Coders, pause timer). All of them got the teal highlight, not just Remote Control and Automation. The plan's own edge-case audit (line 66) even documented this: "Giving `is-active` a clear highlight improves ALL of these consistently — this is desirable, not a side effect." The user disagreed — only RC and Automation should highlight.
+
+2. **MAJOR — Claudify coloured icons broken:** The first fix attempt added ID-scoped `img` filter rules (`#btn-remote-control.is-active img { filter: brightness(1.25) }`) at specificity (1,1,1). This beat the Claudify colour-icon opt-in rules at (0,4,2), replacing the terracotta recolour filter with `brightness(1.25)` on the raw dark PNG — producing black icons instead of terracotta.
+
+### Root Cause
+
+The plan scoped the CSS change to the **class** level (`.strip-icon-btn.is-active`) instead of the **ID** level (`#btn-remote-control.is-active`, `#btn-autoban.is-active`). The class is shared by 6+ buttons; the plan acknowledged this but incorrectly classified it as "desirable." The user's intent was always to highlight only the two specific buttons named in the Goal.
+
+### Fix Applied
+
+1. **Reverted** both generic `.strip-icon-btn.is-active` and `.kanban-sub-bar .strip-icon-btn.is-active` rules to their original pre-plan invisible-active state.
+2. **Added** new ID-scoped rules targeting only `#btn-remote-control.is-active` and `#btn-autoban.is-active` — border + background tint + glow only.
+3. **No `img` filter** in the scoped rules — the icon colour is left entirely to the theme rules, avoiding the Claudify specificity conflict that caused the black-icon bug.
+
+### Files Changed (post-UAT fix)
+
+- `src/webview/kanban.html` (lines 351-361, 567-598) — reverted generic rules to original; added scoped ID rules at 582-598.
+- `.switchboard/plans/feature_plan_20260630123709_remote-control-automation-active-state-highlight.md` — revised Proposed Changes section to reflect the ID-scoped approach; appended this UAT section.
+
+### Verification (post-fix)
+
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+- **Static checks:**
+  - Generic `.strip-icon-btn.is-active` (line 567) confirmed back to `border-color: transparent; background: transparent; box-shadow: none` — identical to pre-plan state.
+  - Generic `.kanban-sub-bar .strip-icon-btn.is-active` (line 351) confirmed back to `background: transparent; box-shadow: none` — identical to pre-plan state.
+  - Scoped rules `#btn-remote-control.is-active` / `#btn-autoban.is-active` (lines 588-598) confirmed present with border + bg tint + glow, no `img` filter.
+  - `id="btn-remote-control"` and `id="btn-autoban"` each appear exactly once in the file — no other elements affected.
+  - No `img` filter in scoped rules → Claudify colour-icon opt-in rules at (0,4,2) and Claudify grey-on-active at (0,3,0) continue to control icon colour unimpeded.
+
+### Remaining Risks (post-fix)
+
+1. **Manual visual confirmation still required:** User must verify via installed VSIX that (a) only RC & Automation show the teal highlight when ON, (b) all other toggles (CLI Triggers, Epic Ultracode/Goal, Collapse Coders) do NOT highlight when active, (c) Claudify colour icons still show terracotta for RC & Automation when active, (d) both themes render correctly.

@@ -130,6 +130,7 @@ export class LinearSyncService {
 
   // Cache service for issue caching
   private _cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService | null = null;
+  private _tokenPresentCache: boolean | null = null;
 
   // Reverse map: issueId -> projectId for efficient cache invalidation
   private _issueProjectIndex: Map<string, string> = new Map();
@@ -1653,6 +1654,17 @@ export class LinearSyncService {
     } catch { return null; }
   }
 
+  async hasApiToken(): Promise<boolean> {
+    if (this._tokenPresentCache !== null) { return this._tokenPresentCache; }
+    const token = await this.getApiToken();
+    this._tokenPresentCache = !!token;
+    return this._tokenPresentCache;
+  }
+
+  clearApiTokenCache(): void {
+    this._tokenPresentCache = null;
+  }
+
   // ── GraphQL Client ───────────────────────────────────────────
 
   /**
@@ -1891,6 +1903,7 @@ export class LinearSyncService {
           return { success: false, error: 'Setup cancelled — Linear API token required.' };
         }
         await this._secretStorage.store('switchboard.linear.apiToken', token);
+        this._tokenPresentCache = true;
       }
 
       if (!(await this.isAvailable())) {
@@ -1963,6 +1976,7 @@ export class LinearSyncService {
   async syncPlan(plan: { planFile: string; topic: string; complexity: string }, newColumn: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) { return; }
+    if (!(await this.hasApiToken())) { return; }
 
     const stateId = config.columnToStateId[newColumn];
     if (!stateId) {
@@ -2016,6 +2030,9 @@ export class LinearSyncService {
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
         return { success: false, error: 'Linear not set up' };
+      }
+      if (!(await this.hasApiToken())) {
+        return { success: false, error: 'Linear API token not configured' };
       }
 
       // Strip H1 header before syncing to description

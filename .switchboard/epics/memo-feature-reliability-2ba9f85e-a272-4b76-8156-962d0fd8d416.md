@@ -4,6 +4,8 @@ description: 'Memo Feature Reliability'
 
 # Memo Feature Reliability
 
+**Complexity:** 5
+
 ## Goal
 
 Fix two reliability bugs in the Memo capture feature: memo content targets the wrong `.switchboard` directory in multi-parent workspaces, and zombie memo content persists in the Implementation panel after the memo has been processed and cleared. Together these make the Memo feature unreliable — users lose captured entries to the wrong workspace and see stale content that should have been purged.

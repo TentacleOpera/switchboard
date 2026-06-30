@@ -687,7 +687,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 try {
                     const clickUp = this._getClickUpService(workspaceRoot);
                     const clickUpConfig = await clickUp.loadConfig();
-                    if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
+                    if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true && (await clickUp.hasApiToken())) {
                         clickUp.debouncedSync(plan.planFile, {
                             planId: plan.planId,
                             sessionId: plan.sessionId,

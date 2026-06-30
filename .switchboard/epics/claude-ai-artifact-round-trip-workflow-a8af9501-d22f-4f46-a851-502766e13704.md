@@ -4,6 +4,8 @@ description: 'Claude.ai Artifact Round-Trip Workflow'
 
 # Claude.ai Artifact Round-Trip Workflow
 
+**Complexity:** 6
+
 ## Goal
 
 Enable a repeatable loop for stakeholder document artifacts hosted on claude.ai: pull an artifact down into a local HTML folder (where the existing previewer renders it), edit it with any agent, and push it back to the same URL. The webview cannot fetch or publish under its CSP sandbox, so the capability is delivered as a prompt bridge — the webview builds and copies (or sends) prompts that Claude Code executes. These two plans are grouped because the second is an explicit second layer on top of the first: one builds the prompt-generation foundation, the other adds a one-click send target.

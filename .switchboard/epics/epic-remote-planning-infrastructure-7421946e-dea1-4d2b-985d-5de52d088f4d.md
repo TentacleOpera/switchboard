@@ -27,7 +27,7 @@ The **actual residual gap** is narrower than the original premise: `restoreFromC
 
 ## Metadata
 
-**Complexity:** 7
+**Complexity:** 5
 **Tags:** infrastructure, backend, cli, feature, devops, reliability
 
 ---
