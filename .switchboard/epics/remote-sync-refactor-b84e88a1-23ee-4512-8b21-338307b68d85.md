@@ -4,6 +4,10 @@ description: 'Remote Sync Refactor'
 
 # Remote Sync Refactor
 
+**Plan ID:** b84e88a1-23ee-4512-8b21-338307b68d85
+
+> **Program note (2026-07-01):** This is the **trunk** of the remote-control production program (see `feature_plan_20260701_remote-control-production-sequencing.md`). Two additions vs. the original scope: (1) the declared push surface must include **`archive`** (for the auto-archive rule) and a **project-level entity** (for project-context sync) — declared in 1/3, not retrofitted; the full surface is **status · content · archive · project-context docs** (epic *structure* mirroring is handled by the Remote Epic Structure epic; outbound structure by the Tracker-Structure feature). (2) 3/3's Remote-tab UX is built in the tab's new home in **`project.html`** — so the Project Context Hub epic's STEP 0 (IA lock) precedes 3/3's UI phase. **Linear bidirectional description sync** is folded in here as a content-push capability on the unified seam.
+
 ## Goal
 
 Reconcile Switchboard's remote/sync system so that **push is a first-class, provider-symmetric capability** alongside pull, and ship the lightweight **Ingest vs. Full** remote modes the system was missing. Today the remote feature implies a heavy "active polling + agent write-back" model, when most users want a lighter pattern — the remote as a plan *source*, with local Automation doing the reacting.
@@ -38,6 +42,7 @@ Fix the foundation before shipping the UX. Make push a declared provider capabil
 - [ ] [Remote Sync Refactor (1/3): Declared Provider Capabilities + Unified Push Dispatch](../plans/remote-sync-refactor-1-provider-capabilities-and-unified-push.md) — **PLAN REVIEWED**
 - [ ] [Remote Sync Refactor (2/3): Notion Push Pipeline (Status + Content Write-Back)](../plans/remote-sync-refactor-2-notion-push-pipeline.md) — **PLAN REVIEWED**
 - [ ] [Remote Sync Refactor (3/3): Config Consolidation + Remote-Tab Ingest/Full UX](../plans/remote-sync-refactor-3-config-consolidation-and-remote-tab-ux.md) — **PLAN REVIEWED**
+- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Metadata

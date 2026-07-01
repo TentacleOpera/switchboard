@@ -1,5 +1,7 @@
 # Add /improve-remote-plan Skill for Linear/Notion-Native Plan Improvement
 
+> **Scope update (2026-07-01):** The Notion write phase MUST use the **Notion Overwrite Data-Loss Guard** (`notion-overwrite-guard.md`) — append-by-default, full overwrite only after a verified childless check. Linear writes use **`update_issue`** (not `save_issue`), with `status` as a status-name string read via `list_issue_statuses`. This is the single orientation family with `/sw-remote`. See `feature_plan_20260701_remote-control-production-sequencing.md`.
+
 ## Goal
 
 Create an `/improve-remote-plan` skill that improves a Switchboard plan living in Linear or Notion — reading content from the issue/page, deepening it with improve-plan logic, writing the result back via MCP, and advancing the card's status — all without touching the git repo or local filesystem.

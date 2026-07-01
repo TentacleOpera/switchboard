@@ -1,5 +1,7 @@
 # Remote Sync Refactor (3/3): Config Consolidation + Remote-Tab Ingest/Full UX
 
+> **Scope update (2026-07-01):** The Remote-tab UX built here targets the Remote tab's **new home in `project.html`** — so the Project Context Hub epic's STEP 0 (lock project.html IA) must land first. The consolidated config contract must also account for the config keys the dependent epics add (Manual-mode reconcile, auto-archive rule, project-context sync) so the single ~4,000-install migration covers them. See `feature_plan_20260701_remote-control-production-sequencing.md`.
+
 ## Goal
 
 Collapse the scattered sync config into **one per-board sync contract**, reconcile the two overlapping pull loops, and ship the **Remote-tab UX** the whole refactor was for: an **Ingest | Full** mode radio plus **comment polling** and **push** controls that the declared-capability matrix can honestly enable, disable, or gray out per provider. Because plans 1–2 made push real and provider-symmetric, **no toggle lies**.

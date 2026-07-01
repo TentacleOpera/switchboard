@@ -1,5 +1,7 @@
 # Plan: Remote Control Epic-Aware State Mirroring
 
+> **Scope update (2026-07-01):** Now part of the **Remote Epic Structure (Notion + Linear)** epic (split out of the former Cross-Provider epic). **Notion + Linear only — ClickUp excluded** (not a remote-control provider). The `parentRemoteId` / `isEpicCandidate` additions and provider-query extensions must be built on the **refactored** `RemoteProvider` seam (post Remote Sync Refactor 1/3), and the Notion side depends on the Notion epic schema shipping with/before it. See `feature_plan_20260701_remote-control-production-sequencing.md`.
+
 ## Goal
 
 Make the Remote Control polling loop **epic-aware** so that when the remote agent creates or changes a parent/child relationship in Linear or Notion, the local board mirrors the epic structure — not just the column state. Today, `RemoteControlService._pollState` (RemoteControlService.ts:252) detects column changes on individual cards but is blind to epic structure: an epic and its subtasks are just independent entries in `_indexByRemoteId` (line 220), and a new parent/child link created by the remote agent is invisible to the poll.

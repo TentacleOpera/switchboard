@@ -1,26 +1,40 @@
 ---
-description: 'Linear Sync & Channel Features'
+description: 'Auto-Archive & Production Hardening'
 ---
 
-# Linear Sync & Channel Features
+# Auto-Archive & Production Hardening
 
-**Complexity:** 7
+**Plan ID:** fbda9869-e114-4e4d-8a12-b81f5af5d64b
+
+**Complexity:** 5
+
+> Formerly "Linear Sync & Channel Features." Rescoped per the remote-control production decisions: the Linear **channel-issues / analyst chat** plan is **cut** (not needed); Linear **bidirectional description sync** moved into the Remote Sync Refactor trunk as a push capability; the auto-archive plan was **reframed from a Linear feature into a Switchboard-level rule**. This epic now owns the two production concerns no other epic covered.
 
 ## Goal
 
-Extend the Linear integration beyond basic column sync. Today, Switchboard syncs kanban column changes to Linear issue status, but description changes aren't bidirectional, Linear channel issues (issues created in a shared team channel for triage) can't be interacted with from Switchboard, and Linear's free tier accumulates closed issues that should be auto-archived when the corresponding plan completes.
+Ship the operational safeguards that make remote control safe to run on the primary user surface across ~4,000 installs with **no feature flag**: an extension-level auto-archive rule, a hard code-level guard against destructive Notion writes, and user-visible remote-sync health.
 
-## How the Subtasks Achieve This
+## How the subtasks achieve this
 
-- **Linear Bidirectional Description Sync**: When a plan's description is edited locally, push the change to the linked Linear issue's description. When a Linear issue's description is edited remotely, pull the change into the local plan file. Uses the existing integration sync infrastructure, adding a description diff check to the sync payload so only changed descriptions are synced.
+- **Switchboard Auto-Archive Rule (time-in-column → Completed + archive)**: a kanban.html setup rule — after a configurable dwell in a **designated** column (default = the stage before Completed), a plan auto-moves to Completed and archives; Linear/Notion follow via push. Solves the real "900 stuck plans vs. Linear free-tier cap" problem by automating the move itself; the trigger column is designated, not hardcoded, so it tracks board topology (e.g. a PRD-tester stage inserted before Completed).
+- **Notion Overwrite Data-Loss Guard (code-level)**: enforce append-by-default; full `replace_content` only after a verified "no inline children" check. Protects the irreversible Notion body-write path used by content push, `/improve-remote-plan`, and project-context sync.
+- **Remote-Sync Health & Error Surfacing**: surface last poll/push status, rate-limit/backoff state, and persistent-failure indicators in the Remote tab (project.html) — replacing today's console-only failures.
 
-- **Linear Channel Issues: Analyst Chat & Extension Command Interface**: Linear issues created in a shared team channel (for triage, analyst requests, etc.) need a way to be interacted with from Switchboard without leaving the extension. This plan adds a command interface for channel issues — view, reply, and link to plans — directly from the Switchboard sidebar, bridging the gap between Linear's channel-based workflow and Switchboard's plan-based workflow.
+## Dependencies & sequencing
 
-- **Linear Free-Tier: Auto-Archive Issues on Plan Completion**: Linear's free tier has a limited number of active issues. When a Switchboard plan linked to a Linear issue is completed, the issue should be auto-archived in Linear to free up the slot. This plan adds a post-completion hook that calls Linear's archive API for the linked issue, configurable per-workspace via a toggle.
+- Auto-archive + content-write paths depend on the unified push seam (Remote Sync Refactor 1/3, `archive` capability) + Notion push (2/3).
+- Health surfacing depends on the Remote tab living in `project.html` (Project Context Hub epic).
+- The Notion overwrite guard is a prerequisite for high-fidelity Notion content push and project-context sync.
+- See `feature_plan_20260701_remote-control-production-sequencing.md`.
+
+## Metadata
+
+**Complexity:** 5
+**Tags:** backend, ui, ux, reliability, security, api, feature
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md) — **PLAN REVIEWED**
-- [ ] [Linear Channel Issues: Analyst Chat & Extension Command Interface](../plans/linear-channel-issues-analyst-and-command.md) — **PLAN REVIEWED**
-- [ ] [Linear Free-Tier: Auto-Archive Issues on Plan Completion](../plans/linear-free-tier-auto-archive-on-completion.md) — **PLAN REVIEWED**
+- [ ] [Switchboard Auto-Archive Rule (Time-in-Column → Completed + Archive)](../plans/linear-free-tier-auto-archive-on-completion.md) — **PLAN REVIEWED**
+- [ ] [Notion Overwrite Data-Loss Guard (Code-Level)](../plans/notion-overwrite-guard.md) — **PLAN REVIEWED**
+- [ ] [Remote-Sync Health & Error Surfacing](../plans/remote-sync-health-surfacing.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

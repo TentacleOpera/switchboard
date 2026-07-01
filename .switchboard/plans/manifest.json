@@ -1,0 +1,263 @@
+{
+  "version": 1,
+  "plans": [
+    {
+      "planFile": ".switchboard/epics/remote-sync-refactor-b84e88a1-23ee-4512-8b21-338307b68d85.md",
+      "planId": "b84e88a1-23ee-4512-8b21-338307b68d85",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": true,
+      "epicId": "",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/epics/epic-remote-planning-infrastructure-7421946e-dea1-4d2b-985d-5de52d088f4d.md",
+      "planId": "7421946e-dea1-4d2b-985d-5de52d088f4d",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": true,
+      "epicId": "",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/epics/remote-epic-structure-5edae55e-ceb3-4d15-99fb-c910bd97d629.md",
+      "planId": "5edae55e-ceb3-4d15-99fb-c910bd97d629",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": true,
+      "epicId": "",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/epics/note-codebase-docs-da9ba512-dead-4632-a58c-220f1c489581.md",
+      "planId": "da9ba512-dead-4632-a58c-220f1c489581",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": true,
+      "epicId": "",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/epics/linear-sync-channel-features-fbda9869-e114-4e4d-8a12-b81f5af5d64b.md",
+      "planId": "fbda9869-e114-4e4d-8a12-b81f5af5d64b",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": true,
+      "epicId": "",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md",
+      "planId": "6fbbc3b6-9404-41f1-8314-eb5140b6db2f",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": true,
+      "epicId": "",
+      "project": "Switchboard"
+    },
+
+    {
+      "planFile": ".switchboard/plans/remote-sync-refactor-1-provider-capabilities-and-unified-push.md",
+      "planId": "7de5be2e-fa59-4e9f-a88c-6f7447caedf7",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "b84e88a1-23ee-4512-8b21-338307b68d85",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/remote-sync-refactor-2-notion-push-pipeline.md",
+      "planId": "fb86d161-aaa5-46da-b85d-f5ca260b4388",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "b84e88a1-23ee-4512-8b21-338307b68d85",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/remote-sync-refactor-3-config-consolidation-and-remote-tab-ux.md",
+      "planId": "1bd3f73a-6a50-46f5-82d6-39070ee74c45",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "b84e88a1-23ee-4512-8b21-338307b68d85",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/linear-bidirectional-description-sync.md",
+      "planId": "4cf51efb-6d7d-43bc-8945-cd2cbb2faa69",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "b84e88a1-23ee-4512-8b21-338307b68d85",
+      "project": "Switchboard"
+    },
+
+    {
+      "planFile": ".switchboard/plans/kanban-startup-reconciler.md",
+      "planId": "b9278529-ab6b-4d51-bc3b-4d48b6aecd25",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "7421946e-dea1-4d2b-985d-5de52d088f4d",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/improve-remote-plan-skill.md",
+      "planId": "93c3bbf3-917a-48e8-bb27-3056de402855",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "7421946e-dea1-4d2b-985d-5de52d088f4d",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/sw-remote-entry-skill.md",
+      "planId": "4d90f251-9f7e-4c5a-9530-aa1888ccf216",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "7421946e-dea1-4d2b-985d-5de52d088f4d",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/create-epic-skill.md",
+      "planId": "9bec6ff1-c4ae-480e-a8b9-a7b9c5004786",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "7421946e-dea1-4d2b-985d-5de52d088f4d",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/epic-grouping-awareness-in-chat-and-memo-skills.md",
+      "planId": "cd748eab-7599-474a-b782-2a78ca55f1f0",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "7421946e-dea1-4d2b-985d-5de52d088f4d",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/remote-control-triage-mutual-exclusivity.md",
+      "planId": "79db5810-cdba-4c53-9bd3-4613f403ffb0",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "7421946e-dea1-4d2b-985d-5de52d088f4d",
+      "project": "Switchboard"
+    },
+
+    {
+      "planFile": ".switchboard/plans/remote-control-epic-aware-mirroring.md",
+      "planId": "e4c976c1-852d-48bb-96a4-fc3831237f9d",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "5edae55e-ceb3-4d15-99fb-c910bd97d629",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/notion-backup-epic-schema-and-remote-orientation.md",
+      "planId": "b63bbf0f-067e-42e5-8566-696f2d3f6b52",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "5edae55e-ceb3-4d15-99fb-c910bd97d629",
+      "project": "Switchboard"
+    },
+
+    {
+      "planFile": ".switchboard/plans/project-html-dev-docs-tab-and-ia.md",
+      "planId": "797aeb2d-ba47-43d8-a0b7-dba20b2048e0",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "da9ba512-dead-4632-a58c-220f1c489581",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/project-context-sync-to-notion-and-linear.md",
+      "planId": "f66ade21-bce8-4dae-935c-b738107d3c5a",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "da9ba512-dead-4632-a58c-220f1c489581",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/phase2-remote-plan-from-notion-docs.md",
+      "planId": "0f7e723e-9327-4073-a18a-0fde08c3e99f",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "da9ba512-dead-4632-a58c-220f1c489581",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/linear-remote-agent-skill-copy-button.md",
+      "planId": "6fe656a9-838b-4a99-81e6-9db715f7d306",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "da9ba512-dead-4632-a58c-220f1c489581",
+      "project": "Switchboard"
+    },
+
+    {
+      "planFile": ".switchboard/plans/linear-free-tier-auto-archive-on-completion.md",
+      "planId": "e38b7126-9fca-410a-a0d1-5a43e76f711e",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "fbda9869-e114-4e4d-8a12-b81f5af5d64b",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/notion-overwrite-guard.md",
+      "planId": "aec51f9b-3d44-423e-ba30-e0dc3dc2d5bc",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "fbda9869-e114-4e4d-8a12-b81f5af5d64b",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/remote-sync-health-surfacing.md",
+      "planId": "767944d0-b8ba-4922-957e-6c26d639275a",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "fbda9869-e114-4e4d-8a12-b81f5af5d64b",
+      "project": "Switchboard"
+    },
+
+    {
+      "planFile": ".switchboard/plans/linear-import-epic-linking.md",
+      "planId": "cb4d8d93-db2d-4670-8c14-d147d5ecb755",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "6fbbc3b6-9404-41f1-8314-eb5140b6db2f",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/clickup-import-epic-linking.md",
+      "planId": "55a7937b-567e-4b7d-9516-b874d4d8396e",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "6fbbc3b6-9404-41f1-8314-eb5140b6db2f",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": ".switchboard/plans/epic-sync-outbound.md",
+      "planId": "4d0829dd-7351-4a4f-b19d-bec3d272f6c5",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "6fbbc3b6-9404-41f1-8314-eb5140b6db2f",
+      "project": "Switchboard"
+    }
+  ]
+}
