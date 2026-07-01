@@ -131,7 +131,7 @@ export interface PromptBuilderOptions {
     defaultPromptOverrides?: Partial<Record<string, DefaultPromptOverride>>;
     /** The absolute path to the workspace root. Used for workspace type detection and working directory resolution. */
     workspaceRoot?: string;
-    /** When true, git prohibition directive is included in planner prompts (default: true). */
+    /** When true, the git safety guardrail directive is included (permits worktrees/commits, forbids destructive undo). Default: true. */
     gitProhibitionEnabled?: boolean;
     /** When true (default), include batchExecutionRules and FOCUS_DIRECTIVE. When false, omit them. */
     switchboardSafeguardsEnabled?: boolean;
@@ -311,7 +311,7 @@ ${perPlanDirectories}`
     };
 }
 
-export const GIT_PROHIBITION_DIRECTIVE = `GIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
+export const GIT_PROHIBITION_DIRECTIVE = `GIT POLICY (safety guardrail): You MAY use git for isolation and progress: creating worktrees (git worktree add), creating branches (git branch, git checkout -b), staging (git add), and committing your own work (git commit). You MUST NOT run work-discarding or history-destroying commands — git reset (any mode), git checkout <path> / git restore to discard changes, git clean, git stash drop/clear, force pushes, or branch/worktree deletion — because these silently destroy uncommitted work. Before any deletion or revert, FIRST run git status and confirm the working tree is clean and your work is committed; make deletions as tracked changes you then commit. Never "undo" a mistake by discarding — commit first, then correct forward. Do not push or merge to shared branches; return completed work to the parent agent or user for that.`;
 export const FOCUS_DIRECTIVE = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
 
 // §11 — injected for ALL roles when the dispatched card's board is under remote control.
