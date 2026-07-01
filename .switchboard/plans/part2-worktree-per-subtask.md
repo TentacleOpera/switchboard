@@ -192,3 +192,9 @@ Yes — confirm:
 Complexity 7 → **Send to Lead Coder.** New git merge topology, multi-entry-point hook coverage,
 and a routing signature change across two providers. Ships after Part 1 + V42; can proceed in
 parallel with Part 3.
+
+---
+
+## Review Findings
+
+Reviewed `src/services/KanbanDatabase.ts` (V42 additive migration + `WorktreeRow` columns + `getWorktrees`/`addWorktree`/`getWorktreeByBranch`), `src/services/KanbanProvider.ts` (`_createSafetyWorktree` baseBranch, `_ensureEpicIntegrationWorktree`, `_provisionSubtaskWorktreeIfNeeded`, subtask-add hooks at all three entry points, `_regenerateEpicFile` WORKTREES block, merge/abandon/remove lifecycle + prune), and `src/services/TaskViewerProvider.ts` (`resolveWorktreePathForPlan` planId precedence + all three callers). Two fixes applied: (1) `_createSafetyWorktree` baseBranch validation rejected `/`, which breaks repos whose default branch contains a slash (e.g. `release/1.0` from `_resolveDefaultBranch`) — removed the `/` check since `execFileAsync` passes args without a shell (`src/services/KanbanProvider.ts:8806`); (2) the high-low merge-routing gap fixed in the shared merge handler is documented under Part 3 (it touches this plan's merge code). Verified: V42 is guarded/idempotent with BEGIN/ROLLBACK; the `_regenerateEpicFile` global byte-identical no-op skip (line ~9081) covers the new WORKTREES block so no self-write loop; all three `resolveWorktreePathForPlan` callers thread `planId`; no confirm-gates. Remaining risk: the lazy-create integration-worktree guard is check-then-create (TOCTOU) — consistent with the existing `createWorktreeForEpic` pattern the plan said to reuse, but two truly simultaneous subtask adds could provision two integration worktrees; practical risk is low since the handlers are sequential/awaited.

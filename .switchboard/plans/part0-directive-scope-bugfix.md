@@ -145,3 +145,9 @@ Yes — confirm the custom-agent checkbox wiring option (a vs b) in step 6 below
 
 Complexity 4 → **Send to Coder.** Single-file-ish, reuses existing prompt path, no schema. Ships
 as an independent PR before Parts 1–4.
+
+---
+
+## Review Findings
+
+Reviewed `src/services/KanbanProvider.ts` (`_buildEpicDirectivePrefix` extraction, allowlist `['lead','coder','intern']` gate, custom-agent `applyEpicDirectives` prepend before the early return), `src/services/agentConfig.ts` (`CustomAgentAddons.applyEpicDirectives` + parser), and `src/webview/kanban.html` (AGENTS-tab checkbox + save/load). Implementation matches the plan: the denylist→allowlist swap is correct, the custom-agent injection point is correct (verified the branch returns before the built-in directive block), and bespoke checkbox wiring (the plan's option b) was chosen over `sharedDefaults.js` — consistent with the plan's "VERIFIED during review" recommendation. No code fixes required: `GOAL_EPIC_PREFIX`/`ULTRACODE_EPIC_PREFIX` remain defined and used, and a grep confirms no `confirm()`/`window.confirm` was introduced. Validation: static only (compilation/tests skipped per session directives); reviewer/tester/analyst/researcher/chat correctly drop the prefix, planner stays clean, custom agents opt in via the toggle. Remaining risk: none material — the separate test run must update any assertions expecting the old prefix-on-reviewer behavior.

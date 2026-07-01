@@ -103,3 +103,9 @@ captured in the epic file.
 
 Complexity 5 → **Send to Coder.** Config read/write + a UI control; no schema, no provisioning
 logic. Ships after Part 0, before Parts 2 & 3.
+
+---
+
+## Review Findings
+
+Reviewed `src/services/KanbanProvider.ts` (`getEpicWorktreeMode`/`setEpicWorktreeMode` handlers, enum validation, `epicWorktreeMode` added to the `_sendWorktreeConfig` payload) and `src/webview/kanban.html` (Epics radio section). Implementation matches the plan: the `epic_worktree_mode` config key uses existing `getConfig`/`setConfig`, defaults to `'none'` when unset, and rejects invalid values via a non-modal `showWarningMessage` notification (a passive rejection notice, not a confirm gate). One fix applied: the `high-low` radio description was factually wrong ("low-complexity ones share the epic worktree") and contradicted Part 3's two-tier model — corrected to describe two tier worktrees off the integration branch plus planner consolidation (`src/webview/kanban.html`). Validation: static grep clean (no confirm gates); the payload field threads through to the webview and the control reflects persisted state on re-render. Remaining risk: none — `none` default preserves current behavior, migration-safe for the ~4k install base.

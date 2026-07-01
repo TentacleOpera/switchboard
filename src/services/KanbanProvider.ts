@@ -8009,9 +8009,23 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     await this._sendWorktreeConfig(workspaceRoot);
                     break;
                 }
+                // `high-low` mode: a tier worktree converges into the epic integration
+                // branch first (same path as a per-subtask subtask worktree), NOT straight
+                // into main — otherwise the integration branch is bypassed, the tier branch
+                // lands on main directly, and the tier worktree is never cleaned up by the
+                // epic-level merge.
+                if (wtRow?.tier && wtRow.epic_id) {
+                    await this._mergeSubtaskIntoIntegration(workspaceRoot, db, wtRow);
+                    await this._sendWorktreeConfig(workspaceRoot);
+                    break;
+                }
 
-                const isIntegrationWorktree = !!wtRow && !!wtRow.epic_id && !wtRow.subtask_plan_id
-                    && allWorktrees.some(w => w.subtask_plan_id && String(w.epic_id) === String(wtRow.epic_id));
+                // The epic integration worktree itself merges into main, then cleans up
+                // every remaining child (subtask worktrees in per-subtask mode, tier
+                // worktrees in high-low mode). Excludes tier so a tier worktree isn't
+                // mistaken for the integration worktree it branched off of.
+                const isIntegrationWorktree = !!wtRow && !!wtRow.epic_id && !wtRow.subtask_plan_id && !wtRow.tier
+                    && allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.epic_id) === String(wtRow.epic_id));
                 if (isIntegrationWorktree && wtRow) {
                     await this._mergeEpicIntegrationIntoMain(workspaceRoot, db, wtRow);
                     await this._sendWorktreeConfig(workspaceRoot);
@@ -8720,17 +8734,20 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
     }
 
     /**
-     * Per-subtask mode merge step 1: merge a subtask's branch into the epic integration
-     * worktree's OWN checkout (`git -C <integrationPath> merge <subtaskBranch>`), not into
-     * the main repo checkout. The integration worktree is the convergence point — main
-     * only sees the result once the epic-level merge (`_mergeEpicIntegrationIntoMain`)
-     * runs. Resolves the integration worktree from the subtask row's `epic_id`.
+     * Convergence merge step 1 (per-subtask AND high-low modes): merge a subtask or tier
+     * worktree's branch into the epic integration worktree's OWN checkout
+     * (`git -C <integrationPath> merge <branch>`), not into the main repo checkout. The
+     * integration worktree is the convergence point — main only sees the result once the
+     * epic-level merge (`_mergeEpicIntegrationIntoMain`) runs. Resolves the integration
+     * worktree from the row's `epic_id`, excluding both subtask and tier rows so a sibling
+     * tier worktree (high-low mode) isn't mistaken for the integration worktree it branched
+     * off of.
      */
     private async _mergeSubtaskIntoIntegration(workspaceRoot: string, db: KanbanDatabase, subtaskWt: WorktreeRow): Promise<void> {
         const allWorktrees = await db.getWorktrees();
-        const integrationWt = allWorktrees.find(w => String(w.epic_id) === String(subtaskWt.epic_id) && !w.subtask_plan_id && w.status === 'active');
+        const integrationWt = allWorktrees.find(w => String(w.epic_id) === String(subtaskWt.epic_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
         if (!integrationWt) {
-            vscode.window.showErrorMessage(`Merge failed: no active epic integration worktree found for this subtask.`);
+            vscode.window.showErrorMessage(`Merge failed: no active epic integration worktree found for this branch.`);
             return;
         }
         try {
@@ -8738,7 +8755,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             await execFileAsync('git', ['-C', integrationWt.path, 'merge', subtaskWt.branch], { timeout: 30000 });
             await this._removeWorktreeRow(workspaceRoot, db, subtaskWt, 'merged');
             await this._pruneWorktrees(workspaceRoot);
-            vscode.window.showInformationMessage(`Merged subtask into epic integration branch: ${subtaskWt.branch} -> ${integrationWt.branch}`);
+            vscode.window.showInformationMessage(`Merged ${subtaskWt.branch} into epic integration branch ${integrationWt.branch}`);
         } catch (e: any) {
             vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
         }
@@ -8783,7 +8800,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             throw new Error('Invalid repository name');
         }
 
-        if (baseBranch && (baseBranch.includes('..') || baseBranch.includes('/') || baseBranch.includes('\\'))) {
+        // baseBranch is a git ref passed as an execFileAsync arg (no shell), so '/' is safe
+        // and legitimate (e.g. a remote default branch like release/1.0). Only reject '..'
+        // (path-traversal-ish, invalid in git refs anyway) and '\\' (invalid in git refs).
+        if (baseBranch && (baseBranch.includes('..') || baseBranch.includes('\\'))) {
             throw new Error('Invalid base branch name');
         }
 

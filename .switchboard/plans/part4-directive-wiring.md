@@ -109,3 +109,9 @@ No — this is a pure refactor/wiring step with no product-scope decisions.
 
 Complexity 4 → **Send to Coder.** Pure wiring/refactor; reuses variants from Parts 2 & 3. Ships
 last, after Parts 2 & 3 land.
+
+---
+
+## Review Findings
+
+Reviewed `src/services/agentPromptBuilder.ts` (`resolveEpicOrchestrationDirective` selector + `buildKanbanBatchPrompt` wiring + planner consolidation gate) and `src/services/KanbanProvider.ts` (`resolvedOptions` threading `epicWorktreeMode`/`epicPlanId`/`tierWorktrees`/`subtaskPlansForConsolidation`). Implementation matches the plan: a single selector keyed on mode, the planner consolidation directive gated to `high-low` + planner role + a non-empty subtask list, and `none`/unknown modes falling back to the base `EPIC_ORCHESTRATION_DIRECTIVE`. Verified byte-identical preservation: for `none`-mode and all existing/legacy epics no `subtask_plan_id`/`tier` worktree rows exist, so `subtaskWorktrees` is empty and the selector returns the base directive unchanged; non-epic dispatch injects no directive. No code fixes required: the selector's intentional deviation (consulting `subtaskWorktrees` independent of the live mode, to handle rows outliving a mode toggle) is documented in-code and only affects epics that previously had per-subtask worktrees. Validation: static only (compilation/tests skipped); no confirm-gates. Remaining risk: none material.

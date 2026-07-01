@@ -9334,7 +9334,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const AUTO_MODE_OPTIONS = [
                 { value: 'none', label: 'None', desc: 'No automatic worktrees — use the manual button below.' },
                 { value: 'per-subtask', label: 'Per Subtask', desc: 'Provision a dedicated worktree for every subtask added to an epic.' },
-                { value: 'high-low', label: 'High/Low Complexity Split', desc: 'Provision worktrees split by subtask complexity — high-complexity subtasks get isolated worktrees, low-complexity ones share the epic worktree.' }
+                { value: 'high-low', label: 'High/Low Complexity Split', desc: 'Provision two tier worktrees (high & low complexity) off the epic integration branch; the planner consolidates subtasks into two plans run in parallel.' }
             ];
             AUTO_MODE_OPTIONS.forEach(opt => {
                 const label = document.createElement('label');
