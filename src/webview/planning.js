@@ -6838,7 +6838,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         setupTextareaTabInterceptor(markdownEditorDesign);
     }
 
-    // Wire up Set as Requirements (PRD) and Set as Constitution buttons
+    // Wire up Save as PRD and Save as Constitution buttons
     const btnSetPrd = document.getElementById('btn-set-prd');
     const btnSetConstitution = document.getElementById('btn-set-constitution');
 

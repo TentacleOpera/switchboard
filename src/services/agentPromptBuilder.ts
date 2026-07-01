@@ -111,10 +111,7 @@ export interface PromptBuilderOptions {
 
     /** Path to the workflow file for the planner role. Defaults to .agents/workflows/improve-plan.md */
     plannerWorkflowPath?: string;
-    /** When present, appends a Design Doc / PRD link to planner prompts. */
-    designDocLink?: string;
-    /** When present, the full pre-fetched Notion page content to embed verbatim. Takes precedence over designDocLink. */
-    designDocContent?: string;
+
     /** Path/link to the project constitution. */
     constitutionLink?: string;
     /** Full content of the project constitution. */
@@ -559,11 +556,6 @@ export function buildKanbanBatchPrompt(
             plannerBase += `${batchExecutionRules}\n\n`;
         }
 
-        const designDocLink = options?.designDocLink?.trim();
-        if (designDocLink) {
-            plannerBase += `PLANNING EPIC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}\n\n`;
-        }
-
         if (aggressivePairProgramming) {
             plannerBase += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
         }
@@ -601,25 +593,9 @@ export function buildKanbanBatchPrompt(
 
         plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
 
-        // Append design doc content (pre-fetched Notion)
-        const designDocContent = options?.designDocContent?.trim();
-        if (designDocContent) {
-            plannerPrompt += `\n\nPLANNING EPIC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
-        }
-
         const constitutionContent = options?.constitutionContent?.trim();
         if (constitutionContent) {
             plannerPrompt += `\n\nPROJECT CONSTITUTION:\nThe following are inviolate rules and invariants for this project:\n\n${constitutionContent}`;
-        }
-
-        const designSystemDocLink = options?.designSystemDocLink?.trim();
-        if (designSystemDocLink) {
-            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE:\nThe following design system document provides the project's visual and interaction design specifications. Use it as context for implementation decisions:\n${designSystemDocLink}`;
-        }
-
-        const designSystemDocContent = options?.designSystemDocContent?.trim();
-        if (designSystemDocContent) {
-            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\nThe following is the full content of the project's design system document. Use it as context for implementation decisions:\n\n${designSystemDocContent}`;
         }
 
         return normalizeNewlines(plannerPrompt);
@@ -743,7 +719,7 @@ For each plan:
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -760,12 +736,6 @@ For each plan:
             blocks.push(`PROJECT CONSTITUTION — inviolate invariants:\n\n${options.constitutionContent.trim()}`);
         } else if (options?.constitutionLink) {
             blocks.push(`PROJECT CONSTITUTION — inviolate invariants:\n${options.constitutionLink.trim()}`);
-        }
-
-        if (options?.designDocContent) {
-            blocks.push(`LEGACY DESIGN DOC (fallback baseline):\n\n${options.designDocContent.trim()}`);
-        } else if (options?.designDocLink) {
-            blocks.push(`LEGACY DESIGN DOC (fallback baseline):\n${options.designDocLink.trim()}`);
         }
 
         const acceptanceBaselineBlock = blocks.join('\n\n');
@@ -1192,12 +1162,6 @@ export function buildCustomAgentPrompt(
     }
 
     if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
-
-    if (addons?.designDocContent) {
-        prompt += `\n\nPLANNING EPIC REFERENCE (pre-fetched):\n${addons.designDocContent}`;
-    } else if (addons?.designDocLink) {
-        prompt += `\n\nPLANNING EPIC REFERENCE:\n${addons.designDocLink}`;
-    }
 
     if (addons?.designSystemDocContent) {
         prompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\n${addons.designSystemDocContent}`;

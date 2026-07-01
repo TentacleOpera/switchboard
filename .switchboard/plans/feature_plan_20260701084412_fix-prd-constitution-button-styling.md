@@ -153,3 +153,7 @@ Update the `_postToBothPanels` docblock comment so a developer grepping for the 
 ---
 
 **Recommendation:** Complexity 2/10 → **Send to Intern**.
+
+## Review Findings
+
+**Files changed:** `src/webview/planning.html` (CSS class + button markup/labels), `src/webview/implementation.html` (deprecation note), `src/services/PlanningPanelProvider.ts` (code comment), `src/webview/planning.js` (stale comment fix — missed by original plan's edge-case audit). **Validation:** Grep for "Set as Requirements"/"Set as Constitution" across `src/` returns zero hits (plan verification step 9 passes). No compilation or test execution per session constraints. **Fixes applied:** Updated stale comment at `planning.js:6841` that still referenced old button labels — the plan's edge-case audit listed 3 references but missed this 4th one. **Remaining risks (NIT, deferred):** (1) The plan incorrectly claimed these buttons are "never disabled in markup" — `btn-set-prd` is disabled by default and toggled by `updatePrdButtonState()`; the `.strip-btn:disabled` rule overrides `.strip-btn--primary` color/border in disabled state, producing grey-on-teal at 0.4 opacity (acceptable for disabled UX). (2) On hover, the base `.strip-btn:hover` border-color override dims the primary border from full teal to dim teal — cosmetic only.
