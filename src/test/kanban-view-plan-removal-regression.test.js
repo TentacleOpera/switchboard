@@ -50,12 +50,16 @@ function run() {
     );
 
     assert.ok(
-        implementationHtmlSource.includes("vscode.postMessage({ type: 'viewPlan', sessionId });"),
-        'Expected the generic implementation viewPlan flow to remain intact.'
+        implementationHtmlSource.includes("type: 'reviewPlan'"),
+        'Expected implementation.html to post reviewPlan (opens Project panel) instead of viewPlan (opens markdown preview).'
+    );
+    assert.ok(
+        !implementationHtmlSource.includes("type: 'viewPlan'"),
+        'Expected implementation.html to no longer post the old viewPlan message.'
     );
     assert.ok(
         taskViewerSource.includes('private async _handleViewPlan(sessionId: string, workspaceRoot?: string) {'),
-        'Expected TaskViewerProvider to preserve the generic _handleViewPlan implementation.'
+        'Expected TaskViewerProvider to preserve the generic _handleViewPlan implementation (used as fallback in reviewPlan handler).'
     );
 
     console.log('kanban view-plan removal regression test passed');

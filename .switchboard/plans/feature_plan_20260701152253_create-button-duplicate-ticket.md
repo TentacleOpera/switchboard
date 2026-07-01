@@ -161,5 +161,9 @@ No automated tests required for this change (per session directive, the test sui
 6. **Existing plans unaffected:** Verify that existing plans in the dropdown are not duplicated or removed after the fix.
 7. **Compile check:** `npm run compile` — verify no TypeScript errors (run only when producing a VSIX; not required for dev testing per project build rules).
 
+## Review Findings
+
+Implementation matches plan exactly: `_planCreationInFlight.add(stablePlanPath)` added before file write (TaskViewerProvider.ts:17292), `.delete` in finally (line 17366), and `_pendingPlanCreations` timeout extended from 2s to 10s (line 17367). Dropped changes #2 and #3 correctly omitted. Regression analysis confirms the watcher guard at line 13836 now checks `_planCreationInFlight` for the full async lifecycle, preventing the duplicate runsheet. No code fixes needed. No compile/test run per session directives. Remaining risk: `_overwriteExistingPlan` (line 17161) still uses a 2s timeout — different code path (overwrite, not create), out of scope; the deeper DB-key normalization issue (`_ensureRelativePlanFile` cold-start) remains unverified per the plan's User Review Required note.
+
 ## Recommendation
 Complexity 5 → **Send to Coder**.

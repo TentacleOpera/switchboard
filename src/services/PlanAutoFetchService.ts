@@ -205,9 +205,13 @@ export class PlanAutoFetchService implements vscode.Disposable {
                 return;
             }
 
-            // 2. Working tree is clean
+            // 2. Working tree is clean (ignoring the generated kanban mirror files —
+            // kanban-board.md and kanban-state-*.md are rewritten with a fresh timestamp
+            // on every DB persist, so treating them as "dirty" would block nearly every
+            // cycle in an actively-used workspace)
             const { stdout: statusRaw } = await execFileAsync('git', ['status', '--porcelain'], { cwd: effectiveGitRoot, timeout: 5000 });
-            if (statusRaw.trim() !== '') {
+            const dirtyLines = statusRaw.split('\n').filter(line => line.trim() !== '' && !this._isIgnorableMirrorFileLine(line));
+            if (dirtyLines.length > 0) {
                 this._updateStatus(resolvedRoot, 'skipped', 'Working tree is dirty', defaultBranch);
                 return;
             }
@@ -272,6 +276,18 @@ export class PlanAutoFetchService implements vscode.Disposable {
             this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Error running auto-fetch: ${errMsg}`);
             this._updateStatus(resolvedRoot, 'failed', `Fetch/git error: ${errMsg}`);
         }
+    }
+
+    // Matches `.switchboard/kanban-board.md` and `.switchboard/kanban-state-<slug>.md`,
+    // regardless of any path prefix (repo-scoped control-plane roots put `.switchboard`
+    // below effectiveGitRoot, so porcelain paths aren't always repo-root-relative).
+    private static readonly MIRROR_FILE_RE = /(^|\/)\.switchboard\/kanban-(board|state-[^/]+)\.md$/;
+
+    private _isIgnorableMirrorFileLine(porcelainLine: string): boolean {
+        const rawPath = porcelainLine.slice(3);
+        const filePath = rawPath.includes(' -> ') ? rawPath.split(' -> ')[1] : rawPath;
+        const normalized = filePath.trim().replace(/^"|"$/g, '').replace(/\\/g, '/');
+        return PlanAutoFetchService.MIRROR_FILE_RE.test(normalized);
     }
 
     private _updateStatus(workspaceRoot: string, outcome: 'success' | 'skipped' | 'failed' | 'idle', reason: string, defaultBranch?: string): void {

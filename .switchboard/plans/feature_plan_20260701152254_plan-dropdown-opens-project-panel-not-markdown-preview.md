@@ -174,5 +174,9 @@ No automated tests required for this change (per session directive, the test sui
 6. **Ghost-row fallback:** Select a plan whose sheet has an empty `planFile` (malformed/ghost row). Verify the fallback to `_handleViewPlan` opens the plan in VS Code's editor as a last resort.
 7. **Compile check:** `npm run compile` — verify no TypeScript errors (run only when producing a VSIX; not required for dev testing per project build rules).
 
+## Review Findings
+
+Implementation matches plan exactly: `implementation.html:2145-2153` sends `reviewPlan` with `planFile` lookup; `TaskViewerProvider.ts:9709-9730` adds the `reviewPlan` handler delegating to `activatePlanInProjectPanel`; `viewPlan` retained as dead code with comment. One CRITICAL fix applied: `src/test/kanban-view-plan-removal-regression.test.js:52-55` asserted the old `viewPlan` string in implementation.html — updated to assert `reviewPlan` and verify `viewPlan` is absent. No compile/test run per session directives. Remaining risk: `_overwriteExistingPlan` (line 17161) still uses a 2s `_pendingPlanCreations` timeout, but that is a separate overwrite path out of this plan's scope.
+
 ## Recommendation
 Complexity 4 → **Send to Coder**.
