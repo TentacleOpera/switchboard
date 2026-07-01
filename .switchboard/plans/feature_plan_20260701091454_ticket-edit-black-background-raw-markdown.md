@@ -123,3 +123,6 @@ None. This is a pure CSS/styling change with no logic change; the textarea ID, v
 
 ## Recommendation
 Complexity 3/10 → **Send to Coder**. Contained single-function + single-CSS-rule change, but requires careful preservation of three inline UX overrides (resize, wrapping, line-height) that a naive class swap would silently drop.
+
+## Review Findings
+Implementation matches the plan exactly with no deviations. `src/webview/planning.js:8585` uses `class="markdown-editor"` with the three preserved inline overrides (`resize:vertical`, `white-space:pre-wrap`, `line-height:1.6`) plus `min-height:480px;height:auto`; `src/webview/planning.html:2469-2471` adds the `#tickets-detail-content .markdown-editor { background: transparent; }` rule immediately after the base `.markdown-editor` block. Regression audit clean: save handler (`planning.js:7795`) reads `.value` by preserved ID, focus call (`planning.js:8605`) intact, no orphaned references, no race conditions (synchronous `innerHTML` rebuild), no double-trigger, selector isolation confirmed (`#tickets-detail-content` scope does not collide with docs `#preview-pane` editor). No code fixes required. Remaining risk: default black-theme editor may be visually indistinguishable from rendered preview — plan's `var(--panel-bg2)` fallback is available if manual verification flags it; deferred to visual review.
