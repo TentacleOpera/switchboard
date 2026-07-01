@@ -1232,7 +1232,9 @@ export class ClickUpSyncService {
       `/task/${normalizedTaskId}?include_subtasks=true&include_markdown_description=true`
     );
     if (taskResult.status !== 200) {
-      throw new Error(localizeHttpError(taskResult.status, 'clickup', 'fetch this ticket from ClickUp'));
+      const err: any = new Error(localizeHttpError(taskResult.status, 'clickup', 'fetch this ticket from ClickUp'));
+      err.statusCode = taskResult.status;
+      throw err;
     }
 
     const task = this._normalizeClickUpTask(taskResult.data);

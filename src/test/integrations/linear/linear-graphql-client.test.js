@@ -50,7 +50,7 @@ async function testGraphqlErrors() {
 
         try {
             http.queueJson(500, { data: null });
-            await assert.rejects(() => service.graphqlRequest('{ viewer { id } }'), /Linear API HTTP 500/);
+            await assert.rejects(() => service.graphqlRequest('{ viewer { id } }'), /Linear server error \(HTTP 500\)/);
 
             http.queueJson(200, { errors: [{ message: 'Boom' }] });
             await assert.rejects(() => service.graphqlRequest('{ viewer { id } }'), /Linear GraphQL error: Boom/);

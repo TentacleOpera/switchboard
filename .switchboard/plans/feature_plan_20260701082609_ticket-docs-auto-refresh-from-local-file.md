@@ -410,3 +410,7 @@ case 'localTicketFileRead': {
    - Select a ticket with no local file and no cached details (fresh). Confirm the
      API fallback DOES fire once (proving the guard only suppresses redundant
      refetches, not the initial load).
+
+## Review Findings
+
+All six changes verified as correctly implemented in `src/webview/planning.js` (no backend changes needed, confirmed `PlanningPanelProvider.ts` unchanged). Change #6 diverges from the plan's `detailsFetched` guard — uses a simpler `break` on `!msg.success` that relies on the click handler's parallel API dispatch; this is equivalent and avoids a flash-to-empty that the plan's approach would cause. Three NIT-level findings: (1) pre-existing race in `localTicketFileRead` success path (line 4597) — doesn't verify `msg.id` matches current selection, slightly amplified by always-send-on-click but negligible due to sync file read; (2) Change #6 deviation is undocumented but sound; (3) cache object always replaced on poll tick even when content identical — DOM short-circuit prevents flicker. No CRITICAL or MAJOR findings; no code fixes applied. Static verification passed (no compilation/tests per session constraints). Remaining risk: the `localTicketFileRead` race could cause a brief flash of a previous ticket if the user clicks two tickets within a sync-read roundtrip window — defer a guard to a future patch.

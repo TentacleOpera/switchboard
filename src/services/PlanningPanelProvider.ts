@@ -4435,14 +4435,17 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error: any) {
-                    const msg = error?.message || String(error);
-                    const statusMatch = msg.match(/HTTP (\d{3})/);
-                    const kind = statusMatch ? classifyHttpError(Number(statusMatch[1])) : 'generic';
+                    const errMsg = error?.message || String(error);
+                    const statusMatch = errMsg.match(/HTTP (\d{3})/);
+                    const statusCode = typeof error?.statusCode === 'number'
+                        ? error.statusCode
+                        : (statusMatch ? Number(statusMatch[1]) : null);
+                    const kind = statusCode != null ? classifyHttpError(statusCode) : 'generic';
                     this._panel?.webview.postMessage({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
-                        error: msg,
+                        error: errMsg,
                         kind,
                         workspaceRoot
                     });
@@ -4672,14 +4675,17 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error: any) {
-                    const msg = error?.message || String(error);
-                    const statusMatch = msg.match(/HTTP (\d{3})/);
-                    const kind = statusMatch ? classifyHttpError(Number(statusMatch[1])) : 'generic';
+                    const errMsg = error?.message || String(error);
+                    const statusMatch = errMsg.match(/HTTP (\d{3})/);
+                    const statusCode = typeof error?.statusCode === 'number'
+                        ? error.statusCode
+                        : (statusMatch ? Number(statusMatch[1]) : null);
+                    const kind = statusCode != null ? classifyHttpError(statusCode) : 'generic';
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'task',
                         taskId: msg.taskId,
-                        error: msg,
+                        error: errMsg,
                         kind,
                         workspaceRoot
                     });
