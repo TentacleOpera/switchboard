@@ -211,9 +211,9 @@ Parts 1–4 per the dependency graph above.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Part 0 — Directive Scope Bug Fix (ultracode/goal leak)](../plans/part0-directive-scope-bugfix.md) — **LEAD CODED**
-- [ ] [Part 1 — Epic Worktree Mode Selector + Config Foundation](../plans/part1-epic-worktree-mode-selector.md) — **LEAD CODED**
-- [ ] [Part 2 — Worktree-per-subtask (Feature 1)](../plans/part2-worktree-per-subtask.md) — **LEAD CODED**
-- [ ] [Part 3 — High/low Complexity Split (Feature 2)](../plans/part3-high-low-complexity-split.md) — **LEAD CODED**
-- [ ] [Part 4 — Directive Wiring Centralization (cross-cutting)](../plans/part4-directive-wiring.md) — **LEAD CODED**
+- [ ] [Part 0 — Directive Scope Bug Fix (ultracode/goal leak)](../plans/part0-directive-scope-bugfix.md) — **CODE REVIEWED**
+- [ ] [Part 1 — Epic Worktree Mode Selector + Config Foundation](../plans/part1-epic-worktree-mode-selector.md) — **CODE REVIEWED**
+- [ ] [Part 2 — Worktree-per-subtask (Feature 1)](../plans/part2-worktree-per-subtask.md) — **CODE REVIEWED**
+- [ ] [Part 3 — High/low Complexity Split (Feature 2)](../plans/part3-high-low-complexity-split.md) — **CODE REVIEWED**
+- [ ] [Part 4 — Directive Wiring Centralization (cross-cutting)](../plans/part4-directive-wiring.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
