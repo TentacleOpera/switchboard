@@ -797,7 +797,59 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         return path.join(stateRoot, '.switchboard', 'state.json');
     };
-    void kanbanProvider!.initializeIntegrationAutoPull();
+    // Runs once per activation; idempotent — only rewrites rules still on the old defaults.
+    const migrateTriageRuleDefaults = async (): Promise<void> => {
+        if (!kanbanProvider || !activeTaskViewerProvider) {
+            return;
+        }
+        const roots = kanbanProvider.getWorkspaceRoots();
+        for (const root of roots) {
+            // ClickUp
+            try {
+                const clickSvc = activeTaskViewerProvider.getClickUpService(root);
+                const cfg = await clickSvc.loadConfig();
+                if (cfg?.automationRules?.length) {
+                    let changed = false;
+                    cfg.automationRules = cfg.automationRules.map((rule) => {
+                        if (/^Triage\s*—/i.test(rule.name)
+                            && rule.targetColumn === 'CREATED'
+                            && rule.finalColumn === 'DONE') {
+                            changed = true;
+                            return { ...rule, targetColumn: 'TICKET UPDATER', finalColumn: 'COMPLETED' };
+                        }
+                        return rule;
+                    });
+                    if (changed) { await clickSvc.saveConfig(cfg); }
+                }
+            } catch { /* ignore — provider not configured */ }
+
+            // Linear
+            try {
+                const linSvc = activeTaskViewerProvider.getLinearService(root);
+                const cfg = await linSvc.loadConfig();
+                if (cfg?.automationRules?.length) {
+                    let changed = false;
+                    cfg.automationRules = cfg.automationRules.map((rule) => {
+                        if (/^Triage\s*—/i.test(rule.name)
+                            && rule.targetColumn === 'CREATED'
+                            && rule.finalColumn === 'DONE') {
+                            changed = true;
+                            return { ...rule, targetColumn: 'TICKET UPDATER', finalColumn: 'COMPLETED' };
+                        }
+                        return rule;
+                    });
+                    if (changed) { await linSvc.saveConfig(cfg); }
+                }
+            } catch { /* ignore — provider not configured */ }
+        }
+    };
+
+    void migrateTriageRuleDefaults().then(() => {
+        void kanbanProvider!.initializeIntegrationAutoPull();
+    }).catch(err => {
+        console.error('[Switchboard] Error migrating triage rule defaults:', err);
+        void kanbanProvider!.initializeIntegrationAutoPull();
+    });
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             void kanbanProvider!.initializeIntegrationAutoPull();

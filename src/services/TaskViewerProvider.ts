@@ -4974,8 +4974,8 @@ Each plan file must include:
                         enabled: true,
                         triggerTag: 'triage',
                         triggerLists: triggerList ? [triggerList] : [],
-                        targetColumn: 'CREATED',
-                        finalColumn: 'DONE',
+                        targetColumn: 'TICKET UPDATER',
+                        finalColumn: 'COMPLETED',
                         writeBackOnComplete: true
                     }
                 ];
@@ -5016,8 +5016,8 @@ Each plan file must include:
                             enabled: true,
                             triggerLabel: 'triage',
                             triggerStates: [inboxStateId],
-                            targetColumn: 'CREATED',
-                            finalColumn: 'DONE',
+                            targetColumn: 'TICKET UPDATER',
+                            finalColumn: 'COMPLETED',
                             writeBackOnComplete: true
                         }
                     ];

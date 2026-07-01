@@ -5,7 +5,7 @@
         style.id = 'md-editor-styles';
         style.textContent = `
             .md-editor-shell {
-                display: flex;
+                display: none;
                 flex-direction: column;
                 border: 1px solid var(--border-color, #30363d);
                 background: var(--bg-color, #0d1117);
@@ -14,6 +14,9 @@
                 width: 100%;
                 height: 100%;
                 box-sizing: border-box;
+            }
+            .edit-mode .md-editor-shell {
+                display: flex;
             }
             .md-toolbar {
                 display: flex;
@@ -204,7 +207,10 @@
 
     window.SwitchboardMarkdownEditor = {
         attach(textarea, options = {}) {
-            if (!textarea || textarea.dataset.mdEditorAttached) {
+            if (!textarea) return;
+            if (textarea.dataset.mdEditorAttached) {
+                // Already attached — re-trigger render with current content
+                textarea.dispatchEvent(new Event('md-editor-refresh', { bubbles: true }));
                 return;
             }
             textarea.dataset.mdEditorAttached = "true";
@@ -309,6 +315,25 @@
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
             };
 
+            // Insert a link — no modal dialog (prompt() is a silent no-op in VS Code webviews)
+            // If selection looks like a URL, put it in the paren with empty link text.
+            // Otherwise, selection becomes link text with a placeholder URL.
+            const insertLink = () => {
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                const text = textarea.value;
+                const selected = text.substring(start, end);
+                if (selected.startsWith('http://') || selected.startsWith('https://')) {
+                    textarea.value = text.substring(0, start) + `[](${selected})` + text.substring(end);
+                    textarea.setSelectionRange(start + 1, start + 1);
+                } else {
+                    textarea.value = text.substring(0, start) + `[${selected}](https://)` + text.substring(end);
+                    const urlStart = start + selected.length + 3;
+                    textarea.setSelectionRange(urlStart, urlStart + 8);
+                }
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            };
+
             // Bold & Italic shortcuts
             textarea.addEventListener('keydown', (e) => {
                 const isMeta = e.ctrlKey || e.metaKey;
@@ -320,10 +345,7 @@
                     insertText('*', '*');
                 } else if (isMeta && e.key === 'k') {
                     e.preventDefault();
-                    const url = prompt('Enter URL:', 'https://');
-                    if (url) {
-                        insertText('[', `](${url})`);
-                    }
+                    insertLink();
                 }
             });
 
@@ -350,19 +372,7 @@
 
             toolbar.appendChild(createBtn('<code>', 'Inline Code', () => insertText('`', '`')));
             toolbar.appendChild(createBtn('<code-block>', 'Code Block', () => insertText('```\n', '\n```')));
-            toolbar.appendChild(createBtn('🔗', 'Link (Ctrl+K)', () => {
-                const start = textarea.selectionStart;
-                const end = textarea.selectionEnd;
-                const selected = textarea.value.substring(start, end);
-                let defaultUrl = 'https://';
-                if (selected.startsWith('http://') || selected.startsWith('https://')) {
-                    defaultUrl = selected;
-                }
-                const url = prompt('Enter URL:', defaultUrl);
-                if (url !== null) {
-                    insertText('[', `](${url})`);
-                }
-            }));
+            toolbar.appendChild(createBtn('🔗', 'Link (Ctrl+K)', () => insertLink()));
 
             // Table picker popover button
             const pickerContainer = document.createElement('div');
@@ -488,8 +498,8 @@
                 const content = textarea.value;
                 if (content.length > 30000) {
                     preview.innerHTML = '<div class="md-preview-placeholder">Live preview paused (large doc)</div>';
-                    // Force edit mode if in split
-                    if (globalViewMode === 'split') {
+                    // Force edit mode if currently showing a preview
+                    if (globalViewMode !== 'edit') {
                         updateViewClasses('edit');
                     }
                     return;
@@ -515,6 +525,12 @@
             textarea.addEventListener('input', () => {
                 if (renderTimeout) clearTimeout(renderTimeout);
                 renderTimeout = setTimeout(triggerRender, 200);
+            });
+
+            // Re-render when re-attach is called (e.g. re-entering edit mode with new content)
+            textarea.addEventListener('md-editor-refresh', () => {
+                if (renderTimeout) clearTimeout(renderTimeout);
+                triggerRender();
             });
 
             // Initial render

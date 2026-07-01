@@ -284,3 +284,7 @@ Key risks: (1) the `!important` CSS rules in `planning.html:2500` and `design.ht
 **Tags:** frontend, ui, ux, feature, docs
 
 **Recommendation:** Send to Coder (complexity 4-6).
+
+## Review Findings
+
+Reviewed the implementation against plan requirements. Fixed 2 CRITICAL and 1 MAJOR issue in `src/webview/markdownEditor.js`: (1) `prompt()` calls were silent no-ops in VS Code webviews — replaced with plan-compliant `insertLink()` that detects URL selections without any modal dialog; (2) `.md-editor-shell` was `display:flex` always, leaving the toolbar + live preview visible in read mode — added `display:none` default with `.edit-mode .md-editor-shell { display:flex }` override per the plan's CSS spec; (3) idempotent `attach()` skipped render on re-entry, leaving stale preview content — re-attach now dispatches a `md-editor-refresh` event that triggers a fresh render. Also fixed a NIT: doc-size guard now forces Edit mode from any non-edit view (was split-only). CSS-preservation constraint verified — all three `.edit-mode .markdown-editor` rules in `planning.html:2500`, `design.html:2459`, and `project.html:255` remain unchanged. No compilation or tests run per session directives. Remaining risks: responsive single-pane collapse (Design §6) is only partially implemented (stacks vertically via media query but does not hide a pane or auto-default to Edit on narrow panels); numbered-list toggle-off is imprecise for multi-line lists (plan accepted this as "simple toggle is fine").
