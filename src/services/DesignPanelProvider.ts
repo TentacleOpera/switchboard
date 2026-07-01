@@ -366,6 +366,11 @@ export class DesignPanelProvider implements vscode.Disposable {
         );
         htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
 
+        const markdownEditorUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'markdownEditor.js')
+        );
+        htmlContent = htmlContent.replace(/\{\{MARKDOWN_EDITOR_URI\}\}/g, markdownEditorUri.toString());
+
         const inspectJsUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'inspect.js')
         );
@@ -1374,6 +1379,26 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         const hasKey = authInfo.valid;
 
         switch (message.type) {
+            case 'renderMarkdownLive': {
+                try {
+                    const html = await vscode.commands.executeCommand<string>('markdown.api.render', message.content || '');
+                    this.postMessage({
+                        type: 'markdownLiveRendered',
+                        requestId: message.requestId,
+                        html: html,
+                        htmlContent: html
+                    });
+                } catch (err) {
+                    this.postMessage({
+                        type: 'markdownLiveRendered',
+                        requestId: message.requestId,
+                        html: '',
+                        htmlContent: '',
+                        error: String(err)
+                    });
+                }
+                break;
+            }
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
                 const items = buildWorkspaceItems(allRoots);

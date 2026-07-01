@@ -484,6 +484,11 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
 
+        const markdownEditorUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'markdownEditor.js')
+        );
+        htmlContent = htmlContent.replace(/\{\{MARKDOWN_EDITOR_URI\}\}/g, markdownEditorUri.toString());
+
         const geistPixelFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );
@@ -1424,6 +1429,11 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, sharedUtilsUri.toString());
 
+        const markdownEditorUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'markdownEditor.js')
+        );
+        htmlContent = htmlContent.replace(/\{\{MARKDOWN_EDITOR_URI\}\}/g, markdownEditorUri.toString());
+
         const geistPixelFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
         );
@@ -2093,6 +2103,28 @@ export class PlanningPanelProvider {
         this._ensureAdaptersRegistered();
 
         switch (msg.type) {
+            case 'renderMarkdownLive': {
+                try {
+                    const html = await vscode.commands.executeCommand<string>('markdown.api.render', msg.content || '');
+                    const targetPanel = isProject ? this._projectPanel : this._panel;
+                    targetPanel?.webview.postMessage({
+                        type: 'markdownLiveRendered',
+                        requestId: msg.requestId,
+                        html: html,
+                        htmlContent: html
+                    });
+                } catch (err) {
+                    const targetPanel = isProject ? this._projectPanel : this._panel;
+                    targetPanel?.webview.postMessage({
+                        type: 'markdownLiveRendered',
+                        requestId: msg.requestId,
+                        html: '',
+                        htmlContent: '',
+                        error: String(err)
+                    });
+                }
+                break;
+            }
             case 'fetchRoots': {
                 console.log('[PlanningPanel] Received fetchRoots, _panel exists:', !!this._panel);
                 const sources = this._researchImportService.getAvailableSources();

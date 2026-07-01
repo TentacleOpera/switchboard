@@ -24,11 +24,19 @@ type LinearAutomationIssueSummary = {
 
 type LinearAutomationWriteBackTarget = 'description' | 'comment';
 
+export interface LinearAutomationCreatedPlan {
+    planFile: string;
+    linearIssueId: string;
+    ruleName: string;
+    targetColumn: string;
+}
+
 export interface LinearAutomationPollResult {
     created: number;
     skipped: number;
     writeBacks: number;
     errors: string[];
+    createdPlans: LinearAutomationCreatedPlan[];
 }
 
 export class LinearAutomationService {
@@ -268,7 +276,8 @@ export class LinearAutomationService {
             created: 0,
             skipped: 0,
             writeBacks: 0,
-            errors: []
+            errors: [],
+            createdPlans: []
         };
 
         const config = await this._linearService.loadConfig();
@@ -427,6 +436,12 @@ export class LinearAutomationService {
                     );
                     console.log(`[LinearAutomation] Created plan ${planFile} for Linear issue ${issue.identifier} (${normalizedIssueId})`);
                     result.created++;
+                    result.createdPlans.push({
+                        planFile,
+                        linearIssueId: normalizedIssueId,
+                        ruleName: matchedRule.name,
+                        targetColumn: matchedRule.targetColumn
+                    });
                 } catch (error) {
                     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
                         console.log(`[LinearAutomation] Plan file already exists (race): ${planFile}`);

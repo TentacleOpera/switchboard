@@ -6635,6 +6635,33 @@ Return ONLY the drafted prompt with no additional commentary.`;
         textarea.value = content;
         previewPane.classList.add('edit-mode');
 
+        if (window.SwitchboardMarkdownEditor) {
+            window.SwitchboardMarkdownEditor.attach(textarea, {
+                renderPreview: (markdown) => {
+                    return new Promise((resolve, reject) => {
+                        const requestId = Date.now() + Math.random();
+                        const handler = (event) => {
+                            const msg = event.data;
+                            if (msg.type === 'markdownLiveRendered' && msg.requestId === requestId) {
+                                window.removeEventListener('message', handler);
+                                if (msg.error) {
+                                    reject(msg.error);
+                                } else {
+                                    resolve(msg.html || msg.htmlContent || '');
+                                }
+                            }
+                        };
+                        window.addEventListener('message', handler);
+                        vscode.postMessage({
+                            type: 'renderMarkdownLive',
+                            requestId,
+                            content: markdown
+                        });
+                    });
+                }
+            });
+        }
+
         const editBtnIds = EDIT_BUTTON_IDS[tab];
         const btnEdit = editBtnIds ? document.getElementById(editBtnIds.edit) : null;
         const btnSave = editBtnIds ? document.getElementById(editBtnIds.save) : null;

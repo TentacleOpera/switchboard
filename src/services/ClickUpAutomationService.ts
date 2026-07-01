@@ -27,11 +27,19 @@ type ClickUpAutomationTaskSummary = {
     status: string;
 };
 
+export interface ClickUpAutomationCreatedPlan {
+    planFile: string;
+    clickupTaskId: string;
+    ruleName: string;
+    targetColumn: string;
+}
+
 export interface ClickUpAutomationPollResult {
     created: number;
     skipped: number;
     writeBacks: number;
     errors: string[];
+    createdPlans: ClickUpAutomationCreatedPlan[];
 }
 
 export class ClickUpAutomationService {
@@ -193,7 +201,8 @@ export class ClickUpAutomationService {
             created: 0,
             skipped: 0,
             writeBacks: 0,
-            errors: []
+            errors: [],
+            createdPlans: []
         };
 
         const config = await this._clickUpService.loadConfig();
@@ -292,6 +301,12 @@ export class ClickUpAutomationService {
                         { encoding: 'utf8', flag: 'wx' }
                     );
                     result.created++;
+                    result.createdPlans.push({
+                        planFile,
+                        clickupTaskId: normalizedTaskId,
+                        ruleName: matchedRule.name,
+                        targetColumn: matchedRule.targetColumn
+                    });
                 } catch (error) {
                     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
                         result.skipped++;

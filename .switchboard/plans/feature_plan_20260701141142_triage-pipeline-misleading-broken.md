@@ -31,10 +31,12 @@ Confirmed by grep: `rule.targetColumn` is only referenced in `setup.html` (the U
 
 ## Metadata
 
-- **Tags:** `ui`, `setup`, `bugfix`, `triage`, `automation`, `dispatch`, `clickup`, `linear`
-- **Complexity:** 5/10
-- **Files touched:** `src/services/ClickUpAutomationService.ts`, `src/services/LinearAutomationService.ts`, `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/setup.html` (5 files)
-- **Shipped-state impact:** The triage button has shipped. Users who clicked it have a rule with `targetColumn: 'CREATED'` and `finalColumn: 'DONE'`. After this fix, the automation service will start moving new imports to `targetColumn` and dispatching agents. Existing rules with wrong column values will be corrected when the user re-clicks the triage button (the rule is replaced by name). Users who don't re-click will have their tickets imported to CREATED as before (no regression — `CREATED` has no role, so no dispatch fires, same as today). No data migration needed — the rule fields already exist in the config, they're just ignored until this fix wires them up.
+**Plan ID:** 7a3c1f2e-9b4d-4e8a-bc67-2d5f0a1e9c44
+
+- **Tags:** `ui`, `bugfix`, `feature`, `backend`
+- **Complexity:** 6/10
+- **Files touched:** `src/services/ClickUpAutomationService.ts`, `src/services/LinearAutomationService.ts`, `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/setup.html`, `src/extension.ts` (startup migration) (6 files)
+- **Shipped-state impact:** The triage button has shipped. Users who clicked it have a rule with `targetColumn: 'CREATED'` and `finalColumn: 'DONE'`. After this fix, the automation service will start moving new imports to `targetColumn` and dispatching agents. Existing rules with wrong column values are corrected two ways: (1) re-clicking the triage button replaces the rule by name with correct defaults, and (2) a one-time startup migration (see Proposed Changes §9) rewrites any `Triage — *` rule that still carries the shipped wrong defaults (`CREATED`/`DONE`) to `TICKET UPDATER`/`COMPLETED`, so the 4,000-install base gets the fix without manual action. Users whose rules are not migrated and who don't re-click will have tickets imported to CREATED as before (no regression — `CREATED` has no role, so no dispatch fires, same as today). The rule fields already exist in the config; they are just ignored until this fix wires them up.
 
 ## User Review Required
 
@@ -56,7 +58,7 @@ No review gate required. This fixes a broken feature by wiring existing systems 
 
 ## Edge-Case & Dependency Audit
 
-- **Plan not yet in DB when automation callback fires:** the automation service writes the plan file, but the file watcher imports it asynchronously. The KanbanProvider callback runs immediately after `poll()` returns. **Fix:** the automation service already has a DB reference (it uses `db.getAllPlans` for write-back). Enrich it to insert the plan record directly after writing the file, and return the session/plan ID + target column in the poll result. This avoids the file-watcher race entirely.
+- **Plan not yet in DB when automation callback fires:** the automation service writes the plan file, but the file watcher imports it asynchronously. The KanbanProvider callback runs immediately after `poll()` returns. **Fix (chosen):** the callback calls `importPlanFiles(workspaceRoot)` — the same idempotent scanner the watcher uses — to deterministically flush the just-written files into the DB before moving them. The plan is then looked up by task ID (`findPlanByClickUpTaskId`/`findPlanByLinearIssueId`), not by file path, so the move uses the DB's own stored `planFile` form regardless of how the importer normalized it. This avoids the race and the path-form mismatch in one stroke. (The earlier "skip this cycle" idea was rejected: the next poll dedupes by task ID and never re-adds the plan to `createdPlans`, so a skipped plan would be stranded in CREATED permanently.)
 - **Duplicate import:** the automation service uses `flag: 'wx'` (exclusive create) on the plan file and checks `findPlanByClickUpTaskId` / `findPlanByLinearIssueId` before creating. No duplicates.
 - **Rule with `targetColumn: 'CREATED'` (existing rules from prior triage clicks):** `CREATED` has no role (`_columnToRole('CREATED')` returns `null`), so no dispatch fires. The plan stays in CREATED as before — no regression. The user can re-click the triage button to update the rule with correct defaults, or manually edit the rule's start column in the automation UI.
 - **`TICKET UPDATER` column hidden (`hideWhenNoAgent: true`):** if no `ticket_updater` agent is configured, the column doesn't appear on the board and dispatch fails. The triage success message should warn: "Configure a Ticket Updater agent to complete the pipeline." The user can configure one in the Prompts/Agents tab.
@@ -125,43 +127,73 @@ Same pattern — push to `result.createdPlans` after each successful file write.
 
 ### File: `src/services/KanbanProvider.ts`
 
-#### 3. After automation poll, move new plans to targetColumn + dispatch
+#### 3. After automation poll, flush-import new plans, then move to targetColumn + dispatch
+
+> **Why this replaces the earlier "skip this cycle" approach:** the file watcher imports plan
+> files asynchronously, so the plan is **not** guaranteed to be in the DB when the callback runs.
+> The earlier draft did `if (!plan) continue;` claiming the next poll cycle would pick it up —
+> **that is false**: the next cycle dedupes via `findPlanByClickUpTaskId` (line 262) and never
+> re-adds the plan to `createdPlans`, so the move would never fire. We instead call
+> `importPlanFiles(workspaceRoot)` (the same idempotent function the watcher uses) to
+> deterministically flush the newly-written files into the DB before moving.
+>
+> **Why we look up by task ID, not file path:** `PlanFileImporter` stores the plan file path as
+> the **absolute** normalized path (`filePath.replace(/\\/g,'/')`, line 92) for non-control-plane
+> workspaces. Computing `path.relative(workspaceRoot, ...)` and querying `getPlanByPlanFile` with
+> a relative path would **not match**. Looking up by `clickupTaskId`/`linearIssueId` is immune to
+> the stored path form, and the automation service already returns the task ID.
+
+Add the import at the top of `KanbanProvider.ts` (near the other service imports):
+
+```ts
+import { importPlanFiles } from './PlanFileImporter';
+```
 
 In `_configureClickUpAutomation` (line 1912), after `const pollResult = await automation.poll()`:
 
 ```ts
 const pollResult = await automation.poll();
-// Wire newly-imported plans to their target column + dispatch the column's agent
+if (pollResult.errors.length > 0) {
+    console.warn('[KanbanProvider] ClickUp automation polling errors:', pollResult.errors);
+}
+
+// Wire newly-imported plans to their target column + dispatch the column's agent.
 if (pollResult.createdPlans && pollResult.createdPlans.length > 0) {
+    // Deterministically flush the just-written plan files into the DB. The file
+    // watcher is asynchronous and may not have imported them yet; without this,
+    // the move below would no-op and the plan would be stranded in CREATED
+    // (the next poll cycle dedupes by task ID and never re-creates it).
+    await importPlanFiles(workspaceRoot);
+
     const db = this._getKanbanDb(workspaceRoot);
-    const workspaceId = await db.getWorkspaceId() || '';
+    const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
     for (const created of pollResult.createdPlans) {
         if (!created.targetColumn || created.targetColumn === 'CREATED') { continue; }
-        // Wait for the file watcher to import the plan (or import directly)
-        // The plan file path is relative to the workspace root
-        const relPath = path.relative(workspaceRoot, created.planFile);
-        let plan = await db.getPlanByPlanFile(relPath, workspaceId);
+        // Look up by task ID (robust to the importer's stored path form).
+        const plan = await db.findPlanByClickUpTaskId(workspaceId, created.clickupTaskId);
         if (!plan) {
-            // Plan not yet imported by the watcher — skip this cycle, it will be
-            // imported on the next poll cycle's write-back check. Alternatively,
-            // insert directly here (the automation service already has the content).
+            // Importer rejected it (e.g. mixed-provider metadata) — skip safely.
             continue;
         }
-        // Move to target column
-        await this.moveCardToColumnByPlanFile(workspaceRoot, relPath, created.targetColumn);
-        // Dispatch the column's agent (reuses the proven remote-dispatch pattern)
-        const sessionId = plan.sessionId || '';
-        if (sessionId) {
-            await this._remoteDispatchColumnAgent(workspaceRoot, sessionId, created.targetColumn);
+        // Move to target column using the DB's own stored planFile form.
+        await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, created.targetColumn);
+        // Dispatch the column's agent (reuses the proven remote-dispatch pattern).
+        if (plan.sessionId) {
+            await this._remoteDispatchColumnAgent(workspaceRoot, plan.sessionId, created.targetColumn);
         }
     }
     this._scheduleBoardRefresh(workspaceRoot);
 }
+
+await this._postClickUpState(workspaceRoot, pollResult.errors.length > 0);
+if (pollResult.errors.length > 0) {
+    throw new Error(pollResult.errors.join('; '));
+}
 ```
 
-Repeat the same pattern in `_configureLinearAutomation` (line 1978) after `const pollResult = await automation.poll()`.
+Repeat the same pattern in `_configureLinearAutomation` (line 1978) after `const pollResult = await automation.poll()`, substituting `findPlanByLinearIssueId(workspaceId, created.linearIssueId)` for the lookup. Note: `LinearAutomationService.poll()` already calls `db.refreshFromDisk()` at its start (line 290), but that only reloads the DB file — it does **not** scan the plans directory for new files, so the `importPlanFiles` call is still required.
 
-**Note:** The `_remoteDispatchColumnAgent` method (line 1631) is currently `private`. It's already called from within `KanbanProvider`, so no visibility change needed. It resolves the column's role and calls `switchboard.triggerAgentFromKanban`.
+**Note:** The `_remoteDispatchColumnAgent` method (line 1631) is `private` and already called from within `KanbanProvider`, so no visibility change is needed. It resolves the column's role via `_resolveKanbanDispatchSpec` (which reads `column.role` from `agentConfig` — `TICKET UPDATER` has `role: 'ticket_updater'`) and calls `switchboard.triggerAgentFromKanban`. The `_columnToRole` fallback returning `null` for `TICKET UPDATER` is irrelevant because the spec supplies the role.
 
 ### File: `src/services/TaskViewerProvider.ts`
 
@@ -248,18 +280,89 @@ case 'triagePipelineResult': {
 }
 ```
 
+### File: `src/extension.ts`
+
+#### 9. One-time startup migration for shipped triage rules
+
+The triage button shipped with `targetColumn: 'CREATED'` / `finalColumn: 'DONE'`. Per the project migration policy, shipped settings must be migrated on change. Add a lightweight, idempotent migration that runs during activation (after the KanbanDatabase is ready, before `initializeIntegrationAutoPull`) and rewrites any `Triage — *` automation rule that still carries the wrong defaults.
+
+```ts
+// Runs once per activation; idempotent — only rewrites rules still on the old defaults.
+async function migrateTriageRuleDefaults(): Promise<void> {
+    const roots = kanbanProvider.getWorkspaceRoots(); // or however roots are enumerated at activation
+    for (const root of roots) {
+        // ClickUp
+        try {
+            const clickSvc = taskViewerProvider.getClickUpService(root);
+            const cfg = await clickSvc.loadConfig();
+            if (cfg?.automationRules?.length) {
+                let changed = false;
+                cfg.automationRules = cfg.automationRules.map((rule) => {
+                    if (/^Triage\s*—/i.test(rule.name)
+                        && rule.targetColumn === 'CREATED'
+                        && rule.finalColumn === 'DONE') {
+                        changed = true;
+                        return { ...rule, targetColumn: 'TICKET UPDATER', finalColumn: 'COMPLETED' };
+                    }
+                    return rule;
+                });
+                if (changed) { await clickSvc.saveConfig(cfg); }
+            }
+        } catch { /* ignore — provider not configured */ }
+
+        // Linear
+        try {
+            const linSvc = taskViewerProvider.getLinearService(root);
+            const cfg = await linSvc.loadConfig();
+            if (cfg?.automationRules?.length) {
+                let changed = false;
+                cfg.automationRules = cfg.automationRules.map((rule) => {
+                    if (/^Triage\s*—/i.test(rule.name)
+                        && rule.targetColumn === 'CREATED'
+                        && rule.finalColumn === 'DONE') {
+                        changed = true;
+                        return { ...rule, targetColumn: 'TICKET UPDATER', finalColumn: 'COMPLETED' };
+                    }
+                    return rule;
+                });
+                if (changed) { await linSvc.saveConfig(cfg); }
+            }
+        } catch { /* ignore — provider not configured */ }
+    }
+}
+```
+
+Call `await migrateTriageRuleDefaults()` once during `activate()` before `kanbanProvider.initializeIntegrationAutoPull()`. The guard (`targetColumn === 'CREATED' && finalColumn === 'DONE'`) makes it safe to run on every activation: already-correct rules are untouched, and user-customized rules (any value other than the exact shipped wrong pair) are preserved.
+
+## Dependencies
+
+- None — this plan wires existing systems (automation import → column move → agent dispatch) and fixes defaults/copy. No prerequisite plan must be coded first.
+- Related (non-blocking): `remote-control-triage-mutual-exclusivity.md` (PLAN REVIEWED, not coded) hooks into `handleEnableTriagePipeline`; this plan only changes default values inside the method, so the mutual-exclusivity plan's insertion point remains valid.
+
+## Adversarial Synthesis
+
+Key risks: (1) the file-watcher import race — mitigated by calling `importPlanFiles` in the automation callback to deterministically flush new files before the move; (2) plan-file path-form mismatch between the importer's absolute storage and a relative lookup — mitigated by looking up plans by task ID (`findPlanByClickUpTaskId`/`findPlanByLinearIssueId`) and moving by the DB's own stored `planFile`; (3) shipped wrong-default rules left dead for the 4,000-install base — mitigated by an idempotent startup migration that rewrites `Triage — *` rules still on `CREATED`/`DONE`. No architectural changes; all wiring reuses proven methods (`moveCardToColumnByPlanFile`, `_remoteDispatchColumnAgent`, `importPlanFiles`).
+
 ## Verification Plan
 
-1. **Compile check:** `npm run compile`.
-2. **End-to-end pipeline test (ClickUp):**
+### Automated Tests
+
+> Per session directives, compilation and the automated test suite are NOT run in this planning session. The steps below are for the implementing agent / user to run separately.
+
+1. **End-to-end pipeline test (ClickUp):**
    - Configure ClickUp (token, folder, list, column mappings).
    - Click **ENABLE TRIAGE PIPELINE**. Confirm button shows "ENABLING…" then success message mentioning "Ticket Updater column" and "ticket_updater agent."
    - In ClickUp, tag a task with `triage` and wait for the next poll cycle (≤15 min).
-   - Confirm: the task appears as a plan in the Kanban, is moved to the **TICKET UPDATER** column, and the ticket_updater agent prompt is generated (clipboard or terminal, depending on `dragDropMode`).
+   - Confirm: the task appears as a plan in the Kanban, is moved to the **TICKET UPDATER** column, and the ticket_updater agent prompt is generated (clipboard, per `dragDropMode: 'prompt'`).
    - Move the card to **COMPLETED**. Confirm the plan content is written back to the ClickUp task (description or comment).
-3. **End-to-end pipeline test (Linear):** Same flow with Linear.
-4. **Wrong-defaults regression test:** If a user has an existing triage rule with `targetColumn: 'CREATED'` / `finalColumn: 'DONE'`, confirm new tickets still import to CREATED (no dispatch, no crash). Re-click the triage button → confirm the rule is updated to `TICKET UPDATER` / `COMPLETED`.
-5. **No ticket_updater agent configured:** Enable triage, import a tagged ticket. Confirm the card moves to TICKET UPDATER column but dispatch is skipped silently (no error, no crash). The success message should warn about configuring a Ticket Updater agent.
-6. **File-watcher race test:** If the plan isn't yet in the DB when the automation callback tries to move it, confirm no crash — the plan stays in CREATED and is picked up on the next poll cycle (or by manual drag).
-7. **Write-back test:** Confirm `writeBackOnComplete` fires when card reaches `COMPLETED` (not `DONE`). The write-back appends the plan content to the ticket.
-8. **Busy state test:** Confirm the triage button disables + shows "ENABLING…" during the request, then restores.
+2. **End-to-end pipeline test (Linear):** Same flow with Linear.
+3. **Shipped-rule migration test:** Create a triage rule with `targetColumn: 'CREATED'` / `finalColumn: 'DONE'` (simulating a pre-fix install). Reload the extension. Confirm the rule is rewritten to `TICKET UPDATER` / `COMPLETED` on activation. Reload again — confirm it is NOT re-touched (idempotent). Confirm a user-customized rule (e.g. `targetColumn: 'CODED'`) is preserved.
+4. **No ticket_updater agent configured:** Enable triage, import a tagged ticket. Confirm the card moves to TICKET UPDATER column but dispatch is skipped silently (`_canAssignRole` returns false, no error, no crash). The success message should warn about configuring a Ticket Updater agent.
+5. **Import-flush race test:** Tag a ticket so the automation poll writes the plan file. Confirm that even if the file watcher has not yet fired, the callback's `importPlanFiles` call inserts the record and the card is moved to TICKET UPDATER in the same poll cycle (no stranded-in-CREATED plan).
+6. **Write-back test:** Confirm `writeBackOnComplete` fires when card reaches `COMPLETED` (not `DONE`). The write-back appends the plan content to the ticket.
+7. **Busy state test:** Confirm the triage button disables + shows "ENABLING…" during the request, then restores on `triagePipelineResult`.
+8. **Wrong-defaults no-regression:** A rule intentionally left on `CREATED`/`DONE` (e.g. user customized `targetColumn` to `CREATED` deliberately) imports tickets to CREATED with no dispatch and no crash.
+
+## Recommendation
+
+Complexity is 6/10 (multi-file, a real race condition, and a path-form subtlety, all reusing existing patterns). **Send to Coder.**

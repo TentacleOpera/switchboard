@@ -43,6 +43,7 @@ import { ContinuousSyncService } from './ContinuousSyncService';
 import type { LiveSyncState } from '../models/LiveSyncTypes';
 import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
+import { importPlanFiles } from './PlanFileImporter';
 
 /**
  * Epic workflow mode directives, prepended at position-zero of an epic prompt
@@ -1913,6 +1914,23 @@ export class KanbanProvider implements vscode.Disposable {
                 if (pollResult.errors.length > 0) {
                     console.warn('[KanbanProvider] ClickUp automation polling errors:', pollResult.errors);
                 }
+
+                if (pollResult.createdPlans && pollResult.createdPlans.length > 0) {
+                    await importPlanFiles(workspaceRoot);
+                    const db = this._getKanbanDb(workspaceRoot);
+                    const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                    for (const created of pollResult.createdPlans) {
+                        if (!created.targetColumn || created.targetColumn === 'CREATED') { continue; }
+                        const plan = await db.findPlanByClickUpTaskId(workspaceId, created.clickupTaskId);
+                        if (!plan) { continue; }
+                        await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, created.targetColumn);
+                        if (plan.sessionId) {
+                            await this._remoteDispatchColumnAgent(workspaceRoot, plan.sessionId, created.targetColumn);
+                        }
+                    }
+                    this._scheduleBoardRefresh(workspaceRoot);
+                }
+
                 await this._postClickUpState(workspaceRoot, pollResult.errors.length > 0);
                 if (pollResult.errors.length > 0) {
                     throw new Error(pollResult.errors.join('; '));
@@ -1979,6 +1997,23 @@ export class KanbanProvider implements vscode.Disposable {
                 if (pollResult.errors.length > 0) {
                     console.warn('[KanbanProvider] Linear automation polling errors:', pollResult.errors);
                 }
+
+                if (pollResult.createdPlans && pollResult.createdPlans.length > 0) {
+                    await importPlanFiles(workspaceRoot);
+                    const db = this._getKanbanDb(workspaceRoot);
+                    const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                    for (const created of pollResult.createdPlans) {
+                        if (!created.targetColumn || created.targetColumn === 'CREATED') { continue; }
+                        const plan = await db.findPlanByLinearIssueId(workspaceId, created.linearIssueId);
+                        if (!plan) { continue; }
+                        await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, created.targetColumn);
+                        if (plan.sessionId) {
+                            await this._remoteDispatchColumnAgent(workspaceRoot, plan.sessionId, created.targetColumn);
+                        }
+                    }
+                    this._scheduleBoardRefresh(workspaceRoot);
+                }
+
                 await this._postLinearState(workspaceRoot, pollResult.errors.length > 0);
                 if (pollResult.errors.length > 0) {
                     throw new Error(pollResult.errors.join('; '));
