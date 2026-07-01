@@ -160,7 +160,7 @@ type ConfiguredKanbanDispatchOptions = {
     workspaceRoot?: string;
     /** Override the working directory for the dispatch (used by git worktree feature). */
     workingDirectory?: string;
-    /** Override git prohibition for this dispatch (false = allow git commands, used by worktree sessions). */
+    /** Override the git safety guardrail for this dispatch (true = include guardrail that permits worktrees/commits but forbids destructive undo; false = omit it entirely, used by worktree sessions that ship their own git policy). */
     gitProhibitionEnabled?: boolean;
     targetTerminalOverride?: string;
 };
@@ -9706,7 +9706,32 @@ Each plan file must include:
                         // Removed: sidebar context map button no longer exists.
                         // Context map generation is now triggered from the Kanban board.
                         break;
+                    case 'reviewPlan': {
+                        if (data.sessionId) {
+                            this._view?.webview.postMessage({ type: 'planLoading', value: true, sessionId: data.sessionId });
+                            try {
+                                const workspaceRoot = this._resolveWorkspaceRoot();
+                                const planFile = data.planFile || '';
+                                if (workspaceRoot && planFile && this._kanbanProvider) {
+                                    // Open the plan in the Project panel, same as kanban.html's Review Plan button.
+                                    await this._kanbanProvider.activatePlanInProjectPanel(planFile, workspaceRoot, false);
+                                } else {
+                                    // Last-resort fallback for ghost/malformed rows with no planFile:
+                                    // opens the raw file in VS Code's editor. This re-introduces the old
+                                    // markdown-preview behavior ONLY for rows that cannot be matched in
+                                    // the Project panel.
+                                    await this._handleViewPlan(data.sessionId);
+                                }
+                            } finally {
+                                this._view?.webview.postMessage({ type: 'planLoading', value: false, sessionId: data.sessionId });
+                            }
+                        }
+                        break;
+                    }
                     case 'viewPlan':
+                        // No webview currently sends viewPlan (grep confirms implementation.html:2145
+                        // was the only sender and now sends reviewPlan). Retained as dead code in case
+                        // a future caller needs the raw VS Code editor open path.
                         if (data.sessionId) {
                             this._view?.webview.postMessage({ type: 'planLoading', value: true, sessionId: data.sessionId });
                             try {
@@ -17264,6 +17289,7 @@ What would you like to find?`;
 
         const stablePlanPath = this._normalizePendingPlanPath(planFileAbsolute);
         this._pendingPlanCreations.add(stablePlanPath);
+        this._planCreationInFlight.add(stablePlanPath);
         GlobalPlanWatcherService.registerPendingCreation(planFileAbsolute);
         try {
             const content = isAirlock ? `## Notebook Plan\n\n${idea}` : idea;
@@ -17337,7 +17363,8 @@ What would you like to find?`;
 
             return { planFileAbsolute };
         } finally {
-            setTimeout(() => this._pendingPlanCreations.delete(stablePlanPath), 2000);
+            this._planCreationInFlight.delete(stablePlanPath);
+            setTimeout(() => this._pendingPlanCreations.delete(stablePlanPath), 10000);
         }
     }
 

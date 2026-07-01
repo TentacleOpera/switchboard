@@ -2142,7 +2142,15 @@
                 if (userInitiatedChange && sessionId) {
                     runSheetSelect.classList.add('loading');
                     if (selectArrow) selectArrow.classList.add('loading');
-                    vscode.postMessage({ type: 'viewPlan', sessionId });
+                    // Look up the sheet to get planFile (column is intentionally omitted —
+                    // activatePlanInProjectPanel does not forward it, so it would be dead data).
+                    const sheets = currentPlanMode === 'active' ? currentActiveSheets : currentCompletedSheets;
+                    const sheet = sheets.find(s => s.sessionId === sessionId);
+                    vscode.postMessage({
+                        type: 'reviewPlan',
+                        sessionId,
+                        planFile: sheet?.planFile || '',
+                    });
                 }
                 userInitiatedChange = false;
             });

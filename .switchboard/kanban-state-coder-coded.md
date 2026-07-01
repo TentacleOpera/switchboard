@@ -1,4 +1,4 @@
 ## CODER CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260701_git-safety-guardrail-worktree-reconciliation.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260701_git-safety-guardrail-worktree-reconciliation.md) — Reframe Git Prohibition as a Git Safety Guardrail (unblock worktrees, forbid destructive undo) <!-- planId:fc5e74e4-cd25-4d0f-802c-d9eb9da96536 -->
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260701152253_create-button-duplicate-ticket.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260701152253_create-button-duplicate-ticket.md) — Create Button in Implementation Tab Creates Duplicate Ticket <!-- planId:0c221c9b-4456-430b-8e6f-11f05db92c32 -->
 

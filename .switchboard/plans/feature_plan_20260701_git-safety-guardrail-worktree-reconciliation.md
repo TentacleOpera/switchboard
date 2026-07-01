@@ -79,3 +79,7 @@ Single source of truth: all call sites reference the `GIT_PROHIBITION_DIRECTIVE`
 
 **Complexity:** 4
 **Tags:** backend, refactor, reliability, ux
+
+## Review Findings
+
+Reviewed commit `1ec10da` against plan steps 1–6. The directive rewrite (`agentPromptBuilder.ts:314`) matches the proposed text verbatim and preserves the `GIT POLICY` marker; all 10 `sharedDefaults.js` role entries and the `kanban.html` label/tooltip were updated consistently with `id`/`default` unchanged (no migration). The new regression test `testGitGuardrailCoexistsWithWorktrees` asserts the guardrail + worktree directive coexist and that the old blanket-ban wording is gone; a grep of `src/test/**` confirms no remaining exact-text assertions of the old wording (only the intentional negative regex). Fixed one missed item from step 5's doc sweep: `TaskViewerProvider.ts:163` comment still claimed "false = allow git commands", which is now wrong (true also permits constructive git) — rewritten to describe guardrail semantics. Verification: compilation and automated tests skipped per session directives; type/snapshot regressions are not expected since no signatures, defaults, or persisted state changed. Remaining risks: `extension.ts:660,3327` legacy-cleanup comments and test `console.log` labels still say "git prohibition" — cosmetic only (they reference the preserved toggle id / historical file removal), deferred.
