@@ -1234,7 +1234,13 @@ export class KanbanProvider implements vscode.Disposable {
      * This ensures sidebar and kanban render from the exact same DB snapshot.
      * Builds cards and posts DIRECTLY to webview — no intermediary that could silently fail.
      */
-    public async refreshWithData(activeRows: import('./KanbanDatabase').KanbanPlanRecord[], completedRows: import('./KanbanDatabase').KanbanPlanRecord[], workspaceRoot: string, projects?: string[]) {
+    public async refreshWithData(
+        activeRows: import('./KanbanDatabase').KanbanPlanRecord[],
+        completedRows: import('./KanbanDatabase').KanbanPlanRecord[],
+        workspaceRoot: string,
+        projects?: string[],
+        dataVersionAtRead?: number
+    ) {
         if (!this._panel) {
             console.warn('[KanbanProvider] refreshWithData: no panel — skipping');
             return;
@@ -1257,13 +1263,19 @@ export class KanbanProvider implements vscode.Disposable {
             const workspaceId = await db.getWorkspaceId();
             const projList = projects || (workspaceId ? await db.getProjects(workspaceId) : []);
 
+            // Use the dataVersion captured at DB read time (passed by the caller) to
+            // prevent the race where a concurrent DB write bumps _dataVersion between
+            // the read and this check/record. Falling back to db.getDataVersion()
+            // preserves backward compatibility for callers that don't pass it.
+            const effectiveDataVersion = dataVersionAtRead ?? db.getDataVersion();
+
             // O(1) no-op early-out (backstop). The primary early-out lives in
             // TaskViewerProvider._refreshRunSheetsImpl (skips the DB query too);
             // this backstop covers any future direct caller of refreshWithData.
             // Compares the composite key (workspaceId|filters|dataVersion|configEpoch)
             // against the last successful push. If unchanged, skip the entire
             // card-build / stringify / hash / auxiliary-post path.
-            if (workspaceId && this.refreshWouldBeNoOp(workspaceId, db.getDataVersion())) {
+            if (workspaceId && this.refreshWouldBeNoOp(workspaceId, effectiveDataVersion)) {
                 return;
             }
 
@@ -1468,7 +1480,7 @@ export class KanbanProvider implements vscode.Disposable {
             // push (cards + auxiliary messages) so a failed push does not record
             // a stale key that would suppress the retry.
             if (workspaceId) {
-                this.recordBoardPush(workspaceId, db.getDataVersion());
+                this.recordBoardPush(workspaceId, effectiveDataVersion);
             }
 
             console.log(`[KanbanProvider] refreshWithData: sent ${cards.length} cards (${activeRowsFiltered.length} active + ${completedRowsFiltered.length} completed) to kanban webview`);
@@ -8187,6 +8199,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
 
                 await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
+                this._markConfigDirty(); // defense-in-depth: ensure the post-promotion refresh isn't skipped by the no-op guard
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
@@ -9328,6 +9341,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         await db.recomputeEpicComplexity(effectiveEpicPlanId);
         const verifyEpic = await db.getPlanByPlanId(effectiveEpicPlanId);
         console.log(`[KanbanProvider] createEpicFromPlanIds: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
+        this._markConfigDirty(); // defense-in-depth: ensure the post-creation refresh isn't skipped by the no-op guard
         await this._refreshBoard(workspaceRoot);
         return { success: true, epicPlanId: effectiveEpicPlanId, epicSessionId: sessionId };
     }

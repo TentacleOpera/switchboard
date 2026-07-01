@@ -15357,6 +15357,13 @@ What would you like to find?`;
                 return; // no-op tick — board data + config unchanged since last push
             }
 
+            // Capture the dataVersion BEFORE the DB read so the push key recorded by
+            // refreshWithData corresponds to a version <= the data actually read. If a
+            // concurrent write (e.g. createEpicFromPlanIds) lands during the read window,
+            // the recorded version will be lower than the post-write version, forcing the
+            // trailing refresh to re-read and push fresh data instead of skipping as a no-op.
+            const dataVersionAtRead = db.getDataVersion();
+
             // ONE DB read — this snapshot feeds both sidebar and kanban
             const repoScope = this._kanbanProvider?.getRepoScopeFilter() ?? null;
             const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
@@ -15378,7 +15385,7 @@ What would you like to find?`;
 
             // Feed kanban board from the SAME snapshot (always, even without sidebar)
             console.log(`[refreshRunSheets] kanbanProvider=${!!this._kanbanProvider}, calling refreshWithData`);
-            await this._kanbanProvider?.refreshWithData(activeRows, completedRows, resolvedWorkspaceRoot, projects);
+            await this._kanbanProvider?.refreshWithData(activeRows, completedRows, resolvedWorkspaceRoot, projects, dataVersionAtRead);
 
             // Feed sidebar dropdown from the same kanban snapshot so both surfaces
             // reflect the same effective repo-scope snapshot.

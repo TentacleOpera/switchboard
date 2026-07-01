@@ -202,3 +202,13 @@ Key risks: modal insertion point was originally specified inside the Constitutio
 ## Recommendation
 
 Complexity 3/10 → **Send to Coder**.
+
+## Review Findings
+
+**Stage 1 (Grumpy):** Welcome to the modal-moving circus. The standalone strip is gone (no `kanban-auto-fetch-strip` matches remain). The ⚙ AutoFetch button sits at line 1498, right after CHAT PROMPT, right before search — exactly as specified. The modal at lines 1741-1769 uses the `kanban-log-overlay`/`kanban-log-modal` pattern (not the `folder-modal` pattern — good, you read the plan). All four element IDs preserved: `kanban-auto-fetch-enabled` (1755), `kanban-auto-fetch-branch` (1756), `btn-plan-auto-fetch-now` (1760), `kanban-auto-fetch-status` (1761). Open/close handlers at lines 1835-1851 match existing modal conventions (no Escape/backdrop — correct). Busy-state at lines 1853-1859 swaps to "Fetching…" and the restore condition at line 424 checks `msg.lastReason !== 'Fetching now...'` — verified the backend sends exactly that string at PlanningPanelProvider.ts:3069. No findings.
+
+**Stage 2 (Balanced):** No CRITICAL/MAJOR/NIT findings. Regression trace: `getElementById` finds the elements inside the hidden modal (DOM-present, just `display:none`), so the `planAutoFetchState` handler (lines 403-428) and checkbox handler (lines 1861-1869) work unchanged. Only one click listener on `btn-plan-auto-fetch-now` (line 1854) — old handler fully replaced, no double-trigger. The `kanban-log-overlay` class defaults to `display:flex` (line 548); inline `display:none` hides initially, JS toggles correctly. No code fixes needed.
+
+**Files changed:** `src/webview/project.html` (button at 1498, modal at 1741-1769, strip removed), `src/webview/project.js` (modal handlers 1835-1851, busy-state 1853-1859, restore 423-427).
+**Validation:** Static review only (compile/tests skipped per session directives). Backend string match verified at PlanningPanelProvider.ts:3069.
+**Remaining risks:** None material. Modal lacks Escape/backdrop dismissal by design (matches existing conventions).

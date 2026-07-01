@@ -268,3 +268,13 @@ Key risks: the original plan undercounted the CSS rules (said "22+", actual is 3
 ## Recommendation
 
 Complexity 3/10 → **Send to Coder**.
+
+## Review Findings
+
+**Stage 1 (Grumpy):** Welcome to the great selector audit. I counted `#constitution-preview-content` at 39 lines and `#projects-preview-content` at 39 lines — perfect parity. Each `#projects-preview-content` selector sits ~3 lines after its `#constitution-preview-content` counterpart within the same rule block (e.g., 269→272, 796→799, 1235→1238). All 36+ rules covered: cyber glow (code/pre/blockquote), claudify headings, base headings h1-h6, paragraphs, lists, code blocks, inline code, blockquotes, tables, links, HR, images, empty-state. The path hint is nuked — zero matches for `projects-prd-path-hint` or `projectsPrdPathHint` across both files. The `#projects-preview-content` container still exists at line 1544, and the area above it (lines 1538-1543) is clean — no leftover path div. No findings.
+
+**Stage 2 (Balanced):** No CRITICAL/MAJOR/NIT findings. Regression trace: removing the path hint element and all three JS references (declaration, set, clear) together prevents null-reference errors — grep confirms zero remaining references. Adding `#projects-preview-content` to existing ID-level selectors doesn't change CSS specificity (all are ID-level), so no override risk. Other tabs' selectors are unchanged. No code fixes needed.
+
+**Files changed:** `src/webview/project.html` (39 CSS selector lines updated, path hint div removed), `src/webview/project.js` (3 path-hint references removed).
+**Validation:** Static review only (compile/tests skipped per session directives). Selector parity verified via grep count comparison (39=39=39 for constitution/projects/tuning).
+**Remaining risks:** None material. If a future markdown element type is added (e.g., `mark`, `kbd`), it must include `#projects-preview-content` from the start — but that's a future-authoring concern, not a defect.

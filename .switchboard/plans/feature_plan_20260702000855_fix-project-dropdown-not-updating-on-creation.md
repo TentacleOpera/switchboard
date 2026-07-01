@@ -151,3 +151,13 @@ Key risks: original plan invented non-existent field names (`this._kanbanWebview
 ## Recommendation
 
 Complexity 4/10 → **Send to Coder**.
+
+## Review Findings
+
+**Stage 1 (Grumpy):** Welcome to the cross-panel notification audit. The `addProject` handler posts `projectListChanged` after `_refreshBoard` at lines 5501-5506, guarded by `if (this._planningPanelProvider)`. The `deleteProject` handler does the same at lines 5571-5576. The `project.js` handler at lines 387-395 debounces 200ms then fires `fetchKanbanPlans` — plain JS `let` declaration at line 381, no TypeScript annotations in a .js file (correct). The `postMessageToProjectWebview` method at PlanningPanelProvider.ts:789-795 has the `_projectPanelReady` guard and `_pendingProjectMessages` queue the plan relied on — safe to call even when the panel isn't open. The `fetchKanbanPlans` handler exists at PlanningPanelProvider.ts:3086, completing the chain. No findings.
+
+**Stage 2 (Balanced):** No CRITICAL/MAJOR/NIT findings. Regression trace: full message chain verified (KanbanProvider `addProject`/`deleteProject` → `projectListChanged` → project.js debounce → `fetchKanbanPlans` → PlanningPanelProvider:3086 → `kanbanPlansReady` → dropdown rebuild). No double-trigger: kanban board refreshes via `_refreshBoard`→`updateWorkspaceSelection` (separate panel, separate flow); project panel refreshes via `fetchKanbanPlans`→`kanbanPlansReady`. The debounce prevents redundant refreshes from rapid bulk creation. If the project panel initiated creation, a single redundant `fetchKanbanPlans` is idempotent (re-fetch + re-render). No race condition: the 200ms debounce serializes bursts; VS Code webview message ordering is preserved. No code fixes needed.
+
+**Files changed:** `src/services/KanbanProvider.ts` (notification at 5501-5506, 5571-5576), `src/webview/project.js` (debounce + handler at 381, 387-395).
+**Validation:** Static review only (compile/tests skipped per session directives). Full message chain traced end-to-end across 3 files.
+**Remaining risks:** None material. If `_projectPanelReady` is true but `_projectPanel` is disposed, the message is silently dropped (no-op via optional chaining) — pre-existing behavior of `postMessageToProjectWebview`, not introduced by this plan.

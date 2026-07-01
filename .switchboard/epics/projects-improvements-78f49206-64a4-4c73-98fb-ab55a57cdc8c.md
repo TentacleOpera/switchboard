@@ -4,11 +4,11 @@
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Move Auto-Fetch Controls Into a Modal in project.html Kanban Plans Tab](../plans/feature_plan_20260701141143_autofetch-controls-into-modal.md) — **INTERN CODED**
-- [ ] [Fix: Parent Board Shows Blank After Creating New Project](../plans/feature_plan_20260702000830_fix-blank-board-after-project-creation.md) — **INTERN CODED**
-- [ ] [Fix: Reduce Sidebar Width for project.html Governance Tabs](../plans/feature_plan_20260702000840_reduce-governance-tab-sidebar-width.md) — **INTERN CODED**
-- [ ] [Fix: New Project Not Showing in project.html Dropdown Until Reopen](../plans/feature_plan_20260702000855_fix-project-dropdown-not-updating-on-creation.md) — **INTERN CODED**
-- [ ] [Fix: Projects Tab Missing Theme Styles and Weird File Path Display](../plans/feature_plan_20260702000850_fix-projects-tab-theme-styles-and-filepath.md) — **INTERN CODED**
+- [ ] [Move Auto-Fetch Controls Into a Modal in project.html Kanban Plans Tab](../plans/feature_plan_20260701141143_autofetch-controls-into-modal.md) — **CODE REVIEWED**
+- [ ] [Fix: Parent Board Shows Blank After Creating New Project](../plans/feature_plan_20260702000830_fix-blank-board-after-project-creation.md) — **CODE REVIEWED**
+- [ ] [Fix: Reduce Sidebar Width for project.html Governance Tabs](../plans/feature_plan_20260702000840_reduce-governance-tab-sidebar-width.md) — **CODE REVIEWED**
+- [ ] [Fix: New Project Not Showing in project.html Dropdown Until Reopen](../plans/feature_plan_20260702000855_fix-project-dropdown-not-updating-on-creation.md) — **CODE REVIEWED**
+- [ ] [Fix: Projects Tab Missing Theme Styles and Weird File Path Display](../plans/feature_plan_20260702000850_fix-projects-tab-theme-styles-and-filepath.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependency Sequence

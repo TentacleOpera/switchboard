@@ -151,3 +151,13 @@ Key risks: original root cause was misdiagnosed (sync already works at line 6137
 ## Recommendation
 
 Complexity 5/10 → **Send to Coder**.
+
+## Review Findings
+
+**Stage 1 (Grumpy):** Welcome to the dropdown priority inversion review. The fix is exactly where the plan said to put it — Priority 1 (`activeProjectFilter` check) at lines 4206-4224, inserted before the `savedValue` restore at line 4226. The `updateWorkspaceSelection` handler syncs `activeProjectFilter = msg.projectFilter` at line 6157 before calling the dropdown rebuild at line 6166. The `explicitChange` guard at line 6165 correctly passes `null` when the workspace root hasn't changed, so workspace switching still takes the explicit branch at line 4187. Delete-button sync is present in all three paths (explicit 4196-4202, Priority 1 4214-4221, fallthrough 4248-4255). No findings.
+
+**Stage 2 (Balanced):** No CRITICAL/MAJOR/NIT findings. Regression trace: `updateWorkspaceProjectDropdown` has exactly ONE caller (line 6166), which always syncs `activeProjectFilter` from `msg.projectFilter` first — so Priority 1 never sees a stale filter. When `activeProjectFilter` is null or `__unassigned__`, Priority 1 is skipped and the existing `savedValue` restore runs. No double-trigger or race risk. No code fixes needed.
+
+**Files changed:** `src/webview/kanban.html` (Priority 1 block inserted at lines 4206-4224).
+**Validation:** Static review only (compile/tests skipped per session directives). Logic traced through all caller paths.
+**Remaining risks:** None material. Pipe-character-in-project-name matching limitation is pre-existing and documented in the plan.
