@@ -365,7 +365,6 @@
     const btnCancelProjects = document.getElementById('btn-cancel-projects');
     const btnProjectContext = document.getElementById('btn-project-context');
     const projectsPrdStatus = document.getElementById('projects-prd-status');
-    const projectsPrdPathHint = document.getElementById('projects-prd-path-hint');
     const projectsPreviewContent = document.getElementById('projects-preview-content');
     const projectsEditor = document.getElementById('projects-editor');
     let projectContextEnabled = false;
@@ -379,10 +378,21 @@
     // Initialize Webview Content
     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
 
+    let _projectListChangedDebounce = null;
+
     // Webview message handler
     window.addEventListener('message', async event => {
         const msg = event.data;
         switch (msg.type) {
+            case 'projectListChanged':
+                if (_projectListChangedDebounce) {
+                    clearTimeout(_projectListChangedDebounce);
+                }
+                _projectListChangedDebounce = setTimeout(() => {
+                    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                    _projectListChangedDebounce = null;
+                }, 200);
+                break;
             case 'switchboardThemeNameSetting':
             case 'switchboardThemeChanged':
                 handleThemeChanged(msg.theme);
@@ -409,6 +419,11 @@
                     }
                     autoFetchStatusText.textContent = text;
                     autoFetchStatusText.title = text;
+                }
+                const btnPlanAutoFetchNow = document.getElementById('btn-plan-auto-fetch-now');
+                if (btnPlanAutoFetchNow && msg.lastReason !== 'Fetching now...') {
+                    btnPlanAutoFetchNow.disabled = false;
+                    btnPlanAutoFetchNow.textContent = 'Fetch now';
                 }
                 break;
             }
@@ -530,7 +545,6 @@
                     state.editOriginalContent.projects = msg.rawContent || '';
                     setProjectsPrdEditorEnabled(true);
                     if (projectsPrdStatus) projectsPrdStatus.textContent = msg.exists ? '' : 'New PRD — not yet saved';
-                    if (projectsPrdPathHint) projectsPrdPathHint.textContent = msg.path || '';
                     _prdLoadedProject = msg.projectName;
                     _prdDirty = false;
                     state.dirtyFlags.projects = false;
@@ -1288,7 +1302,6 @@
             }
             container.style.display = 'none';
             setProjectsPrdEditorEnabled(false);
-            if (projectsPrdPathHint) projectsPrdPathHint.textContent = '';
             if (projectsPrdStatus) projectsPrdStatus.textContent = '';
             _prdLoadedProject = null;
             _prdDirty = false;
@@ -1819,9 +1832,29 @@
             });
         });
     }
+    const btnKanbanAutofetch = document.getElementById('btn-kanban-autofetch');
+    const autofetchModal = document.getElementById('autofetch-modal');
+    const btnCloseAutofetchModal = document.getElementById('btn-close-autofetch-modal');
+
+    function openAutofetchModal() {
+        if (autofetchModal) autofetchModal.style.display = 'flex';
+    }
+    function closeAutofetchModal() {
+        if (autofetchModal) autofetchModal.style.display = 'none';
+    }
+
+    if (btnKanbanAutofetch) {
+        btnKanbanAutofetch.addEventListener('click', openAutofetchModal);
+    }
+    if (btnCloseAutofetchModal) {
+        btnCloseAutofetchModal.addEventListener('click', closeAutofetchModal);
+    }
+
     const btnPlanAutoFetchNow = document.getElementById('btn-plan-auto-fetch-now');
     if (btnPlanAutoFetchNow) {
         btnPlanAutoFetchNow.addEventListener('click', () => {
+            btnPlanAutoFetchNow.disabled = true;
+            btnPlanAutoFetchNow.textContent = 'Fetching…';
             vscode.postMessage({ type: 'planAutoFetchRunNow' });
         });
     }

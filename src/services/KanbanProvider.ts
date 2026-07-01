@@ -5486,6 +5486,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 await this._refreshBoard(workspaceRoot);
 
+                if (this._planningPanelProvider) {
+                    this._planningPanelProvider.postMessageToProjectWebview({
+                        type: 'projectListChanged',
+                        workspaceRoot: workspaceRoot
+                    });
+                }
+
                 // addProject returns false on duplicate (UNIQUE constraint) — report it
                 if (!created) {
                     this._panel?.webview.postMessage({
@@ -5549,6 +5556,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         await db.deleteProject(workspaceId, msg.projectName);
                         this._allWorkspaceProjectsCache = null; // Invalidate cache
                         await this._refreshBoard(workspaceRoot);
+                        if (this._planningPanelProvider) {
+                            this._planningPanelProvider.postMessageToProjectWebview({
+                                type: 'projectListChanged',
+                                workspaceRoot: workspaceRoot
+                            });
+                        }
                     }
                 }
                 break;

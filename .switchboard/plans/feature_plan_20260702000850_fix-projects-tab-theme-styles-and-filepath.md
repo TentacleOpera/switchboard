@@ -1,5 +1,7 @@
 # Fix: Projects Tab Missing Theme Styles and Weird File Path Display
 
+**Plan ID:** 8f95fb2f-b3bb-43fa-97e3-ecdc35a9d90d
+
 ## Goal
 
 The Projects tab in `project.html`'s doc preview does not have the same display rules (CSS theme styling) as the other tabs (Constitution, System, Tuning). Markdown content in the Projects tab renders with default VS Code styling instead of the themed styling (teal accents, uppercase headings, borders, cyber/claudify theme support). Additionally, a raw file path string is displayed directly above the content — a visual inconsistency that no other tab has. Fix both issues so the Projects tab is visually identical to the other governance tabs.
@@ -8,9 +10,9 @@ The Projects tab in `project.html`'s doc preview does not have the same display 
 
 **Issue A — Missing theme styles:**
 
-The `#projects-preview-content` element is included in the base container styling (line 862 of `project.html`) but is **missing from every single markdown element styling rule** that applies themes. There are 22+ CSS rules in `project.html` that style markdown elements (h1-h6, p, li, pre, code, blockquote, ul/ol, table, th, td, a, hr, img) for the kanban, epics, constitution, system, and tuning preview panes — but `#projects-preview-content` is absent from all of them. This means markdown rendered in the Projects tab gets unstyled output: no teal accent colors, no uppercase heading transforms, no bordered code blocks, no themed tables.
+The `#projects-preview-content` element is included in the base container styling (line 862 of `project.html`) but is **missing from every single markdown element styling rule** that applies themes. There are **36 CSS rules** in `project.html` that style markdown elements (h1-h6, p, li, pre, code, blockquote, ul/ol, table, th, td, a, hr, img) for the kanban, epics, constitution, system, and tuning preview panes — but `#projects-preview-content` is absent from all of them. This means markdown rendered in the Projects tab gets unstyled output: no teal accent colors, no uppercase heading transforms, no bordered code blocks, no themed tables.
 
-**Root cause:** When the Projects tab was added, the developer included `#projects-preview-content` in the base container rule but failed to add it to the ~22 specific element styling rules. This is a copy-paste omission — every rule lists 5 selectors (kanban, epics, constitution, system, tuning) and the projects selector was simply never appended.
+**Root cause:** When the Projects tab was added, the developer included `#projects-preview-content` in the base container rule (line 862) and two other rules (line 263 `.edit-mode` and line 1185 `.empty-state`) but failed to add it to the 36 specific element styling rules. This is a copy-paste omission — every rule lists 5 selectors (kanban, epics, constitution, system, tuning) and the projects selector was simply never appended.
 
 **Issue B — Weird file path display:**
 
@@ -53,11 +55,51 @@ It displays the raw filesystem path (e.g., `/Users/patrick/.../switchboard/.swit
 
 ## Proposed Changes
 
-### 1. Add `#projects-preview-content` to all markdown element CSS rules
+### 1. Add `#projects-preview-content` to all 36 markdown element CSS rules
 
 **File:** `src/webview/project.html`
 
 For each of the following CSS rules, append `#projects-preview-content` (and the appropriate child selector) to the selector list. The pattern is: wherever `#constitution-preview-content h1` appears, add `#projects-preview-content h1` alongside it.
+
+**EXACT line numbers of all 36 rules to update (verified against source):**
+
+| # | Lines | Rule description |
+|---|-------|-----------------|
+| 1 | 779-785 | Cyber theme inline code glow |
+| 2 | 788-795 | Cyber theme code block glow |
+| 3 | 798-805 | Cyber theme blockquote glow |
+| 4 | 833-837 | Claudify theme h1 |
+| 5 | 845-849 | Claudify theme h2-h6 |
+| 6 | 874-884 | Base heading styles (h1-h6) |
+| 7 | 887-894 | Cyber theme heading typography |
+| 8 | 896-902 | Cyber theme h1 color |
+| 9 | 904-910 | Cyber theme h2-h6 colors |
+| 10 | 912-924 | Base h1 specific |
+| 11 | 926-938 | Base h2 specific |
+| 12 | 940-962 | Base h3-h6 specific |
+| 13 | 964-970 | Base h3 font-size |
+| 14 | 972-978 | Base h4 font-size |
+| 15 | 980-986 | Base h5 font-size |
+| 16 | 988-994 | Base h6 font-size |
+| 17 | 996-1005 | Paragraph styles |
+| 18 | 1007-1016 | List item styles |
+| 19 | 1018-1024 | List item paragraph styles |
+| 20 | 1026-1037 | Code block styles (pre) |
+| 21 | 1039-1050 | Code block code styles (pre code) |
+| 22 | 1052-1065 | Inline code styles |
+| 23 | 1067-1078 | Blockquote styles |
+| 24 | 1080-1087 | List styles (ul/ol) |
+| 25 | 1090-1098 | Table styles |
+| 26 | 1100-1109 | Table header styles (th) |
+| 27 | 1111-1119 | Table cell styles (td) |
+| 28 | 1121-1127 | Table row hover styles |
+| 29 | 1129-1137 | Table wrapper styles |
+| 30 | 1140-1147 | Link styles (a) |
+| 31 | 1149-1156 | Link hover styles (a:hover) |
+| 32 | 1158-1166 | HR styles |
+| 33 | 1168-1178 | Image styles |
+
+**Note:** 33 rules explicitly identified above. The total count is 36 (39 total rules with `#constitution-preview-content` minus 3 that already include `#projects-preview-content` at lines 263, 862, 1185). Cross-check against all rules containing `#constitution-preview-content` or `#tuning-preview-content` to find the remaining 3 before implementing.
 
 **Base heading styles (line 874-884):**
 ```css
@@ -181,14 +223,15 @@ Remove this line:
 <div id="projects-prd-path-hint" style="font-size:10px; font-family:monospace; color:var(--text-secondary); opacity:0.7; margin-bottom:6px;"></div>
 ```
 
-**File:** `src/webview/project.js` (line 533)
+**File:** `src/webview/project.js`
 
-Remove or comment out this line:
-```javascript
-if (projectsPrdPathHint) projectsPrdPathHint.textContent = msg.path || '';
-```
+Three references must be removed together to avoid dangling references:
 
-Also remove the element reference declaration (search for `projectsPrdPathHint` in the variable declarations section of `project.js` and remove it).
+1. **Line 368** (declaration): `const projectsPrdPathHint = document.getElementById('projects-prd-path-hint');`
+2. **Line 533** (set): `if (projectsPrdPathHint) projectsPrdPathHint.textContent = msg.path || '';`
+3. **Line 1291** (clear): `if (projectsPrdPathHint) projectsPrdPathHint.textContent = '';`
+
+Remove all three. Leaving the declaration (line 368) would create a dangling reference to a removed DOM element. Leaving line 1291 would leave a null-guarded no-op that confuses future readers.
 
 ### 3. Alternative: Move path hint to controls strip (if path display is desired)
 
@@ -212,3 +255,16 @@ This keeps the path info available but visually consistent with other tabs' cont
 5. **Other tabs unaffected:** Switch to Constitution, System, Tuning tabs → verify their styling is unchanged (no visual regression).
 6. **All markdown elements styled:** In the Projects tab, verify: headings (h1-h6), paragraphs, lists (ul/ol), code blocks, inline code, blockquotes, tables, links, horizontal rules, and images all have themed styling.
 7. **Empty state:** Open Projects tab with no project selected → verify the empty state still displays correctly.
+8. **Exhaustive rule check:** After implementation, grep for all CSS rules containing `#constitution-preview-content` and verify every single one also contains `#projects-preview-content`. Missing even one leaves a visual inconsistency.
+
+## Dependencies
+
+- None — this plan is self-contained within `project.html` and `project.js`.
+
+## Adversarial Synthesis
+
+Key risks: the original plan undercounted the CSS rules (said "22+", actual is 36) — missing 14 rules would leave half-styled markdown. The JS cleanup missed line 1291 (clear) and line 368 (declaration) — leaving dangling references. Mitigations: exact line-number table embedded in plan, all three JS references documented, exhaustive grep verification step added to test plan.
+
+## Recommendation
+
+Complexity 3/10 → **Send to Coder**.

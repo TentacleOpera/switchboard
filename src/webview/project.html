@@ -200,8 +200,17 @@
             height: 100%;
             min-height: 0;
         }
-        #kanban-list-pane, #epics-list-pane, #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane {
+        #kanban-list-pane, #epics-list-pane {
             width: 320px;
+            flex-shrink: 0;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            background: var(--panel-bg);
+        }
+        #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane {
+            width: 240px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
             display: flex;
@@ -743,7 +752,12 @@
         }
 
         .cyber-theme-enabled #kanban-list-pane,
-        .cyber-theme-enabled #epics-list-pane,
+        .cyber-theme-enabled #epics-list-pane {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+        }
         .cyber-theme-enabled #constitution-list-pane,
         .cyber-theme-enabled #system-list-pane,
         .cyber-theme-enabled #tuning-list-pane,
@@ -762,7 +776,8 @@
         .cyber-theme-enabled #kanban-preview-pane,
         .cyber-theme-enabled #epics-preview-pane,
         .cyber-theme-enabled #constitution-preview-pane,
-        .cyber-theme-enabled #tuning-preview-pane {
+        .cyber-theme-enabled #tuning-preview-pane,
+        .cyber-theme-enabled #projects-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
                 linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
@@ -780,7 +795,8 @@
         .cyber-theme-enabled #epics-preview-content code,
         .cyber-theme-enabled #constitution-preview-content code,
         .cyber-theme-enabled #system-preview-content code,
-        .cyber-theme-enabled #tuning-preview-content code {
+        .cyber-theme-enabled #tuning-preview-content code,
+        .cyber-theme-enabled #projects-preview-content code {
             box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
         }
 
@@ -789,7 +805,8 @@
         .cyber-theme-enabled #epics-preview-content pre,
         .cyber-theme-enabled #constitution-preview-content pre,
         .cyber-theme-enabled #system-preview-content pre,
-        .cyber-theme-enabled #tuning-preview-content pre {
+        .cyber-theme-enabled #tuning-preview-content pre,
+        .cyber-theme-enabled #projects-preview-content pre {
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
                          inset 0 0 12px rgba(0, 0, 0, 0.3);
         }
@@ -799,7 +816,8 @@
         .cyber-theme-enabled #epics-preview-content blockquote,
         .cyber-theme-enabled #constitution-preview-content blockquote,
         .cyber-theme-enabled #system-preview-content blockquote,
-        .cyber-theme-enabled #tuning-preview-content blockquote {
+        .cyber-theme-enabled #tuning-preview-content blockquote,
+        .cyber-theme-enabled #projects-preview-content blockquote {
             border-left-color: var(--accent-teal);
             box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
@@ -817,11 +835,13 @@
         body.theme-claudify #constitution-content,
         body.theme-claudify #system-content,
         body.theme-claudify #tuning-content,
+        body.theme-claudify #projects-content,
         body.theme-claudify #kanban-preview-pane,
         body.theme-claudify #epics-preview-pane,
         body.theme-claudify #constitution-preview-pane,
         body.theme-claudify #system-preview-pane,
-        body.theme-claudify #tuning-preview-pane {
+        body.theme-claudify #tuning-preview-pane,
+        body.theme-claudify #projects-preview-pane {
             background-color: #1C1C1C;   /* neutral flat surface (claudify has no glass overlay) */
             background-image:
                 linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
@@ -834,7 +854,8 @@
         body.theme-claudify #epics-preview-content h1,
         body.theme-claudify #constitution-preview-content h1,
         body.theme-claudify #system-preview-content h1,
-        body.theme-claudify #tuning-preview-content h1 {
+        body.theme-claudify #tuning-preview-content h1,
+        body.theme-claudify #projects-preview-content h1 {
             font-family: 'GeistPixel', var(--font-family);
             letter-spacing: -0.05em;
             font-stretch: 90%;
@@ -846,7 +867,8 @@
         body.theme-claudify #epics-preview-content h2, body.theme-claudify #epics-preview-content h3, body.theme-claudify #epics-preview-content h4, body.theme-claudify #epics-preview-content h5, body.theme-claudify #epics-preview-content h6,
         body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6,
         body.theme-claudify #system-preview-content h2, body.theme-claudify #system-preview-content h3, body.theme-claudify #system-preview-content h4, body.theme-claudify #system-preview-content h5, body.theme-claudify #system-preview-content h6,
-        body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6 {
+        body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6,
+        body.theme-claudify #projects-preview-content h2, body.theme-claudify #projects-preview-content h3, body.theme-claudify #projects-preview-content h4, body.theme-claudify #projects-preview-content h5, body.theme-claudify #projects-preview-content h6 {
             font-family: var(--font-family);
             letter-spacing: normal;
             font-stretch: 100%;
@@ -875,7 +897,8 @@
         #epics-preview-content h1, #epics-preview-content h2, #epics-preview-content h3, #epics-preview-content h4, #epics-preview-content h5, #epics-preview-content h6,
         #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6,
         #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6,
-        #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6 {
+        #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6,
+        #projects-preview-content h1, #projects-preview-content h2, #projects-preview-content h3, #projects-preview-content h4, #projects-preview-content h5, #projects-preview-content h6 {
             margin-top: 24px;
             margin-bottom: 12px;
             font-weight: 600;
@@ -888,7 +911,8 @@
         body.cyber-theme-enabled #epics-preview-content h1, body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
         body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
-        body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
+        body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
+        body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             font-family: var(--font-family);
             line-height: 1.1;
         }
@@ -897,7 +921,8 @@
         body.cyber-theme-enabled #epics-preview-content h1,
         body.cyber-theme-enabled #constitution-preview-content h1,
         body.cyber-theme-enabled #system-preview-content h1,
-        body.cyber-theme-enabled #tuning-preview-content h1 {
+        body.cyber-theme-enabled #tuning-preview-content h1,
+        body.cyber-theme-enabled #projects-preview-content h1 {
             color: #ffffff;
         }
         /* Cyber theme — doc preview h2-h6 use accent color */
@@ -905,7 +930,8 @@
         body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
         body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
-        body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6 {
+        body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
+        body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             color: var(--accent-primary);
         }
 
@@ -913,7 +939,8 @@
         #epics-preview-content h1,
         #constitution-preview-content h1,
         #system-preview-content h1,
-        #tuning-preview-content h1 {
+        #tuning-preview-content h1,
+        #projects-preview-content h1 {
             font-size: 2em; /* 2em relative to 14px base = 28px */
             margin-top: 0;
             padding-bottom: 0.3em;
@@ -927,7 +954,8 @@
         #epics-preview-content h2,
         #constitution-preview-content h2,
         #system-preview-content h2,
-        #tuning-preview-content h2 {
+        #tuning-preview-content h2,
+        #projects-preview-content h2 {
             font-size: 1.5em; /* 1.5em relative to 14px base = 21px */
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--accent-teal-dim);
@@ -942,21 +970,25 @@
         #constitution-preview-content h3,
         #system-preview-content h3,
         #tuning-preview-content h3,
+        #projects-preview-content h3,
         #kanban-preview-content h4,
         #epics-preview-content h4,
         #constitution-preview-content h4,
         #system-preview-content h4,
         #tuning-preview-content h4,
+        #projects-preview-content h4,
         #kanban-preview-content h5,
         #epics-preview-content h5,
         #constitution-preview-content h5,
         #system-preview-content h5,
         #tuning-preview-content h5,
+        #projects-preview-content h5,
         #kanban-preview-content h6,
         #epics-preview-content h6,
         #constitution-preview-content h6,
         #system-preview-content h6,
-        #tuning-preview-content h6 {
+        #tuning-preview-content h6,
+        #projects-preview-content h6 {
             text-transform: uppercase;
             color: var(--accent-teal);
         }
@@ -965,7 +997,8 @@
         #epics-preview-content h3,
         #constitution-preview-content h3,
         #system-preview-content h3,
-        #tuning-preview-content h3 {
+        #tuning-preview-content h3,
+        #projects-preview-content h3 {
             font-size: 1.25em; /* 1.25em relative to 14px base = 17.5px */
         }
 
@@ -973,7 +1006,8 @@
         #epics-preview-content h4,
         #constitution-preview-content h4,
         #system-preview-content h4,
-        #tuning-preview-content h4 {
+        #tuning-preview-content h4,
+        #projects-preview-content h4 {
             font-size: 1em;
         }
 
@@ -981,7 +1015,8 @@
         #epics-preview-content h5,
         #constitution-preview-content h5,
         #system-preview-content h5,
-        #tuning-preview-content h5 {
+        #tuning-preview-content h5,
+        #projects-preview-content h5 {
             font-size: 0.875em;
         }
 
@@ -989,7 +1024,8 @@
         #epics-preview-content h6,
         #constitution-preview-content h6,
         #system-preview-content h6,
-        #tuning-preview-content h6 {
+        #tuning-preview-content h6,
+        #projects-preview-content h6 {
             font-size: 0.85em;
         }
 
@@ -997,7 +1033,8 @@
         #epics-preview-content p,
         #constitution-preview-content p,
         #system-preview-content p,
-        #tuning-preview-content p {
+        #tuning-preview-content p,
+        #projects-preview-content p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
             color: var(--text-primary, #e0e0e0);
@@ -1008,7 +1045,8 @@
         #epics-preview-content li,
         #constitution-preview-content li,
         #system-preview-content li,
-        #tuning-preview-content li {
+        #tuning-preview-content li,
+        #projects-preview-content li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
             color: var(--vscode-editor-foreground, #cccccc);
@@ -1019,7 +1057,8 @@
         #epics-preview-content li p,
         #constitution-preview-content li p,
         #system-preview-content li p,
-        #tuning-preview-content li p {
+        #tuning-preview-content li p,
+        #projects-preview-content li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
@@ -1027,7 +1066,8 @@
         #epics-preview-content pre,
         #constitution-preview-content pre,
         #system-preview-content pre,
-        #tuning-preview-content pre {
+        #tuning-preview-content pre,
+        #projects-preview-content pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
             border-radius: 3px;
@@ -1040,7 +1080,8 @@
         #epics-preview-content pre code,
         #constitution-preview-content pre code,
         #system-preview-content pre code,
-        #tuning-preview-content pre code {
+        #tuning-preview-content pre code,
+        #projects-preview-content pre code {
             background: none;
             padding: 0;
             border: none;
@@ -1053,7 +1094,8 @@
         #epics-preview-content code,
         #constitution-preview-content code,
         #system-preview-content code,
-        #tuning-preview-content code {
+        #tuning-preview-content code,
+        #projects-preview-content code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
@@ -1068,7 +1110,8 @@
         #epics-preview-content blockquote,
         #constitution-preview-content blockquote,
         #system-preview-content blockquote,
-        #tuning-preview-content blockquote {
+        #tuning-preview-content blockquote,
+        #projects-preview-content blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
@@ -1081,7 +1124,8 @@
         #epics-preview-content ul, #epics-preview-content ol,
         #constitution-preview-content ul, #constitution-preview-content ol,
         #system-preview-content ul, #system-preview-content ol,
-        #tuning-preview-content ul, #tuning-preview-content ol {
+        #tuning-preview-content ul, #tuning-preview-content ol,
+        #projects-preview-content ul, #projects-preview-content ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
         }
@@ -1091,7 +1135,8 @@
         #epics-preview-content table,
         #constitution-preview-content table,
         #system-preview-content table,
-        #tuning-preview-content table {
+        #tuning-preview-content table,
+        #projects-preview-content table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
             font-size: inherit; /* Inherits from container */
@@ -1101,7 +1146,8 @@
         #epics-preview-content th,
         #constitution-preview-content th,
         #system-preview-content th,
-        #tuning-preview-content th {
+        #tuning-preview-content th,
+        #projects-preview-content th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
             font-weight: 600;
@@ -1112,7 +1158,8 @@
         #epics-preview-content td,
         #constitution-preview-content td,
         #system-preview-content td,
-        #tuning-preview-content td {
+        #tuning-preview-content td,
+        #projects-preview-content td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
             color: var(--vscode-editor-foreground, var(--text-primary));
@@ -1122,7 +1169,8 @@
         #epics-preview-content tr:hover td,
         #constitution-preview-content tr:hover td,
         #system-preview-content tr:hover td,
-        #tuning-preview-content tr:hover td {
+        #tuning-preview-content tr:hover td,
+        #projects-preview-content tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
         }
 
@@ -1130,7 +1178,8 @@
         #epics-preview-content .table-wrapper,
         #constitution-preview-content .table-wrapper,
         #system-preview-content .table-wrapper,
-        #tuning-preview-content .table-wrapper {
+        #tuning-preview-content .table-wrapper,
+        #projects-preview-content .table-wrapper {
             overflow-x: auto;
             max-width: 100%;
             margin-bottom: 16px;
@@ -1141,7 +1190,8 @@
         #epics-preview-content a,
         #constitution-preview-content a,
         #system-preview-content a,
-        #tuning-preview-content a {
+        #tuning-preview-content a,
+        #projects-preview-content a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
         }
@@ -1150,7 +1200,8 @@
         #epics-preview-content a:hover,
         #constitution-preview-content a:hover,
         #system-preview-content a:hover,
-        #tuning-preview-content a:hover {
+        #tuning-preview-content a:hover,
+        #projects-preview-content a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
         }
@@ -1159,7 +1210,8 @@
         #epics-preview-content hr,
         #constitution-preview-content hr,
         #system-preview-content hr,
-        #tuning-preview-content hr {
+        #tuning-preview-content hr,
+        #projects-preview-content hr {
             border: 0;
             height: 1px;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
@@ -1169,7 +1221,8 @@
         #epics-preview-content img,
         #constitution-preview-content img,
         #system-preview-content img,
-        #tuning-preview-content img {
+        #tuning-preview-content img,
+        #projects-preview-content img {
             max-width: 100%;
             max-height: 100%;
             position: relative;
@@ -1442,15 +1495,8 @@
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add">Import</button>
                 <button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>
                 <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">CHAT PROMPT</button>
+                <button id="btn-kanban-autofetch" class="strip-btn" title="Configure auto-fetch of plans from the default branch">⚙ AutoFetch</button>
                 <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
-            </div>
-            <div class="kanban-auto-fetch-strip" style="display: flex; align-items: center; gap: 10px; margin: 4px 0 10px 0; padding: 4px 10px; font-size: 11px; background: var(--vscode-editor-background); border: 1px solid var(--vscode-widget-border); border-radius: 4px;">
-                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; margin: 0;">
-                    <input type="checkbox" id="kanban-auto-fetch-enabled" style="margin: 0; cursor: pointer;" />
-                    <span>Auto-fetch plans from <strong id="kanban-auto-fetch-branch">default branch</strong></span>
-                </label>
-                <button id="btn-plan-auto-fetch-now" class="strip-btn" style="padding: 2px 6px; font-size: 10px;" title="Fetch and fast-forward now">Fetch now</button>
-                <span id="kanban-auto-fetch-status" style="opacity: 0.8; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
             </div>
             <div class="content-row">
                 <div id="kanban-list-pane">
@@ -1494,7 +1540,6 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div class="cyber-scanlines"></div>
-                    <div id="projects-prd-path-hint" style="font-size:10px; font-family:monospace; color:var(--text-secondary); opacity:0.7; margin-bottom:6px;"></div>
                     <div id="projects-preview-pane" class="constitution-preview-pane">
                         <div id="projects-preview-content">
                             <div class="empty-state">Select a project to view its PRD</div>
@@ -1688,6 +1733,37 @@
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
                 <button id="btn-epic-add-subtask-cancel" class="strip-btn">Cancel</button>
                 <button id="btn-epic-add-subtask-submit" class="strip-btn" style="border-color: var(--accent-teal);">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto-Fetch Plans Modal -->
+    <div id="autofetch-modal" class="kanban-log-overlay" style="display: none;">
+        <div class="kanban-log-modal" style="width: 480px;">
+            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                <span>Auto-Fetch Plans</span>
+                <button id="btn-close-autofetch-modal" class="strip-btn" style="padding: 2px 8px;" aria-label="Close">&times;</button>
+            </div>
+            <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+                <!-- Explanation -->
+                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.6; background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px;">
+                    <strong style="color: var(--text-primary);">What this does:</strong><br/>
+                    Periodically fetches the default branch from the <code>origin</code> remote and fast-forwards your local <code>.switchboard/plans/</code> directory to pull in plan files authored by teammates. Only runs when you're on the default branch with a clean working tree. Only applies changes from <strong>trusted authors</strong> (defaults to your git <code>user.email</code>; configurable in VS Code settings under <code>switchboard.planAutoFetch.trustedAuthors</code>). Skips silently on feature branches or dirty trees. Uses exponential backoff on repeated fetch failures.
+                </div>
+                <!-- Enable toggle -->
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 12px;">
+                    <input type="checkbox" id="kanban-auto-fetch-enabled" style="margin: 0; cursor: pointer;" />
+                    <span>Enable auto-fetch from <strong id="kanban-auto-fetch-branch">default branch</strong></span>
+                </label>
+                <!-- Fetch now + status -->
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <button id="btn-plan-auto-fetch-now" class="strip-btn" style="padding: 4px 12px; font-size: 11px;" title="Fetch and fast-forward now">Fetch now</button>
+                    <span id="kanban-auto-fetch-status" style="opacity: 0.8; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+                </div>
+                <!-- Settings hint -->
+                <div style="font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); padding-top: 10px;">
+                    Interval (default 300s), remote, default branch, and trusted authors are configurable in VS Code Settings → Switchboard → Plan Auto Fetch.
+                </div>
             </div>
         </div>
     </div>

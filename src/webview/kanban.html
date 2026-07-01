@@ -4203,11 +4203,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 return;
             }
 
-            // Try to restore saved selection
+            // Priority 1: If activeProjectFilter is set and matches an option, use it.
+            // This ensures the dropdown follows the backend filter (e.g., after project creation
+            // where setProjectFilter was called but the workspace root didn't change).
+            if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
+                const filterRoot = currentWorkspaceRoot;
+                const filterValue = filterRoot + '|' + activeProjectFilter;
+                if ([...select.options].some(o => o.value === filterValue)) {
+                    select.value = filterValue;
+                    // Sync delete button state
+                    const delBtn = document.getElementById('btn-delete-project');
+                    if (delBtn) {
+                        const currentOption = select.selectedOptions?.[0];
+                        const hasProject = !!(currentOption?.dataset?.project) && currentOption.dataset.project !== '__unassigned__';
+                        delBtn.disabled = !hasProject;
+                        delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
+                    }
+                    return;
+                }
+            }
+
+            // Priority 2: Try to restore saved selection (existing behavior)
             if (savedValue && [...select.options].some(o => o.value === savedValue)) {
                 select.value = savedValue;
             } else {
-                // Fall back to current workspace + active project filter
+                // Priority 3: Fall back to current workspace + active project filter (existing behavior)
                 let fallbackRoot = activeWorkspaceFilter
                     ? ((workspaceItems.find(item => getWorkspaceItemRepoScope(item) === activeWorkspaceFilter) || {}).workspaceRoot || currentWorkspaceRoot)
                     : currentWorkspaceRoot;

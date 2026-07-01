@@ -1,5 +1,7 @@
 # Fix: Reduce Sidebar Width for project.html Governance Tabs
 
+**Plan ID:** 9395cf16-b9e4-4ca3-9487-430c91d5fb88
+
 ## Goal
 
 The sidebar width for the Projects, Constitution, System, and Tuning tabs in `project.html` is unnecessarily large (320px — the same as the Kanban Plans and Epics tabs). These governance tabs display simple document lists, not complex plan/epic cards, so they don't need as much horizontal space. Reduce their sidebar width to ~240px to give more room to the preview pane.
@@ -40,9 +42,11 @@ The sidebar width for the Projects, Constitution, System, and Tuning tabs in `pr
 
 ## Edge-Case & Dependency Audit
 
-- **Collapsed sidebar state:** Lines 509-514 and 519-524 have collapsed-state CSS rules that reference the same selectors. These need to be updated to match the split.
-- **Responsive behavior:** The sidebar uses `flex-shrink: 0` so it won't shrink below its set width. Reducing to 240px is safe.
-- **Sidebar toggle button:** The toggle button position is relative to the sidebar; it will automatically adjust.
+- **Collapsed sidebar state:** Lines 509-517 and 519-526 have collapsed-state CSS rules that reference the same selectors. **Verified:** these rules only set padding, overflow, and `display: none` for non-toggle children — they do NOT set width. The collapsed width (40px) is controlled by a separate rule at lines 502-504 (`.content-row.collapsed > :first-child { flex: 0 0 40px !important; }`), which applies to all tabs equally. The collapsed rules at 509-517 and 519-526 can remain as a single rule — no split needed.
+- **Cyber-theme rule:** Lines 745-755 have a cyber-theme rule (`.cyber-theme-enabled #kanban-list-pane, ...`) that references all six pane IDs for background/backdrop-filter/border-color. It does NOT set width, but should be split into two groups for consistency with the width split.
+- **Responsive behavior:** The sidebar uses `flex-shrink: 0` so it won't shrink below its set width. Reducing to 240px is safe. No media queries override sidebar width.
+- **Sidebar toggle button:** The toggle logic in `project.js` uses class selectors (`.sidebar-toggle-btn`, `.content-row`), NOT pane IDs. A width change will NOT break the toggle.
+- **Projects tab wiring:** The `projects-list-pane` ID exists in HTML but is NOT referenced in `project.js` (no corresponding variable). This may indicate the Projects tab is wired differently or is incomplete. Verify the tab is functional before changing its width — if it's a dead pane, the width change is cosmetic on non-functional content.
 - **No dependencies on other files** — this is entirely within `project.html`'s inline CSS.
 
 ## Proposed Changes
@@ -77,22 +81,41 @@ Replace the single rule with two:
 }
 ```
 
-### 2. Update collapsed-state CSS rules
+### 2. Collapsed-state CSS rules — NO SPLIT NEEDED
 
-**File:** `src/webview/project.html` (lines 509-514 and 519-524)
+**File:** `src/webview/project.html` (lines 509-517 and 519-526)
 
-Find any collapsed-state rules that reference the same selectors and split them similarly. For example, if there is:
+**Verified:** The collapsed-state rules at lines 509-517 and 519-526 do NOT set width — they only set padding, overflow, and `display: none` for non-toggle children. The collapsed width (40px) is controlled by a separate universal rule at lines 502-504 (`.content-row.collapsed > :first-child { flex: 0 0 40px !important; }`). These rules can remain as-is — no split needed.
+
+### 3. Split the cyber-theme sidebar rule for consistency
+
+**File:** `src/webview/project.html` (lines 745-755)
+
+The cyber-theme rule references all six pane IDs. While it doesn't set width, split it for consistency:
 
 ```css
-#kanban-list-pane.collapsed, #epics-list-pane.collapsed, #constitution-list-pane.collapsed, #system-list-pane.collapsed, #tuning-list-pane.collapsed, #projects-list-pane.collapsed {
-    width: 0px;
-    /* ... */
+/* Cyber theme — Kanban & Epics */
+.cyber-theme-enabled #kanban-list-pane,
+.cyber-theme-enabled #epics-list-pane {
+    background: rgba(10, 10, 10, 0.70);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+
+/* Cyber theme — Projects, Constitution, System, Tuning */
+.cyber-theme-enabled #constitution-list-pane,
+.cyber-theme-enabled #system-list-pane,
+.cyber-theme-enabled #tuning-list-pane,
+.cyber-theme-enabled #projects-list-pane {
+    background: rgba(10, 10, 10, 0.70);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
 }
 ```
 
-This can remain as a single rule since the collapsed width is the same (0px) for all tabs. Verify that no collapsed rule sets a different non-zero width that needs splitting.
-
-### 3. If architect tab is added
+### 4. If architect tab is added
 
 If the architect tab (from the architect agent plan) is implemented, add `#architect-list-pane` to the narrower sidebar group:
 
@@ -113,3 +136,16 @@ If the architect tab (from the architect agent plan) is implemented, add `#archi
 6. **Visual check — Tuning tab:** Switch to Tuning tab → verify sidebar is 240px.
 7. **Sidebar toggle:** Click the sidebar toggle button on each tab → verify collapse/expand works correctly for both width groups.
 8. **Document list fits:** Verify all document names in the governance tab sidebars are fully visible at 240px (no truncation).
+9. **Projects tab functional check:** Before changing width, verify the Projects tab is actually functional (its pane ID `projects-list-pane` is not referenced in `project.js` — confirm the tab renders content correctly).
+
+## Dependencies
+
+- None — this plan is self-contained within `project.html`'s inline CSS.
+
+## Adversarial Synthesis
+
+Key risks: the `projects-list-pane` ID is not referenced in `project.js`, suggesting the Projects tab may be incompletely wired — verify before changing width. The collapsed width is 40px (not 0px as originally assumed), controlled by a universal rule, so collapsed rules need no split. The cyber-theme rule at 745-755 should be split for consistency. Mitigations: pure CSS change, toggle uses class selectors not IDs, no media queries affect width.
+
+## Recommendation
+
+Complexity 2/10 → **Send to Coder**.

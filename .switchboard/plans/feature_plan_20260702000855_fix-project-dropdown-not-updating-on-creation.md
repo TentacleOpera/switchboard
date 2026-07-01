@@ -1,5 +1,7 @@
 # Fix: New Project Not Showing in project.html Dropdown Until Reopen
 
+**Plan ID:** 4a0192da-b9f9-4f9e-bb7a-048bb9c76b95
+
 ## Goal
 
 When a project is created from the kanban board while `project.html` is already open, the new project does not appear in the project panel's dropdown filters until `project.html` is closed and reopened. The project panel should be notified of the new project in real-time and update its dropdown filters immediately without requiring a manual reload.
@@ -17,12 +19,12 @@ When a project is created from the kanban board while `project.html` is already 
 3. `_refreshBoardImpl` (lines 2210-2406):
    - Fetches updated projects via `db.getProjects()` (line 2341)
    - Fetches `allWorkspaceProjects` via `_getAllWorkspaceProjects()` (line 2342)
-   - Sends `updateWorkspaceSelection` message **only to the kanban webview** (lines 2345-2360)
+   - Sends `updateWorkspaceSelection` message **only to the kanban webview** via `this._panel.webview.postMessage` (lines 2345-2360) — NOTE: the field is `this._panel`, not `this._kanbanWebview` (which does not exist)
 4. `kanban.html` receives `updateWorkspaceSelection` and updates its dropdown (lines 6132-6170)
 
-**The bug:** The `updateWorkspaceSelection` message is sent only to `this._kanbanWebview` (the kanban board's webview). The project panel (`project.html`) is never notified. The project panel maintains its own cache of workspace projects (`_kanbanAllWorkspaceProjects` in `project.js`, line 443-449) which is only updated when it receives a `kanbanPlansReady` message — and that message is only sent when the project panel explicitly requests it via `fetchKanbanPlans` (which happens on tab switch, line 39 in `project.js`).
+**The bug:** The `updateWorkspaceSelection` message is sent only to `this._panel.webview` (the kanban board's webview). The project panel (`project.html`) is never notified. The project panel maintains its own cache of workspace projects (`_kanbanAllWorkspaceProjects` in `project.js`, line 443-449) which is only updated when it receives a `kanbanPlansReady` message — and that message is only sent when the project panel explicitly requests it via `fetchKanbanPlans` (which happens on tab switch, line 39 in `project.js`).
 
-**Root cause:** `KanbanProvider.ts` has a reference to `_planningPanelProvider` (line 198) and can call `postMessageToProjectWebview()` on it, but the `addProject` handler never does this. There is no cross-panel notification mechanism for project creation/deletion events. The project panel's data is stale until the user happens to trigger a `fetchKanbanPlans` by switching tabs or reopening the panel.
+**Root cause:** `KanbanProvider.ts` has a reference to `_planningPanelProvider` (line 198) and `PlanningPanelProvider` has an existing `postMessageToProjectWebview()` method (line 789) that sends messages to `this._projectPanel` (line 71 — NOT `this._projectWebview`, which does not exist). The method includes a `_projectPanelReady` guard and a `_pendingProjectMessages` queue, so it's safe to call even if the panel isn't ready yet. However, the `addProject` handler never calls it. There is no cross-panel notification mechanism for project creation/deletion events. The project panel's data is stale until the user happens to trigger a `fetchKanbanPlans` by switching tabs or reopening the panel.
 
 ## Metadata
 - **Tags:** bug, frontend, backend, kanban, project-creation, dropdown, project-html
@@ -53,50 +55,27 @@ When a project is created from the kanban board while `project.html` is already 
 
 **File:** `src/services/KanbanProvider.ts` (in `addProject` handler, after line 5487)
 
-After `await this._refreshBoard(workspaceRoot);`, add a notification to the project panel:
+After `await this._refreshBoard(workspaceRoot);`, add a notification to the project panel using the EXISTING `postMessageToProjectWebview()` method:
 
 ```typescript
 // After line 5487: await this._refreshBoard(workspaceRoot);
 
 // Notify the project panel (if open) so its dropdown filters update immediately
+// postMessageToProjectWebview has its own _projectPanelReady guard + pending queue,
+// so it's safe to call even if the panel isn't ready yet.
 if (this._planningPanelProvider) {
-    this._planningPanelProvider.notifyProjectListChanged(workspaceRoot);
+    this._planningPanelProvider.postMessageToProjectWebview({
+        type: 'projectListChanged',
+        workspaceRoot: workspaceRoot
+    });
 }
 ```
 
-### 2. Add `notifyProjectListChanged` method to PlanningPanelProvider
+### 2. No new method needed in PlanningPanelProvider
 
-**File:** `src/services/PlanningPanelProvider.ts`
+**File:** `src/services/PlanningPanelProvider.ts` — NO CHANGES
 
-Add a new method that sends a lightweight notification to the project webview:
-
-```typescript
-public notifyProjectListChanged(workspaceRoot?: string): void {
-    if (this._projectWebview) {
-        this._projectWebview.postMessage({
-            type: 'projectListChanged',
-            workspaceRoot: workspaceRoot
-        });
-    }
-}
-```
-
-Alternatively, if a full refresh is simpler and more reliable, trigger the existing `fetchKanbanPlans` flow:
-
-```typescript
-public notifyProjectListChanged(workspaceRoot?: string): void {
-    if (this._projectWebview) {
-        // Trigger a full plans fetch which includes updated project lists
-        this._projectWebview.postMessage({
-            type: 'kanbanPlansReady',
-            requestId: Date.now(),
-            // The project panel will re-request via fetchKanbanPlans
-        });
-    }
-}
-```
-
-**Recommended approach:** Use a dedicated `projectListChanged` message type. The project panel handles it by re-fetching the kanban plans (which includes the updated project list). This is explicit and doesn't conflate with the normal `kanbanPlansReady` response flow.
+The existing `postMessageToProjectWebview()` method (line 789) already handles the `_projectPanelReady` guard and `_pendingProjectMessages` queue. It sends to `this._projectPanel?.webview` (line 71). No new method is needed — just call the existing one directly from KanbanProvider. The `hasProjectPanel()` method (line 781) is also available if an explicit guard is desired, but it's redundant since `postMessageToProjectWebview` already handles the not-ready case.
 
 ### 3. Handle `projectListChanged` message in project.js
 
@@ -117,12 +96,15 @@ This triggers the existing `fetchKanbanPlans` → `kanbanPlansReady` flow, which
 
 **File:** `src/services/KanbanProvider.ts` (in `deleteProject` handler, ~line 5540-5555)
 
-After the existing `_refreshBoard` call, add the same notification:
+After the existing `_refreshBoard` call (line 5551), add the same notification:
 
 ```typescript
-// After the existing _refreshBoard call in deleteProject handler:
+// After line 5551: await this._refreshBoard(workspaceRoot);
 if (this._planningPanelProvider) {
-    this._planningPanelProvider.notifyProjectListChanged(workspaceRoot);
+    this._planningPanelProvider.postMessageToProjectWebview({
+        type: 'projectListChanged',
+        workspaceRoot: workspaceRoot
+    });
 }
 ```
 
@@ -130,10 +112,10 @@ if (this._planningPanelProvider) {
 
 **File:** `src/webview/project.js` (in the `projectListChanged` handler)
 
-If the project panel itself initiated the project creation (rare, but possible), the notification would trigger a redundant refresh. Add a simple debounce:
+If the project panel itself initiated the project creation (rare, but possible), the notification would trigger a redundant refresh. Add a simple debounce (NOTE: this is plain JS, not TypeScript — use `let` without type annotations):
 
 ```javascript
-let _projectListChangedDebounce: number | null = null;
+let _projectListChangedDebounce = null;
 
 case 'projectListChanged':
     if (_projectListChangedDebounce) {
@@ -157,3 +139,15 @@ This ensures that if multiple project changes happen in rapid succession (e.g., 
 5. **Multi-workspace:** Switch to a different workspace in the kanban board → create a project → verify the project appears in the correct workspace's dropdown in project.html.
 6. **Tab switch still works:** After the fix, switch to the Kanban tab in project.html and back → verify the dropdown still refreshes correctly (existing behavior preserved).
 7. **No console errors:** Open browser devtools for the project.html webview → create a project from kanban → verify no JavaScript errors are logged.
+
+## Dependencies
+
+- None — this plan is self-contained. It uses existing infrastructure (`postMessageToProjectWebview`, `fetchKanbanPlans` flow) and adds only a new message type + handler.
+
+## Adversarial Synthesis
+
+Key risks: original plan invented non-existent field names (`this._kanbanWebview`, `this._projectWebview`) and proposed a new method bypassing the existing pending-message queue. Corrected to use the existing `postMessageToProjectWebview()` which already handles the not-ready case. The debounce in project.js must use plain JS syntax (no TypeScript type annotations in a .js file). Mitigations: all field names verified against source, existing infrastructure reused, both addProject and deleteProject covered.
+
+## Recommendation
+
+Complexity 4/10 → **Send to Coder**.

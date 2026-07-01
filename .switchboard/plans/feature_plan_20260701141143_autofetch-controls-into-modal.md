@@ -1,5 +1,7 @@
 # Move Auto-Fetch Controls Into a Modal in project.html Kanban Plans Tab
 
+**Plan ID:** 66adcf76-dc81-4491-9fef-a7a2e5b15809
+
 ## Goal
 
 The auto-fetch controls in the Kanban Plans tab (`project.html`) sit on their own dedicated line — a full-width strip below the controls bar — just to hold a checkbox, a "Fetch now" button, and a status text. This wastes vertical space for a feature most users interact with once (to enable it) and then ignore. 
@@ -49,8 +51,8 @@ No review gate required. This is a UI reorganization + copy addition with no log
 ### Routine
 - Remove the `.kanban-auto-fetch-strip` div from the Kanban tab markup.
 - Add an **AutoFetch** button to the `kanban-controls-strip` (next to Import/Create/Chat Prompt).
-- Add a new modal overlay (reusing the existing `.kanban-log-overlay` / `.kanban-log-modal` pattern already used by the New Epic and Add Subtask modals in the same file) containing: the enable checkbox, the "Fetch now" button, the status text, the resolved branch label, and an explanation section.
-- Add JS to show/hide the modal (open on AutoFetch button click, close on backdrop click / close button / Escape).
+- Add a new modal overlay (reusing the existing `.kanban-log-overlay` / `.kanban-log-modal` pattern already used by the New Epic modal at line 1654 and the Add Subtask modal at line 1677 in the same file — note: the Constitution Paths modal at line 1696 uses a DIFFERENT `.folder-modal` / `.modal-content` pattern and is NOT a reference for this modal) containing: the enable checkbox, the "Fetch now" button, the status text, the resolved branch label, and an explanation section.
+- Add JS to show/hide the modal (open on AutoFetch button click, close on close button). **Clarification:** existing modals in this file (New Epic, Add Subtask) do NOT handle Escape key or backdrop click — they only close via explicit cancel/submit buttons. To match existing conventions, skip Escape and backdrop handling. If added, flag explicitly as a new interaction pattern.
 - The existing `planAutoFetchState` message handler in `project.js` (lines 393–413) already updates the checkbox, branch label, and status text by element ID — these elements just move into the modal, so no handler changes needed.
 
 ### Complex / Risky
@@ -70,7 +72,9 @@ No review gate required. This is a UI reorganization + copy addition with no log
 
 ### File: `src/webview/project.html`
 
-#### 1. Add the AutoFetch button to the controls strip (after the Chat Prompt button, line 1444)
+#### 1. Add the AutoFetch button to the controls strip (after the Chat Prompt button at line 1444, before the search input at line 1445)
+
+The `kanban-controls-strip` starts at line 1425 and closes at line 1446. The CHAT PROMPT button is at line 1444. Insert the AutoFetch button after line 1444 and before line 1445 (the `kanban-search` input):
 
 ```html
 <button id="btn-kanban-autofetch" class="strip-btn" title="Configure auto-fetch of plans from the default branch">⚙ AutoFetch</button>
@@ -80,7 +84,7 @@ No review gate required. This is a UI reorganization + copy addition with no log
 
 Remove the entire `<div class="kanban-auto-fetch-strip">…</div>` block.
 
-#### 3. Add the auto-fetch modal (after the existing modals, near line 1697)
+#### 3. Add the auto-fetch modal (after the Add Subtask modal closes at line 1693, before the Constitution Paths modal at line 1695)
 
 ```html
 <div id="autofetch-modal" class="kanban-log-overlay" style="display: none;">
@@ -136,19 +140,13 @@ if (btnKanbanAutofetch) {
 if (btnCloseAutofetchModal) {
     btnCloseAutofetchModal.addEventListener('click', closeAutofetchModal);
 }
-if (autofetchModal) {
-    autofetchModal.addEventListener('click', (e) => {
-        if (e.target === autofetchModal) closeAutofetchModal();
-    });
-}
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && autofetchModal && autofetchModal.style.display !== 'none') {
-        closeAutofetchModal();
-    }
-});
+// NOTE: No backdrop-click or Escape-key handling — matches existing modal conventions
+// in this file (New Epic and Add Subtask modals only close via explicit buttons).
+// If desired as a future enhancement, add backdrop + Escape handling to ALL modals
+// consistently, not just this one.
 ```
 
-#### 5. Add busy state to "Fetch now" button (enhance the existing handler at line 1822)
+#### 5. Add busy state to "Fetch now" button (ENHANCEMENT — the existing handler at line 1822 has no busy state; this is net-new UX, not preservation)
 
 ```js
 const btnPlanAutoFetchNow = document.getElementById('btn-plan-auto-fetch-now');
@@ -192,3 +190,15 @@ The `kanbanAutoFetchEnabled.addEventListener('change', …)` handler works uncha
 7. **Branch label test:** Confirm the `<strong id="kanban-auto-fetch-branch">` inside the modal shows the resolved branch name (e.g. "main") after a `planAutoFetchState` push.
 8. **Theme test:** Verify the modal renders correctly in both cyber (default) and claudify themes — the `.kanban-log-overlay` / `.kanban-log-modal` classes are theme-agnostic.
 9. **No-regression test:** Confirm the existing Import, Create, Chat Prompt, search, and all filter dropdowns in the controls bar still work — the AutoFetch button addition doesn't shift or break their layout.
+
+## Dependencies
+
+- None — this plan is self-contained within `project.html` and `project.js`.
+
+## Adversarial Synthesis
+
+Key risks: modal insertion point was originally specified inside the Constitution Paths modal (corrected to after line 1693); Escape/backdrop handling would introduce an inconsistent interaction pattern (corrected to match existing conventions); busy-state is net-new UX that must be labeled as enhancement. Mitigations: line numbers verified against source, modal pattern matched to the two `.kanban-log-overlay` modals only, element IDs preserved so existing handlers work unchanged.
+
+## Recommendation
+
+Complexity 3/10 → **Send to Coder**.
