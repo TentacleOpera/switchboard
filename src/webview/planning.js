@@ -4570,18 +4570,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             case 'localTicketFileRead': {
                 if (!msg.success) {
-                    // No local file. Only fall back to a live API fetch when we don't already
-                    // have cached API details — otherwise (detailsFetched true) the cached
-                    // description/comments/attachments stay on screen and we avoid re-fetching
-                    // on every selection / poll tick. This is critical now that readLocalTicketFile
-                    // is sent on every selection and on the 4s safety-net poll.
-                    const existing = msg.provider === 'clickup'
-                        ? clickUpTaskDetailCache.get(msg.id)
-                        : linearIssueDetailCache.get(msg.id);
-                    if (!existing || !existing.detailsFetched) {
-                        if (msg.provider === 'clickup') loadClickUpTaskDetails(msg.id);
-                        else loadLinearTaskDetails(msg.id);
-                    }
+                    // No local file — the card-click handler already dispatched a
+                    // parallel linearLoadTaskDetails / clickupLoadTaskDetails request.
+                    // Do NOT fire a redundant second fetch.
                     break;
                 }
                 // Strip leading H1 — the render function always prepends <h1>title</h1> itself
@@ -4617,6 +4608,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     };
                     linearIssueDetailCache.set(msg.id, selectedLinearIssue);
                 }
+                // Clear any stale error — the local description is already displayed,
+                // so a supplementary API failure is not a total failure.
+                clearTicketsStatus();
                 renderTicketsTab();
                 break;
             }
@@ -5156,7 +5150,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // Subtask data has now arrived — activate drill-down if the user clicked
                 // this parent and it has subtasks.
                 _maybeEnterDrillDown('linear', msg.issue.id);
-                if (!ticketsEditMode) renderTicketsTab();
+                if (!ticketsEditMode) {
+                    clearTicketsStatus();
+                    renderTicketsTab();
+                }
                 break;
             }
             case 'clickupSpacesLoaded':
@@ -5301,7 +5298,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // Subtask data has now arrived — activate drill-down if the user clicked
                 // this parent and it has subtasks.
                 _maybeEnterDrillDown('clickup', msg.task.id);
-                if (!ticketsEditMode) renderTicketsTab();
+                if (!ticketsEditMode) {
+                    clearTicketsStatus();
+                    renderTicketsTab();
+                }
                 break;
             }
             case 'clickupError': {
@@ -5324,7 +5324,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         break;
                 }
                 setTicketsLoadingState(false);
-                showTicketsError(msg.error || 'ClickUp request failed');
+                if (msg.scope === 'task' && selectedClickUpIssue?.localDescription) {
+                    if (msg.kind === 'deleted') {
+                        // Local copy is a stale snapshot of a deleted ticket — warn visibly.
+                        showTicketsError('This ticket was deleted from ClickUp. Showing the local copy, which may be out of date.');
+                    } else {
+                        // Supplementary fetch (comments/attachments) failed — not a total failure.
+                        showTicketsStatus('Could not load live comments/attachments — ' + (msg.error || 'ClickUp unavailable'), false);
+                    }
+                } else {
+                    showTicketsError(msg.error || 'ClickUp request failed');
+                }
                 renderTicketsTab();
                 break;
             }
@@ -5337,7 +5347,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         break;
                 }
                 setTicketsLoadingState(false);
-                showTicketsError(msg.error || 'Linear request failed');
+                if (msg.scope === 'task' && selectedLinearIssue?.localDescription) {
+                    if (msg.kind === 'deleted') {
+                        showTicketsError('This issue was deleted from Linear. Showing the local copy, which may be out of date.');
+                    } else {
+                        showTicketsStatus('Could not load live comments/attachments — ' + (msg.error || 'Linear unavailable'), false);
+                    }
+                } else {
+                    showTicketsError(msg.error || 'Linear request failed');
+                }
                 renderTicketsTab();
                 break;
             }
