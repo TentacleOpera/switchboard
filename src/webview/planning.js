@@ -1174,6 +1174,7 @@
         _restoredPanelState.panel['docs.root'] = e.target.value;
         persistTab('docs.root', state.docsWorkspaceRootFilter);
         rerenderUnifiedDocs();
+        updatePrdButtonState();
     });
 
     document.getElementById('docs-cache-mode')?.addEventListener('change', (e) => {
@@ -1353,6 +1354,7 @@
         }
         if (tabName === 'docs') {
             vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
+            vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
         }
         if (tabName === 'html') {
             const root = state.planningHtmlWorkspaceRootFilter || (_workspaceItems[0] && _workspaceItems[0].workspaceRoot) || '';
@@ -6428,6 +6430,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
         _kanbanWorkspaceItems = msg.workspaceItems || [];
         _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects || {};
+        updatePrdButtonState();
         _kanbanAvailableColumns = msg.columns || [];  // NEW: store available columns
 
         if (kanbanFilters.workspaceRoot && !_kanbanWorkspaceItems.some(ws => ws.workspaceRoot === kanbanFilters.workspaceRoot)) {
@@ -6839,6 +6842,20 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const btnSetPrd = document.getElementById('btn-set-prd');
     const btnSetConstitution = document.getElementById('btn-set-constitution');
 
+    function getActiveDocsWorkspace() {
+        return state.docsWorkspaceRootFilter || (window._workspaceItems && window._workspaceItems[0]?.workspaceRoot) || '';
+    }
+
+    function updatePrdButtonState() {
+        if (!btnSetPrd) return;
+        const activeWorkspace = getActiveDocsWorkspace();
+        const projects = _kanbanAllWorkspaceProjects[activeWorkspace] || [];
+        btnSetPrd.disabled = projects.length === 0;
+        btnSetPrd.title = btnSetPrd.disabled
+            ? 'No projects in this workspace yet — create one in the Projects tab first.'
+            : "Copy the open document into a project's PRD. You'll choose the project; if it already has a PRD you can keep, append, or replace it.";
+    }
+
     function checkProjectContextEnabled(workspaceRoot, callback) {
         // We listen to the projectContextEnabled echo message
         const listener = (event) => {
@@ -6858,7 +6875,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                 showStatus('Wait for document preview to load.', true);
                 return;
             }
-            const activeWorkspace = state.docsWorkspaceRootFilter || (window._workspaceItems && window._workspaceItems[0]?.workspaceRoot) || '';
+            const activeWorkspace = getActiveDocsWorkspace();
             if (!activeWorkspace) {
                 showStatus('Select a workspace root first.', true);
                 return;

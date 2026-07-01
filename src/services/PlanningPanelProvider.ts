@@ -1070,7 +1070,7 @@ export class PlanningPanelProvider {
 
     /**
      * Post a message to BOTH the project panel and the planning panel webviews.
-     * The Docs-tab "Set as Requirements / Set as Constitution" actions run in the
+     * The Docs-tab "Save as PRD / Save as Constitution" actions run in the
      * planning panel (`this._panel`) but reuse handlers that were originally wired
      * to the project panel (`this._projectPanel`). Replying to only one panel left
      * the planning-panel listeners dead (collision detection, success status, and
@@ -3114,7 +3114,7 @@ export class PlanningPanelProvider {
                     if (requestId !== this._latestRequestIds.get(guardKey)) { break; }
                     allPlans.sort((a, b) => b.mtime - a.mtime);
                     mergedColumns.sort((a, b) => a.order - b.order);
-                    this._projectPanel?.webview.postMessage({
+                    this._postToBothPanels({
                         type: 'kanbanPlansReady',
                         plans: allPlans,
                         workspaceItems,
@@ -3125,7 +3125,7 @@ export class PlanningPanelProvider {
                     });
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(guardKey)) {
-                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err) });
+                        this._postToBothPanels({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err) });
                     }
                 }
                 break;

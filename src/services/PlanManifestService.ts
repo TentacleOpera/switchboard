@@ -151,8 +151,9 @@ export class PlanManifestService {
                 this._attempts.delete(workspaceRoot);
                 result.consumed = true; // consumed by force-drop
                 result.deferred = 0;
+            } else {
+                log?.(`[PlanManifest] Applied ${result.applied}, deferred ${result.deferred} (manifest retained for retry).`);
             }
-            log?.(`[PlanManifest] Applied ${result.applied}, deferred ${result.deferred} (manifest retained for retry).`);
             return result;
         }
 
@@ -213,12 +214,12 @@ export class PlanManifestService {
         // ── kanbanColumn (stale-manifest guard: only override if still CREATED) ──
         if (entry.kanbanColumn) {
             if (VALID_KANBAN_COLUMNS.has(entry.kanbanColumn)) {
-                if (plan.kanbanColumn === 'CREATED') {
+                if (plan.kanbanColumn === 'CREATED' && entry.kanbanColumn !== plan.kanbanColumn) {
                     const moved = await db.movePlanByPlanFile(entry.planFile, workspaceId, entry.kanbanColumn);
                     if (!moved) {
                         log?.(`[PlanManifest] movePlanByPlanFile failed for ${entry.planFile} → ${entry.kanbanColumn}`);
                     }
-                } else if (plan.kanbanColumn !== entry.kanbanColumn) {
+                } else if (plan.kanbanColumn !== 'CREATED' && plan.kanbanColumn !== entry.kanbanColumn) {
                     log?.(`[PlanManifest] Stale-manifest guard: ${entry.planFile} already at '${plan.kanbanColumn}', not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
                 }
             } else {
@@ -262,11 +263,11 @@ export class PlanManifestService {
             }
         }
         const isEpicVal = entry.isEpic ? 1 : 0;
-        // Only touch epic state when the manifest actually specifies it (isEpic
-        // present OR an epicId link to apply). A manifest that omits both must
-        // leave existing epic state untouched — otherwise a column-only manifest
-        // would clobber an epic's is_epic flag or strip its epic_id.
-        if (entry.isEpic !== undefined || resolvedEpicId) {
+        // Only touch epic state when the manifest carries a positive epic payload
+        // (isEpic === true OR a resolved epicId link). A manifest that sets
+        // isEpic:false with no epicId — the default for Trigger A column-only
+        // manifests — must NOT clobber an existing subtask's epic_id link.
+        if (entry.isEpic === true || resolvedEpicId) {
             const planIdForEpic = entry.planId || plan.planId;
             if (planIdForEpic) {
                 const ok = await db.updateEpicStatus(planIdForEpic, isEpicVal, resolvedEpicId);

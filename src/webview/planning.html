@@ -246,6 +246,15 @@
             font-weight: 600;
         }
 
+        .strip-btn--primary {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        .strip-btn--primary:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+        }
+
         .strip-btn:disabled {
             opacity: 0.4;
             cursor: not-allowed;
@@ -3458,8 +3467,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button id="btn-edit" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel" class="strip-btn" style="display:none;">Cancel</button>
-                <button id="btn-set-prd" class="strip-btn" style="background: var(--accent-teal-dim); border-color: var(--accent-teal);" title="Set the open document as Project Requirements (PRD)">Set as Requirements (PRD)</button>
-                <button id="btn-set-constitution" class="strip-btn" style="background: var(--accent-teal-dim); border-color: var(--accent-teal);" title="Set the open document as Workspace Constitution">Set as Constitution</button>
+                <button id="btn-set-prd" class="strip-btn strip-btn--primary" disabled title="No projects in this workspace yet — create one in the Projects tab first.">Save as PRD</button>
+                <button id="btn-set-constitution" class="strip-btn strip-btn--primary" title="Copy the open document into this workspace's Constitution. If one already exists you can keep, append, or replace it.">Save as Constitution</button>
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
                 <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status" style="margin-left: 0; display: none;"></span>
