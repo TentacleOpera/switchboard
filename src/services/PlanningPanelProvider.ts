@@ -32,6 +32,8 @@ import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
 import { getProjectPrdPath } from './prdUtils';
 import { PlanAutoFetchService } from './PlanAutoFetchService';
+import { classifyHttpError } from './errorMessages';
+
 
 
 export interface PlanningPanelAdapterFactories {
@@ -1976,6 +1978,30 @@ export class PlanningPanelProvider {
             }
         }
         return null;
+    }
+
+    private _rewriteLocalImagePaths(markdown: string, baseDir: string): string {
+        return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
+            const trimmed = url.trim();
+            // Leave remote, data, and already-webview URIs alone
+            if (/^(https?:|data:|vscode-resource:|vscode-webview-resource:|vscode-webview:)/i.test(trimmed)) {
+                return match;
+            }
+            try {
+                let absPath: string;
+                if (/^file:\/\/\//i.test(trimmed)) {
+                    absPath = vscode.Uri.parse(trimmed).fsPath;
+                } else {
+                    absPath = path.resolve(baseDir, trimmed);
+                }
+                if (!fs.existsSync(absPath)) { return match; } // don't rewrite missing files
+                const webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath));
+                if (!webviewUri) { return match; }
+                return `![${alt}](${webviewUri.toString()})`;
+            } catch {
+                return match;
+            }
+        });
     }
 
     private _mapClickUpTaskToSidebar(task: any): any {
@@ -4384,7 +4410,8 @@ Please format the updated output document strictly as follows:
                             type: 'linearError',
                             scope: 'task',
                             issueId,
-                            error: `Linear issue ${issueId} was not found.`,
+                            error: `This Linear issue could not be found. It may have been deleted, or your token may lack access to it.`,
+                            kind: 'deleted',
                             workspaceRoot
                         });
                         break;
@@ -4407,12 +4434,16 @@ Please format the updated output document strictly as follows:
                         renderedDescriptionHtml,
                         workspaceRoot
                     });
-                } catch (error) {
+                } catch (error: any) {
+                    const msg = error?.message || String(error);
+                    const statusMatch = msg.match(/HTTP (\d{3})/);
+                    const kind = statusMatch ? classifyHttpError(Number(statusMatch[1])) : 'generic';
                     this._panel?.webview.postMessage({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
-                        error: error instanceof Error ? error.message : String(error),
+                        error: msg,
+                        kind,
                         workspaceRoot
                     });
                 }
@@ -4640,12 +4671,16 @@ Please format the updated output document strictly as follows:
                         renderedDescriptionHtml,
                         workspaceRoot
                     });
-                } catch (error) {
+                } catch (error: any) {
+                    const msg = error?.message || String(error);
+                    const statusMatch = msg.match(/HTTP (\d{3})/);
+                    const kind = statusMatch ? classifyHttpError(Number(statusMatch[1])) : 'generic';
                     this._panel?.webview.postMessage({
                         type: 'clickupError',
                         scope: 'task',
                         taskId: msg.taskId,
-                        error: error instanceof Error ? error.message : 'Failed to load task details',
+                        error: msg,
+                        kind,
                         workspaceRoot
                     });
                 }
@@ -5468,7 +5503,10 @@ Please format the updated output document strictly as follows:
                     const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
                     const h1 = content.match(/^#\s+(.+)$/m);
                     const title = h1 ? h1[1].trim() : id;
-                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: true, title, content });
+                    // Rewrite local image paths to webview-accessible URIs for display only.
+                    // rawContent preserves original local paths for edit mode + push flow.
+                    const displayContent = this._rewriteLocalImagePaths(content, path.dirname(filePath));
+                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: true, title, content: displayContent, rawContent: content });
                 } catch {
                     this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
                 }
@@ -7054,6 +7092,18 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 }
             } catch (err) {}
         }
+        try {
+            const clickupCfg = GlobalIntegrationConfigService.loadConfigSync('clickup');
+            if (clickupCfg?.ticketSaveLocation) {
+                folderUris.push(vscode.Uri.file(clickupCfg.ticketSaveLocation));
+            }
+        } catch {}
+        try {
+            const linearCfg = GlobalIntegrationConfigService.loadConfigSync('linear');
+            if (linearCfg?.ticketSaveLocation) {
+                folderUris.push(vscode.Uri.file(linearCfg.ticketSaveLocation));
+            }
+        } catch {}
 
         const localResourceRoots = [
             vscode.Uri.joinPath(this._extensionUri, 'dist'),
@@ -8601,7 +8651,8 @@ Read the current content above. Determine what's missing. Produce a complete epi
                     const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
                     const h1 = content.match(/^#\s+(.+)$/m);
                     const title = h1 ? h1[1].trim() : id;
-                    this._panel?.webview.postMessage({ type: 'ticketFileChanged', provider, id, title, content });
+                    const displayContent = this._rewriteLocalImagePaths(content, path.dirname(uri.fsPath));
+                    this._panel?.webview.postMessage({ type: 'ticketFileChanged', provider, id, title, content: displayContent });
                 } catch { }
             }, 300));
         };

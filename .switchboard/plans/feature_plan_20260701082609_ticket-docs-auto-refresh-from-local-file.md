@@ -45,26 +45,49 @@ tab focus" path once `detailsFetched` is set. The user's expectation that the ta
 
 ## Metadata
 
-- Tags: `tickets`, `planning-html`, `auto-refresh`, `local-files`, `ux`
-- Complexity: 4/10
-- Files: `src/webview/planning.js`, `src/services/PlanningPanelProvider.ts`
+- **Tags:** frontend, ui, ux, bugfix, feature
+- **Complexity:** 4/10
+
+## User Review Required
+
+Yes — confirm the 4-second safety-net poll interval is acceptable (vs. a longer
+interval such as 8–10s) and that polling only while the Tickets tab is active is the
+desired behaviour (as opposed to polling whenever a ticket is selected regardless of
+tab visibility). Also confirm that tickets without a local `.md` file (subtasks in
+drill-down, API-only tickets never imported) should keep showing the cached API
+description rather than attempting a re-fetch on every refresh tick.
 
 ## Complexity Audit
 
-**Routine.** The building blocks already exist:
+### Routine
 - `readLocalTicketFile` message + `localTicketFileRead` response already re-read the
   file from disk and update the cache + re-render (`planning.js` ~4534,
   `PlanningPanelProvider.ts` ~5453).
 - `ticketFileChanged` watcher path already updates the cache + re-renders.
+- The change is to (a) call the existing `readLocalTicketFile` path on every ticket
+  selection and on tab focus even when `detailsFetched` is true, and (b) add a
+  lightweight safety-net poll while the tab is active. No new backend endpoints, no
+  data-model changes, no migrations.
+- The `_lastTicketsDetailContentHtml` (Linear, line ~9249) and
+  `_lastTicketsClickUpDetailContentHtml` (ClickUp, line ~9748) short-circuits
+  already prevent redundant DOM writes when rendered HTML is unchanged, so the poll
+  produces no flicker on identical content for either provider.
+- The failure-fallback guard (Change #6) is a 3-line conditional inside the existing
+  `localTicketFileRead` handler — no new pattern.
 
-The change is to (a) call the existing `readLocalTicketFile` path on every ticket
-selection and on tab focus even when `detailsFetched` is true, and (b) add a
-lightweight safety-net poll while the tab is active. No new backend endpoints, no
-data-model changes, no migrations.
-
-**Risk:** Low. Re-reading a single small `.md` file on selection is cheap. The
-`detailsFetched` flag must continue to gate API comment/attachment fetches (so we
-don't spam the API), but must NOT gate the local-file re-read.
+### Complex / Risky
+- **Failure-fallback API spam / view wipe (mitigated by Change #6):** The existing
+  `localTicketFileRead` `success: false` branch calls
+  `loadLinearTaskDetails` / `loadClickUpTaskDetails`, which null out the selected
+  issue and fire an API fetch. Without the guard, the new poll + always-read-on-select
+  would re-trigger this every 4s for any ticket without a local file (subtasks in
+  drill-down, deleted files, never-imported tickets), causing API rate-limit spam and
+  a flickering wipe of comments/attachments. Change #6 gates the fallback on
+  `detailsFetched === false` so it only fires when the API data is genuinely missing.
+- Synchronous `fs.readFileSync` on the extension host runs on every poll tick (every
+  4s). This is a pre-existing pattern in the `readLocalTicketFile` handler
+  (PlanningPanelProvider.ts line ~5467); the poll amplifies its frequency but only
+  for a single small `.md` file. Low risk; noted for awareness.
 
 ## Edge-Case & Dependency Audit
 
@@ -73,7 +96,9 @@ don't spam the API), but must NOT gate the local-file re-read.
   re-read while edit mode is active; re-read on `exitTicketsEditMode`.
 - **No local file yet:** `readLocalTicketFile` already returns `success: false` and
   the webview falls back to a live API fetch (`localTicketFileRead` handler line
-  ~4535). This path is preserved.
+  ~4535). This path is preserved **only when `detailsFetched` is false** — see
+  Change #6. When `detailsFetched` is already true, a missing local file is a silent
+  no-op (the cached API description stays on screen).
 - **`localDescription: true` guard:** The `localTicketFileRead` handler sets
   `localDescription: true` so a subsequent API response (for comments/attachments)
   does not overwrite the local description. This must be preserved so re-reading the
@@ -94,6 +119,35 @@ don't spam the API), but must NOT gate the local-file re-read.
   short-circuit).
 - **Workspace root resolution:** `readLocalTicketFile` already uses
   `_resolveWorkspaceRoot`; no change needed.
+- **Subtasks in drill-down:** A subtask selected in drill-down typically has no
+  local `.md` file of its own (subtasks are embedded into the parent's file via
+  `importTicketSubtasks`, not imported as standalone files). The poll's
+  `_refreshSelectedTicketFromFile()` will send `readLocalTicketFile` for the subtask
+  id, which returns `success: false`. Change #6 ensures this does NOT wipe the
+  displayed subtask detail or spam the API when the subtask's details are already
+  cached (`detailsFetched: true`).
+- **Poll timer lifecycle:** The poll timer must be cleared on tab-leave (the `else`
+  branch of `switchToTab`), in `resetTicketsInMemoryState`, and on webview unload
+  (`pagehide` / `beforeunload`) to avoid a leaked interval if the panel is disposed
+  without those paths firing.
+
+## Dependencies
+
+- None. This plan is self-contained within `src/webview/planning.js`. No other
+  session or plan must complete first.
+
+## Adversarial Synthesis
+
+Key risks: (1) the `localTicketFileRead` failure fallback nulls the selected issue
+and fires an API fetch, which the new 4s poll + always-read-on-select would
+re-trigger endlessly for any ticket without a local file (subtasks, deleted files,
+never-imported tickets) — causing API spam and a flickering wipe of
+comments/attachments; (2) synchronous `fs.readFileSync` on the extension host runs
+on every poll tick. Mitigations: Change #6 gates the failure fallback on
+`detailsFetched === false` so missing local files become a silent no-op when API
+data is already cached, defusing both the spam and the flicker in one stroke; the
+sync read is a pre-existing pattern amplified only for a single small file and is
+acceptable, with the poll restricted to the active tab.
 
 ## Proposed Changes
 
@@ -135,6 +189,12 @@ if (!cachedLinear || !cachedLinear.detailsFetched) {
 Apply the same change to the ClickUp branch (~line 8198): always send
 `readLocalTicketFile`; gate only the `clickupLoadTaskDetails` API call on
 `detailsFetched`.
+
+> **Note:** This change is safe ONLY because Change #6 guards the
+> `localTicketFileRead` failure fallback. Without that guard, a ticket with
+> `detailsFetched: true` but no local file would hit the failure path, null the
+> selection, and re-fetch on every click — a regression. Implement Change #6 in the
+> same patch.
 
 ### 2. `src/webview/planning.js` — Re-read selected ticket on tab focus
 
@@ -199,9 +259,18 @@ function _stopTicketsFilePoll() {
   init/load).
 - Call `_stopTicketsFilePoll()` in the `else` branch of `switchToTab` (when leaving
   the tickets tab) and in `resetTicketsInMemoryState`.
+- Add a `window.addEventListener('pagehide', _stopTicketsFilePoll)` (and/or
+  `beforeunload`) so the interval is cleared if the webview is disposed without the
+  tab-leave path firing.
 - The poll re-uses `readLocalTicketFile`; the existing `localTicketFileRead`
   handler skips redundant DOM writes when rendered HTML is unchanged (via
-  `_lastTicketsDetailContentHtml`), so identical content produces no flicker.
+  `_lastTicketsDetailContentHtml` for Linear at line ~9249 and
+  `_lastTicketsClickUpDetailContentHtml` for ClickUp at line ~9748), so identical
+  content produces no flicker for either provider.
+- **Relies on Change #6:** for a selected ticket without a local file, the poll's
+  `readLocalTicketFile` returns `success: false`; without the guard this would
+  null the selection and fire an API fetch every 4s. Change #6 makes it a no-op
+  when `detailsFetched` is true.
 
 ### 4. `src/webview/planning.js` — Re-read after exiting edit mode
 
@@ -216,7 +285,75 @@ disk on every call and posts `localTicketFileRead`. The existing
 `_setupTicketsViewWatcher` (line ~8568) is retained as the instant-refresh path.
 No backend changes needed.
 
+### 6. `src/webview/planning.js` — Guard the `localTicketFileRead` failure fallback (CRITICAL)
+
+**This is the fix for the API-spam / view-wipe regression identified in adversarial
+review.** The current `localTicketFileRead` handler (~line 4534) unconditionally
+calls `loadLinearTaskDetails` / `loadClickUpTaskDetails` on `success: false`, which
+nulls the selected issue and fires an API fetch. With Changes #1 and #3 now sending
+`readLocalTicketFile` on every selection and every 4s poll, any ticket without a
+local file (subtasks in drill-down, deleted files, never-imported tickets) would
+trigger this fallback repeatedly — wiping the displayed comments/attachments and
+spamming the API.
+
+Guard the fallback so it only fires when the API data is genuinely missing
+(`detailsFetched === false`). When `detailsFetched` is already true, a missing local
+file is a silent no-op: the cached API description stays on screen.
+
+```js
+// BEFORE (~line 4534):
+case 'localTicketFileRead': {
+    if (!msg.success) {
+        // No local file — fall back to live API fetch
+        if (msg.provider === 'clickup') loadClickUpTaskDetails(msg.id);
+        else loadLinearTaskDetails(msg.id);
+        break;
+    }
+    // ... existing success path unchanged ...
+}
+
+// AFTER:
+case 'localTicketFileRead': {
+    if (!msg.success) {
+        // No local file. Only fall back to a live API fetch when we don't already
+        // have cached API details — otherwise (detailsFetched true) the cached
+        // description/comments/attachments stay on screen and we avoid re-fetching
+        // on every selection / poll tick. This is critical now that readLocalTicketFile
+        // is sent on every selection and on the 4s safety-net poll.
+        const existing = msg.provider === 'clickup'
+            ? clickUpTaskDetailCache.get(msg.id)
+            : linearIssueDetailCache.get(msg.id);
+        if (!existing || !existing.detailsFetched) {
+            if (msg.provider === 'clickup') loadClickUpTaskDetails(msg.id);
+            else loadLinearTaskDetails(msg.id);
+        }
+        break;
+    }
+    // ... existing success path unchanged ...
+}
+```
+
+**Edge cases preserved:**
+- First-ever selection of a ticket with no local file and no cache: `existing` is
+  `undefined` → fallback fires → API fetch proceeds as today.
+- Subsequent selections of the same ticket after API details arrived:
+  `detailsFetched: true` → no-op → no spam, no flicker.
+- Subtask in drill-down with cached details: `detailsFetched: true` → no-op.
+- Ticket whose local file was deleted after import but API details are cached:
+  `detailsFetched: true` → no-op (API description shown).
+
 ## Verification Plan
+
+> **Session constraints:** No compilation step and no automated test run are
+> performed in this session. The verification plan below is for manual execution by
+> the user (or a later session). `npm run compile` is only needed when producing a
+> VSIX for release; `src/` is the source of truth.
+
+### Automated Tests
+- None. The Switchboard webview layer has no unit/integration test harness for
+  `planning.js` message handlers. Verification is manual via an installed VSIX.
+
+### Manual Verification Steps
 
 1. **Manual — external edit reflects instantly (watcher path):**
    - Open the Tickets tab, select a ticket, observe its description.
@@ -258,4 +395,18 @@ No backend changes needed.
 7. **No flicker on identical content:**
    - With a ticket selected and the poll running, leave the file unchanged for ~20s.
      Confirm the detail pane does not flicker or re-render (the
-     `_lastTicketsDetailContentHtml` short-circuit holds).
+     `_lastTicketsDetailContentHtml` / `_lastTicketsClickUpDetailContentHtml`
+     short-circuits hold).
+
+8. **No API spam / no wipe for tickets without a local file (Change #6):**
+   - Select a subtask inside drill-down (no standalone local `.md` file) whose
+     `detailsFetched` is true. Confirm the detail pane does NOT flash to a loading
+     state and no `linearLoadTaskDetails` / `clickupLoadTaskDetails` message is sent
+     on selection or on any 4s poll tick.
+   - Delete a previously-imported ticket's local `.md` file while the ticket is
+     selected and `detailsFetched` is true. Confirm the displayed description
+     (sourced from the API cache) remains on screen and no API refetch is triggered
+     by the poll.
+   - Select a ticket with no local file and no cached details (fresh). Confirm the
+     API fallback DOES fire once (proving the guard only suppresses redundant
+     refetches, not the initial load).

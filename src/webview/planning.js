@@ -562,6 +562,18 @@
         showTicketsStatus(text, true);
     }
 
+    function clearTicketsStatus() {
+        const { ticketsStatusFooter } = getTicketsTabElements();
+        if (window._ticketsFooterTimeout) {
+            clearTimeout(window._ticketsFooterTimeout);
+            window._ticketsFooterTimeout = null;
+        }
+        if (ticketsStatusFooter) {
+            ticketsStatusFooter.textContent = '';
+            ticketsStatusFooter.style.display = 'none';
+        }
+    }
+
     // ── Comment Manager functions ──────────────────────────────────
 
     function openCommentManager(provider, id) {
@@ -1111,6 +1123,26 @@
         return document.querySelector('.shared-tab-btn.active')?.dataset.tab === 'tickets';
     }
 
+    let _ticketsFilePollTimer = null;
+    function _startTicketsFilePoll() {
+        _stopTicketsFilePoll();
+        _ticketsFilePollTimer = setInterval(() => {
+            if (!isTicketsTabActive()) { _stopTicketsFilePoll(); return; }
+            _refreshSelectedTicketFromFile();
+        }, 4000);
+    }
+    function _stopTicketsFilePoll() {
+        if (_ticketsFilePollTimer) { clearInterval(_ticketsFilePollTimer); _ticketsFilePollTimer = null; }
+    }
+    function _refreshSelectedTicketFromFile() {
+        if (ticketsEditMode) return; // never clobber an active edit
+        if (lastIntegrationProvider === 'linear' && selectedLinearIssue?.issue?.id) {
+            vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: selectedLinearIssue.issue.id, workspaceRoot: ticketsWorkspaceRoot });
+        } else if (lastIntegrationProvider === 'clickup' && selectedClickUpIssue?.task?.id) {
+            vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: selectedClickUpIssue.task.id, workspaceRoot: ticketsWorkspaceRoot });
+        }
+    }
+
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
         const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
         if (!select) return;
@@ -1344,9 +1376,14 @@
                 loadLocalTicketFiles();
             } else {
                 renderTicketsTab();
+                // re-read the currently-selected ticket's local file on tab focus
+                // so an external edit made while the tab was hidden is reflected.
+                _refreshSelectedTicketFromFile();
             }
+            _startTicketsFilePoll();
         } else {
             if (ticketsInitialized) { saveTicketsState(); }
+            _stopTicketsFilePoll();
         }
     }
 
@@ -4533,14 +4570,24 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             case 'localTicketFileRead': {
                 if (!msg.success) {
-                    // No local file — fall back to live API fetch
-                    if (msg.provider === 'clickup') loadClickUpTaskDetails(msg.id);
-                    else loadLinearTaskDetails(msg.id);
+                    // No local file. Only fall back to a live API fetch when we don't already
+                    // have cached API details — otherwise (detailsFetched true) the cached
+                    // description/comments/attachments stay on screen and we avoid re-fetching
+                    // on every selection / poll tick. This is critical now that readLocalTicketFile
+                    // is sent on every selection and on the 4s safety-net poll.
+                    const existing = msg.provider === 'clickup'
+                        ? clickUpTaskDetailCache.get(msg.id)
+                        : linearIssueDetailCache.get(msg.id);
+                    if (!existing || !existing.detailsFetched) {
+                        if (msg.provider === 'clickup') loadClickUpTaskDetails(msg.id);
+                        else loadLinearTaskDetails(msg.id);
+                    }
                     break;
                 }
                 // Strip leading H1 — the render function always prepends <h1>title</h1> itself
-                const localBodyMarkdown = (msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
-                const rendered = renderMarkdown(localBodyMarkdown);
+                const editMarkdown = (msg.rawContent || msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
+                const previewMarkdown = (msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
+                const rendered = renderMarkdown(previewMarkdown);
                 // Local file is the source of truth for description. localDescription: true
                 // prevents the API response from overwriting it when it arrives.
                 if (msg.provider === 'clickup') {
@@ -4551,7 +4598,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         comments: existing?.comments || [],
                         attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered,
-                        descriptionMarkdown: localBodyMarkdown,
+                        descriptionMarkdown: editMarkdown,
                         localDescription: true,
                         detailsFetched: existing?.detailsFetched || false
                     };
@@ -4564,7 +4611,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         comments: existing?.comments || [],
                         attachments: existing?.attachments || [],
                         renderedDescriptionHtml: rendered,
-                        descriptionMarkdown: localBodyMarkdown,
+                        descriptionMarkdown: editMarkdown,
                         localDescription: true,
                         detailsFetched: existing?.detailsFetched || false
                     };
@@ -8179,35 +8226,26 @@ Instructions:
                 }
                 if (linearId) {
                     const cachedLinear = linearIssueDetailCache.get(linearId);
-                    // Only skip the API fetch when full details were actually fetched.
-                    // A file-change stub (detailsFetched falsy, comments: []) must NOT
-                    // short-circuit, or comments/attachments would never load.
-                    if (cachedLinear && cachedLinear.detailsFetched) {
+                    // Always read the local file fresh on selection — the local .md is the source of
+                    // truth for the description. Render the cached snapshot instantly (if any) for
+                    // responsiveness, then the localTicketFileRead response updates it.
+                    if (cachedLinear) {
                         selectedLinearIssue = cachedLinear;
                         renderTicketsLinearPanel();
-                    } else {
-                        // Render the cached description instantly (if any) while we fetch.
-                        if (cachedLinear) {
-                            selectedLinearIssue = cachedLinear;
-                            renderTicketsLinearPanel();
-                        }
-                        // Local file for fast description, API for comments/attachments
-                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: linearId, workspaceRoot: ticketsWorkspaceRoot });
+                    }
+                    vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id: linearId, workspaceRoot: ticketsWorkspaceRoot });
+                    // Only fetch comments/attachments from the API once per session (detailsFetched).
+                    if (!cachedLinear || !cachedLinear.detailsFetched) {
                         vscode.postMessage({ type: 'linearLoadTaskDetails', issueId: linearId, workspaceRoot: ticketsWorkspaceRoot || undefined });
                     }
                 } else if (clickUpId) {
                     const cachedClickUp = clickUpTaskDetailCache.get(clickUpId);
-                    if (cachedClickUp && cachedClickUp.detailsFetched) {
+                    if (cachedClickUp) {
                         selectedClickUpIssue = cachedClickUp;
                         renderTicketsClickUpPanel();
-                    } else {
-                        // Render the cached description instantly (if any) while we fetch.
-                        if (cachedClickUp) {
-                            selectedClickUpIssue = cachedClickUp;
-                            renderTicketsClickUpPanel();
-                        }
-                        // Local file for fast description, API for comments/attachments
-                        vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
+                    }
+                    vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id: clickUpId, workspaceRoot: ticketsWorkspaceRoot });
+                    if (!cachedClickUp || !cachedClickUp.detailsFetched) {
                         vscode.postMessage({ type: 'clickupLoadTaskDetails', taskId: clickUpId, workspaceRoot: ticketsWorkspaceRoot || undefined });
                     }
                 }
@@ -8526,7 +8564,7 @@ Instructions:
         const comments = issue.comments || [];
         const attachments = issue.attachments || [];
         let html = `<h1 id="ticket-edit-title" contenteditable="true" spellcheck="true" style="border:1px solid var(--border-color);outline:none;border-radius:4px;padding:4px 8px;">${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
-        html += `<textarea id="ticket-edit-description" spellcheck="true" style="width:100%;box-sizing:border-box;outline:none;border:none;padding:16px;min-height:480px;line-height:1.6;font-family:var(--vscode-editor-font-family,monospace);font-size:13px;resize:vertical;background:var(--panel-bg);color:var(--text-primary,#ddd);">${escapeHtml(descMarkdown)}</textarea>`;
+        html += `<textarea id="ticket-edit-description" class="markdown-editor" spellcheck="true" style="min-height:480px;height:auto;resize:vertical;white-space:pre-wrap;line-height:1.6;">${escapeHtml(descMarkdown)}</textarea>`;
 
         if (comments.length > 0) {
             html += '<h3 style="user-select:none;">Comments</h3>';
@@ -8560,6 +8598,7 @@ Instructions:
         _lastTicketsClickUpDetailContentHtml = '';
         _lastTicketsDetailContentHtml = '';
         renderTicketsTab();
+        _refreshSelectedTicketFromFile();
     }
 
     function renderTicketsTab() {
@@ -9982,6 +10021,7 @@ Instructions:
     // ===== STATE PERSISTENCE =====
 
     function resetTicketsInMemoryState() {
+        _stopTicketsFilePoll();
         ticketsEditMode = false;
         _ticketsEditBackupHtml = null;
         linearIssueDetailCache.clear();
@@ -10361,4 +10401,7 @@ Instructions:
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
     vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
+
+    window.addEventListener('pagehide', _stopTicketsFilePoll);
+    window.addEventListener('beforeunload', _stopTicketsFilePoll);
 })();

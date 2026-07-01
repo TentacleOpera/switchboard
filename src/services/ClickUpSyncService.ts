@@ -13,6 +13,8 @@ import {
 } from '../models/PipelineDefinition';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { stampMarker, truncateForComment } from './commentMarker';
+import { localizeHttpError } from './errorMessages';
+
 
 export interface ClickUpConfig {
   workspaceId: string;
@@ -1230,7 +1232,7 @@ export class ClickUpSyncService {
       `/task/${normalizedTaskId}?include_subtasks=true&include_markdown_description=true`
     );
     if (taskResult.status !== 200) {
-      throw new Error(`Failed to fetch ClickUp task ${normalizedTaskId}: ${taskResult.status}`);
+      throw new Error(localizeHttpError(taskResult.status, 'clickup', 'fetch this ticket from ClickUp'));
     }
 
     const task = this._normalizeClickUpTask(taskResult.data);

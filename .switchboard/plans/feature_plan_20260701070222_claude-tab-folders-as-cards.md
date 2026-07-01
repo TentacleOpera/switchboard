@@ -240,5 +240,9 @@ The `renderGroup` function inside the old `renderClaudeDocs` (lines ~4612–4657
 7. **Sidebar collapse**: Collapse the sidebar via the toggle button. Confirm the Claude tab collapses cleanly (no orphaned folder cards visible).
 8. **Collapse-state persistence**: Expand/collapse a few Claude folder accordions, click "Set target" (triggers re-render). Confirm the expand/collapse state of each folder is preserved after the re-render.
 
+## Review Findings
+
+Reviewed the implementation in `src/webview/design.js`: `renderClaudeDocs` (4560-4624), `createClaudeDocCard` (4542-4558), `renderFolderGroupedDocs` (643-722), and `renderSubfolderGroups` (591-641). The `folderActionsFn` parameter is correctly threaded through all 4 action sites (subfolder helper + 3 branches in `renderFolderGroupedDocs`), the other 4 tabs remain backward-compatible (no 8th arg → default "Link"), and dead code (`renderGroup`, `getFileExt`) is fully removed with no orphaned references. No CRITICAL or MAJOR findings; 4 NITs (redundant `.selected` toggle in `loadClaudePreview`, empty-state wording, subfolder path comparison, double DOM work on doc click) are all pre-approved by the plan or harmless. No code fixes applied. Remaining risk: manual verification via installed VSIX still needed to confirm visual consistency and target-label sync behavior per the plan's manual verification checklist.
+
 ## Recommendation
 Complexity 5/10 → **Send to Coder**.

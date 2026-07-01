@@ -19,7 +19,8 @@ function sanitizeUrl(rawUrl) {
     const schemeMatch = trimmed.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
     if (schemeMatch) {
         const scheme = schemeMatch[1].toLowerCase();
-        if (scheme === 'http' || scheme === 'https' || scheme === 'mailto' || scheme === 'tel') {
+        if (scheme === 'http' || scheme === 'https' || scheme === 'mailto' || scheme === 'tel'
+            || scheme === 'vscode-webview-resource' || scheme === 'vscode-resource' || scheme === 'vscode-webview') {
             return trimmed;
         }
         return '#';

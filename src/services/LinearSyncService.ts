@@ -13,6 +13,8 @@ import {
 } from '../models/PipelineDefinition';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { stampMarker, truncateForComment } from './commentMarker';
+import { localizeHttpError } from './errorMessages';
+
 
 export interface LinearConfig {
   teamId: string;
@@ -1751,7 +1753,7 @@ export class LinearSyncService {
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
           if (res.statusCode !== 200) {
-            return safeReject(new Error(`Linear API HTTP ${res.statusCode}`));
+            return safeReject(new Error(localizeHttpError(res.statusCode, 'linear', 'fetch from Linear')));
           }
           try {
             const parsed = JSON.parse(raw);
