@@ -22,7 +22,7 @@ Three of the six epics independently edit the **same** seam (`RemoteControlServi
 
 1. **Providers:** Remote control is **Notion (primary) + Linear (secondary) only.** ClickUp is **not** a remote-control provider — it stays a push-only stakeholder-visibility mirror. ClickUp epic import/outbound work is out of this program.
 2. **Push fidelity:** **High.** Push propagates **status · content · epic-structure · archive · project-context docs**, across **two entity levels** (card *and* project), for Notion + Linear.
-3. **Foundation:** **Refactor-first.** The Remote Sync Refactor is the trunk; build the clean, declared-capability push seam and consolidate config once (single ~4,000-install migration) before layering features on top. No stopgaps.
+3. **Foundation:** **Refactor-first.** The Remote Sync Refactor is the trunk; build the clean, declared-capability push seam and consolidate config before layering features on top. No stopgaps. **(Audit update: the sync surface is experimental/unshipped — clean break, NO migration; the earlier "avoid a double migration" rationale for refactor-first no longer applies, though the clean-foundation rationale still does.)**
 4. **No feature flag / staged rollout.** Ship directly.
 5. **Codebase context is NOT code-mirroring.** Notion/Linear get **developer docs + workspace constitution + project PRDs** — the curated planning context, not a generated per-file code doc set. The `ContextBundler` repo-walker, per-file pages, and the `codebase_docs_sync` content-hash pipeline are **cut**.
 6. **Context is provider-agnostic and lives in `project.html`.** A new **Dev Docs** tab is added to `project.html`; **all** `project.html` content (Dev Docs + PRDs + constitution) syncs to **both** Notion and Linear. No Notion-specific docs pipeline.
@@ -63,7 +63,7 @@ STEP 1  Remote Sync Refactor 1/3  — declared provider capabilities + unified p
 
 STEP 2  Remote Sync Refactor 2/3  — Notion push (closes the "Notion goes stale" gap)
 
-STEP 3  Remote Sync Refactor 3/3  — config consolidation + Ingest/Full UX + single migration
+STEP 3  Remote Sync Refactor 3/3  — config consolidation + Ingest/Full UX (no migration — experimental surface)
           Remote-tab UX built in its NEW home (project.html, per STEP 0)
 
 STEP 4  (parallel, all re-pointed onto STEPS 1–3)
@@ -124,7 +124,7 @@ High-fidelity push currently lives fragmented across three epics (Notion status+
 
 - **Re-pointing debt (highest risk).** Step-4 plans carry file/line/interface assumptions against today's seam and config. *Mitigation:* before coding each Step-4 plan, update it to the post-refactor seam + consolidated config; navigate by method name (several subtask plans already have stale line numbers).
 - **Push re-fragmentation.** *Mitigation:* enforce the unified push contract — Linear description push and outbound structure are capabilities on STEP 1's dispatch, reviewed against that seam, not separate paths.
-- **Migration (single, consolidated).** Refactor-first is chosen specifically to keep this to one ~4,000-install migration. *Mitigation:* the 3/3 migration must account for the config keys every Step-4 epic introduces (reconciler behavior, auto-archive settings, project-context sync settings) — enumerate them before writing the migration. Preserve legacy `realTimeSyncEnabled` / `completeSyncEnabled` behavior; archive legacy files as `*.migrated.bak`.
+- **Config scope (NOT migration).** The audit found config is already ~2 surfaces (remote-control config is a single `remote.config` blob), not four — and the whole remote-sync surface is **experimental/unshipped**, so per the project rule this is a **clean break: no migration, no legacy-flag preservation, no `*.migrated.bak`.** 3/3 simply defines the consolidated per-board contract as the sole path; the dependent epics add a few keys (startup reconcile, auto-archive, project-context sync) directly to it.
 - **project.html surgery collision.** Remote-tab UX (3/3), Dev Docs, and two tab-moves all land in project.html. *Mitigation:* STEP 0 locks the IA before 3/3's UI phase.
 - **Irreversible Notion writes.** *Mitigation:* the code-level append-by-default guard above.
 
@@ -134,7 +134,7 @@ High-fidelity push currently lives fragmented across three epics (Notion status+
 
 - **Trunk seam:** existing delta-polling / echo-guard orchestration tests still pass after 1/3; `targetColumn === plan.kanbanColumn` no-op and `authoredBySelf` skip remain intact.
 - **Notion push (2/3):** a local column move / content edit / archive writes back to the correct Notion page property/body/archive state; echo guards hold on the new round trip.
-- **Config migration (3/3):** on a pre-refactor install, legacy sync config maps to the consolidated per-board contract; legacy behavior preserved; no data loss; a no-op is idempotent.
+- **Config consolidation (3/3):** the consolidated per-board contract is the sole config path; no migration needed (experimental/unshipped surface — clean break).
 - **Reconciler (Planning Infra):** Manual-mode `restoreFromConfig()` runs exactly one `_poll()` and schedules no timer; Constant-mode unchanged; clean no-op when unconfigured.
 - **Auto-archive:** a plan in the designated column past the threshold auto-moves to Completed + archives locally; the archive propagates to Linear and Notion via push; changing the designated column in setup re-targets the rule; nothing legitimately parked *before* the designated column is touched.
 - **Notion overwrite guard:** writing content/project-docs to a Notion page **with** inline children uses append and does not orphan sub-pages or change existing block IDs; full overwrite occurs only when the page is verified childless.

@@ -1,6 +1,6 @@
 # Remote Sync Refactor (3/3): Config Consolidation + Remote-Tab Ingest/Full UX
 
-> **Scope update (2026-07-01):** The Remote-tab UX built here targets the Remote tab's **new home in `project.html`** — so the Project Context Hub epic's STEP 0 (lock project.html IA) must land first. The consolidated config contract must also account for the config keys the dependent epics add (Manual-mode reconcile, auto-archive rule, project-context sync) so the single ~4,000-install migration covers them. See `feature_plan_20260701_remote-control-production-sequencing.md`.
+> **Scope update (2026-07-01):** The Remote-tab UX built here targets the Remote tab's **new home in `project.html`** — so the Project Context Hub epic's STEP 0 (lock project.html IA) must land first. The consolidated config contract is **smaller than originally scoped** — the audit found remote-control config is already a single blob (~2 surfaces, not 4). The dependent epics add only a few keys (startup reconcile, auto-archive rule, project-context sync). Since the remote-sync surface is **experimental/unshipped, this is a clean break — no migration** (disregard the body's ~4,000-install migration language). See `feature_plan_20260701_remote-control-production-sequencing.md`.
 
 ## Goal
 
