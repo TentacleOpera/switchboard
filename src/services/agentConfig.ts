@@ -25,9 +25,7 @@ export interface CustomAgentAddons {
     useWorktreesPerPlan?: boolean;
 
     // Design doc (planning epic)
-    designDoc?: boolean;
-    designDocLink?: string;
-    designDocContent?: string;
+
 
     // Design System Doc
     designSystemDoc?: boolean;
@@ -192,13 +190,7 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
         if (sanitized) a.customSubagentName = sanitized;
     }
     if (s.useWorktreesPerPlan === true) a.useWorktreesPerPlan = true;
-    if (s.designDoc === true) a.designDoc = true;
-    if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
-    if (!a.designDoc && s.designDocLink) a.designDoc = true;
-    if (s.designDocContent) {
-        const content = String(s.designDocContent).trim();
-        a.designDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
-    }
+
     if (s.designSystemDoc === true) a.designSystemDoc = true;
     if (s.designSystemDocLink) a.designSystemDocLink = String(s.designSystemDocLink).trim();
     if (!a.designSystemDoc && s.designSystemDocLink) a.designSystemDoc = true;

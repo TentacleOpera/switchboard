@@ -3024,20 +3024,7 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
-    private async _resolveGlobalDesignDoc(workspaceRoot: string): Promise<{ designDocLink?: string; designDocContent?: string }> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
-        const designDocLink = designDocEnabled ? (config.get<string>('planner.designDocLink', '') || '').trim() : undefined;
-        if (!designDocLink) return {};
-        let designDocContent: string | undefined;
-        if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
-            try {
-                const notionService = this._getNotionService(workspaceRoot);
-                designDocContent = (await notionService.loadCachedContent()) || undefined;
-            } catch { /* non-fatal */ }
-        }
-        return { designDocLink, designDocContent };
-    }
+
 
     private async _resolveConstitution(workspaceRoot: string, enabled: boolean = true): Promise<{ constitutionLink?: string; constitutionContent?: string }> {
         if (!enabled) return {};
@@ -3137,11 +3124,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ...agentConfig?.addons,
                 ...(roleConfigAddons || {}),
             };
-            if (mergedAddons.designDoc) {
-                const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
-                mergedAddons.designDocLink = designDocLink;
-                mergedAddons.designDocContent = designDocContent;
-            }
+
             if (mergedAddons.designSystemDoc) {
                 const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
                 mergedAddons.designSystemDocLink = designSystemDocLink;
@@ -3221,9 +3204,7 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
             resolvedOptions.workflowFilePathEnabled = promptsConfig.workflowFilePathEnabledByRole?.planner !== false;
 
-            const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
-            resolvedOptions.designDocLink = designDocLink;
-            resolvedOptions.designDocContent = designDocContent;
+
             resolvedOptions.constitutionEnabled = promptsConfig.constitutionEnabled;
             const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
             resolvedOptions.designSystemDocLink = designSystemDocLink;
@@ -3247,12 +3228,9 @@ export class KanbanProvider implements vscode.Disposable {
             // active project's PRD (resolved above into resolvedOptions.prdEnabled and
             // injected via the shared prefix) satisfies this; the legacy global design
             // doc remains a back-compat fallback. Throw ONLY when neither exists.
-            const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
-            if (!designDocLink && !resolvedOptions.prdEnabled) {
-                throw new Error('Acceptance review requires a product requirements baseline: author a PRD for the active project (Projects tab) or attach a legacy Planning Epic in Setup. The workspace constitution, if present, will be enforced as supplementary invariants.');
+            if (!resolvedOptions.prdEnabled) {
+                throw new Error('Acceptance review requires a product requirements baseline: author a PRD for the active project (Projects tab). The workspace constitution, if present, will be enforced as supplementary invariants.');
             }
-            resolvedOptions.designDocLink = designDocLink;
-            resolvedOptions.designDocContent = designDocContent;
 
             // Resolve the workspace constitution for the tester regardless of planner.constitutionEnabled (always-included supplementary invariants when the file exists)
             const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, true);
@@ -3369,8 +3347,7 @@ export class KanbanProvider implements vscode.Disposable {
             leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
             adviseResearchIfUnsure: plannerConfig?.addons?.adviseResearch ?? true,
-            designDocEnabled: plannerConfig?.addons?.designDoc ?? config.get<boolean>('planner.designDocEnabled', false),
-            designDocLink: config.get<string>('planner.designDocLink', ''),
+
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
@@ -3683,12 +3660,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (typeof msg.aggressivePairProgramming === 'boolean') {
                 await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true);
             }
-            if (typeof msg.designDocEnabled === 'boolean') {
-                await config.update('planner.designDocEnabled', msg.designDocEnabled, true);
-            }
-            if (typeof msg.designDocLink === 'string') {
-                await config.update('planner.designDocLink', msg.designDocLink, true);
-            }
+
             if (typeof msg.gitProhibitionEnabled === 'boolean') {
                 await config.update('planner.gitProhibitionEnabled', msg.gitProhibitionEnabled, true);
             }
@@ -8224,9 +8196,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
 
     private _isAcceptanceTesterDesignDocConfigured(): boolean {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        return config.get<boolean>('planner.designDocEnabled', false)
-            && !!(config.get<string>('planner.designDocLink', '') || '').trim();
+        return true;
     }
 
     private async _isAcceptanceTesterActive(workspaceRoot: string): Promise<boolean> {

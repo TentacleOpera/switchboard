@@ -18,7 +18,7 @@ const DEFAULT_VISIBLE_AGENTS = {
 const DEFAULT_ROLE_CONFIG = {
     planner: {
         workflowFilePath: '.agents/workflows/improve-plan.md',
-        addons: { switchboardSafeguards: true, designDoc: false, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, adviseResearch: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true }
+        addons: { switchboardSafeguards: true, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, adviseResearch: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true }
     },
     lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
     coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
@@ -58,7 +58,7 @@ const PROMPT_OVERRIDE_EXCLUDED_KEYS = new Set(['ticket_updater']);
 const ROLE_ADDONS = {
     planner: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-        { id: 'designDoc', label: 'Planning Epic Reference (legacy)', tooltip: 'Legacy planner-only doc — superseded by per-project PRDs (Projects tab + PROJECT CONTEXT toggle). Kept for back-compat.', default: false },
+
         { id: 'constitution', label: 'Project Constitution Reference', tooltip: 'Include project constitution as context for planning', default: false },
         { id: 'designSystemDoc', label: 'Design Doc Reference', tooltip: 'Include design system doc as context', default: false },
         { id: 'aggressivePairProgramming', label: 'Aggressive Pair Programming', tooltip: 'Assume Coder can handle more independently', default: false },

@@ -598,6 +598,16 @@ export function buildKanbanBatchPrompt(
             plannerPrompt += `\n\nPROJECT CONSTITUTION:\nThe following are inviolate rules and invariants for this project:\n\n${constitutionContent}`;
         }
 
+        const designSystemDocLink = options?.designSystemDocLink?.trim();
+        if (designSystemDocLink) {
+            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE:\nThe following design system document provides the project's visual and interaction design specifications. Use it as context for implementation decisions:\n${designSystemDocLink}`;
+        }
+
+        const designSystemDocContent = options?.designSystemDocContent?.trim();
+        if (designSystemDocContent) {
+            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\nThe following is the full content of the project's design system document. Use it as context for implementation decisions:\n\n${designSystemDocContent}`;
+        }
+
         return normalizeNewlines(plannerPrompt);
     }
 
@@ -719,7 +729,7 @@ For each plan:
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 

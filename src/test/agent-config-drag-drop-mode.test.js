@@ -3,20 +3,7 @@ const path = require('path');
 const { parseCustomAgents, parseCustomKanbanColumns, buildKanbanColumns, reweightSequence, parseCustomAgentAddons } = require(path.join(process.cwd(), 'out', 'services', 'agentConfig.js'));
 
 describe('agentConfig — dragDropMode', () => {
-    describe('parseCustomAgentAddons() designDoc backward compatibility', () => {
-        it('sets designDoc: true when designDocLink is populated', () => {
-            const addons = parseCustomAgentAddons({ designDocLink: 'https://notion.so/test' });
-            assert.ok(addons);
-            assert.strictEqual(addons.designDoc, true);
-            assert.strictEqual(addons.designDocLink, 'https://notion.so/test');
-        });
 
-        it('preserves designDoc: true if designDoc is already true', () => {
-            const addons = parseCustomAgentAddons({ designDoc: true, designDocLink: 'https://notion.so/test' });
-            assert.ok(addons);
-            assert.strictEqual(addons.designDoc, true);
-        });
-    });
 
     describe('parseCustomAgentAddons() designSystemDoc fields', () => {
         it('sets designSystemDoc: true when designSystemDocLink is populated', () => {

@@ -35,7 +35,7 @@ async function testConfigAndCacheIo() {
             pageTitle: 'Roadmap',
             setupComplete: true,
             lastFetchAt: '2026-04-01T00:00:00.000Z',
-            designDocUrl: 'https://www.notion.so/acme/123456781234123412341234567890ab'
+
         };
 
         await service.saveConfig(config);
@@ -124,7 +124,7 @@ async function testFetchAndCacheHappyPath() {
             const savedConfig = readJson(service.configPath);
             const cachedContent = readText(service.cachePath);
             assert.strictEqual(savedConfig.pageTitle, 'Integration Spec');
-            assert.strictEqual(savedConfig.designDocUrl, 'https://www.notion.so/acme/Integration-Spec-123456781234123412341234567890ab');
+
             assert.ok(cachedContent.startsWith('# Integration Spec'));
             assert.ok(cachedContent.includes('> Fetched from Notion: https://www.notion.so/acme/Integration-Spec-123456781234123412341234567890ab'));
             assert.ok(cachedContent.includes('Hello **world**'));

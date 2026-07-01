@@ -14,8 +14,6 @@ export interface PlannerPromptWriterOptions {
     getLocalFolderService: (workspaceRoot: string) => LocalFolderService;
     getLinearDocsAdapter: (workspaceRoot: string) => LinearDocsAdapter;
     getClickUpDocsAdapter: (workspaceRoot: string) => ClickUpDocsAdapter;
-    getCacheService: (workspaceRoot: string) => PlanningPanelCacheService;
-    syncDesignDocLinkForActiveSources: (workspaceRoot: string) => Promise<string | null>;
 }
 
 export class PlannerPromptWriter {
@@ -49,14 +47,13 @@ export class PlannerPromptWriter {
     /**
      * Shared logic: write content to the first configured local docs folder.
      * Idempotent by design: same content → same filename → overwrite with identical content.
-     * @param options.skipDesignDocLink - (DEPRECATED) If true, do NOT set the planning epic link (designDocLink). Previously used by removed "Copy Link" feature.
      */
     private async _writeDocToDocsDir(
         workspaceRoot: string,
         content: string,
         docTitle: string,
         sourceId: string,
-        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string; targetFolder?: string } = {}
+        options: { pageOrder?: number; parentDocName?: string; targetFolder?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         const localFolderService = this._options.getLocalFolderService(workspaceRoot);
         const folderPaths = localFolderService.getFolderPaths();
@@ -102,37 +99,7 @@ export class PlannerPromptWriter {
         // Write the doc without front-matter
         await fs.promises.writeFile(newDocPath, content, 'utf8');
 
-        if (!options.skipDesignDocLink) {
-            // Point designDocLink at the structured docs/ path AND enable the feature
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocLink',
-                newDocPath,
-                vscode.ConfigurationTarget.Workspace
-            );
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocEnabled',
-                true,
-                vscode.ConfigurationTarget.Workspace
-            );
 
-            // Multi-source aggregation check
-            let aggregatedPath: string | null = null;
-            try {
-                aggregatedPath = await this._options.syncDesignDocLinkForActiveSources(workspaceRoot);
-            } catch (aggErr) {
-                console.warn('[PlannerPromptWriter] aggregate cache sync failed:', aggErr);
-            }
-
-            const sourceName = this._sourceDisplayName(sourceId);
-            return {
-                success: true,
-                source: sourceId,
-                savedPath: newDocPath,
-                message: aggregatedPath
-                    ? `Planning epic imported and activated from ${sourceName} (aggregated with other active sources)`
-                    : `Planning epic imported and activated from ${sourceName}`
-            };
-        }
 
         return {
             success: true,
@@ -156,7 +123,7 @@ export class PlannerPromptWriter {
         content: string,
         docTitle: string,
         sourceId: string,
-        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string; targetFolder?: string } = {}
+        options: { pageOrder?: number; parentDocName?: string; targetFolder?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existingWrite = this._writeQueue.get(resolvedRoot);
@@ -195,7 +162,7 @@ export class PlannerPromptWriter {
         sourceId: string,
         docId: string,
         docName: string,
-        options: { skipDesignDocLink?: boolean } = {}
+        options: {} = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existingWrite = this._writeQueue.get(resolvedRoot);
@@ -234,7 +201,7 @@ export class PlannerPromptWriter {
     async writeFromCache(
         workspaceRoot: string,
         sourceId: string,
-        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string } = {}
+        options: { pageOrder?: number; parentDocName?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         // Serialize planner prompt writes per workspace to prevent race conditions
         const resolvedRoot = path.resolve(workspaceRoot);
@@ -257,7 +224,7 @@ export class PlannerPromptWriter {
                         }
                         cachePath = GlobalIntegrationConfigService.getGlobalCachePath('notion-cache.md');
                         const notionCfg = await notionService.loadConfig();
-                        docTitle = notionCfg?.pageTitle || notionCfg?.designDocUrl || 'notion';
+                        docTitle = notionCfg?.pageTitle || notionCfg?.pageUrl || 'notion';
                         break;
                     }
                     case 'local-folder': {

@@ -129,8 +129,7 @@ export class PlanningPanelProvider {
     private _activePlanningHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
     private _saveTextDocListener: vscode.Disposable | undefined;
     private _watcherGeneration: number = 0;
-    private _activeDesignDocSourceId: string | null = null;
-    private _activeDesignDocId: string | null = null;
+
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
     // Type-only reference (avoids a runtime circular import with KanbanProvider).
     private _kanbanProvider?: import('./KanbanProvider').KanbanProvider;
@@ -437,7 +436,7 @@ export class PlanningPanelProvider {
             }
         }
 
-        await this._sendActiveDesignDocState();
+
     }
 
     private _getProjectHtml(webview: vscode.Webview): string {
@@ -617,7 +616,7 @@ export class PlanningPanelProvider {
         this._setupInsightsWatcher();
 
         // Send initial active design doc state
-        await this._sendActiveDesignDocState();
+
     }
 
     public async deserializeWebviewPanel(
@@ -742,7 +741,7 @@ export class PlanningPanelProvider {
             this._setupInsightsWatcher();
         }
 
-        await this._sendActiveDesignDocState();
+
     }
 
 
@@ -2756,14 +2755,7 @@ export class PlanningPanelProvider {
                 await vscode.commands.executeCommand('revealFileInOS', folderUri);
                 break;
             }
-            case 'disableDesignDoc': {
-                await this._handleDisableDesignDoc();
-                break;
-            }
-            case 'setActivePlanningContext': {
-                await this._handleSetActivePlanningContext(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.sourceFolder);
-                break;
-            }
+
             case 'linkToDocument': {
                 await this._handleLinkToDocument(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.sourceFolder);
                 break;
@@ -3153,28 +3145,7 @@ export class PlanningPanelProvider {
                 await this._handleFetchKanbanPlanPreview(filePath, requestId);
                 break;
             }
-            case 'setKanbanPlanContext': {
-                const filePath: string = msg.filePath || '';
-                const resolved = path.resolve(filePath);
-                const isAllowed = Array.from(this._getAllowedRoots()).some(r => resolved.startsWith(path.resolve(r)));
-                if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanContextSet', success: false, error: 'File not found or not in workspace' });
-                    break;
-                }
-                try {
-                    await vscode.workspace.getConfiguration('switchboard').update(
-                        'planner.designDocLink', filePath, vscode.ConfigurationTarget.Workspace
-                    );
-                    await vscode.workspace.getConfiguration('switchboard').update(
-                        'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
-                    );
-                    await this._sendActiveDesignDocState();
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanContextSet', success: true });
-                } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanContextSet', success: false, error: String(err) });
-                }
-                break;
-            }
+
             case 'copyKanbanPlanPrompt': {
                 const sessionId = String(msg.sessionId || '');
                 const column = String(msg.column || '');
@@ -6673,32 +6644,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
         }
     }
 
-    private async _handleDisableDesignDoc(): Promise<void> {
-        try {
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocEnabled',
-                false,
-                vscode.ConfigurationTarget.Workspace
-            );
-            // Clear the designDocLink to remove stale references
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocLink',
-                undefined,
-                vscode.ConfigurationTarget.Workspace
-            );
-            this._activeDesignDocSourceId = null;
-            this._activeDesignDocId = null;
-            // Send updated state back to panel
-            await this._sendActiveDesignDocState();
-        } catch (err) {
-            console.error('[PlanningPanelProvider] Failed to disable design doc:', err);
-            this._panel?.webview.postMessage({
-                type: 'activeDesignDocUpdated',
-                planningEpic: { enabled: true, docName: this._getPlanningEpicName() || 'None', sourceId: this._activeDesignDocSourceId, docId: this._activeDesignDocId },
-                error: String(err)
-            });
-        }
-    }
+
 
     private async _handleSetActivePlanningContext(
         workspaceRoot: string,
@@ -6728,53 +6674,6 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 } catch {
                     docPath = null;
                 }
-            } else if (sourceId === 'antigravity') {
-                // For antigravity: docId is already an absolute path to the artifact
-                const localFolderService = this._getLocalFolderService(workspaceRoot);
-                const result = await localFolderService.fetchAntigravityArtifact(docId);
-                if (result.success) {
-                    docPath = docId;
-                } else {
-                    docPath = null;
-                }
-            } else {
-                // For online sources: resolve through the import registry
-                if (this._cacheService) {
-                    const rawSlug = (docName || sourceId)
-                        .toLowerCase()
-                        .replace(/[^a-z0-9]+/g, '_')
-                        .replace(/^_+|_+$/g, '')
-                        .slice(0, 60) || sourceId;
-                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
-                    docPath = await this._cacheService.resolveImportedDocPath(rawSlug, workspaceId);
-                }
-            }
-
-            if (!docPath) {
-                this._panel?.webview.postMessage({ type: 'activeContextSet', success: false, error: 'Document not found' });
-                return;
-            }
-
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocLink', docPath, vscode.ConfigurationTarget.Workspace
-            );
-            await vscode.workspace.getConfiguration('switchboard').update(
-                'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
-            );
-            this._activeDesignDocSourceId = sourceId;
-            this._activeDesignDocId = docId;
-            await this._sendActiveDesignDocState();
-
-            this._panel?.webview.postMessage({ type: 'activeContextSet', success: true });
-        } catch (err) {
-            this._panel?.webview.postMessage({
-                type: 'activeContextSet',
-                success: false,
-                error: String(err)
-            });
-        }
-    }
-
     private async _handleLinkToDocument(
         workspaceRoot: string,
         sourceId: string,
@@ -7067,24 +6966,6 @@ Read the current content above. Determine what's missing. Produce a complete epi
         }
     }
 
-    private _getPlanningEpicName(): string | null {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designDocLink = config.get<string>('planner.designDocLink');
-        if (!designDocLink) return null;
-        return path.basename(designDocLink, '.md');
-    }
-
-
-    private async _sendActiveDesignDocState(): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const enabled = config.get<boolean>('planner.designDocEnabled', false);
-        const docName = enabled ? this._getPlanningEpicName() : null;
-        const payload = {
-            type: 'activeDesignDocUpdated',
-            planningEpic: { enabled, docName: docName || 'None', sourceId: this._activeDesignDocSourceId, docId: this._activeDesignDocId }
-        };
-        this._panel?.webview.postMessage(payload);
-        this._projectPanel?.webview.postMessage(payload);
     }
 
     private _updateWebviewRoots(): void {
@@ -7722,9 +7603,9 @@ Read the current content above. Determine what's missing. Produce a complete epi
             }
             if (finalContent) {
                 // Use provided content directly (for pages that aren't cached)
-                result = await this._plannerPromptWriter.writeContentToDocsDir(workspaceRoot, finalContent, docName, sourceId, { skipDesignDocLink: true });
+                result = await this._plannerPromptWriter.writeContentToDocsDir(workspaceRoot, finalContent, docName, sourceId);
             } else {
-                result = await this._plannerPromptWriter.writeFromPlanningCache(workspaceRoot, sourceId, docId, docName, { skipDesignDocLink: true });
+                result = await this._plannerPromptWriter.writeFromPlanningCache(workspaceRoot, sourceId, docId, docName);
             }
             if (result.success && this._cacheService && result.savedPath) {
                 try {
@@ -7754,7 +7635,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
             this._panel?.webview.postMessage({ type: 'plannerPromptState', ...result });
             // Send updated active design doc state after import
             if (result.success) {
-                await this._sendActiveDesignDocState();
+
             }
         } catch (err) {
             this._panel?.webview.postMessage({ type: 'plannerPromptState', error: String(err) });
@@ -8072,7 +7953,6 @@ Read the current content above. Determine what's missing. Produce a complete epi
                     result.content || '',
                     docName,
                     sourceId,
-                    { skipDesignDocLink: true }
                 );
                 this._lastPanelWriteTimestamp = Date.now();
                 if (writeResult.error) {
@@ -8137,7 +8017,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                                     result.content,
                                     pageDocName,
                                     sourceId,
-                                    { pageOrder: pageIndex, parentDocName: docName, skipDesignDocLink: true }
+                                    { pageOrder: pageIndex, parentDocName: docName }
                                 );
                                 
                                 if (writeResult.success && writeResult.savedPath) {
@@ -8203,7 +8083,6 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 content,
                 docName,
                 sourceId,
-                { skipDesignDocLink: true }
             );
 
             if (writeResult.error) {
@@ -8327,7 +8206,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 contentToWrite,
                 finalDocTitle,
                 'research-clipboard',
-                { skipDesignDocLink: true, targetFolder: resolvedFolder ?? folderPath }
+                { targetFolder: resolvedFolder ?? folderPath }
             );
 
             this._lastPanelWriteTimestamp = Date.now();

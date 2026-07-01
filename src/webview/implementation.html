@@ -1633,7 +1633,7 @@
         let copyPlanLinkTimer = null;
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
-        let lastDesignDocLink = '';
+
         let currentWorkspaceRoot = '';
         const selectArrow = document.querySelector('.select-arrow');
 
@@ -3122,11 +3122,7 @@
                 ));
             }
 
-            // Notion Design Doc is deprecated. Config is still honored behind the scenes, but input UI is hidden.
-            const deprecationMsg = document.createElement('div');
-            deprecationMsg.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); text-align:center; font-family:var(--font-mono); border: 1px dashed var(--border-color); margin: 8px; border-radius: 4px;';
-            deprecationMsg.innerText = 'Notion Design Doc settings are deprecated. Use the Docs tab (Save as PRD / Save as Constitution) to import context instead.';
-            agentListStandard.appendChild(deprecationMsg);
+
 
             // Show empty state if all agents are hidden
             if (agentListStandard.children.length === 0) {
@@ -3143,144 +3139,7 @@
             switchAgentTab(currentAgentTab, false);
         }
 
-        function createNotionPanel() {
-            const container = document.createElement('div');
-            container.className = 'agent-row';
-            container.dataset.panel = 'notion';
 
-            const header = document.createElement('div');
-            header.className = 'row-header';
-            const identity = document.createElement('div');
-            identity.className = 'agent-identity';
-            const name = document.createElement('div');
-            name.className = 'agent-name';
-            name.style.cssText = 'color:var(--text-secondary);';
-            name.innerText = 'NOTION DESIGN DOC';
-            identity.appendChild(name);
-            header.appendChild(identity);
-            container.appendChild(header);
-
-            const desc1 = document.createElement('div');
-            desc1.style.cssText = 'padding:6px 8px 4px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            desc1.innerText = 'Fetch a Notion page and embed its full content in every planner prompt. The page is cached locally.';
-            container.appendChild(desc1);
-
-            const desc2 = document.createElement('div');
-            desc2.style.cssText = 'padding:0 8px 8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            desc2.innerText = 'As an alternative, you can link a regular URL or a local file path. These provide foundational context for planning decisions, appended as a reference link.';
-            container.appendChild(desc2);
-
-            const urlRow = document.createElement('div');
-            urlRow.style.cssText = 'padding:0 8px 4px;';
-            const urlInput = document.createElement('input');
-            urlInput.id = 'notion-url-input';
-            urlInput.type = 'text';
-            urlInput.placeholder = 'https://notion.so/... or /path/to/design.md';
-            urlInput.style.cssText = 'width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:10px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:3px 4px; border-radius:3px;';
-            urlInput.value = lastDesignDocLink;
-            urlRow.appendChild(urlInput);
-            container.appendChild(urlRow);
-
-            const syncRow = document.createElement('div');
-            syncRow.id = 'notion-sync-row';
-            syncRow.style.cssText = 'display:none; align-items:center; gap:8px; padding:0 8px 4px;';
-
-            const syncBtn = document.createElement('button');
-            syncBtn.id = 'notion-sync-btn';
-            syncBtn.style.cssText = 'font-size:11px; padding:3px 8px; cursor:pointer; white-space:nowrap;';
-            syncBtn.innerText = 'Sync from Notion';
-
-            const syncStatus = document.createElement('span');
-            syncStatus.id = 'notion-sync-status';
-            syncStatus.style.cssText = 'font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
-            syncStatus.textContent = 'Not synced';
-
-            syncRow.appendChild(syncBtn);
-            syncRow.appendChild(syncStatus);
-            container.appendChild(syncRow);
-
-            const sizeWarn = document.createElement('div');
-            sizeWarn.id = 'notion-size-warning';
-            sizeWarn.style.cssText = 'display:none; padding:0 8px 4px; font-size:10px; color:var(--accent-orange); font-family:var(--font-mono);';
-            container.appendChild(sizeWarn);
-
-            function isNotionUrl(val) {
-                return val && (val.includes('notion.so') || val.includes('notion.site'));
-            }
-
-            function updateSyncRowVisibility(val) {
-                syncRow.style.display = isNotionUrl(val) ? 'flex' : 'none';
-            }
-
-            function updateConfigStatusLine(url) {
-                const sl = document.getElementById('design-doc-status-line');
-                if (!sl) { return; }
-                sl.textContent = url
-                    ? `Source: ${url.length > 60 ? url.slice(0, 57) + '...' : url}`
-                    : 'Not configured — configure in Planning tab';
-            }
-
-            updateSyncRowVisibility(urlInput.value);
-
-            let urlDebounce = null;
-            urlInput.addEventListener('input', () => {
-                clearTimeout(urlDebounce);
-                urlDebounce = setTimeout(() => {
-                    const val = urlInput.value.trim();
-                    lastDesignDocLink = val;
-                    updateSyncRowVisibility(val);
-                    updateConfigStatusLine(val);
-
-                    if (isNotionUrl(val) && lastNotionSyncedUrl && val !== lastNotionSyncedUrl) {
-                        syncStatus.textContent = 'URL changed — sync required';
-                        syncStatus.style.color = 'var(--accent-orange)';
-                    }
-
-                    vscode.postMessage({ type: 'setDesignDocUrl', url: val });
-                }, 400);
-            });
-
-            let lastNotionSyncedUrl = null;
-            syncBtn.addEventListener('click', () => {
-                const url = urlInput.value.trim();
-                if (!url) { return; }
-                syncBtn.disabled = true;
-                syncBtn.innerText = '⏳ Syncing...';
-                syncStatus.textContent = 'Fetching...';
-                syncStatus.style.color = 'var(--text-secondary)';
-                vscode.postMessage({ type: 'fetchNotionContent', url });
-            });
-
-            container._handleNotionFetchState = function(msg) {
-                syncBtn.disabled = false;
-                syncBtn.innerText = 'Sync from Notion';
-
-                if (msg.error) {
-                    syncStatus.textContent = `⚠️ ${msg.error}`;
-                    syncStatus.style.color = 'var(--accent-orange)';
-                    return;
-                }
-
-                if (msg.syncedAt) {
-                    lastNotionSyncedUrl = msg.pageUrl || null;
-                    const ago = _relativeTime(new Date(msg.syncedAt));
-                    syncStatus.textContent = `✅ Synced ${ago}${msg.pageTitle ? ` — ${msg.pageTitle}` : ''}`;
-                    syncStatus.style.color = 'var(--text-secondary)';
-                    updateConfigStatusLine(msg.pageUrl || urlInput.value.trim());
-                }
-
-                if (msg.charCount && msg.charCount > 40000) {
-                    sizeWarn.style.display = 'block';
-                    sizeWarn.textContent = `⚠️ Content is large (${(msg.charCount / 1000).toFixed(0)}k chars). Consider linking a shorter summary page.`;
-                } else {
-                    sizeWarn.style.display = 'none';
-                }
-            };
-
-            vscode.postMessage({ type: 'getNotionFetchState' });
-
-            return container;
-        }
 
         function createNotebookLMPanel() {
             const container = document.createElement('div');

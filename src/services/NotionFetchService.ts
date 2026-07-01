@@ -12,8 +12,6 @@ export interface NotionConfig {
   pageTitle: string;
   setupComplete: boolean;
   lastFetchAt: string | null;
-  /** Alias for pageUrl — used by extension.ts command handler. */
-  designDocUrl?: string;
 }
 
 export class NotionFetchService {
@@ -606,8 +604,7 @@ export class NotionFetchService {
       pageId,
       pageTitle,
       setupComplete: true,
-      lastFetchAt: new Date().toISOString(),
-      designDocUrl: url
+      lastFetchAt: new Date().toISOString()
     });
     await this.saveCachedContent(fullContent);
 

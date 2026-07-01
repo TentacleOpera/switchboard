@@ -838,8 +838,7 @@ export async function activate(context: vscode.ExtensionContext) {
         getLocalFolderService: (root) => new LocalFolderService(root),
         getLinearDocsAdapter: (root) => (kanbanProvider as any)._getLinearDocsAdapter(root),
         getClickUpDocsAdapter: (root) => (kanbanProvider as any)._getClickUpDocsAdapter(root),
-        getCacheService,
-        syncDesignDocLinkForActiveSources: (root) => (kanbanProvider as any)._syncDesignDocLinkForActiveSources(root)
+        getCacheService
     });
     kanbanProvider!.setPlannerPromptWriter(plannerPromptWriter);
 
@@ -1473,32 +1472,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setNotionTokenDisposable);
 
-    const fetchNotionDesignDocDisposable = vscode.commands.registerCommand('switchboard.fetchNotionDesignDoc', async () => {
-        const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
-        if (!workspaceRoot) {
-            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
-            return;
-        }
-        const service = new NotionFetchService(workspaceRoot, context.secrets);
-        const config = await service.loadConfig();
-        const url = config?.designDocUrl;
-        if (!url) {
-            vscode.window.showWarningMessage('No Notion design doc URL configured. Set one in Switchboard settings.');
-            return;
-        }
-        await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Fetching Notion design doc...', cancellable: false },
-            async () => {
-                const result = await service.fetchAndCache(url);
-                if (!result.success) {
-                    vscode.window.showErrorMessage(`Notion fetch failed: ${result.error}`);
-                } else {
-                    showTemporaryNotification(`Notion design doc fetched (${result.charCount?.toLocaleString()} chars).`);
-                }
-            }
-        );
-    });
-    context.subscriptions.push(fetchNotionDesignDocDisposable);
+
 
     const importFromLinearDisposable = vscode.commands.registerCommand('switchboard.importFromLinear', async () => {
         const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();

@@ -2899,11 +2899,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 
 
                 
-                <label class="checkbox-item" title="Legacy: superseded by per-project PRDs (Projects tab + PROJECT CONTEXT toggle). Kept for back-compat with existing setups.">
-                  <input type="checkbox" id="plannerAddonPlanningEpic">
-                  <span>Planning Epic Reference (legacy)</span>
-                  <span class="tooltip">Legacy planner-only doc. Use per-project PRDs (Projects tab) instead.</span>
-                </label>
+
                 <label class="checkbox-item" title="Include project constitution as context for planning">
                   <input type="checkbox" id="plannerAddonConstitution">
                   <span>Project Constitution Reference</span>
@@ -3306,7 +3302,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
                 document.getElementById('plannerAddonSwitchboardSafeguards').checked = config.addons?.switchboardSafeguards !== false;
 
-                document.getElementById('plannerAddonPlanningEpic').checked = !!config.addons?.designDoc;
+
                 document.getElementById('plannerAddonConstitution').checked = !!config.addons?.constitution;
                 document.getElementById('plannerAddonDesignSystemDoc').checked = !!config.addons?.designSystemDoc;
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
@@ -4061,12 +4057,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonPlanningEpic', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
                         const addonIdMap = {
-                            'plannerAddonPlanningEpic': 'designDoc',
                             'plannerAddonDesignSystemDoc': 'designSystemDoc',
                             'plannerAddonConstitution': 'constitution'
                         };

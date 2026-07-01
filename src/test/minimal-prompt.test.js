@@ -78,17 +78,7 @@ function testDispatchContextAndPlanListAreIncluded() {
     console.log('  PASS: Dispatch context and plan list are included');
 }
 
-function testDesignDocContentAppendedWhenProvided() {
-    console.log('Testing design doc content is appended when provided...');
-    const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agents/workflows/improve-plan.md',
-        designDocContent: 'Pre-fetched Notion content here'
-    });
 
-    assert.ok(prompt.includes('PLANNING EPIC REFERENCE (pre-fetched from Notion)'), 'Prompt should include planning epic content reference');
-    assert.ok(prompt.includes('Pre-fetched Notion content here'), 'Prompt should include the actual design doc content');
-    console.log('  PASS: Design doc content is appended when provided');
-}
 
 function testWorkspaceTypeBlockIncludedForSingleRepo() {
     console.log('Testing workspace type block is included for single-repo...');
@@ -272,7 +262,7 @@ try {
     testGitProhibitionIncludedWhenEnabled();
     testGitProhibitionExcludedWhenDisabled();
     testDispatchContextAndPlanListAreIncluded();
-    testDesignDocContentAppendedWhenProvided();
+
     testWorkspaceTypeBlockIncludedForSingleRepo();
     testBatchExecutionRulesIncludedForMultiPlan();
     testBatchExecutionRulesExcludedForSinglePlan();

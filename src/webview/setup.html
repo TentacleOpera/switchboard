@@ -1522,7 +1522,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastPromptOverrides = {};
         let lastPromptPreviews = {};
         let editingPromptRole = 'planner';
-        let lastDesignDocLink = '';
+
         let currentDbPath = '';
         let workspaceRoot = '';
         let lastPlanIngestionFolder = '';
@@ -2383,7 +2383,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             };
             const payload = {
                 type: 'saveStartupCommands',
-                designDocLink: lastDesignDocLink,
+
                 planIngestionFolder,
                 visibleAgents,
                 gitIgnoreStrategy,
@@ -4636,20 +4636,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
-                case 'designDocSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('design-doc-toggle');
-                        if (toggle) toggle.checked = !!message.enabled;
-                        lastDesignDocLink = message.link || '';
-                        const statusLine = document.getElementById('design-doc-status-line');
-                        if (statusLine) {
-                            statusLine.textContent = lastDesignDocLink
-                                ? `Source: ${lastDesignDocLink.length > 60 ? lastDesignDocLink.slice(0, 57) + '...' : lastDesignDocLink}`
-                                : 'Not configured — configure in Planning tab';
-                        }
-                    });
-                    break;
-                }
+
                 case 'gitIgnoreConfig': {
                     runSetupHydration(() => {
                         const validStrategies = ['targetedGitignore', 'localExclude', 'custom', 'none'];

@@ -197,11 +197,7 @@ function run() {
     console.log('Test 4: Message Handler Verification');
     
     // Verify providers send messages with correct structure
-    expectRegex(
-        taskViewerSource,
-        /designDocSetting/,
-        'Expected TaskViewerProvider to send designDocSetting message'
-    );
+
     expectRegex(
         taskViewerSource,
         /accurateCodingSetting/,
@@ -212,11 +208,7 @@ function run() {
         /defaultPromptOverrides/,
         'Expected TaskViewerProvider to send defaultPromptOverrides message'
     );
-    expectRegex(
-        setupPanelSource,
-        /designDocSetting/,
-        'Expected SetupPanelProvider to send designDocSetting message'
-    );
+
     expectRegex(
         setupPanelSource,
         /accurateCodingSetting/,
@@ -244,16 +236,8 @@ function run() {
         /accurateCodingEnabled/,
         'Expected buildKanbanBatchPrompt to include accurateCodingEnabled flag'
     );
-    expectRegex(
-        taskViewerSource,
-        /designDocLink/,
-        'Expected buildKanbanBatchPrompt to include designDocLink when enabled'
-    );
-    expectRegex(
-        taskViewerSource,
-        /handleGetDesignDocSetting/,
-        'Expected TaskViewerProvider.handleGetDesignDocSetting to exist'
-    );
+
+
     expectRegex(
         taskViewerSource,
         /handleGetAccurateCodingSetting/,
@@ -366,16 +350,8 @@ function run() {
         /pairProgramming\.aggressive/,
         'Expected pairProgramming.aggressive config key'
     );
-    expectRegex(
-        taskViewerSource,
-        /planner\.designDocEnabled/,
-        'Expected planner.designDocEnabled config key'
-    );
-    expectRegex(
-        taskViewerSource,
-        /planner\.designDocLink/,
-        'Expected planner.designDocLink config key'
-    );
+
+
 
     // Verify save functionality exists (saveRoleConfig uses postKanbanMessage)
     expectRegex(

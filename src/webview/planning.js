@@ -37,9 +37,7 @@
         docsSourceFilter: persistedState.docsSourceFilter || ['local', 'clickup', 'linear', 'notion', 'antigravity'],
         localDocsSearch: '',
         onlineDocsSearch: '',
-        activeDesignDocEnabled: false,
-        activeDesignDocSourceId: null,
-        activeDesignDocId: null,
+
         designSystemDocEnabled: false,
         designSystemDocSourceId: null,
         designSystemDocId: null,
@@ -5541,53 +5539,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
     });
 
-    // Active Design Doc Banner handlers
-    const btnDisableDocLocal = document.getElementById('btn-disable-doc-local');
-    const btnDisableDocOnline = document.getElementById('btn-disable-doc-online');
-
     function updateLocalActiveContextButtonState() {
-        // Planning-context setting moved to the Project panel's Epics tab; the
-        // set-context button no longer exists here. Keep the Sync-to-Online button
-        // state in sync, which this function is still relied upon to refresh.
         updateSyncToOnlineButtonState();
-    }
-
-    function updateActiveDocBanner(msg) {
-        // Support both old flat format and new nested format
-        const planningEpic = msg.planningEpic || { enabled: msg.enabled, docName: msg.docName, sourceId: msg.sourceId, docId: msg.docId };
-
-        const bannerLocal = document.getElementById('active-doc-banner-local');
-        const bannerOnline = document.getElementById('active-doc-banner-online');
-        const nameLocal = document.getElementById('active-doc-name-local');
-        const nameOnline = document.getElementById('active-doc-name-online');
-
-        const isEpicActive = planningEpic.enabled && planningEpic.docName;
-        const epicName = planningEpic.docName || 'None';
-
-        if (bannerLocal) {
-            bannerLocal.classList.toggle('inactive', !isEpicActive);
-            if (nameLocal) nameLocal.textContent = epicName;
-        }
-        if (bannerOnline) {
-            bannerOnline.classList.toggle('inactive', !isEpicActive);
-            if (nameOnline) nameOnline.textContent = epicName;
-        }
-
-        state.activeDesignDocEnabled = planningEpic.enabled || false;
-        state.activeDesignDocSourceId = planningEpic.sourceId || null;
-        state.activeDesignDocId = planningEpic.docId || null;
-        updateLocalActiveContextButtonState();
-    }
-
-    function handleDisablePlanningEpic() {
-        vscode.postMessage({ type: 'disableDesignDoc', docType: 'planning-epic' });
-    }
-
-    if (btnDisableDocLocal) {
-        btnDisableDocLocal.addEventListener('click', handleDisablePlanningEpic);
-    }
-    if (btnDisableDocOnline) {
-        btnDisableDocOnline.addEventListener('click', handleDisablePlanningEpic);
     }
 
     // Button handlers

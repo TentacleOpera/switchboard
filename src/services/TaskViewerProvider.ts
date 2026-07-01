@@ -3508,7 +3508,7 @@ Each plan file must include:
     }
 
     private _isAcceptanceTesterDesignDocConfigured(): boolean {
-        return this._isDesignDocEnabled() && this._getDesignDocLink().trim().length > 0;
+        return true;
     }
 
     public handleGetDesignSystemDocSetting(): { enabled: boolean; link: string } {
@@ -4154,12 +4154,7 @@ Each plan file must include:
         return this._isJulesAutoSyncEnabled();
     }
 
-    public handleGetDesignDocSetting(): { enabled: boolean; link: string } {
-        return {
-            enabled: this._isDesignDocEnabled(),
-            link: this._getDesignDocLink()
-        };
-    }
+
 
     /**
      * Re-initializes the plan watcher for a specific workspace root.
@@ -4441,12 +4436,7 @@ Each plan file must include:
             enabled: this.handleGetJulesAutoSyncSetting()
         });
 
-        const designDocSetting = this.handleGetDesignDocSetting();
-        this._view.webview.postMessage({
-            type: 'designDocSetting',
-            enabled: designDocSetting.enabled,
-            link: designDocSetting.link
-        });
+
 
         const designSystemDocSetting = this.handleGetDesignSystemDocSetting();
         this._view.webview.postMessage({
@@ -4552,12 +4542,7 @@ Each plan file must include:
             enabled: this.handleGetCyberScanlinesDisabledSetting()
         });
 
-        const designDocSetting = this.handleGetDesignDocSetting();
-        this._setupPanelProvider.postMessage({
-            type: 'designDocSetting',
-            enabled: designDocSetting.enabled,
-            link: designDocSetting.link
-        });
+
 
         const gitIgnoreConfig = this.handleGetGitIgnoreConfig();
         this._setupPanelProvider.postMessage({ type: 'gitIgnoreConfig', ...gitIgnoreConfig });
@@ -5612,7 +5597,7 @@ Each plan file must include:
             pageTitle: existingConfig?.pageTitle || 'Notion Design Doc',
             setupComplete: true,
             lastFetchAt: existingConfig?.lastFetchAt || null,
-            designDocUrl: existingConfig?.designDocUrl || existingConfig?.pageUrl || ''
+
         });
         return { success: true };
     }
@@ -7964,20 +7949,7 @@ Each plan file must include:
                 await this._persistAutobanState();
                 this._postAutobanState();
             }
-            if (typeof data.designDocEnabled === 'boolean') {
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designDocEnabled',
-                    data.designDocEnabled,
-                    vscode.ConfigurationTarget.Workspace
-                );
-            }
-            if (typeof data.designDocLink === 'string') {
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'planner.designDocLink',
-                    data.designDocLink || undefined,
-                    vscode.ConfigurationTarget.Workspace
-                );
-            }
+
 
             if (typeof data.planIngestionFolder === 'string' && !validationError) {
                 await this._refreshConfiguredPlanWatcher();
@@ -9797,13 +9769,7 @@ Each plan file must include:
                         );
                         break;
                     }
-                    case 'setDesignDocUrl': {
-                        const url: string = data.url || '';
-                        await vscode.workspace.getConfiguration('switchboard').update(
-                            'planner.designDocLink', url, vscode.ConfigurationTarget.Workspace
-                        );
-                        break;
-                    }
+
                     case 'getNotionFetchState': {
                         const wsRoot = this._getWorkspaceRoot();
                         if (!wsRoot) { break; }
@@ -15938,15 +15904,7 @@ What would you like to find?`;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('jules.autoSync', false);
     }
 
-    private _isDesignDocEnabled(): boolean {
-        const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
-        if (plannerConfig?.addons?.designDoc !== undefined) return plannerConfig.addons.designDoc;
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.designDocEnabled', false);
-    }
 
-    private _getDesignDocLink(): string {
-        return vscode.workspace.getConfiguration('switchboard').get<string>('planner.designDocLink', '') || '';
-    }
 
     private _isDesignSystemDocEnabled(): boolean {
         const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
@@ -15958,25 +15916,7 @@ What would you like to find?`;
         return vscode.workspace.getConfiguration('switchboard').get<string>('planner.designSystemDocLink', '') || '';
     }
 
-    private async _getDesignDocContent(workspaceRoot: string): Promise<string | null> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
-        if (!designDocEnabled) { return null; }
 
-        const designDocLink = (config.get<string>('planner.designDocLink', '') || '').trim();
-        if (!designDocLink) { return null; }
-
-        if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
-            const cached = this._notionContentCache.get(workspaceRoot);
-            if (cached !== undefined) { return cached; }
-            const service = this._getNotionService(workspaceRoot);
-            const content = await service.loadCachedContent();
-            this._notionContentCache.set(workspaceRoot, content);
-            return content;
-        }
-
-        return null;
-    }
 
     private _withCoderAccuracyInstruction(basePayload: string): string {
         if (!this._isAccurateCodingEnabled()) {

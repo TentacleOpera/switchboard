@@ -2,8 +2,8 @@
   "version": 1,
   "plans": [
     {
-      "planFile": "feature_plan_20260630_remove-legacy-planner-design-doc.md",
-      "planId": "39168a8b-55c5-4b2f-880a-3ed9ddbc1c71",
+      "planFile": "feature_plan_20260630_settings-persistence-consistency.md",
+      "planId": "2a6d7f11-c4c1-45d0-a0a2-c80a34b8daff",
       "kanbanColumn": "PLAN REVIEWED",
       "status": "active",
       "isEpic": false,

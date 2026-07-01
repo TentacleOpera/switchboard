@@ -180,7 +180,7 @@
     let _pendingAutoEdit = false;
     let _pendingKanbanFilterIntent = null;   // { workspaceRoot, project, column } — applied after dropdowns populate
     let _pendingKanbanSelectionRetries = 0;  // incremented on failed resolution; fallback to widest at 3
-    let _activeEpicName = 'None';
+
     let _activeEpicFilePath = '';
 
     let _constitutionWorkspaces = [];
@@ -225,7 +225,7 @@
  
     const epicsWorkspaceFilter = document.getElementById('epics-workspace-filter');
     const epicsColumnFilter = document.getElementById('epics-column-filter');
-    const btnSetActiveEpic = document.getElementById('btn-set-active-epic');
+
     const btnNewEpic = document.getElementById('btn-new-epic');
     const newEpicModal = document.getElementById('new-epic-modal');
     const newEpicName = document.getElementById('new-epic-name');
@@ -236,9 +236,7 @@
     const epicsPreviewPane = document.getElementById('epics-preview-pane');
     const epicsPreviewContent = document.getElementById('epics-preview-content');
     const epicsEditor = document.getElementById('epics-editor');
-    const activeEpicBanner = document.getElementById('active-epic-banner');
-    const activeEpicNameSpan = document.getElementById('active-epic-name');
-    const btnDisableEpic = document.getElementById('btn-disable-epic');
+
 
     // Intercept clicks on <a> tags inside the rendered epic markdown preview.
     // Subtask links in the auto-generated "## Subtasks" section are rendered as
@@ -652,17 +650,6 @@
                 break;
             case 'epicError':
                 showToast(msg.message || 'Error occurred', 'error');
-                break;
-            case 'activeDesignDocUpdated': {
-                const planningEpic = msg.planningEpic || { enabled: msg.enabled, docName: msg.docName, sourceId: msg.sourceId, docId: msg.docId };
-                _activeEpicName = planningEpic.enabled ? (planningEpic.docName || 'None') : 'None';
-                updateActiveEpicBanner();
-                break;
-            }
-            case 'kanbanContextSet':
-                if (!msg.success) {
-                    showToast('Failed to set active planning context: ' + (msg.error || 'Unknown error'), 'error');
-                }
                 break;
             case 'kanbanPlanColumnChanged':
                 if (msg.success) {
@@ -2066,7 +2053,7 @@
         _epicSelectedPlan = plan;
         _epicPreviewFilePath = plan.planFile || null;
         _epicSubtaskPreview = null;
-        if (btnSetActiveEpic) btnSetActiveEpic.disabled = false;
+
         renderEpicMetaBar(plan);
 
         if (plan.planFile) {
@@ -2352,37 +2339,7 @@
         });
     }
 
-    if (btnSetActiveEpic) {
-        btnSetActiveEpic.addEventListener('click', () => {
-            if (_epicSelectedPlan && _epicSelectedPlan.planFile) {
-                // Reuse the proven kanban-plan context handler, which sets
-                // planner.designDocLink to the plan file path so the epic flows
-                // into planner prompts via the design-doc resolution path.
-                vscode.postMessage({
-                    type: 'setKanbanPlanContext',
-                    filePath: _epicSelectedPlan.planFile
-                });
-            } else {
-                showToast('This epic has no plan file on disk to set as planning context.', 'error');
-            }
-        });
-    }
 
-    if (btnDisableEpic) {
-        btnDisableEpic.addEventListener('click', () => {
-            vscode.postMessage({ type: 'disableDesignDoc' });
-        });
-    }
-
-    function updateActiveEpicBanner() {
-        if (!activeEpicBanner || !activeEpicNameSpan) return;
-        if (_activeEpicName && _activeEpicName !== 'None') {
-            activeEpicBanner.classList.remove('inactive');
-            activeEpicNameSpan.textContent = _activeEpicName;
-        } else {
-            activeEpicBanner.classList.add('inactive');
-        }
-    }
 
     // =========================================================================
     // CONSTITUTION TAB

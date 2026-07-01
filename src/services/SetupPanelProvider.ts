@@ -718,15 +718,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
-                case 'getDesignDocSetting': {
-                    const designDocSetting = this._taskViewerProvider.handleGetDesignDocSetting();
-                    this._panel.webview.postMessage({
-                        type: 'designDocSetting',
-                        enabled: designDocSetting.enabled,
-                        link: designDocSetting.link
-                    });
-                    break;
-                }
+
                 case 'getDesignSystemDocSetting': {
                     const setting = this._taskViewerProvider.handleGetDesignSystemDocSetting();
                     this._panel.webview.postMessage({
