@@ -101,6 +101,21 @@ function testGitProhibitionDisabledForExecutionRoles() {
     console.log('  PASS: Git prohibition is excluded for execution roles when disabled');
 }
 
+function testGitGuardrailCoexistsWithWorktrees() {
+    console.log('Testing git guardrail coexists with worktree directive (no contradiction)...');
+    // Regression: git prohibition used to ban `branch`/`checkout`, which blocked `git worktree add`.
+    // The reframed guardrail must permit worktree creation while both blocks ship together.
+    const prompt = buildKanbanBatchPrompt('coder', plans2, {
+        gitProhibitionEnabled: true,
+        useWorktreesPerPlanEnabled: true
+    });
+    assert.ok(prompt.includes('GIT POLICY'), 'Guardrail should be present');
+    assert.ok(prompt.includes('git worktree'), 'Worktree directive should be present');
+    assert.ok(prompt.includes('git worktree add'), 'Guardrail must explicitly permit worktree creation');
+    assert.ok(!/Do NOT execute state-mutating git commands/.test(prompt), 'Old blanket prohibition wording must be gone');
+    console.log('  PASS: Git guardrail and worktree directive coexist without contradiction');
+}
+
 function testChatCritiqueDirective() {
     console.log('Testing chat critique directive absence...');
     // No role should include the chat critique directive after the bugfix
@@ -331,6 +346,7 @@ try {
     testExecutionDirective();
     testGitProhibitionDirective();
     testGitProhibitionDisabledForExecutionRoles();
+    testGitGuardrailCoexistsWithWorktrees();
     testChatCritiqueDirective();
     testNoRepoContextForUnscopedPlans();
     testSingleWorkingDirectoryContext();
