@@ -85,3 +85,44 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
      - If complexity is 1-3 → "Send to Intern"
      - If complexity is 4-6 → "Send to Coder"
      - If complexity is 7-10 → "Send to Lead Coder"
+
+## Plan-Import Manifest (Trigger A — column transition)
+
+After updating the plan `.md` file(s), emit a **plan-import manifest** so the reviewed plan lands in the correct kanban column on import instead of defaulting to `CREATED`. This is the completion gate: the column move signals "agent done, pipeline may advance."
+
+**When to emit:**
+- **Always (Trigger A):** you have adversarially reviewed a plan → set `kanbanColumn: "PLAN REVIEWED"`.
+- **Also (Trigger B):** if you restructured plans into an epic during review → include `isEpic`/`epicId` links for the epic + subtask set.
+- Pure plan creation with no review and no grouping → no manifest.
+
+**Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced/reviewed). Write it **last**, after all `.md` files.
+
+**v1 schema:**
+```json
+{
+  "version": 1,
+  "plans": [
+    {
+      "planFile": "feature_plan_20260630_foo.md",
+      "planId": "550e8400-e29b-41d4-a716-446655440000",
+      "kanbanColumn": "PLAN REVIEWED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "",
+      "project": "Switchboard"
+    }
+  ]
+}
+```
+
+**Field rules:**
+- `planFile` (**required**): relative path as stored in the DB (e.g. `feature_plan_20260630_foo.md` or `.switchboard/epics/epic-<uuid>.md`). Must resolve inside `.switchboard/plans/` or `.switchboard/epics/`; no `..` or absolute paths.
+- `planId` (recommended): must match the `**Plan ID:** <uuid>` embedded in the `.md` so identity is stable and `epicId` references resolve.
+- `kanbanColumn`: validated against the board's column set. Invalid → skipped (plan stays `CREATED`).
+- `status`: `active` | `archived` | `completed` | `deleted`.
+- `isEpic` / `epicId`: `epicId` references another entry's `planId` (in-batch) or an existing DB epic. Process epics before subtasks (the ingestor sorts automatically).
+- `project`: project name; resolved to `project_id` at ingest (unknown project → kept as denormalized string).
+
+**Stale-manifest guard:** the ingestor only overrides the column when the row is still at `CREATED`; if the user already moved the card, the column override is skipped (epic/project still applied). The manifest is deleted after all entries apply; idempotent if a delete is missed.
+
+**`**Plan ID:**` embedding:** each plan `.md` must embed `**Plan ID:** <uuid>` (and epics use the `epic-<uuid>.md` filename) so `epicId` links resolve and identity is stable across re-imports. Required for Trigger B, recommended for Trigger A.

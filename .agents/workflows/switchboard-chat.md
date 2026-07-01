@@ -24,3 +24,48 @@ When the user references plans, columns, or board state (e.g. "plans in the Crea
 2. **Iterate:** Ask "Why" before "How." Challenge assumptions. Document requirements, edge cases, and risks the user may have missed.
 3. **Plan:** When the "What" and "Why" are clear, draft the implementation plan.
 4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
+
+## Plan-Import Manifest (Trigger B — epic grouping)
+
+Emit a **plan-import manifest** ONLY when you group plans into an epic (or otherwise create an epic + subtask set). Pure consultation that writes loose plans with no grouping → **no manifest** (cards stay `CREATED`, the user moves them). Epic grouping → manifest with `isEpic`/`epicId`/`planId` and `kanbanColumn: "CREATED"` (no transition; the payload is the epic relationships, which span multiple `.md` files and cannot live in any single file's front-matter).
+
+**Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced). Write it **last**, after all `.md` files — this is an atomicity requirement: all epic `.md` rows must exist before links resolve.
+
+**v1 schema:**
+```json
+{
+  "version": 1,
+  "plans": [
+    {
+      "planFile": ".switchboard/epics/epic-77ac0000-aaaa-bbbb-cccc-dddddddddddd.md",
+      "planId": "77ac0000-aaaa-bbbb-cccc-dddddddddddd",
+      "kanbanColumn": "CREATED",
+      "status": "active",
+      "isEpic": true,
+      "epicId": "",
+      "project": "Switchboard"
+    },
+    {
+      "planFile": "feature_plan_20260630_foo.md",
+      "planId": "550e8400-e29b-41d4-a716-446655440000",
+      "kanbanColumn": "CREATED",
+      "status": "active",
+      "isEpic": false,
+      "epicId": "77ac0000-aaaa-bbbb-cccc-dddddddddddd",
+      "project": "Switchboard"
+    }
+  ]
+}
+```
+
+**Field rules:**
+- `planFile` (**required**): relative path as stored in the DB. Must resolve inside `.switchboard/plans/` or `.switchboard/epics/`; no `..` or absolute paths.
+- `planId` (**required for Trigger B**): must match the `**Plan ID:** <uuid>` embedded in the `.md` so `epicId` references resolve. Epics use the `epic-<uuid>.md` filename convention so the epic's `plan_id` is stable across re-imports.
+- `kanbanColumn`: typically `CREATED` for pure grouping; set a transition column only if a stage advance also applies.
+- `status`: `active` | `archived` | `completed` | `deleted`.
+- `isEpic` / `epicId`: `epicId` references another entry's `planId` (in-batch) or an existing DB epic. The ingestor processes epics before subtasks automatically.
+- `project`: project name; resolved to `project_id` at ingest (unknown project → kept as denormalized string).
+
+**`**Plan ID:**` embedding (required for Trigger B):** each plan `.md` must embed `**Plan ID:** <uuid>`, and epics use the `epic-<uuid>.md` filename, so `epicId` links resolve and identity is stable across re-imports.
+
+**Stale-manifest guard:** the ingestor only overrides the column when the row is still at `CREATED`; manual board moves are never reverted. The manifest is deleted after all entries apply; idempotent if a delete is missed.

@@ -4619,19 +4619,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const changedProvider = msg.provider;
                 const isCurrentClickUp = changedProvider === 'clickup' && selectedClickUpIssue?.task?.id === changedId;
                 const isCurrentLinear = changedProvider === 'linear' && selectedLinearIssue?.issue?.id === changedId;
+                // content = rewritten webview URIs (preview); rawContent = original local paths (edit/push).
                 const changedBodyMarkdown = (msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
+                const editBodyMarkdown = (msg.rawContent || msg.content || '').replace(/^#[^\n]*\n?/, '').trim();
                 if (isCurrentClickUp || isCurrentLinear) {
                     const rendered = renderMarkdown(changedBodyMarkdown);
                     let hasChanged = false;
                     if (isCurrentClickUp) {
                         if (selectedClickUpIssue?.renderedDescriptionHtml !== rendered) {
-                            selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
+                            selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: editBodyMarkdown };
                             clickUpTaskDetailCache.set(changedId, selectedClickUpIssue);
                             hasChanged = true;
                         }
                     } else {
                         if (selectedLinearIssue?.renderedDescriptionHtml !== rendered) {
-                            selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: changedBodyMarkdown };
+                            selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: editBodyMarkdown };
                             linearIssueDetailCache.set(changedId, selectedLinearIssue);
                             hasChanged = true;
                         }
@@ -4652,14 +4654,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         clickUpTaskDetailCache.set(changedId, {
                             ...(existing || { task: { id: changedId, title: msg.title, name: msg.title, status: '', assignees: [] }, subtasks: [], comments: [], attachments: [] }),
                             renderedDescriptionHtml: changedRendered,
-                            descriptionMarkdown: changedBodyMarkdown
+                            descriptionMarkdown: editBodyMarkdown
                         });
                     } else {
                         const existing = linearIssueDetailCache.get(changedId);
                         linearIssueDetailCache.set(changedId, {
                             ...(existing || { issue: { id: changedId, title: msg.title, state: { name: '' }, assignee: null }, subtasks: [], comments: [], attachments: [] }),
                             renderedDescriptionHtml: changedRendered,
-                            descriptionMarkdown: changedBodyMarkdown
+                            descriptionMarkdown: editBodyMarkdown
                         });
                     }
                 }

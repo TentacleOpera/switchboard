@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
+import { PlanManifestService } from './PlanManifestService';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
@@ -31,6 +32,9 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _recentRenames = new Set<string>();
     private _recentlyDeletedColumns = new Map<string, { column: string; ts: number }>();
     private _scanSeenPaths = new Map<string, Set<string>>();
+
+    // Plan-Import DB Manifest ingest — dedicated check per periodic cycle.
+    private _manifestService = new PlanManifestService();
 
     // Paths currently being written by _createInitiatedPlan — skip watcher insert to avoid duplicates
     private static _pendingCreations = new Map<string, NodeJS.Timeout>();
@@ -117,6 +121,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 for (const folder of folders) {
                     await this._scanForNewFiles(folder);
                 }
+                // Manifest ingest on startup too — a manifest may have landed while
+                // the extension was unloaded; apply it once rows are seeded.
+                for (const folder of folders) {
+                    await this._processManifest(folder);
+                }
                 this._outputChannel?.appendLine('[GlobalPlanWatcher] Startup scan complete');
             } finally {
                 this._scanInProgress = false;
@@ -146,6 +155,13 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 const folders = await this._getAllMappedFolders();
                 for (const folder of folders) {
                     await this._scanForNewFiles(folder);
+                }
+                // Manifest ingest: explicit dedicated check AFTER the .md import pass,
+                // so plan rows exist before the manifest upgrades them. Runs every cycle
+                // regardless of whether new .md files appeared (the .md pass short-circuits
+                // when nothing is new, but a manifest can land alone).
+                for (const folder of folders) {
+                    await this._processManifest(folder);
                 }
             } finally {
                 this._scanInProgress = false;
@@ -796,9 +812,40 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 await scanDir(epicsDir);
             }
 
+            // Manifest ingest: apply AFTER the .md import pass so rows exist.
+            await this._processManifest(workspaceRoot);
+
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scanned ${processed} files in ${workspaceRoot}`);
         } catch (err) {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scan error in ${workspaceRoot}: ${err}`);
+        }
+    }
+
+    /**
+     * Dedicated manifest ingest for one workspace. Reads
+     * `.switchboard/plans/manifest.json`, validates + applies each entry via the
+     * targeted UPDATE methods on KanbanDatabase (NOT upsertPlans, which cannot
+     * override kanban_column on existing rows), then deletes the manifest once
+     * all entries are applied. Stale-manifest guard: only overrides the column
+     * when the row is still at CREATED, so a manual board move between
+     * manifest-write and consume is never reverted. Staleness guard drops a
+     * manifest that can never resolve (referenced .md never appears) so the scan
+     * loop can't wedge. All validation failures are logged + skipped, never thrown.
+     */
+    private async _processManifest(workspaceRoot: string): Promise<void> {
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            const workspaceId = await db.getWorkspaceId();
+            if (!workspaceId) { return; }
+            await this._manifestService.applyManifest(
+                workspaceRoot,
+                workspaceId,
+                db,
+                (msg) => this._outputChannel?.appendLine(msg)
+            );
+        } catch (err) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manifest processing error in ${workspaceRoot}: ${err}`);
         }
     }
 

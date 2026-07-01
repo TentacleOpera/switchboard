@@ -1828,6 +1828,62 @@ export class KanbanDatabase {
         return this.updateStatusByPlanFile(plan.planFile, plan.workspaceId, status);
     }
 
+    /**
+     * Resolve a project name to its project_id for a workspace. Returns null when
+     * the project is unknown (no matching row in `projects`). Mirrors the lookup
+     * inside `insertFileDerivedPlan` (KanbanDatabase.ts:1383-1395) but exposed for
+     * the manifest ingest path so callers don't duplicate the 8-line block.
+     */
+    public async resolveProjectId(projectName: string, workspaceId: string): Promise<number | null> {
+        if (!(await this.ensureReady()) || !this._db || !projectName) return null;
+        const stmt = this._db.prepare(
+            'SELECT id FROM projects WHERE name = ? AND workspace_id = ?',
+            [projectName, workspaceId]
+        );
+        try {
+            if (stmt.step()) {
+                return Number(stmt.getAsObject().id);
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /**
+     * Narrow targeted UPDATE of project + project_id for a single plan, keyed by
+     * (plan_file, workspace_id). Used by the manifest ingest path. Unknown project
+     * → project_id null + keep the denormalized `project` string (matches the
+     * existing insertFileDerivedPlan COALESCE behavior). Returns false on 0 rows
+     * (race with delete) so the caller can defer.
+     */
+    public async updatePlanProjectByPlanFile(
+        planFile: string,
+        workspaceId: string,
+        projectName: string
+    ): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const projectId = await this.resolveProjectId(projectName, workspaceId);
+        const now = new Date().toISOString();
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.run(
+                'UPDATE plans SET project = ?, project_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [projectName || '', projectId, now, normalized, workspaceId]
+            );
+            const affected = this._db.getRowsModified();
+            await this._persist();
+            if (affected === 0) {
+                console.warn(`[KanbanDatabase] updatePlanProjectByPlanFile: 0 rows affected for planFile=${normalized} (race with delete?)`);
+                return false;
+            }
+            return true;
+        } catch (error) {
+            console.error('[KanbanDatabase] updatePlanProjectByPlanFile failed:', error);
+            return false;
+        }
+    }
+
     public async reviveDeletedPlansByPlanFile(planFiles: Array<{ planFile: string; workspaceId: string }>): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const uniqueEntries = [...new Map(

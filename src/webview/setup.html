@@ -742,6 +742,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3; margin-bottom:12px;">
                             Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call ClickUp directly — it's never sent to any Switchboard server or logged.
                         </div>
+                        <label class="startup-row" style="display:block; margin-bottom:6px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                                Custom Ticket Import Location
+                            </span>
+                            <div style="display:flex; gap:8px; margin-top:4px;">
+                                <input id="clickup-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <button id="btn-browse-clickup-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                            </div>
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Optional. When not set, imported tickets are saved under <code>.switchboard/tickets/clickup/</code> in your workspace. Set a path here only if you want them saved somewhere else. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
+                        </div>
+                        <div style="margin-top:10px; margin-bottom:4px;">
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
+                            </div>
+                        </div>
                         <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
                         <button id="btn-enable-triage-clickup" class="action-btn w-full" style="margin-top: 8px;">⚡ ENABLE TRIAGE PIPELINE (ONE-CLICK)</button>
                         <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
@@ -752,38 +773,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
 
-                    <!-- Section 2: Ticket Import -->
-                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
-                        <div class="subsection-header">
-                            <span>2. Ticket Import</span>
-                        </div>
-                        <label class="startup-row" style="display:block; margin-bottom:6px;">
-                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
-                                Ticket Import Location
-                            </span>
-                            <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input id="clickup-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
-                                <button id="btn-browse-clickup-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
-                            </div>
-                        </label>
-                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                            Required. Choose where imported tickets are saved locally. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
-                        </div>
-                        <div style="margin-top:10px;">
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Section 3: Kanban Board Mapping -->
+                    <!-- Section 2: Kanban Board Mapping -->
                     <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>3. Kanban Board Mapping</span>
+                            <span>2. Kanban Board Mapping</span>
                         </div>
                         <div>
                             <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
@@ -847,10 +840,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         </div>
                     </div>
 
-                    <!-- Section 4: Kanban Automation -->
+                    <!-- Section 3: Kanban Automation -->
                     <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none;">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>4. Kanban Automation</span>
+                            <span>3. Kanban Automation</span>
                         </div>
                         <div>
                             <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
@@ -946,6 +939,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3; margin-bottom:12px;">
                             Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Linear directly — it's never sent to any Switchboard server or logged.
                         </div>
+                        <label class="startup-row" style="display:block; margin-bottom:6px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                                Custom Ticket Import Location
+                            </span>
+                            <div style="display:flex; gap:8px; margin-top:4px;">
+                                <input id="linear-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <button id="btn-browse-linear-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                            </div>
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Optional. When not set, imported tickets are saved under <code>.switchboard/tickets/linear/</code> in your workspace. Set a path here only if you want them saved somewhere else. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
+                        </div>
+                        <div style="margin-top:10px; margin-bottom:4px;">
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
+                            </div>
+                        </div>
                         <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
                         <button id="btn-enable-triage-linear" class="action-btn w-full" style="margin-top: 8px;">⚡ ENABLE TRIAGE PIPELINE (ONE-CLICK)</button>
                         <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
@@ -956,38 +970,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
 
-                    <!-- Section 2: Ticket Import -->
-                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
-                        <div class="subsection-header">
-                            <span>2. Ticket Import</span>
-                        </div>
-                        <label class="startup-row" style="display:block; margin-bottom:6px;">
-                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
-                                Ticket Import Location
-                            </span>
-                            <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input id="linear-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
-                                <button id="btn-browse-linear-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
-                            </div>
-                        </label>
-                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
-                            Required. Choose where imported tickets are saved locally. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
-                        </div>
-                        <div style="margin-top:10px;">
-                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
-                            </label>
-                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Section 3: Kanban Board Mapping -->
+                    <!-- Section 2: Kanban Board Mapping -->
                     <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>3. Kanban Board Mapping</span>
+                            <span>2. Kanban Board Mapping</span>
                         </div>
                         <div>
                             <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
@@ -1050,10 +1036,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         </div>
                     </div>
 
-                    <!-- Section 4: Kanban Automation -->
+                    <!-- Section 3: Kanban Automation -->
                     <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none;">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>4. Kanban Automation</span>
+                            <span>3. Kanban Automation</span>
                         </div>
                         <div>
                             <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
@@ -3528,20 +3514,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'linearBrowseProjects', target: 'exclude' });
         });
         function updateApplyButtonsState() {
+            // Apply gates only on the API token. The ticket-import folder is an
+            // optional custom override (defaults to .switchboard/tickets/<provider>),
+            // lives in a separate section, and is saved by its own saveTicketsFolder
+            // message — it is NOT part of the applyConfig payload, so it must never
+            // block Apply.
             // ClickUp
             const clickupToken = document.getElementById('clickup-token-input')?.value.trim() || '';
-            const clickupFolder = document.getElementById('clickup-ticket-import-folder')?.value.trim() || '';
             const clickupApplyBtn = document.getElementById('btn-apply-clickup-config');
             if (clickupApplyBtn) {
-                clickupApplyBtn.disabled = !clickupToken || !clickupFolder;
+                clickupApplyBtn.disabled = !clickupToken;
             }
 
             // Linear
             const linearToken = document.getElementById('linear-token-input')?.value.trim() || '';
-            const linearFolder = document.getElementById('linear-ticket-import-folder')?.value.trim() || '';
             const linearApplyBtn = document.getElementById('btn-apply-linear-config');
             if (linearApplyBtn) {
-                linearApplyBtn.disabled = !linearToken || !linearFolder;
+                linearApplyBtn.disabled = !linearToken;
             }
         }
 

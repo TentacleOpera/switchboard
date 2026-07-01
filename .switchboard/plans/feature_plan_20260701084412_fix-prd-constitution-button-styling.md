@@ -39,26 +39,52 @@ This is the only place in the controls strip where inline styles override the sh
 
 ## Metadata
 
-- **Tags:** `ui`, `css`, `copy`, `planning-webview`, `docs-tab`, `polish`
+- **Tags:** `ui`, `docs`, `bugfix`
 - **Complexity:** 2/10
-- **Files touched:** `src/webview/planning.html`, `src/webview/implementation.html` (2 files)
-- **Shipped-state impact:** Visual/copy-only change to a released webview; no data/migration concerns. Button `id`s, click handlers, and posted message types are untouched, so no behavior changes.
+- **Files touched:** `src/webview/planning.html`, `src/webview/implementation.html`, `src/services/PlanningPanelProvider.ts` (3 files)
+- **Shipped-state impact:** Visual/copy-only change to a released webview; no data/migration concerns. Button `id`s, click handlers, and posted message types are untouched, so no behavior changes. The `PlanningPanelProvider.ts` change is a code-comment-only update for wording consistency.
+
+## User Review Required
+
+No review gate required. This is a cosmetic/copy-only change with no logic, data, or API surface impact. The rename ("Set as" → "Save as") is a UX clarification, not a feature change. Proceed directly to implementation.
 
 ## Complexity Audit
 
-**Routine.** This is a CSS-class + visible-text/tooltip change across two HTML files. No logic, no data flow, no API surface, no message-type changes. Confirmed via grep that no test pins the exact button text (`planning-copy-labels-regression.test.js` tests an unrelated kanban-copy-prompt function) and no other source file references these labels except the `implementation.html` deprecation note, which is updated in this same plan to stay consistent.
+### Routine
+- CSS class addition (4 declarations) in `planning.html` — mirrors the proven `.strip-btn.active` pattern.
+- Button markup swap: replace inline `style` attribute with a class name; rename visible text + tooltip.
+- One-line string update in `implementation.html` deprecation note.
+- One-line code-comment update in `PlanningPanelProvider.ts` for wording consistency.
+- Element `id`s (`btn-set-prd`, `btn-set-constitution`) are unchanged — no JS handler wiring changes.
+
+### Complex / Risky
+- None
 
 ## Edge-Case & Dependency Audit
 
 - **Theme variants:** The webview ships two accent palettes — default cyan (`--accent-teal: #00e5ff`) and warm terracotta (`--accent-teal: #D97757`). The fix uses the `--accent-teal` / `--accent-teal-dim` variables (not hardcoded colors) so it adapts to both themes.
-- **Cyber theme:** `.cyber-theme-enabled .strip-btn:hover:not(:disabled)` adds a `--glow-teal` box-shadow on hover. Keeping a tinted background requires the hover state's `color: var(--accent-teal)` to still read well against the dim background — it does, since `.strip-btn.active` (planning.html:242-247) already uses exactly that combination (`background: var(--accent-teal-dim); border-color: var(--accent-teal); color: var(--accent-teal);`) and is proven to work in both themes. The new `.strip-btn--primary` class mirrors `.strip-btn.active` rather than reusing it directly, since `.active` is a transient state class toggled elsewhere (tab buttons) and giving these two permanently-tinted buttons their own class avoids any future collision.
+- **Cyber theme:** `.cyber-theme-enabled .strip-btn:hover:not(:disabled)` (planning.html:2191) adds a `--glow-teal` box-shadow on hover. This selector has specificity (0,3,1) and only sets `box-shadow` — it does not touch `background` or `color`, so it cannot conflict with `.strip-btn--primary:hover` (specificity 0,2,1). The glow stacks on top of the primary hover background. Keeping a tinted background requires the hover state's `color: var(--accent-teal)` (inherited from base `.strip-btn:hover:not(:disabled)` at planning.html:236-240) to still read well against the dim background — it does, since `.strip-btn.active` (planning.html:242-247) already uses exactly that combination (`background: var(--accent-teal-dim); border-color: var(--accent-teal); color: var(--accent-teal);`) and is proven to work in both themes. The new `.strip-btn--primary` class mirrors `.strip-btn.active` rather than reusing it directly, since `.active` is a transient state class toggled elsewhere (tab buttons) and giving these two permanently-tinted buttons their own class avoids any future collision.
+- **CSS specificity — hover override:** `.strip-btn--primary:hover:not(:disabled)` and base `.strip-btn:hover:not(:disabled)` both have specificity (0,2,1). The primary class is declared *after* the base hover rule (inserted near line 247, base hover at line 236), so the primary hover `background` wins by source order. No `!important` needed.
 - **Disabled state:** These two buttons are never `disabled` in markup (unlike Edit/Save/Cancel which toggle `disabled`). No interaction with `.strip-btn:disabled`.
-- **No JS dependency:** `planning.js` only attaches click handlers by element `id` (lines ~6771–6973); it never reads or sets `textContent`/inline `style` on these buttons, and no test pins their exact label text (confirmed via grep — `planning-copy-labels-regression.test.js` covers an unrelated kanban copy-prompt function). A markup/CSS/copy-only fix is safe.
-- **Other references to the old wording:** `implementation.html:3128` has a Notion-design-doc deprecation note that says *"Use the Docs tab (Set as Requirements / Set as Constitution) to import context instead."* This must be updated to the new label so it doesn't point users at button text that no longer exists. (Historical plan/epic files under `.switchboard/` that mention the old names are append-only history — left as-is.)
+- **No JS dependency:** `planning.js` only attaches click handlers by element `id` (lines 6839-6840, handlers at 6855+); it never reads or sets `textContent`/inline `style` on these buttons. Confirmed via grep: no source file sets `.textContent` or `.innerText` on `btn-set-prd` / `btn-set-constitution`.
+- **Test pinning evidence:** The test file `src/test/planning-copy-labels-regression.test.js` exists and tests the `_getCopyLabel` kanban copy-prompt function (unrelated to these button labels). It never references `btn-set-prd`, `btn-set-constitution`, "Set as Requirements", or "Set as Constitution". A markup/CSS/copy-only fix is safe — no test asserts the current label text.
+- **Other references to the old wording (3 locations, all updated by this plan):**
+  1. `src/webview/planning.html:3461-3462` — the buttons themselves (Proposed Change #2).
+  2. `src/webview/implementation.html:3128` — Notion-design-doc deprecation note: *"Use the Docs tab (Set as Requirements / Set as Constitution) to import context instead."* Updated in Proposed Change #3.
+  3. `src/services/PlanningPanelProvider.ts:1073` — code comment in `_postToBothPanels` docblock: *"The Docs-tab 'Set as Requirements / Set as Constitution' actions run in the planning panel..."* Updated in Proposed Change #4. (Code comment, not user-facing, but updated for developer-grep consistency.)
+  - Historical plan/epic files under `.switchboard/` that mention the old names are append-only history — left as-is.
+
+## Dependencies
+
+None — this plan is self-contained and has no prerequisite plans.
+
+## Adversarial Synthesis
+
+Key risks: (1) missed `PlanningPanelProvider.ts` code-comment reference would leave a stale grep hit causing developer confusion; (2) illegal metadata tags would break plan indexing/filtering; (3) wrong line numbers would mislead the implementer. Mitigations: all three references now listed explicitly with correct line numbers (3461-3462, 3128, 1073); tags constrained to the allowed list (`ui`, `docs`, `bugfix`); hover opacity (18%) documented as an intentional darker-on-hover progression from the 40% resting dim. No logic, data, or API risk — complexity remains 2/10.
 
 ## Proposed Changes
 
-### 1. New dedicated class — `src/webview/planning.html` (near line 247, after `.strip-btn.active`)
+### 1. New dedicated class — `src/webview/planning.html` (insert after `.strip-btn.active`, near line 247)
 
 ```css
 .strip-btn--primary {
@@ -71,7 +97,9 @@ This is the only place in the controls strip where inline styles override the sh
 }
 ```
 
-### 2. Button markup + copy — `src/webview/planning.html` (lines 3458–3459)
+**Rationale for 18% hover opacity:** The resting state uses `--accent-teal-dim` (~40% opacity teal). Hover darkens the tint to 18% mix for a visible "press-target" cue without going full-opacity (which would clash with the cyber-theme glow). This is an intentional progression: 40% rest → 18% hover → full `--accent-teal` border. The base `.strip-btn:hover` (8%) is too subtle for a permanently-tinted button, so 18% is chosen to stay perceptible against the existing dim background.
+
+### 2. Button markup + copy — `src/webview/planning.html` (lines 3461–3462)
 
 Replace the inline-styled buttons with the new class, and rename the visible text from a status-toggle phrasing ("Set as...") to a save/copy phrasing that signals "this writes the open doc somewhere else," matching the existing **Save**/**Save As** mental model already used elsewhere in the strip:
 
@@ -80,7 +108,7 @@ Replace the inline-styled buttons with the new class, and rename the visible tex
 <button id="btn-set-constitution" class="strip-btn strip-btn--primary" title="Copy the open document into this workspace's Constitution. If one already exists you can keep, append, or replace it.">Save as Constitution</button>
 ```
 
-Element `id`s (`btn-set-prd`, `btn-set-constitution`) are unchanged — `planning.js` click handlers keep working with no JS edits.
+Element `id`s (`btn-set-prd`, `btn-set-constitution`) are unchanged — `planning.js` click handlers (lines 6855+) keep working with no JS edits.
 
 ### 3. Update the matching deprecation note — `src/webview/implementation.html` (line 3128)
 
@@ -88,13 +116,40 @@ Element `id`s (`btn-set-prd`, `btn-set-constitution`) are unchanged — `plannin
 deprecationMsg.innerText = 'Notion Design Doc settings are deprecated. Use the Docs tab (Save as PRD / Save as Constitution) to import context instead.';
 ```
 
+### 4. Update the code comment — `src/services/PlanningPanelProvider.ts` (line 1073)
+
+Update the `_postToBothPanels` docblock comment so a developer grepping for the current button wording finds the right label:
+
+```ts
+    /**
+     * Post a message to BOTH the project panel and the planning panel webviews.
+     * The Docs-tab "Save as PRD / Save as Constitution" actions run in the
+     * planning panel (`this._panel`) but reuse handlers that were originally wired
+     * to the project panel (`this._projectPanel`). Replying to only one panel left
+     * the planning-panel listeners dead (collision detection, success status, and
+     * the Project-Context toggle warning never fired). Posting to both ensures the
+     * requesting panel receives the response regardless of which is visible.
+     */
+```
+
 ## Verification Plan
 
+### Automated Tests
+- No automated tests required for this change. The existing `planning-copy-labels-regression.test.js` tests the unrelated `_getCopyLabel` kanban function and does not pin these button labels. No new test is warranted for a cosmetic/copy-only change.
+- **Test suite will be run separately by the user.** No test execution is part of this plan's verification.
+- **No compilation step** is part of this plan's verification (project assumed pre-compiled / compilation-free for this session).
+
+### Manual Verification
 1. Build the VSIX and open the Planning panel → Docs tab in VS Code.
 2. Confirm the two buttons show teal text on a dim-teal background (no more grey-on-tint), and read "Save as PRD" / "Save as Constitution".
 3. Toggle the warm/terracotta theme and re-check contrast on both buttons.
 4. Enable the cyber theme and hover each button — confirm the `--glow-teal` hover glow still appears and no styling regresses.
 5. Hover each button and confirm the new tooltip text explains the copy/destination behavior.
-6. Click each button to confirm the existing project-picker / collision-modal flow (`planning.js` ~line 6788+) still fires unchanged; styling/copy change must not affect click handlers or posted message types.
+6. Click each button to confirm the existing project-picker / collision-modal flow (`planning.js` ~line 6855+) still fires unchanged; styling/copy change must not affect click handlers or posted message types.
 7. Open the Automation tab's agent list with the Notion design-doc setting present and confirm the deprecation note in `implementation.html` reads "Save as PRD / Save as Constitution".
 8. Visually compare the full controls strip — the two buttons should now read as deliberate "primary/special" actions, distinguishable at a glance from Edit/Save/Cancel, with no contrast issue.
+9. Grep the `src/` tree for "Set as Requirements" and "Set as Constitution" — confirm zero hits (all three references updated: buttons, deprecation note, code comment).
+
+---
+
+**Recommendation:** Complexity 2/10 → **Send to Intern**.

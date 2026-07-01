@@ -1753,8 +1753,9 @@ export class LinearSyncService {
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
           if (res.statusCode !== 200) {
-            const err: any = new Error(localizeHttpError(res.statusCode, 'linear', 'fetch from Linear'));
-            err.statusCode = res.statusCode;
+            const status = res.statusCode ?? 0;
+            const err: any = new Error(localizeHttpError(status, 'linear', 'fetch from Linear'));
+            err.statusCode = status;
             return safeReject(err);
           }
           try {

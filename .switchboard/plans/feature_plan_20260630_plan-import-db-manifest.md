@@ -140,12 +140,23 @@ Field rules:
 
 ### Phase 5 — Workflow (skill) changes  ⚠️ requires explicit permission to edit system/workflow files
 *(User is the workflow author and has requested this; confirm before editing.)*
-10. Update the relevant skills to emit/maintain the manifest after writing plan `.md` files:
-    - `.claude/skills/switchboard-chat` (`/sw`) and `.agents/workflows/switchboard-chat.md`: after writing plans, write `manifest.json`. For pure consultation output the column is `CREATED` (trivial, but the manifest still carries status/epic/project).
-    - `.claude/skills/improve-plan` / `.agents/workflows/improve-plan.md`: set `kanbanColumn: "PLAN REVIEWED"` for plans it has adversarially reviewed.
-    - Coding workflows: set the appropriate coded column.
-11. Each plan `.md` must embed `**Plan ID:** <uuid>` (and epics use the `epic-<uuid>.md` filename) so `epicId` links resolve and identity is stable across re-imports.
-12. Document the v1 schema inside the skill so the agent emits valid JSON, and instruct it to **write the manifest last** (after all `.md`), ideally via temp-write + rename for atomicity (per MAN2 decision).
+
+The manifest serves two distinct triggers. A workflow emits a manifest only when at least one applies — pure plan creation with no grouping and no stage transition produces no manifest.
+
+**Trigger A — Column transition (completion signal):** the workflow has advanced a plan through a pipeline stage. The manifest is the completion gate: written at the END of the workflow, after all `.md` files, so the column move signals "agent done, pipeline may advance." Setting the column before the workflow finishes would let downstream automation grab a plan mid-review.
+- `.claude/skills/improve-plan` / `.agents/workflows/improve-plan.md`: set `kanbanColumn: "PLAN REVIEWED"` for plans it has adversarially reviewed. This is the primary use case — lets a user run `/improve-plan` directly after `/sw` creation without touching the board, and lets automation proactively pick up reviewed plans for coding.
+- Coding workflows: set the appropriate coded column (`LEAD CODED`, `CODED`, etc.).
+
+**Trigger B — Epic grouping (relational payload):** the workflow created an epic + subtask set and needs to express `isEpic` / `epicId` links that span multiple `.md` files and cannot live in any single file's front-matter. The column is typically `CREATED` (no transition); the payload is the epic relationships.
+- `.claude/skills/switchboard-chat` (`/sw`) and `.agents/workflows/switchboard-chat.md`: emit a manifest ONLY when the user asked the agent to group plans into an epic (or otherwise create epic+subtask sets). Pure consultation that writes loose plans with no grouping → no manifest (cards stay `CREATED`, user moves them). Epic grouping → manifest with `isEpic`/`epicId`/`planId` and `kanbanColumn: "CREATED"`.
+- `/improve-plan` may also emit Trigger B if it restructured plans into an epic during review (rare, but possible).
+
+10. Update the relevant skills per the two triggers above:
+    - **Trigger A (column transition):** `/improve-plan` and coding workflows — emit manifest with the target column at workflow completion.
+    - **Trigger B (epic grouping):** `/sw` (and `/improve-plan` if it groups) — emit manifest with `isEpic`/`epicId` links; column stays `CREATED` unless a transition also applies.
+    - A single manifest may carry both triggers (e.g. `/improve-plan` that reviewed AND grouped into an epic).
+11. Each plan `.md` must embed `**Plan ID:** <uuid>` (and epics use the `epic-<uuid>.md` filename) so `epicId` links resolve and identity is stable across re-imports. This is required for Trigger B and recommended for Trigger A (stable identity helps re-imports).
+12. Document the v1 schema inside each modified skill so the agent emits valid JSON. Instruct the agent to **write the manifest last** (after all `.md`) — for Trigger A this is a completion gate (column set = "I'm done"), for Trigger B it's an atomicity requirement (all epic `.md` rows must exist before links resolve). Use temp-write + rename for atomicity if MAN2 is approved.
 
 ### Phase 6 — Verification
 13. Build only for VSIX; test from `src/`. *(Session directive: skip compilation and automated tests — the user runs those separately.)*
@@ -185,7 +196,9 @@ Field rules:
 - **Logic:** If `_handlePlanFile` is sufficient (it already imports a single `.md`), no change needed. Only add a helper if the manifest service needs a synchronous single-file import outside the debounce path.
 
 ### Skills / workflows (with permission)
-- `.claude/skills/switchboard-chat`, `.claude/skills/improve-plan`, `.agents/workflows/*.md`, plus any coding workflow — manifest-writing instructions + `**Plan ID:**` embedding + v1 schema doc. Write manifest last; temp-write + rename if MAN2 chooses atomic.
+- **Trigger A (column transition):** `.claude/skills/improve-plan`, `.agents/workflows/improve-plan.md`, plus any coding workflow — emit manifest with target column at workflow completion. `**Plan ID:**` embedding recommended.
+- **Trigger B (epic grouping):** `.claude/skills/switchboard-chat`, `.agents/workflows/switchboard-chat.md` — emit manifest ONLY when grouping plans into an epic; no manifest for pure consultation. `**Plan ID:**` embedding required (epic links depend on stable IDs). Epics use `epic-<uuid>.md` filename.
+- Both triggers: v1 schema doc in each modified skill; write manifest last (completion gate for A, atomicity for B); temp-write + rename if MAN2 chooses atomic.
 
 ## Verification Plan
 
@@ -209,7 +222,10 @@ Field rules:
 - New `src/services/PlanManifestService.ts` — parse/validate/apply/delete (or fold into the watcher).
 - `src/services/KanbanDatabase.ts` — reuse `movePlanByPlanFile` / `updateEpicStatus`; add narrow status + project UPDATE helpers and possibly expose `resolveProjectId`.
 - `src/services/PlanFileImporter.ts` — possibly expose a "import single file now" helper for the ensure-row step.
-- Skills/workflows (with permission): `.claude/skills/switchboard-chat`, `.claude/skills/improve-plan`, `.agents/workflows/*.md`, plus any coding workflow — manifest-writing instructions + `**Plan ID:**` embedding + schema doc.
+- Skills/workflows (with permission):
+  - **Trigger A:** `.claude/skills/improve-plan`, `.agents/workflows/improve-plan.md`, coding workflows — column-transition manifest at completion.
+  - **Trigger B:** `.claude/skills/switchboard-chat`, `.agents/workflows/switchboard-chat.md` — epic-grouping manifest only when grouping.
+  - Both: `**Plan ID:**` embedding + v1 schema doc.
 - Tests: manifest parse/validate/apply, epic ordering, dedup/idempotency, staleness, security (path traversal, invalid enums), stale-manifest guard, dedicated-check proof, multi-workspace isolation.
 
 ## Uncertain Assumptions

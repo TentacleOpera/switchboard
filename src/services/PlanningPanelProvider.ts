@@ -8658,7 +8658,9 @@ Read the current content above. Determine what's missing. Produce a complete epi
                     const h1 = content.match(/^#\s+(.+)$/m);
                     const title = h1 ? h1[1].trim() : id;
                     const displayContent = this._rewriteLocalImagePaths(content, path.dirname(uri.fsPath));
-                    this._panel?.webview.postMessage({ type: 'ticketFileChanged', provider, id, title, content: displayContent });
+                    // rawContent preserves original local paths for edit mode + push flow;
+                    // content holds rewritten webview URIs for preview only.
+                    this._panel?.webview.postMessage({ type: 'ticketFileChanged', provider, id, title, content: displayContent, rawContent: content });
                 } catch { }
             }, 300));
         };
