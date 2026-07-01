@@ -1,50 +1,47 @@
 ---
-description: 'Note codebase docs'
+description: 'Project Context & Remote UI Hub'
 ---
 
-# Note codebase docs
+# Project Context & Remote UI Hub
+
+**Plan ID:** da9ba512-dead-4632-a58c-220f1c489581
 
 **Complexity:** 6
 
-> Phase 2 of the Remote Planning Infrastructure epic (`epic-remote-planning-infrastructure-7421946e-...`), split out as its own epic.
+> Formerly "Note codebase docs." Rescoped per the remote-control production decisions: **no codebase code-mirroring.** The remote agent gets curated **developer docs + PRDs + constitution**, authored in `project.html` and synced provider-agnostically to Notion + Linear.
 
 ## Goal
 
-Continuously sync the workspace's codebase documentation into Notion so a remote claude.ai + Notion session can read the code and author a code-grounded plan **with no repo access, no GitHub MCP, and no git branches**. The extension keeps a "Switchboard Codebase Docs" Notion database current; the remote agent reads it, writes a plan into the plans DB with the trigger column, and the shipped `RemoteControlService` + Phase-1 startup reconciler dispatches it locally.
+Make `project.html` the single **project-context hub** and give the remote agent real planning context — so remote plans are code-grounded, not "post-it notes" that make execution agents do wrong work.
 
-### Problem & Background
+### Problem & background
 
-Today remote agents have zero repo access — `switchboard_remote_notion.md` treats the plan-card text as the sole source of truth, and the PRD/constitution are local-only (`prdUtils.ts:33-36`). The only repo-summarizing code, `ContextBundler.bundleWorkspaceContext()` (`ContextBundler.ts:64-219`), emits DOCX for *manual* Google NotebookLM upload — local-only, not page-structured, not synced. This epic re-targets that walker to markdown and pushes it into Notion incrementally.
+A remote claude.ai + Notion (or Linear-native) session has zero repo access and no curated context today; constitution + PRDs are local-only (`prdUtils.ts`) and there is no dev-docs concept at all. The earlier Phase-2 answer over-engineered this into a code-mirroring pipeline (repo-walker generator → per-file Notion pages → incremental hash-diff sync). That is **cut**. The right answer: a **Dev Docs tab** in `project.html`, and **all** `project.html` content synced to both trackers.
 
-### Root cause / corrected assumptions
+The context pipeline: **NotebookLM (get code into an analysis system) → author Dev Docs → Dev Docs + PRDs + constitution sync to Notion/Linear → remote agent reads real context.** NotebookLM is the on-ramp, so it moves into `project.html` alongside Dev Docs and the Remote tab.
 
-- Notion writes already auto-retry with `Retry-After` (`NotionFetchService.httpRequest` 74-117) — no new backoff engine needed.
-- Incremental sync already exists for inbound docs (`imported_docs` content-hash pattern, `KanbanDatabase.ts:280-303` + `PlanningPanelProvider` 7605-7650) — Phase 2 mirrors it outbound.
-- Page write primitives already exist (`createPage` 678-751, `updatePageContent` 631-672).
+## How the subtasks achieve this
 
-## Child plans (all specified — Notion-only for v1)
+- **Project Context Hub — Dev Docs Tab + project.html IA** *(STEP 0 of the program)*: add a Dev Docs tab; move the Remote tab and the NotebookLM tab (from planning.html) into `project.html`. Gates the Remote Sync Refactor 3/3 UI phase so Remote-tab UX is built in its final home.
+- **Project-Context Sync — project.html Content → Notion + Linear**: sync Dev Docs + PRDs + constitution outward via the unified push seam's project-level capability (not a Notion-only pipeline). Obeys the Notion overwrite guard.
+- **Remote Agent Orientation — Plan From Project-Context Docs**: orient the single remote skill to read the synced context and author code-grounded plans with no repo access (provider-agnostic; supersedes the codebase-docs orientation).
+- **Linear Remote Tab: Dynamic Agent Skill Copy Button**: a Remote-tab (now in project.html) button that generates tailored orientation text for Linear's native agent.
 
-- **1/4 — `phase2-codebase-doc-generator.md`** (Cplx 5): reuse `ContextBundler`'s walker to emit a structured markdown doc set (overview → module → file) with stable slugs + content hashes. Pure local transform.
-- **2/4 — `phase2-notion-codebase-docs-sync.md`** (Cplx 6): new "Switchboard Codebase Docs" Notion DB + incremental push (hash diff → push only changed, archive deleted). New `codebase_docs_sync` table.
-- **3/4 — `phase2-codebase-docs-sync-triggers-and-ui.md`** (Cplx 5): triggers (manual / on-commit via the Airlock hook / optional timer) + Remote-tab config & status UI. Off by default.
-- **4/4 — `phase2-remote-plan-from-notion-docs.md`** (Cplx 2): orient the claude.ai + Notion agent to read the docs DB and author code-grounded plans with zero repo access. Folds into the Notion remote skill.
+## Dependencies & sequencing
 
-## Resolved design decisions
+- STEP 0 (Dev Docs + IA) first — gates Remote Sync Refactor 3/3's UI phase.
+- Context sync depends on the unified push seam (Remote Sync Refactor 1/3) + Notion push (2/3) + the Notion overwrite guard.
+- See `feature_plan_20260701_remote-control-production-sequencing.md`.
 
-- **Granularity:** per-file pages under per-directory module parents + a repo-root overview (not per-symbol, not one-giant-doc).
-- **Rate limits:** serialized ~350 ms queue on top of the existing `Retry-After` retry; hash diff keeps steady-state syncs to a handful of pages.
-- **Base:** reuse `ContextBundler` walk + file-summary extraction (factored into shared helpers); DOCX/NotebookLM flow untouched.
-- **Sync-state:** `codebase_docs_sync` table (slug + `content_hash` + `notion_page_id` + `last_synced_at`).
-- **Scope:** Notion-only for v1; Linear/ClickUp codebase-doc sync is an explicit follow-on.
+## Metadata
 
-## Sequencing
-
-Phase 1 (remote plan improvement + startup reconciler) has no dependency on this epic — land it first, then this. Within this epic: 1/4 → 2/4 → 3/4 → 4/4.
+**Complexity:** 6
+**Tags:** frontend, ui, ux, backend, api, docs, feature
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Phase 2 (1/4): Codebase Doc Generator — Repo → Structured Markdown Doc Set](../plans/phase2-codebase-doc-generator.md) — **PLAN REVIEWED**
-- [ ] [Phase 2 (2/4): Notion Codebase-Docs Database + Incremental Push Pipeline](../plans/phase2-notion-codebase-docs-sync.md) — **PLAN REVIEWED**
-- [ ] [Phase 2 (3/4): Continuous Sync Triggers + Remote-Tab Config & Controls](../plans/phase2-codebase-docs-sync-triggers-and-ui.md) — **PLAN REVIEWED**
-- [ ] [Phase 2 (4/4): Remote Agent Orientation — Plan From Notion Codebase Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **PLAN REVIEWED**
+- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **PLAN REVIEWED**
+- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **PLAN REVIEWED**
+- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **PLAN REVIEWED**
+- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

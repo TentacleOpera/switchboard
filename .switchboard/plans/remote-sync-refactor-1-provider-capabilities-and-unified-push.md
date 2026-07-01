@@ -1,5 +1,7 @@
 # Remote Sync Refactor (1/3): Declared Provider Capabilities + Unified Push Dispatch
 
+> **Scope update (2026-07-01):** The declared push surface must include **`archive`** (a distinct provider verb — Linear `issueArchive`, Notion page archive) and a **project-level entity target** (Notion project page / Linear project docs) in addition to card status/content — declared here up front, not retrofitted. All push (Linear description sync, auto-archive, project-context sync) routes through this single dispatch. See `feature_plan_20260701_remote-control-production-sequencing.md`.
+
 ## Goal
 
 Make **push a first-class, provider-symmetric capability** behind the same `RemoteProvider` abstraction that already governs pull, and route every existing push trigger through one provider registry. This is a **behavior-preserving** refactor — no user-visible change for existing Linear/ClickUp users. It is the foundation the other two remote-sync plans build on.

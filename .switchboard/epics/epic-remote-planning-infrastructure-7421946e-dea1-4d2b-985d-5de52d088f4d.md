@@ -1,5 +1,9 @@
 # Epic: Remote Planning Infrastructure
 
+**Plan ID:** 7421946e-dea1-4d2b-985d-5de52d088f4d
+
+> **Program note (2026-07-01):** Part of the remote-control production program (see `feature_plan_20260701_remote-control-production-sequencing.md`). Deltas vs. original: **Phase 2 (codebase docs) is removed from this epic** — it was already split into its own epic, now rescoped to the **Project Context & Remote UI Hub** (curated Dev Docs, not code-mirroring). The **Remote-Control ↔ Bug-Triage mutual-exclusivity guard** folds in here (from the deleted "Remote Control Mode" epic). Orientation is **one** skill: `/sw-remote` (the duplicate `/switchboard-remote` stub is deleted). The reconciler, `/improve-remote-plan`, and `/create-epic` re-point onto the **consolidated config** from Remote Sync Refactor 3/3; `/improve-remote-plan`'s Notion write phase must use the **Notion overwrite guard**.
+
 ## Goal
 
 Enable full Switchboard planning workflows from remote sessions (Claude Code on the web, claude.ai) without requiring the local machine or IDE to be running. Plans are read from and written directly to Linear/Notion via MCP — no git branches, no pull requests, no repo file writes for the planning phase.
@@ -202,4 +206,5 @@ No outstanding uncertainties remain.
 - [ ] [Add /improve-remote-plan Skill for Linear/Notion-Native Plan Improvement](../plans/improve-remote-plan-skill.md) — **PLAN REVIEWED**
 - [ ] [Kanban Startup Reconciler for Remote Plan Status Changes](../plans/kanban-startup-reconciler.md) — **PLAN REVIEWED**
 - [ ] [Add /sw-remote Entry Skill for Remote Switchboard Sessions](../plans/sw-remote-entry-skill.md) — **PLAN REVIEWED**
+- [ ] [Enforce Mutual Exclusivity Between Remote Control and Bug-Triage Modes](../plans/remote-control-triage-mutual-exclusivity.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
