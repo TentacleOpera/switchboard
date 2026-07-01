@@ -14,6 +14,7 @@ export interface PlannerPromptWriterOptions {
     getLocalFolderService: (workspaceRoot: string) => LocalFolderService;
     getLinearDocsAdapter: (workspaceRoot: string) => LinearDocsAdapter;
     getClickUpDocsAdapter: (workspaceRoot: string) => ClickUpDocsAdapter;
+    getCacheService: (workspaceRoot: string) => PlanningPanelCacheService;
 }
 
 export class PlannerPromptWriter {

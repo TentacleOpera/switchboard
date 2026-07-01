@@ -460,8 +460,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
-        // Seed aggressive pair programming from VS Code config so KanbanProvider starts with the correct value
-        this._autobanState.aggressivePairProgramming = vscode.workspace.getConfiguration('switchboard').get<boolean>('pairProgramming.aggressive', false);
+        const switchboardConfig = vscode.workspace.getConfiguration('switchboard');
+        const newInspect = switchboardConfig.inspect<boolean>('pairProgramming.aggressive');
+        const hasNew = newInspect?.globalValue !== undefined || newInspect?.workspaceValue !== undefined;
+        this._autobanState.aggressivePairProgramming = hasNew ? switchboardConfig.get<boolean>('pairProgramming.aggressive', false) : switchboardConfig.get<boolean>('aggressivePairProgramming.enabled', false);
 
         this._setupStateWatcher();
         this._setupPlanWatcher();
@@ -4052,19 +4054,14 @@ Each plan file must include:
         return this._isLeadInlineChallengeEnabled();
     }
 
-    public handleGetAggressivePairSetting(): boolean {
-        return this._isAggressivePairProgrammingEnabled();
-    }
-
-
-
     public handleGetExcludeReviewedBacklogSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', true);
     }
 
     public async handleSetExcludeReviewedBacklogSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('excludeReviewedBacklogFromDropdown', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('excludeReviewedBacklogFromDropdown', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('excludeReviewedBacklogFromDropdown', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
 
@@ -4075,7 +4072,8 @@ Each plan file must include:
 
     public async handleSetStatusShowTerminalsSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('statusBar.showTerminalControls', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('statusBar.showTerminalControls', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('statusBar.showTerminalControls', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetStatusShowKanbanSetting(): boolean {
@@ -4084,7 +4082,8 @@ Each plan file must include:
 
     public async handleSetStatusShowKanbanSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('statusBar.showKanbanButton', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('statusBar.showKanbanButton', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('statusBar.showKanbanButton', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetStatusShowArtifactsSetting(): boolean {
@@ -4093,7 +4092,8 @@ Each plan file must include:
 
     public async handleSetStatusShowArtifactsSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('statusBar.showArtifactsButton', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetStatusShowDesignSetting(): boolean {
@@ -4102,7 +4102,8 @@ Each plan file must include:
 
     public async handleSetStatusShowDesignSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('statusBar.showDesignButton', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('statusBar.showDesignButton', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetStatusShowProjectSetting(): boolean {
@@ -4111,7 +4112,8 @@ Each plan file must include:
 
     public async handleSetStatusShowProjectSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('statusBar.showProjectButton', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('statusBar.showProjectButton', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('statusBar.showProjectButton', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetStatusShowMemoSetting(): boolean {
@@ -4120,7 +4122,8 @@ Each plan file must include:
 
     public async handleSetStatusShowMemoSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('statusBar.showMemoButton', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('statusBar.showMemoButton', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('statusBar.showMemoButton', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetCyberAnimationDisabledSetting(): boolean {
@@ -4393,7 +4396,9 @@ Each plan file must include:
     }
 
     public async handleSetThemeSetting(theme: string): Promise<void> {
-        await vscode.workspace.getConfiguration('switchboard').update('theme.name', theme, vscode.ConfigurationTarget.Workspace);
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.name', theme, vscode.ConfigurationTarget.Global);
+        await config.update('theme.name', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     private _postSharedWebviewMessage(message: any): void {
@@ -4496,10 +4501,6 @@ Each plan file must include:
         this._setupPanelProvider.postMessage({
             type: 'leadChallengeSetting',
             enabled: this.handleGetLeadChallengeSetting()
-        });
-        this._setupPanelProvider.postMessage({
-            type: 'aggressivePairSetting',
-            enabled: this.handleGetAggressivePairSetting()
         });
 
         this._setupPanelProvider.postMessage({
@@ -7905,23 +7906,41 @@ Each plan file must include:
             }
 
             if (typeof data.accurateCodingEnabled === 'boolean') {
-                await vscode.workspace.getConfiguration('switchboard').update(
+                const config = vscode.workspace.getConfiguration('switchboard');
+                await config.update(
                     'accurateCoding.enabled',
                     data.accurateCodingEnabled,
+                    vscode.ConfigurationTarget.Global
+                );
+                await config.update(
+                    'accurateCoding.enabled',
+                    undefined,
                     vscode.ConfigurationTarget.Workspace
                 );
             }
             if (typeof data.advancedReviewerEnabled === 'boolean') {
-                await vscode.workspace.getConfiguration('switchboard').update(
+                const config = vscode.workspace.getConfiguration('switchboard');
+                await config.update(
                     'reviewer.advancedMode',
                     data.advancedReviewerEnabled,
+                    vscode.ConfigurationTarget.Global
+                );
+                await config.update(
+                    'reviewer.advancedMode',
+                    undefined,
                     vscode.ConfigurationTarget.Workspace
                 );
             }
             if (typeof data.leadChallengeEnabled === 'boolean') {
-                await vscode.workspace.getConfiguration('switchboard').update(
+                const config = vscode.workspace.getConfiguration('switchboard');
+                await config.update(
                     'leadCoder.inlineChallenge',
                     data.leadChallengeEnabled,
+                    vscode.ConfigurationTarget.Global
+                );
+                await config.update(
+                    'leadCoder.inlineChallenge',
+                    undefined,
                     vscode.ConfigurationTarget.Workspace
                 );
             }
@@ -7935,19 +7954,6 @@ Each plan file must include:
                     data.julesAutoSyncEnabled,
                     vscode.ConfigurationTarget.Workspace
                 );
-            }
-            if (typeof data.aggressivePairProgramming === 'boolean') {
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'pairProgramming.aggressive',
-                    data.aggressivePairProgramming,
-                    vscode.ConfigurationTarget.Workspace
-                );
-                this._autobanState = normalizeAutobanConfigState({
-                    ...this._autobanState,
-                    aggressivePairProgramming: data.aggressivePairProgramming
-                });
-                await this._persistAutobanState();
-                this._postAutobanState();
             }
 
 
@@ -9829,11 +9835,6 @@ Each plan file must include:
                         this._view?.webview.postMessage({ type: 'julesAutoSyncSetting', enabled });
                         break;
                     }
-                    case 'getAggressivePairSetting': {
-                        const enabled = this._isAggressivePairProgrammingEnabled();
-                        this._view?.webview.postMessage({ type: 'aggressivePairSetting', enabled });
-                        break;
-                    }
                     case 'getDefaultPromptOverrides': {
                         const overrides = await this.handleGetDefaultPromptOverrides();
                         this._view?.webview.postMessage({ type: 'defaultPromptOverrides', overrides });
@@ -10222,11 +10223,6 @@ What would you like to find?`;
 
                         await sendRobustText(terminal, input, paced);
                         console.log(`[TaskViewer] sendToTerminal: sent to '${name}' (paced: ${paced}, len: ${input.length})`);
-                        break;
-                    }
-                    case 'getDesignDocSetting': {
-                        const setting = this.handleGetDesignDocSetting();
-                        this._view?.webview.postMessage({ type: 'designDocSetting', ...setting });
                         break;
                     }
                 }
@@ -15895,7 +15891,10 @@ What would you like to find?`;
     private _isAggressivePairProgrammingEnabled(): boolean {
         const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
         if (plannerConfig?.addons?.aggressivePairProgramming !== undefined) return plannerConfig.addons.aggressivePairProgramming;
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('pairProgramming.aggressive', false);
+        const switchboardConfig = vscode.workspace.getConfiguration('switchboard');
+        const newInspect = switchboardConfig.inspect<boolean>('pairProgramming.aggressive');
+        const hasNew = newInspect?.globalValue !== undefined || newInspect?.workspaceValue !== undefined;
+        return hasNew ? switchboardConfig.get<boolean>('pairProgramming.aggressive', false) : switchboardConfig.get<boolean>('aggressivePairProgramming.enabled', false);
     }
 
 

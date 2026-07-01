@@ -729,7 +729,7 @@ For each plan:
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 

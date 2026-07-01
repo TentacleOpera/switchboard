@@ -77,11 +77,11 @@ async function run() {
         assert.ok(!contentAfterUnknown.includes('unknown-source'),          'unknown source key should not leak into output');
 
         // --- Single-source vs multi-source dispatch.
-        // KanbanProvider._syncDesignDocLinkForActiveSources can't be loaded under Node
-        // because KanbanProvider imports `vscode`. Mirror its dispatch logic inline here
-        // and assert it matches the same semantics: 0 or 1 existing cache => no aggregate
-        // rebuild (single-source designDocLink is left intact); 2+ existing caches =>
-        // aggregate rebuild + designDocLink redirect.
+        // The aggregate cache dispatch logic (formerly _syncDesignDocLinkForActiveSources,
+        // now removed with the legacy design-doc feature) is mirrored inline here because
+        // KanbanProvider imports `vscode` and can't be loaded under Node. Assert the same
+        // semantics: 0 or 1 existing cache => no aggregate rebuild; 2+ existing caches =>
+        // aggregate rebuild.
         function detectActiveSources(dir) {
             const active = [];
             for (const [key, entry] of Object.entries(AGGREGATE_CACHE_SOURCES)) {

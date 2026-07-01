@@ -3345,7 +3345,11 @@ export class KanbanProvider implements vscode.Disposable {
             reviewerConciseModeEnabled: reviewerConfig?.addons?.reviewerConciseMode ?? false,
             reviewerCompactPlanUpdateEnabled: reviewerConfig?.addons?.reviewerCompactPlanUpdate ?? false,
             leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
-            aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
+            aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? (() => {
+                const newInspect = config.inspect<boolean>('pairProgramming.aggressive');
+                const hasNew = newInspect?.globalValue !== undefined || newInspect?.workspaceValue !== undefined;
+                return hasNew ? config.get<boolean>('pairProgramming.aggressive', false) : config.get<boolean>('aggressivePairProgramming.enabled', false);
+            })(),
             adviseResearchIfUnsure: plannerConfig?.addons?.adviseResearch ?? true,
 
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
@@ -3649,16 +3653,22 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const config = vscode.workspace.getConfiguration('switchboard');
         try {
             if (typeof msg.accurateCodingEnabled === 'boolean') {
-                await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, true);
+                await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, vscode.ConfigurationTarget.Global);
+                await config.update('accurateCoding.enabled', undefined, vscode.ConfigurationTarget.Workspace);
             }
             if (typeof msg.advancedReviewerEnabled === 'boolean') {
-                await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, true);
+                await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, vscode.ConfigurationTarget.Global);
+                await config.update('reviewer.advancedMode', undefined, vscode.ConfigurationTarget.Workspace);
             }
             if (typeof msg.leadChallengeEnabled === 'boolean') {
-                await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, true);
+                await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, vscode.ConfigurationTarget.Global);
+                await config.update('leadCoder.inlineChallenge', undefined, vscode.ConfigurationTarget.Workspace);
             }
             if (typeof msg.aggressivePairProgramming === 'boolean') {
-                await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true);
+                await config.update('pairProgramming.aggressive', msg.aggressivePairProgramming, vscode.ConfigurationTarget.Global);
+                await config.update('pairProgramming.aggressive', undefined, vscode.ConfigurationTarget.Workspace);
+                await config.update('aggressivePairProgramming.enabled', undefined, vscode.ConfigurationTarget.Global);
+                await config.update('aggressivePairProgramming.enabled', undefined, vscode.ConfigurationTarget.Workspace);
             }
 
             if (typeof msg.gitProhibitionEnabled === 'boolean') {

@@ -6646,34 +6646,6 @@ Read the current content above. Determine what's missing. Produce a complete epi
 
 
 
-    private async _handleSetActivePlanningContext(
-        workspaceRoot: string,
-        sourceId: string,
-        docId: string,
-        docName: string,
-        sourceFolder?: string
-    ): Promise<void> {
-        try {
-            let docPath: string | null = null;
-
-            if (sourceId === 'local-folder') {
-                if (!sourceFolder) {
-                    throw new Error('sourceFolder is required');
-                }
-                const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, sourceId)
-                    || this._getLocalFolderService(workspaceRoot);
-                const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-                const allowedPaths = localFolderService.getFolderPaths();
-                if (!allowedPaths.includes(resolvedSourceFolder)) {
-                    throw new Error('sourceFolder is not a configured folder path');
-                }
-                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
-                docPath = path.join(resolvedSourceFolder, cleanDocId);
-                try {
-                    await fs.promises.access(docPath, fs.constants.R_OK);
-                } catch {
-                    docPath = null;
-                }
     private async _handleLinkToDocument(
         workspaceRoot: string,
         sourceId: string,

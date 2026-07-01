@@ -1466,11 +1466,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         this.postMessage({ type: 'activeContextSet', success: false, error: 'Document not found' });
                         break;
                     }
-                    await vscode.workspace.getConfiguration('switchboard').update(
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    await config.update(
                         'planner.designSystemDocLink', docPath, vscode.ConfigurationTarget.Workspace
                     );
-                    await vscode.workspace.getConfiguration('switchboard').update(
-                        'planner.designSystemDocEnabled', true, vscode.ConfigurationTarget.Workspace
+                    await config.update(
+                        'planner.designSystemDocLink', undefined, vscode.ConfigurationTarget.Global
+                    );
+                    await config.update(
+                        'planner.designSystemDocEnabled', true, vscode.ConfigurationTarget.Global
+                    );
+                    await config.update(
+                        'planner.designSystemDocEnabled', undefined, vscode.ConfigurationTarget.Workspace
                     );
                     this._activeDesignSystemDocSourceId = message.sourceId;
                     this._activeDesignSystemDocId = message.docId;
@@ -1485,11 +1492,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'disableDesignDoc': {
                 try {
-                    await vscode.workspace.getConfiguration('switchboard').update(
-                        'planner.designSystemDocEnabled', false, vscode.ConfigurationTarget.Workspace
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    await config.update(
+                        'planner.designSystemDocEnabled', false, vscode.ConfigurationTarget.Global
                     );
-                    await vscode.workspace.getConfiguration('switchboard').update(
+                    await config.update(
+                        'planner.designSystemDocEnabled', undefined, vscode.ConfigurationTarget.Workspace
+                    );
+                    await config.update(
                         'planner.designSystemDocLink', undefined, vscode.ConfigurationTarget.Workspace
+                    );
+                    await config.update(
+                        'planner.designSystemDocLink', undefined, vscode.ConfigurationTarget.Global
                     );
                     this._activeDesignSystemDocSourceId = null;
                     this._activeDesignSystemDocId = null;

@@ -547,12 +547,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         enabled: this._taskViewerProvider.handleGetLeadChallengeSetting()
                     });
                     break;
-                case 'getAggressivePairSetting':
-                    this._panel.webview.postMessage({
-                        type: 'aggressivePairSetting',
-                        enabled: this._taskViewerProvider.handleGetAggressivePairSetting()
-                    });
-                    break;
+
 
                 case 'getAutoCommitOnCodeReviewSetting': {
                     const value = await this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting();

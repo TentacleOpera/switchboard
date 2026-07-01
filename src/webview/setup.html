@@ -4504,13 +4504,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
-                case 'aggressivePairSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('aggressive-pair-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
-                    });
-                    break;
-                }
+
 
 
                 case 'autoCommitOnCodeReviewSetting': {
