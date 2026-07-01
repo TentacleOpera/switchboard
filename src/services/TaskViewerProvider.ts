@@ -1857,6 +1857,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     if (planRecord) {
                         plan = {
                             epicId: planRecord.epicId ?? undefined,
+                            planId: planRecord.planId ?? undefined,
                             workingDir: workspaceRoot,
                             absolutePath: planRecord.planFile,
                         };
@@ -1870,7 +1871,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (db) {
                 const worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
                     epicId: plan.epicId,
-                    project: plan.project
+                    project: plan.project,
+                    planId: plan.planId
                 });
                 if (worktreePath) {
                     plan.worktreePath = worktreePath;
@@ -3121,7 +3123,8 @@ Each plan file must include:
                         epicId = plan.epicId ?? undefined;
                         worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
                             epicId: plan.epicId,
-                            project: plan.project
+                            project: plan.project,
+                            planId: plan.planId
                         });
                     }
                 }
@@ -5844,6 +5847,19 @@ Each plan file must include:
         return service;
     }
 
+    /**
+     * Public accessors for sync services — used by the activation-time
+     * triage-rule migration in extension.ts. Thin wrappers over the private
+     * methods to avoid widening their visibility.
+     */
+    public getClickUpService(workspaceRoot: string): ClickUpSyncService {
+        return this._getClickUpService(workspaceRoot);
+    }
+
+    public getLinearService(workspaceRoot: string): LinearSyncService {
+        return this._getLinearService(workspaceRoot);
+    }
+
     private _getClickUpService(workspaceRoot: string): ClickUpSyncService {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existing = this._clickUpServices.get(resolvedRoot);
@@ -7369,10 +7385,16 @@ Each plan file must include:
         });
     }
 
-    /** Resolve the worktree path for a plan based on precedence: epic worktree -> project worktree -> undefined. */
-    public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { epicId?: string | null; project?: string | null }): Promise<string | undefined> {
+    /** Resolve the worktree path for a plan based on precedence: subtask worktree -> epic worktree -> project worktree -> undefined. */
+    public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { epicId?: string | null; project?: string | null; planId?: string | null }): Promise<string | undefined> {
         const worktrees = await db.getWorktrees();
         const activeWorktrees = worktrees.filter(w => w.status === 'active');
+        if (plan.planId) {
+            const subtaskWt = activeWorktrees.find(w => w.subtask_plan_id && String(w.subtask_plan_id) === String(plan.planId));
+            if (subtaskWt) {
+                return subtaskWt.path;
+            }
+        }
         if (plan.epicId) {
             const epicWt = activeWorktrees.find(w => String(w.epic_id) === String(plan.epicId));
             if (epicWt) {
@@ -16172,7 +16194,8 @@ What would you like to find?`;
                 epicPlanId = plan.planId;
                 worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
                     epicId: plan.epicId,
-                    project: plan.project
+                    project: plan.project,
+                    planId: plan.planId
                 });
             }
         }

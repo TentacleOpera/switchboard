@@ -25,6 +25,9 @@ export interface WorktreeRow {
     status: 'active' | 'merged' | 'abandoned';
     project: string | null;
     agentsOpenWithGrid: boolean;
+    subtask_plan_id: string | null;
+    base_branch: string | null;
+    tier: string | null;
 }
 
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted';
@@ -263,6 +266,18 @@ const MIGRATION_V40_SQL = [
     // Existing rows get NULL; they backfill on the next import/sync. Docs rows
     // leave this NULL (only tickets use it).
     `ALTER TABLE imported_docs ADD COLUMN url TEXT`,
+];
+
+// V42: worktree-per-subtask support. subtask_plan_id binds a worktree to a single
+// subtask plan (routing precedence in resolveWorktreePathForPlan); base_branch records
+// what a worktree was branched off (epic integration branch for subtasks, main/default
+// for the epic integration worktree itself); tier is reserved for Part 3's high/low
+// complexity split. All three are nullable — existing worktree rows get NULL, which is
+// correct (legacy worktrees have no subtask/tier binding).
+const MIGRATION_V42_SQL = [
+    `ALTER TABLE worktrees ADD COLUMN subtask_plan_id TEXT`,
+    `ALTER TABLE worktrees ADD COLUMN base_branch TEXT`,
+    `ALTER TABLE worktrees ADD COLUMN tier TEXT`,
 ];
 
 const MIGRATION_V13_SQL = [
@@ -2589,7 +2604,7 @@ export class KanbanDatabase {
     public async getWorktrees(): Promise<WorktreeRow[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
+            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
         );
         const rows: any[] = [];
         try {
@@ -2608,22 +2623,28 @@ export class KanbanDatabase {
             status: r.status as 'active' | 'merged' | 'abandoned',
             project: r.project !== null && r.project !== undefined && r.project !== '' ? String(r.project) : null,
             agentsOpenWithGrid: Number(r.agents_open_with_grid) === 1,
+            subtask_plan_id: r.subtask_plan_id !== null && r.subtask_plan_id !== undefined && r.subtask_plan_id !== '' ? String(r.subtask_plan_id) : null,
+            base_branch: r.base_branch !== null && r.base_branch !== undefined && r.base_branch !== '' ? String(r.base_branch) : null,
+            tier: r.tier !== null && r.tier !== undefined && r.tier !== '' ? String(r.tier) : null,
         }));
     }
 
-    public async addWorktree(branch: string, wtPath: string, epicId?: string, project?: string): Promise<number> {
+    public async addWorktree(branch: string, wtPath: string, epicId?: string, project?: string, subtaskPlanId?: string, baseBranch?: string, tier?: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         this._db.run(
-            `INSERT INTO worktrees (branch, path, epic_id, project) VALUES (?, ?, ?, ?)`,
+            `INSERT INTO worktrees (branch, path, epic_id, project, subtask_plan_id, base_branch, tier) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
                 branch,
                 wtPath,
                 epicId !== undefined && epicId !== null ? epicId : null,
-                project !== undefined && project !== null ? project : null
+                project !== undefined && project !== null ? project : null,
+                subtaskPlanId !== undefined && subtaskPlanId !== null ? subtaskPlanId : null,
+                baseBranch !== undefined && baseBranch !== null ? baseBranch : null,
+                tier !== undefined && tier !== null ? tier : null,
             ]
         );
         await this._persist();
-        
+
         const stmt = this._db.prepare(`SELECT last_insert_rowid() as id`);
         try {
             if (stmt.step()) {
@@ -2656,7 +2677,7 @@ export class KanbanDatabase {
     public async getWorktreeByBranch(branch: string): Promise<WorktreeRow | undefined> {
         if (!(await this.ensureReady()) || !this._db) return undefined;
         const stmt = this._db.prepare(
-            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid FROM worktrees WHERE branch = ? LIMIT 1`,
+            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE branch = ? LIMIT 1`,
             [branch]
         );
         try {
@@ -2671,6 +2692,9 @@ export class KanbanDatabase {
                     status: r.status as 'active' | 'merged' | 'abandoned',
                     project: r.project !== null && r.project !== undefined && r.project !== '' ? String(r.project) : null,
                     agentsOpenWithGrid: Number(r.agents_open_with_grid) === 1,
+                    subtask_plan_id: r.subtask_plan_id !== null && r.subtask_plan_id !== undefined && r.subtask_plan_id !== '' ? String(r.subtask_plan_id) : null,
+                    base_branch: r.base_branch !== null && r.base_branch !== undefined && r.base_branch !== '' ? String(r.base_branch) : null,
+                    tier: r.tier !== null && r.tier !== undefined && r.tier !== '' ? String(r.tier) : null,
                 };
             }
             return undefined;
@@ -5350,6 +5374,31 @@ export class KanbanDatabase {
             } catch { /* best effort */ }
             await this.setMigrationVersion(41);
             console.log('[KanbanDatabase] V41 migration completed: epic complexity backfilled to subtask max');
+        }
+
+        // V42: worktree-per-subtask columns. Purely additive — subtask_plan_id, base_branch,
+        // tier all default to NULL on existing rows (no derivation/backfill needed).
+        const v42 = await this.getMigrationVersion();
+        if (v42 < 42) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V42_SQL) {
+                    try {
+                        this._db.exec(sql);
+                    } catch (e) {
+                        const msg = e instanceof Error ? e.message : String(e);
+                        if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                            throw e;
+                        }
+                    }
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(42);
+                console.log('[KanbanDatabase] V42 migration completed: subtask_plan_id, base_branch, tier columns added to worktrees');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V42 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
         }
     }
 

@@ -6970,8 +6970,6 @@ Read the current content above. Determine what's missing. Produce a complete epi
         }
     }
 
-    }
-
     private _updateWebviewRoots(): void {
         const allRoots = this._getWorkspaceRoots();
         const folderUris: vscode.Uri[] = [];

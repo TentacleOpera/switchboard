@@ -366,3 +366,7 @@ Key risks: (1) the file-watcher import race — mitigated by calling `importPlan
 ## Recommendation
 
 Complexity is 6/10 (multi-file, a real race condition, and a path-form subtlety, all reusing existing patterns). **Send to Coder.**
+
+## Review Findings
+
+Implementation matches the plan across all 6 files: poll-result enrichment (ClickUp + Linear), KanbanProvider wiring (importPlanFiles flush → task-ID lookup → move → dispatch), defaults fix (TICKET UPDATER / COMPLETED), setup.html copy + busy state + success message, and the idempotent startup migration. Two CRITICAL compile errors were found and fixed: the migration in `extension.ts` called `kanbanProvider.getWorkspaceRoots()`, `activeTaskViewerProvider.getClickUpService()`, and `getLinearService()` — none of which existed as public methods (only private `_`-prefixed variants). Public wrapper methods were added to `KanbanProvider.ts` (line 616) and `TaskViewerProvider.ts` (lines 5852–5858). Two NITs remain (benign double board-refresh from `_scheduleBoardRefresh` after `moveCardToColumnByPlanFile` already calls `_refreshBoard`; pre-existing Linear empty-inbox-state silent success) — neither warrants a fix. No compilation or tests were run per session directives; remaining risk is runtime-only verification of the full pipeline (agent dispatch with `dragDropMode: 'prompt'`, write-back on COMPLETED).

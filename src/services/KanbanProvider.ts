@@ -19,7 +19,7 @@ import {
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions } from './agentPromptBuilder';
-import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
+import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
@@ -606,6 +606,15 @@ export class KanbanProvider implements vscode.Disposable {
 
     private _getWorkspaceRoots(): string[] {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+    }
+
+    /**
+     * Public accessor for workspace roots — used by the activation-time
+     * triage-rule migration in extension.ts. Thin wrapper over the private
+     * method to avoid widening visibility of the internal helper itself.
+     */
+    public getWorkspaceRoots(): string[] {
+        return this._getWorkspaceRoots();
     }
 
     private _getAllowedRoots(): Set<string> {
@@ -2681,11 +2690,17 @@ export class KanbanProvider implements vscode.Disposable {
 
         // Build epic -> worktree path map from active worktrees (replaces deleted meta keys)
         const worktreePathMap = new Map<string, string>();
+        // subtask_plan_id -> worktree path (per-subtask mode); checked before the epic map
+        // in expandEpicSubtaskPlans so each subtask routes to its own isolated worktree.
+        const subtaskWorktreePathMap = new Map<string, string>();
         if (hasDb) {
             const wts = await db.getWorktrees();
             for (const wt of wts) {
                 if (wt.epic_id) {
                     worktreePathMap.set(String(wt.epic_id), wt.path);
+                }
+                if (wt.subtask_plan_id) {
+                    subtaskWorktreePathMap.set(String(wt.subtask_plan_id), wt.path);
                 }
             }
         }
@@ -2731,7 +2746,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             if (card.isEpic && hasDb && card.planId) {
                 const subtaskPlans = await this.expandEpicSubtaskPlans(
-                    workspaceRoot, card.planId, card.topic, card.column, worktreePath, worktreePathMap
+                    workspaceRoot, card.planId, card.topic, card.column, worktreePath, worktreePathMap, subtaskWorktreePathMap
                 );
                 for (const sp of subtaskPlans) { promptPlans.push(sp); }
             }
@@ -2746,6 +2761,11 @@ export class KanbanProvider implements vscode.Disposable {
      * (_cardsToPromptPlans, which passes a worktreePathMap) and the CLI-dispatch
      * path (_resolveKanbanDispatchPlans in TaskViewerProvider, which passes only
      * a resolved worktreePath). Does not mutate any caller array.
+     *
+     * Precedence for each subtask's worktree: its own subtask-bound worktree (per-subtask
+     * mode) -> the caller-supplied epic worktreePathMap/worktreePath -> undefined. When
+     * subtaskWorktreePathMap is omitted (callers not yet threading it through), it is
+     * fetched from the DB here so every call site benefits without a signature change.
      */
     public async expandEpicSubtaskPlans(
         workspaceRoot: string,
@@ -2753,16 +2773,25 @@ export class KanbanProvider implements vscode.Disposable {
         epicTopic: string,
         epicColumn: string,
         worktreePath?: string,
-        worktreePathMap?: Map<string, string>
+        worktreePathMap?: Map<string, string>,
+        subtaskWorktreePathMap?: Map<string, string>
     ): Promise<BatchPromptPlan[]> {
         const out: BatchPromptPlan[] = [];
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady()) || !epicPlanId) { return out; }
         const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+        let stWtMap = subtaskWorktreePathMap;
+        if (!stWtMap) {
+            stWtMap = new Map<string, string>();
+            const wts = await db.getWorktrees();
+            for (const wt of wts) {
+                if (wt.subtask_plan_id) { stWtMap.set(String(wt.subtask_plan_id), wt.path); }
+            }
+        }
         for (const st of subtasks) {
-            const stWorktreePath = st.epicId
-                ? (worktreePathMap?.get(String(st.epicId)) ?? worktreePath)
-                : worktreePath;
+            const ownWorktreePath = stWtMap.get(String(st.planId));
+            const stWorktreePath = ownWorktreePath
+                ?? (st.epicId ? (worktreePathMap?.get(String(st.epicId)) ?? worktreePath) : worktreePath);
             out.push({
                 topic: `[SUBTASK] ${st.topic}`,
                 absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
@@ -2770,6 +2799,7 @@ export class KanbanProvider implements vscode.Disposable {
                 workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
                 sessionId: st.sessionId || st.planId,
                 worktreePath: stWorktreePath,
+                hasOwnWorktree: !!ownWorktreePath,
                 isSubtask: true,
                 epicTopic,
                 epicId: epicPlanId
@@ -3144,6 +3174,19 @@ export class KanbanProvider implements vscode.Disposable {
         return { designSystemDocLink };
     }
 
+    private async _buildEpicDirectivePrefix(workspaceRoot: string): Promise<string> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return '';
+        const ultracode = (await db.getConfig('epic_ultracode_enabled')) === 'true';
+        const goal = (await db.getConfig('epic_goal_enabled')) === 'true';
+        if (!goal && !ultracode) return '';
+        let prefix = '';
+        // /goal must be position-zero for the host to parse it as a slash command.
+        if (goal) { prefix += `${GOAL_EPIC_PREFIX}\n`; }
+        if (ultracode) { prefix += `${ULTRACODE_EPIC_PREFIX}\n\n`; }
+        return prefix;
+    }
+
     public async generateUnifiedPrompt(
         role: string,
         plans: BatchPromptPlan[],
@@ -3181,12 +3224,21 @@ export class KanbanProvider implements vscode.Disposable {
             }
             const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
             const instructions = promptTab || agentConfig?.promptInstructions || '';
-            return buildCustomAgentPrompt(
+            const customBuilt = buildCustomAgentPrompt(
                 plans,
                 instructions || undefined,
                 mergedAddons,
                 workspaceRoot
             );
+            // This branch returns early, before the built-in epic-directive block
+            // below — so custom agents must have their own opt-in prepend here or
+            // they'd never receive the directive regardless of the toggle.
+            const primaryPlan = plans[0];
+            if (primaryPlan?.isEpic && mergedAddons.applyEpicDirectives === true) {
+                const prefix = await this._buildEpicDirectivePrefix(workspaceRoot);
+                return `${prefix}${customBuilt}`;
+            }
+            return customBuilt;
         }
 
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
@@ -3284,7 +3336,8 @@ export class KanbanProvider implements vscode.Disposable {
         const hasSubtasks = plans.some(p => p.isSubtask);
         if (hasSubtasks) {
             const epicPlan = plans.find(p => !p.isSubtask);
-            const subtaskCount = plans.filter(p => p.isSubtask).length;
+            const subtaskPlans = plans.filter(p => p.isSubtask);
+            const subtaskCount = subtaskPlans.length;
             resolvedOptions.epicMode = true;
             resolvedOptions.epicTopic = epicPlan?.topic || '';
             resolvedOptions.subtaskCount = subtaskCount;
@@ -3295,6 +3348,35 @@ export class KanbanProvider implements vscode.Disposable {
             if (db && await db.ensureReady()) {
                 const template = (await db.getConfig('epic_prompt_template')) || undefined;
                 if (template) resolvedOptions.epicPromptTemplate = template;
+
+                // `high-low` mode: resolve the epic's planId, its worktree mode, its two
+                // tier worktree paths (for the executor directive, any role), and its
+                // subtask plan list (for the planner consolidation directive only — cheap
+                // to always resolve here since subtaskPlans is already in hand from
+                // the plans array, no extra DB round-trip beyond the worktree lookup).
+                // No-op unless epic_worktree_mode is explicitly 'high-low'.
+                const epicPlanId = epicPlan?.sessionId;
+                if (epicPlanId) {
+                    resolvedOptions.epicPlanId = epicPlanId;
+                    const mode = (await db.getConfig('epic_worktree_mode')) || 'none';
+                    resolvedOptions.epicWorktreeMode = mode;
+                    if (mode === 'high-low') {
+                        const allWorktrees = await db.getWorktrees();
+                        const tierWorktrees = allWorktrees
+                            .filter(w => String(w.epic_id) === String(epicPlanId) && (w.tier === 'high' || w.tier === 'low'))
+                            .map(w => ({ tier: w.tier as 'high' | 'low', worktreePath: w.path }));
+                        if (tierWorktrees.length > 0) {
+                            resolvedOptions.tierWorktrees = tierWorktrees;
+                        }
+                        if (role === 'planner' && subtaskPlans.length > 0) {
+                            resolvedOptions.subtaskPlansForConsolidation = subtaskPlans.map(sp => ({
+                                planId: sp.sessionId || '',
+                                topic: sp.topic,
+                                complexity: sp.complexity
+                            })).filter(sp => sp.planId);
+                        }
+                    }
+                }
             }
         }
 
@@ -3309,21 +3391,14 @@ export class KanbanProvider implements vscode.Disposable {
         // board-level workflow toggle (ultracode / goal) is active, prepend the
         // directive at position-zero of the prompt. Covers both copy and CLI
         // dispatch paths since both funnel through generateUnifiedPrompt.
-        // Skipped for the planner role — /goal and ultracode are execution-mode
-        // directives that would hijack the improve-plan workflow.
+        // Allowlisted to the execution roles — /goal and ultracode are
+        // execution-mode directives that would hijack reviewer/tester/planner
+        // (and other non-execution) prompts.
         const primaryPlan = plans[0];
-        if (primaryPlan && primaryPlan.isEpic && role !== 'planner') {
-            const db = this._getKanbanDb(workspaceRoot);
-            if (db && await db.ensureReady()) {
-                const ultracode = (await db.getConfig('epic_ultracode_enabled')) === 'true';
-                const goal = (await db.getConfig('epic_goal_enabled')) === 'true';
-                if (goal || ultracode) {
-                    let prefix = '';
-                    // /goal must be position-zero for the host to parse it as a slash command.
-                    if (goal) { prefix += `${GOAL_EPIC_PREFIX}\n`; }
-                    if (ultracode) { prefix += `${ULTRACODE_EPIC_PREFIX}\n\n`; }
-                    return `${prefix}${built}`;
-                }
+        if (primaryPlan && primaryPlan.isEpic && ['lead', 'coder', 'intern'].includes(role)) {
+            const prefix = await this._buildEpicDirectivePrefix(workspaceRoot);
+            if (prefix) {
+                return `${prefix}${built}`;
             }
         }
         return built;
@@ -7867,6 +7942,28 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }
+            case 'getEpicWorktreeMode': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                await this._sendWorktreeConfig(workspaceRoot);
+                break;
+            }
+            case 'setEpicWorktreeMode': {
+                const { mode, workspaceRoot: msgRoot } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
+                if (!workspaceRoot) break;
+                const validModes = ['none', 'per-subtask', 'high-low'];
+                if (!validModes.includes(mode)) {
+                    vscode.window.showWarningMessage(`Invalid epic worktree mode: ${mode}`);
+                    break;
+                }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                await db.setConfig('epic_worktree_mode', mode);
+                await this._sendWorktreeConfig(workspaceRoot);
+                break;
+            }
             case 'openWorktreeTerminals': {
                 const { worktreeId, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
@@ -7897,6 +7994,30 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !await db.ensureReady()) break;
+
+                // Per-subtask mode changes the merge TARGET for two of the three worktree
+                // kinds: a subtask worktree merges into its epic's integration worktree
+                // (not main), and merging the integration worktree itself into main also
+                // requires cleaning up its now-converged subtask children. Plain/project
+                // worktrees (no subtask_plan_id, no epic_id, or an epic worktree from
+                // `none` mode with no subtask children) keep the original main-merge path.
+                const allWorktrees = await db.getWorktrees();
+                const wtRow = allWorktrees.find(w => w.id === Number(worktreeId));
+
+                if (wtRow?.subtask_plan_id && wtRow.epic_id) {
+                    await this._mergeSubtaskIntoIntegration(workspaceRoot, db, wtRow);
+                    await this._sendWorktreeConfig(workspaceRoot);
+                    break;
+                }
+
+                const isIntegrationWorktree = !!wtRow && !!wtRow.epic_id && !wtRow.subtask_plan_id
+                    && allWorktrees.some(w => w.subtask_plan_id && String(w.epic_id) === String(wtRow.epic_id));
+                if (isIntegrationWorktree && wtRow) {
+                    await this._mergeEpicIntegrationIntoMain(workspaceRoot, db, wtRow);
+                    await this._sendWorktreeConfig(workspaceRoot);
+                    break;
+                }
+
                 try {
                     const execFileAsync = promisify(cp.execFile);
                     await execFileAsync('git', ['-C', workspaceRoot, 'merge', branch], { timeout: 30000 });
@@ -7971,6 +8092,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     break;
                 }
                 await db.updateEpicStatus(subtask.planId, 0, epic.planId);
+                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, epic.planId, epic.topic, subtask.planId, subtask.topic);
                 await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
                 await this._refreshBoard(workspaceRoot);
                 break;
@@ -8088,6 +8210,16 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!subtask) break;
                 const epicId = subtask.epicId;
                 await db.updateEpicStatus(subtask.planId, 0, '');
+                // per-subtask mode: a subtask removed from its epic gets its worktree
+                // abandoned (discarded, not merged) — it's no longer part of the epic's
+                // convergence, so its branch shouldn't land in the integration branch.
+                const subtaskWorktrees = (await db.getWorktrees()).filter(w => w.subtask_plan_id === subtask.planId);
+                for (const wt of subtaskWorktrees) {
+                    await this._removeWorktreeRow(workspaceRoot, db, wt, 'abandoned');
+                }
+                if (subtaskWorktrees.length > 0) {
+                    await this._pruneWorktrees(workspaceRoot);
+                }
                 if (epicId) {
                     await this._regenerateEpicFile(workspaceRoot, epicId, db);
                 }
@@ -8101,6 +8233,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!db || !(await db.ensureReady())) break;
                 const epic = await db.getPlanByPlanId(msg.sessionId);
                 if (!epic || !epic.isEpic) break;
+                // Epic abandon: remove every child worktree (subtask + integration) —
+                // discarded, not merged. Runs regardless of deleteSubtasks: even when
+                // subtasks are kept on the board (unlinked from the epic), their
+                // per-subtask worktrees no longer have a convergence point to target.
+                await this._cleanupEpicWorktrees(workspaceRoot, db, epic.planId, 'abandoned');
                 if (msg.deleteSubtasks) {
                     const subtasks = await db.getSubtasksByEpicId(epic.planId);
                     for (const st of subtasks) {
@@ -8338,7 +8475,299 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return content;
     }
 
-    private async _createSafetyWorktree(workspaceRoot: string, epicTopic?: string, repoName?: string): Promise<{ branch: string; path: string }> {
+    /**
+     * Resolve the repo's default branch (what the epic integration worktree branches
+     * off). Prefers the remote HEAD symref (works even when main/master isn't checked
+     * out locally); falls back to checking for local main/master; falls back to the
+     * currently checked-out branch so worktree creation never hard-fails on an unusual
+     * default-branch name.
+     */
+    private async _resolveDefaultBranch(gitRoot: string): Promise<string> {
+        const execFileAsync = promisify(cp.execFile);
+        try {
+            const { stdout } = await execFileAsync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: gitRoot });
+            const ref = stdout.trim().replace(/^origin\//, '');
+            if (ref) return ref;
+        } catch { /* no remote / no origin/HEAD — fall through */ }
+        for (const candidate of ['main', 'master']) {
+            try {
+                await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${candidate}`], { cwd: gitRoot });
+                return candidate;
+            } catch { /* candidate branch doesn't exist locally */ }
+        }
+        try {
+            const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: gitRoot });
+            const cur = stdout.trim();
+            if (cur && cur !== 'HEAD') return cur;
+        } catch { /* detached HEAD or other failure */ }
+        return 'main';
+    }
+
+    /**
+     * Lazy-create (idempotent) the epic integration worktree for `per-subtask` mode.
+     * Mirrors the "epic already has an active worktree" guard from `createWorktreeForEpic`
+     * (check-then-create against `getWorktrees()`) so two near-simultaneous subtask-adds
+     * racing to provision the integration worktree converge on the same row instead of
+     * creating two. Returns the existing or newly-created worktree row.
+     */
+    private async _ensureEpicIntegrationWorktree(
+        workspaceRoot: string,
+        db: KanbanDatabase,
+        epicPlanId: string,
+        epicTopic: string
+    ): Promise<WorktreeRow | undefined> {
+        const allWorktrees = await db.getWorktrees();
+        // The integration worktree is the one with neither subtask_plan_id (per-subtask mode's
+        // per-subtask worktrees) nor tier (high-low mode's tier worktrees) set — excluding both
+        // keeps this lookup correct in both modes rather than mistaking a tier worktree for the
+        // integration worktree it was itself branched off of.
+        const existing = allWorktrees.find(w => String(w.epic_id) === String(epicPlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+        if (existing) return existing;
+
+        try {
+            const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, epicTopic, undefined, defaultBranch);
+            await db.addWorktree(branch, wtPath, epicPlanId, undefined, undefined, defaultBranch);
+            if (this._taskViewerProvider) {
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                const activeAgents = Object.entries(visibleAgents)
+                    .filter(([_, enabled]) => enabled)
+                    .map(([role]) => role);
+                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+            }
+            return await db.getWorktreeByBranch(branch);
+        } catch (e: any) {
+            console.error(`[KanbanProvider] _ensureEpicIntegrationWorktree: failed to create integration worktree for epic ${epicPlanId}:`, e);
+            // Race fallback: another near-simultaneous call may have created it first.
+            const retried = await db.getWorktrees();
+            return retried.find(w => String(w.epic_id) === String(epicPlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+        }
+    }
+
+    /**
+     * `high-low` mode: provision the epic integration worktree, then exactly two tier
+     * worktrees branched off it — `tier='high'` and `tier='low'`. Idempotent (checks
+     * existing tier worktrees first, same guard style as `_ensureEpicIntegrationWorktree`).
+     *
+     * All-or-nothing: if either tier worktree fails to create, the one that DID succeed
+     * (plus the integration worktree, since it has no purpose without both tiers) is torn
+     * down so a failed `createEpicFromPlanIds` call never leaves a half-provisioned epic
+     * behind. Best-effort logs on rollback failure — a lingering worktree row is a lesser
+     * problem than throwing out of epic creation after the DB/file writes above already
+     * committed.
+     */
+    private async _provisionHighLowTierWorktrees(
+        workspaceRoot: string,
+        db: KanbanDatabase,
+        epicPlanId: string,
+        epicTopic: string
+    ): Promise<void> {
+        const allWorktrees = await db.getWorktrees();
+        const existingHigh = allWorktrees.find(w => String(w.epic_id) === String(epicPlanId) && w.tier === 'high' && w.status === 'active');
+        const existingLow = allWorktrees.find(w => String(w.epic_id) === String(epicPlanId) && w.tier === 'low' && w.status === 'active');
+        if (existingHigh && existingLow) return;
+
+        // Track whether THIS call created the integration worktree (vs. it already existing
+        // from a prior partial run) so rollback only removes what this call is responsible for.
+        const integrationPreexisted = allWorktrees.some(w => String(w.epic_id) === String(epicPlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+        const integration = await this._ensureEpicIntegrationWorktree(workspaceRoot, db, epicPlanId, epicTopic);
+        if (!integration) {
+            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: no integration worktree available for epic ${epicPlanId}, skipping tier worktrees.`);
+            return;
+        }
+
+        const activeAgents = this._taskViewerProvider
+            ? Object.entries(await this._getVisibleAgents(workspaceRoot)).filter(([_, enabled]) => enabled).map(([role]) => role)
+            : [];
+
+        let highResult: { branch: string; path: string } | undefined;
+        let lowResult: { branch: string; path: string } | undefined;
+        try {
+            if (!existingHigh) {
+                highResult = await this._createSafetyWorktree(workspaceRoot, `${epicTopic}-high`, undefined, integration.branch);
+                await db.addWorktree(highResult.branch, highResult.path, epicPlanId, undefined, undefined, integration.branch, 'high');
+                if (this._taskViewerProvider) await this._taskViewerProvider.ensureWorktreeTerminals(highResult.path, activeAgents);
+            }
+            if (!existingLow) {
+                lowResult = await this._createSafetyWorktree(workspaceRoot, `${epicTopic}-low`, undefined, integration.branch);
+                await db.addWorktree(lowResult.branch, lowResult.path, epicPlanId, undefined, undefined, integration.branch, 'low');
+                if (this._taskViewerProvider) await this._taskViewerProvider.ensureWorktreeTerminals(lowResult.path, activeAgents);
+            }
+        } catch (e: any) {
+            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: failed to create tier worktrees for epic ${epicPlanId}, rolling back:`, e);
+            const execFileAsync = promisify(cp.execFile);
+            const toRemove: Array<{ branch: string; path: string }> = [highResult, lowResult].filter((r): r is { branch: string; path: string } => !!r);
+            // Neither tier survived (both failed, or one failed before the other was even
+            // attempted) AND this call is the one that created the integration worktree —
+            // it now has no purpose, so remove it too rather than leaving an orphaned
+            // integration branch/worktree behind.
+            if (!existingHigh && !existingLow && !integrationPreexisted && toRemove.every(r => r.branch !== integration.branch)) {
+                toRemove.push(integration);
+            }
+            for (const created of toRemove) {
+                try {
+                    if (fs.existsSync(created.path)) {
+                        await execFileAsync('git', ['worktree', 'remove', '--force', created.path], { cwd: workspaceRoot });
+                    }
+                    const row = await db.getWorktreeByBranch(created.branch);
+                    if (row) await db.updateWorktreeStatus(row.id, 'abandoned');
+                } catch (rollbackErr) {
+                    console.warn(`[KanbanProvider] _provisionHighLowTierWorktrees: rollback cleanup failed for ${created.branch} (continuing):`, rollbackErr);
+                }
+            }
+            await this._pruneWorktrees(workspaceRoot);
+        }
+    }
+
+    /**
+     * Create a per-subtask worktree branched off the epic integration branch, when the
+     * epic's mode is `per-subtask`. Lazy-creates the integration worktree first if it
+     * doesn't exist yet. Guards against duplicate creation (subtask already has an active
+     * worktree). No-op (returns undefined) when mode isn't `per-subtask` or the subtask
+     * already has one.
+     *
+     * `modeSnapshot` lets a caller that already read `epic_worktree_mode` once for the
+     * whole operation (e.g. the subtask loop in `createEpicFromPlanIds`) pass it through,
+     * so a mode toggle mid-loop can't split one create/assign call between two behaviors.
+     * Callers that haven't already read it (single-subtask entry points) omit it and this
+     * reads it fresh.
+     */
+    private async _provisionSubtaskWorktreeIfNeeded(
+        workspaceRoot: string,
+        db: KanbanDatabase,
+        epicPlanId: string,
+        epicTopic: string,
+        subtaskPlanId: string,
+        subtaskTopic: string,
+        modeSnapshot?: string
+    ): Promise<void> {
+        const mode = modeSnapshot ?? ((await db.getConfig('epic_worktree_mode')) || 'none');
+        if (mode !== 'per-subtask') return;
+
+        const allWorktrees = await db.getWorktrees();
+        const existingForSubtask = allWorktrees.find(w => w.subtask_plan_id === subtaskPlanId && w.status === 'active');
+        if (existingForSubtask) return;
+
+        const integration = await this._ensureEpicIntegrationWorktree(workspaceRoot, db, epicPlanId, epicTopic);
+        if (!integration) {
+            console.error(`[KanbanProvider] _provisionSubtaskWorktreeIfNeeded: no integration worktree available for epic ${epicPlanId}, skipping subtask worktree for ${subtaskPlanId}`);
+            return;
+        }
+
+        try {
+            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, subtaskTopic, undefined, integration.branch);
+            await db.addWorktree(branch, wtPath, epicPlanId, undefined, subtaskPlanId, integration.branch);
+            if (this._taskViewerProvider) {
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                const activeAgents = Object.entries(visibleAgents)
+                    .filter(([_, enabled]) => enabled)
+                    .map(([role]) => role);
+                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+            }
+        } catch (e: any) {
+            console.error(`[KanbanProvider] _provisionSubtaskWorktreeIfNeeded: failed to create worktree for subtask ${subtaskPlanId}:`, e);
+        }
+    }
+
+    /**
+     * Remove a worktree's on-disk directory + branch and mark it abandoned/merged in the
+     * DB. Log-and-continue on failure rather than throwing — callers that walk multiple
+     * worktrees (epic merge/abandon cleanup) must not let one failure abort the rest.
+     * Still marks the DB row even if the filesystem removal fails, so a dangling worktree
+     * doesn't also show as "active" on the board; `git worktree prune` (called separately
+     * by the caller after the walk) catches the filesystem straggler.
+     */
+    private async _removeWorktreeRow(workspaceRoot: string, db: KanbanDatabase, wt: WorktreeRow, finalStatus: 'merged' | 'abandoned'): Promise<void> {
+        const execFileAsync = promisify(cp.execFile);
+        try {
+            if (wt.path && fs.existsSync(wt.path)) {
+                await execFileAsync('git', ['worktree', 'remove', '--force', wt.path], { cwd: workspaceRoot });
+            }
+        } catch (e) {
+            console.warn(`[KanbanProvider] _removeWorktreeRow: failed to remove worktree dir for ${wt.branch} (continuing):`, e);
+        }
+        try {
+            await db.updateWorktreeStatus(wt.id, finalStatus);
+        } catch (e) {
+            console.warn(`[KanbanProvider] _removeWorktreeRow: failed to update worktree status for ${wt.branch} (continuing):`, e);
+        }
+    }
+
+    /** Best-effort `git worktree prune` to catch stragglers left by a partial cleanup failure. */
+    private async _pruneWorktrees(workspaceRoot: string): Promise<void> {
+        try {
+            const execFileAsync = promisify(cp.execFile);
+            await execFileAsync('git', ['worktree', 'prune'], { cwd: workspaceRoot });
+        } catch (e) {
+            console.warn('[KanbanProvider] _pruneWorktrees: git worktree prune failed (non-fatal):', e);
+        }
+    }
+
+    /**
+     * Walk every child worktree of an epic (integration + all subtask worktrees) and
+     * remove them. Used by both epic abandon (all children discarded) and epic merge
+     * (children cleaned up after their branches have already been merged into the
+     * integration branch, and the integration branch into main). Partial failures are
+     * logged and skipped, not thrown — see `_removeWorktreeRow`. Always ends with a prune.
+     */
+    private async _cleanupEpicWorktrees(workspaceRoot: string, db: KanbanDatabase, epicPlanId: string, finalStatus: 'merged' | 'abandoned'): Promise<void> {
+        const allWorktrees = await db.getWorktrees();
+        const epicWorktrees = allWorktrees.filter(w => String(w.epic_id) === String(epicPlanId));
+        for (const wt of epicWorktrees) {
+            await this._removeWorktreeRow(workspaceRoot, db, wt, finalStatus);
+        }
+        await this._pruneWorktrees(workspaceRoot);
+    }
+
+    /**
+     * Per-subtask mode merge step 1: merge a subtask's branch into the epic integration
+     * worktree's OWN checkout (`git -C <integrationPath> merge <subtaskBranch>`), not into
+     * the main repo checkout. The integration worktree is the convergence point — main
+     * only sees the result once the epic-level merge (`_mergeEpicIntegrationIntoMain`)
+     * runs. Resolves the integration worktree from the subtask row's `epic_id`.
+     */
+    private async _mergeSubtaskIntoIntegration(workspaceRoot: string, db: KanbanDatabase, subtaskWt: WorktreeRow): Promise<void> {
+        const allWorktrees = await db.getWorktrees();
+        const integrationWt = allWorktrees.find(w => String(w.epic_id) === String(subtaskWt.epic_id) && !w.subtask_plan_id && w.status === 'active');
+        if (!integrationWt) {
+            vscode.window.showErrorMessage(`Merge failed: no active epic integration worktree found for this subtask.`);
+            return;
+        }
+        try {
+            const execFileAsync = promisify(cp.execFile);
+            await execFileAsync('git', ['-C', integrationWt.path, 'merge', subtaskWt.branch], { timeout: 30000 });
+            await this._removeWorktreeRow(workspaceRoot, db, subtaskWt, 'merged');
+            await this._pruneWorktrees(workspaceRoot);
+            vscode.window.showInformationMessage(`Merged subtask into epic integration branch: ${subtaskWt.branch} -> ${integrationWt.branch}`);
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
+        }
+    }
+
+    /**
+     * Per-subtask mode merge step 2: merge the epic integration branch into the main repo
+     * checkout, then walk and clean up every remaining child subtask worktree (their
+     * branches are already folded into the integration branch by step 1; any that were
+     * never individually merged are folded in here via the integration branch itself, so
+     * removing their worktrees at this point does not lose work).
+     */
+    private async _mergeEpicIntegrationIntoMain(workspaceRoot: string, db: KanbanDatabase, integrationWt: WorktreeRow): Promise<void> {
+        try {
+            const execFileAsync = promisify(cp.execFile);
+            await execFileAsync('git', ['-C', workspaceRoot, 'merge', integrationWt.branch], { timeout: 30000 });
+            await this._removeWorktreeRow(workspaceRoot, db, integrationWt, 'merged');
+            if (integrationWt.epic_id) {
+                await this._cleanupEpicWorktrees(workspaceRoot, db, integrationWt.epic_id, 'merged');
+            } else {
+                await this._pruneWorktrees(workspaceRoot);
+            }
+            vscode.window.showInformationMessage(`Merged epic integration branch into main: ${integrationWt.branch}`);
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Epic merge failed: ${e.message}`);
+        }
+    }
+
+    private async _createSafetyWorktree(workspaceRoot: string, epicTopic?: string, repoName?: string, baseBranch?: string): Promise<{ branch: string; path: string }> {
         const execFileAsync = promisify(cp.execFile);
 
         // Resolve workspace root first — getControlPlaneSelectionStatus returns garbage if this is empty.
@@ -8352,6 +8781,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
         if (repoName && (repoName.includes('..') || repoName.includes('/') || repoName.includes('\\'))) {
             throw new Error('Invalid repository name');
+        }
+
+        if (baseBranch && (baseBranch.includes('..') || baseBranch.includes('/') || baseBranch.includes('\\'))) {
+            throw new Error('Invalid base branch name');
         }
 
         let effectiveGitRoot = workspaceRoot;
@@ -8387,7 +8820,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             try {
                 const fullPath = path.join(worktreesParent, branch);
                 // CRITICAL: git worktree add MUST run from effectiveGitRoot (the git repo), not the control plane root
-                await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: effectiveGitRoot });
+                const worktreeArgs = baseBranch
+                    ? ['worktree', 'add', '-b', branch, fullPath, baseBranch]
+                    : ['worktree', 'add', '-b', branch, fullPath];
+                await execFileAsync('git', worktreeArgs, { cwd: effectiveGitRoot });
                 return { branch, path: fullPath };
             } catch (e: any) {
                 if (e.message?.includes('already exists') || e.message?.includes('already used')) {
@@ -8408,6 +8844,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         
         const workspaceId = await db.getWorkspaceId() || '';
         const suppressMainTerminals = (await db.getMeta('worktree_suppress_main_terminals')) === 'true';
+        const epicWorktreeMode = (await db.getConfig('epic_worktree_mode')) || 'none';
         const projects = await db.getProjects(workspaceId);
         
         // Fetch all active epic plans to pass to webview for selection and mapping
@@ -8463,6 +8900,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             worktrees: mappedWorktrees,
             controlPlaneMode: cpStatus.mode,
             suppressMainTerminals,
+            epicWorktreeMode,
             projects,
             epics,
             availableRepos,
@@ -8577,6 +9015,44 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             newContent = existingContent.slice(0, beginIdx) + subtaskSection + existingContent.slice(endIdx + endMarker.length);
         } else {
             newContent = existingContent.replace(/\n*$/, '') + '\n\n' + subtaskSection + '\n';
+        }
+
+        // WORKTREES block: only emitted when the epic actually has worktrees (per-subtask
+        // or high-low mode) — `none`-mode epics see no change to their file. Mirrors the
+        // SUBTASKS block's begin/end marker replace-or-append shape exactly, including the
+        // byte-identical no-op skip below, so this doesn't cause the file watcher to
+        // re-fire on every regen.
+        const allWorktrees = await db.getWorktrees();
+        const epicWorktrees = allWorktrees.filter(w => String(w.epic_id) === String(epicPlanId));
+        if (epicWorktrees.length > 0) {
+            // The true integration worktree has neither subtask_plan_id (per-subtask mode's
+            // per-subtask worktrees) nor tier (high-low mode's tier worktrees) set.
+            const integrationWt = epicWorktrees.find(w => !w.subtask_plan_id && !w.tier);
+            const subtaskWtByPlanId = new Map(epicWorktrees.filter(w => w.subtask_plan_id).map(w => [String(w.subtask_plan_id), w]));
+            const tierWts = epicWorktrees.filter(w => w.tier);
+            const worktreeLines: string[] = [];
+            if (integrationWt) {
+                worktreeLines.push(`- **Epic integration**: \`${integrationWt.branch}\` → \`${integrationWt.path}\``);
+            }
+            for (const wt of tierWts) {
+                worktreeLines.push(`- **${wt.tier === 'high' ? 'High' : 'Low'}-complexity tier**: \`${wt.branch}\` → \`${wt.path}\``);
+            }
+            for (const st of subtasks) {
+                const wt = subtaskWtByPlanId.get(String(st.planId));
+                if (!wt) continue;
+                const basename = path.basename(st.planFile);
+                worktreeLines.push(`- [${st.topic || basename}](../plans/${basename}): \`${wt.branch}\` → \`${wt.path}\``);
+            }
+            const worktreeSection = `<!-- BEGIN WORKTREES (auto-generated, do not edit) -->\n## Worktrees\n${worktreeLines.join('\n')}\n<!-- END WORKTREES -->`;
+            const wtBeginMarker = '<!-- BEGIN WORKTREES';
+            const wtEndMarker = '<!-- END WORKTREES -->';
+            const wtBeginIdx = newContent.indexOf(wtBeginMarker);
+            const wtEndIdx = newContent.indexOf(wtEndMarker);
+            if (wtBeginIdx !== -1 && wtEndIdx !== -1) {
+                newContent = newContent.slice(0, wtBeginIdx) + worktreeSection + newContent.slice(wtEndIdx + wtEndMarker.length);
+            } else {
+                newContent = newContent.replace(/\n*$/, '') + '\n\n' + worktreeSection + '\n';
+            }
         }
         // Embed/refresh a derived **Complexity:** marker (= max active-subtask score) in the
         // epic file. Epic complexity is derived in the DB, but the plan watcher's
@@ -8784,12 +9260,27 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // the DB record is already committed above with is_epic=1.
         GlobalPlanWatcherService.registerPendingCreation(epicPath);
         await fs.promises.writeFile(epicPath, epicContent, 'utf8');
+
+        // per-subtask mode: provision the epic integration worktree up front (even for a
+        // blank epic with zero subtasks yet) so it exists as soon as the epic does — the
+        // convergence point subtasks branch off. Read the mode once and snapshot it for
+        // the rest of this call so a mode toggle mid-creation can't split the epic between
+        // two provisioning behaviors.
+        const epicWorktreeModeSnapshot = (await db.getConfig('epic_worktree_mode')) || 'none';
+        if (epicWorktreeModeSnapshot === 'per-subtask') {
+            await this._ensureEpicIntegrationWorktree(workspaceRoot, db, effectiveEpicPlanId, epicName);
+        } else if (epicWorktreeModeSnapshot === 'high-low') {
+            await this._provisionHighLowTierWorktrees(workspaceRoot, db, effectiveEpicPlanId, epicName);
+        }
+
         for (const st of subtasks) {
             // Use planId (not sessionId) — file-watcher-imported plans have session_id=''
             // and getPlanBySessionId('') would find an arbitrary other plan instead.
             const linkOk = await db.updateEpicStatus(st.planId || st.sessionId, 0, effectiveEpicPlanId);
             if (!linkOk) {
                 console.warn(`[KanbanProvider] createEpicFromPlanIds: updateEpicStatus failed for subtask ${st.planId}`);
+            } else {
+                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, effectiveEpicPlanId, epicName, st.planId || st.sessionId, st.topic, epicWorktreeModeSnapshot);
             }
         }
         await this._regenerateEpicFile(workspaceRoot, effectiveEpicPlanId, db);
@@ -8842,6 +9333,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (lockColumns.includes(epic.kanbanColumn)) {
             return { success: false, assigned: [], skipped: [], error: 'Cannot modify subtasks of an epic in a locked column.' };
         }
+        // Snapshot the mode once for the whole batch — see _provisionSubtaskWorktreeIfNeeded's
+        // modeSnapshot doc: a toggle mid-batch must not split one assignPlansToEpic call
+        // between two provisioning behaviors.
+        const epicWorktreeModeSnapshot = (await db.getConfig('epic_worktree_mode')) || 'none';
         const assigned: string[] = [];
         const skipped: string[] = [];
         for (const pid of ids) {
@@ -8850,6 +9345,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             if (!subtask || subtask.isEpic) { skipped.push(pid); continue; }
             if (subtask.epicId && subtask.epicId !== epic.planId) { skipped.push(pid); continue; }
             await db.updateEpicStatus(subtask.planId, 0, epic.planId);
+            await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, epic.planId, epic.topic, subtask.planId, subtask.topic, epicWorktreeModeSnapshot);
             assigned.push(pid);
         }
         if (assigned.length > 0) {

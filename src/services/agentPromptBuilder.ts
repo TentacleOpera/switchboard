@@ -36,6 +36,11 @@ export interface BatchPromptPlan {
     isSubtask?: boolean;
     epicTopic?: string;
     isEpic?: boolean;
+    // True when worktreePath is THIS subtask's own dedicated worktree (per-subtask mode),
+    // as opposed to an inherited epic-level/project-level worktree shared by all subtasks.
+    // Distinguishes the two so prompt selection doesn't mistake a shared fallback worktree
+    // for per-subtask isolation.
+    hasOwnWorktree?: boolean;
 }
 
 /**
@@ -197,6 +202,18 @@ export interface PromptBuilderOptions {
     prdLink?: string;
     /** Full content of the active project's PRD, embedded verbatim. */
     prdContent?: string;
+    /**
+     * The epic's `epic_worktree_mode` snapshot ('none' | 'per-subtask' | 'high-low').
+     * Only meaningful when epicMode is true. Selection between the base/per-subtask/high-low
+     * orchestration directives is a NO-OP for 'none' and unset — those keep existing behavior.
+     */
+    epicWorktreeMode?: string;
+    /** The epic's planId. Required for the high-low planner consolidation directive (assign-to-epic.js target) and the high-low executor directive. */
+    epicPlanId?: string;
+    /** Pre-provisioned tier worktrees for a `high-low`-mode epic, resolved from the worktrees table's `tier` column. Drives EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW. */
+    tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
+    /** The epic's subtask plans (planId/topic/complexity), for the planner high-low consolidation directive. Only injected when epicWorktreeMode === 'high-low' and role === 'planner'. */
+    subtaskPlansForConsolidation?: Array<{ planId: string; topic: string; complexity?: string }>;
 }
 
 export function resolveBaseInstructions(
@@ -354,6 +371,124 @@ export const EPIC_ORCHESTRATION_DIRECTIVE = (epicTopic: string, count: number) =
     `If you do not support subagents, handle each subtask sequentially in the order listed below. ` +
     `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
     `Before starting, briefly tell the user how you are using the workflow to handle these subtasks (e.g. parallel vs sequential and why, how they are grouped, and any review/verification pass you plan to run).`;
+
+/**
+ * `per-subtask` worktree mode variant: the extension has ALREADY pre-provisioned one
+ * worktree per subtask off the shared epic integration branch — this replaces the
+ * "create your own worktree" guidance from the base directive with "dispatch into the
+ * path already assigned to you." Falls back to the base directive at the call site when
+ * no subtask worktree paths resolved (mode mismatch / lazy-create failed) so the agent
+ * always gets usable orchestration guidance either way.
+ */
+export const EPIC_ORCHESTRATION_DIRECTIVE_PER_SUBTASK = (epicTopic: string, subtaskWorktrees: Array<{ topic: string; worktreePath: string }>) =>
+    `EPIC MODE (worktree-per-subtask): You are implementing the epic "${epicTopic}" which consists of ${subtaskWorktrees.length} subtask(s).\n` +
+    `Each subtask has ALREADY been assigned its own isolated git worktree, pre-created off the shared epic integration branch. Do NOT create your own worktrees for these subtasks. ` +
+    `Use your native subagent or orchestration capabilities to dispatch one subagent per subtask into its assigned worktree path below, so subagents cannot collide on files:\n` +
+    subtaskWorktrees.map(sw => `  - [SUBTASK] ${sw.topic} → Worktree: ${sw.worktreePath}`).join('\n') + '\n' +
+    `If you do not support subagents, handle each subtask sequentially, running each one's changes from inside its assigned worktree path. ` +
+    `All subtasks are part of a single delivery unit — do not treat them as independent tickets. Do not merge branches yourself; the extension owns convergence into the epic integration branch and, later, into main.\n` +
+    `Before starting, briefly tell the user how you are using the workflow to handle these subtasks (e.g. parallel vs sequential and why, how they are grouped, and any review/verification pass you plan to run).`;
+
+/**
+ * `high-low` worktree mode variant: the extension has ALREADY pre-provisioned exactly two
+ * tier worktrees (high/low complexity) off the shared epic integration branch. The planner
+ * (dispatched separately, see PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE) is expected to have
+ * consolidated the epic's subtask plans into two new plan files, but may not have produced
+ * exactly two (a broken/partial planner run) — so this directive references the tier
+ * worktrees by their `tier` column/label, not by an assumed count or order of plan files.
+ */
+export const EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW = (epicTopic: string, tierWorktrees: Array<{ tier: 'high' | 'low'; worktreePath: string }>) =>
+    `EPIC MODE (high/low complexity split): You are implementing the epic "${epicTopic}".\n` +
+    `The epic's subtask plans have been consolidated into complexity tiers (high-complexity, low-complexity). Each tier has ALREADY been assigned its own isolated git worktree, pre-created off the shared epic integration branch. Do NOT create your own worktrees for these tiers.\n` +
+    `Use your native subagent or orchestration capabilities to dispatch one subagent per tier below, running IN PARALLEL, each from inside its assigned worktree path:\n` +
+    tierWorktrees.map(tw => `  - [${tw.tier.toUpperCase()} TIER] Worktree: ${tw.worktreePath}`).join('\n') + '\n' +
+    `Match each tier's subagent to the consolidated plan file(s) intended for that tier (check each plan's "Consolidated From" / tier marker in its metadata) — do not assume plan file order or count; a partial planner run may not have produced exactly one plan per tier. ` +
+    `If you do not support subagents, process the high tier first, then the low tier, each fully from inside its assigned worktree path. ` +
+    `Do not merge branches yourself; the extension owns convergence into the epic integration branch and, later, into main.\n` +
+    `Before starting, briefly tell the user how you are using the workflow to handle these tiers (parallel subagent assignment, which plan(s) map to which tier, and any review/verification pass you plan to run).`;
+
+/**
+ * Injected into the PLANNER role's prompt only, only for `high-low`-mode epics. Additive to
+ * improve-plan.md, not a replacement — the planner still runs the full planning workflow, this
+ * just adds a consolidation pass on top of it.
+ *
+ * LOAD-BEARING DETAIL: `GlobalPlanWatcherService._handlePlanFile` (src/services/GlobalPlanWatcherService.ts)
+ * imports new/changed `.switchboard/plans/*.md` files via `KanbanDatabase.insertFileDerivedPlan`
+ * (src/services/KanbanDatabase.ts:1387). That INSERT statement does NOT reference `epic_id` at
+ * all — there is no `**Epic ID:**`-style marker the watcher parses to link a file-derived plan to
+ * an epic. `epic_id` is a DB-owned column, only ever set imperatively via
+ * `KanbanDatabase.updateEpicStatus(planId, isEpic, epicId)` — see `KanbanProvider.createEpicFromPlanIds`'s
+ * subtask-linking loop, and `PlanFileImporter.ts`'s explicit comment that file-derived imports
+ * have "no business setting DB-owned columns (is_epic, epic_id, ...)". So the two new consolidated
+ * plans CANNOT be linked to the epic by embedding a marker in their file content — they must be
+ * linked via the `assign-to-epic.js` script (routes through the running extension's
+ * `/kanban/epic/assign` endpoint, which calls updateEpicStatus + regenerates the epic file). The
+ * directive below instructs the planner to write the files first (so they get a planId from the
+ * watcher import) and then explicitly run assign-to-epic.js — this is the only correct linkage
+ * path; a content marker would silently produce orphan CREATED cards.
+ */
+export const PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE = (epicTopic: string, epicPlanId: string, subtaskPlans: Array<{ planId: string; topic: string; complexity?: string }>) =>
+    `HIGH/LOW COMPLEXITY CONSOLIDATION (additive to the planning workflow above — run this AFTER completing the normal planning steps, not instead of them):\n` +
+    `This dispatch is for the epic "${epicTopic}" (epic planId: ${epicPlanId}), which has ${subtaskPlans.length} existing subtask plan(s):\n` +
+    subtaskPlans.map(sp => `  - [${sp.complexity ?? 'Unknown'}] ${sp.topic} — planId: ${sp.planId}`).join('\n') + '\n' +
+    `1. Read all ${subtaskPlans.length} subtask plan files listed above in full.\n` +
+    `2. Consolidate them into EXACTLY TWO new plan files, following the same section structure as the subtask plans (Goal, Metadata, Complexity Audit, Proposed Changes, Verification Plan, etc.):\n` +
+    `   - One HIGH-complexity plan combining every subtask scoring 5 or above.\n` +
+    `   - One LOW-complexity plan combining every subtask scoring 4 or below.\n` +
+    `   - If every subtask lands in only one tier, still write both files — the low/high plan for the empty tier should state there is no work for that tier (do not skip writing it; the executor dispatch depends on both existing).\n` +
+    `3. Write the two new files to .switchboard/plans/ with descriptive filenames. Give each a "**Complexity:**" metadata line reflecting its tier (>=5 for the high plan, <=4 for the low plan) and a "**Consolidated From:**" metadata line listing the original subtask planIds, for human traceability.\n` +
+    `4. Do NOT delete, edit, or replace the ${subtaskPlans.length} original subtask plan files — keep them as-is; the new files are additional, not replacements.\n` +
+    `5. After writing both files, wait a few seconds for the file watcher to import them (they need to be picked up and assigned a planId before they can be linked), then run:\n` +
+    `   node .agents/skills/kanban_operations/assign-to-epic.js ${epicPlanId} '["<new-high-plan-planId>","<new-low-plan-planId>"]'\n` +
+    `   Look up each new plan's planId via .agents/skills/kanban_operations/get-state.js (matched by plan_file/topic) before running assign-to-epic.js — do not guess the planId.\n` +
+    `6. Report the two new plan file paths and their planIds at the end of your response so the executor dispatch can find them.`;
+
+/**
+ * Context bundle for `resolveEpicOrchestrationDirective` — carries whatever the
+ * three variants each need. `subtaskWorktrees`/`tierWorktrees` are independent;
+ * only the one matching the resolved mode is consulted.
+ */
+interface EpicOrchestrationDirectiveContext {
+    subtaskWorktrees?: Array<{ topic: string; worktreePath: string }>;
+    tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
+}
+
+/**
+ * Single selector for the three orchestration-directive variants, keyed on the
+ * epic's `epic_worktree_mode`. Preserves the exact fallback semantics that
+ * previously lived inline in `buildKanbanBatchPrompt`:
+ * - `high-low` tier worktrees are only consulted when mode === 'high-low' (gated).
+ * - Subtask-own worktrees (per-subtask variant) are consulted whenever any resolved
+ *   — independent of the live mode value, matching the pre-refactor `else` branch,
+ *   which kept selecting the per-subtask variant off `hasOwnWorktree` data alone.
+ *   This intentionally covers the case where worktree rows outlive a mode change
+ *   (e.g. epic switched from `per-subtask` to `none`/`high-low` mid-lifecycle
+ *   without deprovisioning existing per-subtask worktree rows).
+ * - Otherwise falls back to the base directive.
+ * Unknown mode values (not `none`/`per-subtask`/`high-low`) that don't resolve to
+ * either variant above log a warning and fall back to the base directive.
+ */
+export function resolveEpicOrchestrationDirective(
+    mode: string | undefined,
+    epicTopic: string,
+    subtaskCount: number,
+    context?: EpicOrchestrationDirectiveContext
+): string {
+    const tierWorktrees = mode === 'high-low' ? (context?.tierWorktrees || []) : [];
+    if (tierWorktrees.length > 0) {
+        return EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW(epicTopic, tierWorktrees);
+    }
+
+    const subtaskWorktrees = context?.subtaskWorktrees || [];
+    if (subtaskWorktrees.length > 0) {
+        return EPIC_ORCHESTRATION_DIRECTIVE_PER_SUBTASK(epicTopic, subtaskWorktrees);
+    }
+
+    if (mode !== undefined && mode !== 'none' && mode !== 'per-subtask' && mode !== 'high-low') {
+        console.warn(`[agentPromptBuilder] Unknown epic_worktree_mode "${mode}" — falling back to base orchestration directive.`);
+    }
+    return EPIC_ORCHESTRATION_DIRECTIVE(epicTopic, subtaskCount);
+}
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
     `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
@@ -519,7 +654,20 @@ export function buildKanbanBatchPrompt(
     const dispatchPrefixCore = [dispatchContextBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
     if (options?.epicMode && options?.epicTopic) {
-        planList = `${EPIC_ORCHESTRATION_DIRECTIVE(options.epicTopic, options.subtaskCount || 0)}\n\n${planList}`;
+        // hasOwnWorktree distinguishes a subtask's OWN dedicated worktree (set by
+        // expandEpicSubtaskPlans only when a subtask_plan_id-bound row exists) from an
+        // inherited epic-level/project-level worktree shared by every subtask (the
+        // `none`-mode fallback, where worktreePath is set but not owned).
+        const subtaskWorktrees = plans
+            .filter(p => p.isSubtask && p.hasOwnWorktree && p.worktreePath)
+            .map(p => ({ topic: p.topic, worktreePath: p.worktreePath as string }));
+        const directive = resolveEpicOrchestrationDirective(
+            options.epicWorktreeMode,
+            options.epicTopic,
+            options.subtaskCount || 0,
+            { subtaskWorktrees, tierWorktrees: options.tierWorktrees }
+        );
+        planList = `${directive}\n\n${planList}`;
         if (options?.epicPromptTemplate) {
             planList = `${options.epicPromptTemplate}\n\n${planList}`;
         }
@@ -592,6 +740,15 @@ export function buildKanbanBatchPrompt(
         }
 
         plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
+
+        // `high-low` mode: additive consolidation pass, injected only for the planner role
+        // dispatched against a high-low-mode epic with subtask plans to consolidate. No-op
+        // for 'none'/'per-subtask' modes and for non-epic dispatches (subtaskPlansForConsolidation
+        // is only populated by the caller for this exact case).
+        if (options?.epicWorktreeMode === 'high-low' && options?.epicTopic && options?.epicPlanId
+            && options.subtaskPlansForConsolidation && options.subtaskPlansForConsolidation.length > 0) {
+            plannerPrompt += '\n\n' + PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE(options.epicTopic, options.epicPlanId, options.subtaskPlansForConsolidation);
+        }
 
         const constitutionContent = options?.constitutionContent?.trim();
         if (constitutionContent) {
