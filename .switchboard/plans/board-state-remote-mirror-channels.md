@@ -1,5 +1,9 @@
 # Board State Remote Mirror: Configurable Export Destinations + Git-Native Remote Control
 
+**Plan ID:** f89dabb4-14c9-4a85-aafe-89b6a4a71889
+
+> **Improve-plan pass (2026-07-01) — session insights folded in.** A ground-truth code audit refines three load-bearing assumptions (detail in-line and in `## Adversarial Synthesis`): (1) the `RemoteProvider` interface is **pull-only** — no push methods — so the git providers' *inbound* deltas plug into the existing seam, but the *outbound* mirror push is **net-new**, not "implement the same interface Linear/Notion do"; (2) `RemoteControlService` has **no auto-start** (only a manual `start()` + `silentSync` + `pingFrequencySeconds`; no `pingMode`/`restoreFromConfig`), so the "web agent checks in periodically" story depends on the **startup reconciler** plan; (3) plan files do **not** carry a `**Column:**` line today — §3's inbound state signal requires a net-new export change. Consistent with: the remote-sync surface is experimental/unshipped → clean break, **no migration**.
+
 ## Goal
 
 Give a workspace an explicit choice of **where** (if anywhere) its kanban board state gets mirrored for remote/web-agent visibility, decoupled from the git history developers actually work in — and let the git-native destinations (control plane, wiki) support the same **bidirectional** remote-control capability Notion/Linear already have, not just one-way state export.
@@ -48,6 +52,8 @@ Today `ControlPlaneMigrationService` treats the control-plane directory as purel
 - **Cursor:** `remote.stateCursor.{control-plane|wiki}` and `remote.commentCursor.{control-plane|wiki}`, stored in the same DB config table Linear/Notion cursors already use — but holding the **last-processed commit SHA**, not a timestamp. This is strictly simpler than the existing providers: Notion's timestamp cursor needs a 500-ID de-dup cache (`remote.commentSeen.*`) to work around same-minute filter ambiguity; a commit SHA has no such ambiguity, so no de-dup cache is needed for the git-native providers.
 - **Outbound push cadence:** debounced/coalesced identically to today's local-file writer (single-flight, trailing-request coalescing), with a floor equal to the poll interval — outbound pushes and inbound polls run on a comparable cadence rather than pushing on every card move. Each push cycle fetches first and reconciles (merge/rebase) against any commits that landed since the last local push, so an inbound edit from a remote agent never causes an outbound push to be rejected as a non-fast-forward — this reconcile step lives inside `GitStateProvider` itself, it is not a reuse of `PlanAutoFetchService` (which guards a different thing: untrusted code landing in a human's active branch, not signal commits in a dedicated mirror repo).
 - **Inbound trust guard:** every state/comment delta is checked against an author allowlist before being mirrored locally or dispatched to an agent, mirroring `PlanAutoFetchService`'s trusted-author check (`PlanAutoFetchService.ts:238-251`) — reusing the same commit-author-email mechanism, git-side. This matters more here than it does for `planAutoFetch`: an untrusted inbound comment there just sits inert in a workspace, but here it flows directly into agent dispatch (`KanbanProvider.ts:1638`), so an unauthenticated/untrusted git author must never reach that path. Untrusted deltas are dropped and surfaced the same way `planAutoFetch` surfaces a skip reason, not silently ignored.
+
+**Audit correction (2026-07-01) — inbound plugs in, outbound is net-new.** The `RemoteProvider` interface (`src/services/remote/RemoteProvider.ts:40`) is **pull-only**: `fetchStateDeltas` / `fetchCommentDeltas` / `stateKeyToColumn` / `refreshLocalPlanFromRemote` / `importRemotePlan` / `postComment`. So `GitStateProvider`'s **inbound** half (read column/comment deltas via `git log`, ack via `postComment`) genuinely implements the existing seam and rides the existing `_poll()` loop. But there is **no `pushState`/`pushContent`** on the interface — push today lives unabstracted in `ContinuousSyncService` + the column-move handlers (Linear/ClickUp only; Notion can't be pushed to). So the **outbound** mirror push (git commit+push of the regenerated export) is a *net-new mechanism layered on `exportStateToFile()`*, not a provider-interface method. Build it standalone here, but coordinate with the Remote Sync Refactor (which later generalizes push into a declared provider capability) so the two don't build conflicting push paths. Also net-new: plan files do **not** carry a `**Column:**` line today (verified — column lives in the DB and the grouped `kanban-state-*.md`, not per-plan), so the export must be extended to emit the per-plan `**Column:**` signal §3 reads.
 
 ### 4. Wiki provider
 
@@ -98,6 +104,88 @@ This is the concrete case the §5 interval decision above is sized for — it fa
 1. Confirm whether `KanbanDatabase.exportStateToFile()`'s target path, **and the existing plan-file-import-watcher**, already resolve to the control-plane root when control-plane mode is active, the same way `PlanAutoFetchService._runCycleForRoot` resolves `effectiveGitRoot` via `getControlPlaneSelectionStatus` (`KanbanProvider.ts:4668`). If yes, this plan only needs to add git init/remote/push on top of the existing write/import paths. If no, both the exporter and the import-watcher need the same control-plane-path resolution added — step 5 of the worked scenario above depends on this being true for either reason.
 2. Confirm there's no existing generated `.gitignore` content in `ControlPlaneMigrationService` that the new managed-subdirectory exclusion block would need to merge with rather than overwrite.
 
+## User Review Required
+
+1. **Outbound push = net-new — standalone or folded into the Remote Sync Refactor?** The `RemoteProvider` seam is pull-only; the git outbound push has no interface to plug into. Confirm building it standalone (git commit+push around `exportStateToFile()`) now, with a note to reconcile with the Remote Sync Refactor's future declared push capability.
+2. **Net-new `**Column:**` per-plan export line** — §3's inbound signal reads a line plan files don't carry today. Confirm the export is extended to emit it (format + placement).
+3. **Startup reconciliation is a hard dependency** — remote control does not auto-start; the "checks in every ~60–120s" scenario only holds while the poll is running. Confirm `kanban-startup-reconciler` gates the offline-then-resume path.
+4. **Default `none`, no auto-detection** — already decided; re-affirm.
+5. **Trust guard is bounded by mirror push-access** (see Security) — confirm acceptable.
+
+## Complexity Audit
+
+### Routine
+- `boardStateExport` enum setting + setup UI (mirrors existing per-workspace settings).
+- Reusing the `PlanAutoFetchService` guard chain (`_getAllowedRoots`, `_runCycleForRoot`, `MIRROR_FILE_RE:284`, `trustedAuthors:150/245`) for §5's control-plane pull.
+- Wiki push via the existing ambient-git `execFileAsync('git', …)` path — no new auth.
+- Reusing `RemoteControlService`'s `_poll()` loop + cursor-storage pattern for inbound deltas.
+
+### Complex / Risky
+- **Net-new outbound push half** — the seam is pull-only; the git push is greenfield and must coordinate with the Remote Sync Refactor.
+- **Net-new `**Column:**` export signal** — the inbound channel rests on an export-format change that doesn't exist yet.
+- **§5 discard-before-merge** racing a concurrent regeneration — must be strictly ordered after a completed single-flight export.
+- **Trust guard flows into agent dispatch** (`KanbanProvider.ts:1638`) — security-sensitive; the allowlist is only as strong as who can push to the mirror.
+- **Control-plane git init/remote/`.gitignore` generation** — reverses existing `ControlPlaneMigrationService` guidance; must not stage nested managed repos.
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions**
+- Concurrent inbound pull + local regeneration touching the same mirror files (§5). Mitigation: single-flight export; discard only `MIRROR_FILE_RE`-matching paths *after* a completed export, immediately before `merge --ff-only`.
+- Outbound push vs. an inbound commit landing between fetch and push → non-fast-forward. Mitigation: fetch+reconcile inside the push cycle before pushing (already in §3).
+- `_polling` re-entrancy guard prevents overlapping poll cycles (existing).
+
+**Security**
+- Inbound deltas flow into agent dispatch, gated by a trusted-author check (git commit-author email, `PlanAutoFetchService`-style). **Caveat (folded in):** commit-author email is spoofable; the guard's real strength is *who can push to the mirror repo*. For `control-plane` (separate, access-controlled repo) this is meaningful — document that the allowlist assumes restricted push. Untrusted deltas are dropped and surfaced, not silently ignored.
+- No new auth surface — all git ops ride ambient credentials.
+
+**Side Effects**
+- Enabling `control-plane` obligates the control-plane dir to become a git repo with a remote + background push loop — never automatic (default `none`).
+- `.gitignore` generation in the control-plane root excludes managed subdirectories.
+
+**Dependencies & Conflicts**
+- **Hard dependency on the startup reconciler** (`kanban-startup-reconciler`) for offline-resume reconciliation.
+- **Coordinate outbound push with the Remote Sync Refactor** (declared push capability) to avoid two push mechanisms.
+- Reuses `PlanAutoFetchService`, `RemoteControlService`, `ControlPlaneMigrationService`, `WorkspaceIdentityService`, `KanbanProvider:1632/1638` — no rebuilds.
+
+## Adversarial Synthesis
+
+Key risks: (1) the plan says the git providers "implement the same interface Linear/Notion do," but that interface is **pull-only** — the outbound mirror push is net-new and must coordinate with the Remote Sync Refactor rather than assume an existing push seam; (2) the inbound state signal depends on a per-plan `**Column:**` export line that **does not exist today**; (3) the periodic check-in story depends on the **startup reconciler**, since remote control does not auto-start. Mitigations: build outbound push standalone-but-coordinated, add the `**Column:**` export emission, make the reconciler a hard dependency, and strictly order §5's discard-before-merge after a completed single-flight export. The trust guard is sound but bounded by mirror push-access — document it.
+
+## Proposed Changes
+
+### `src/services/KanbanDatabase.ts` — `exportStateToFile()`
+- **Context:** already writes `kanban-board.md` / `kanban-state-*.md` (one-way export, verified).
+- **Logic:** (a) resolve the export target to the control-plane root when `boardStateExport = control-plane` (Open Item 1); (b) emit a per-plan `**Column:** <name>` line (net-new) so §3's inbound signal has something to diff.
+- **Edge Cases:** single-flight so a discard-before-merge can't race a partial write.
+
+### `src/services/remote/GitStateProvider.ts` (new)
+- **Context:** implements the pull-only `RemoteProvider` interface for `control-plane`/`wiki`.
+- **Logic:** `fetchStateDeltas`/`fetchCommentDeltas` via `git fetch` + `git log <sha>..<head>` diffing `**Column:**` lines and appended comment blocks; SHA cursor (`remote.stateCursor.{control-plane|wiki}` / `remote.commentCursor.*`) — no de-dup cache needed. `postComment` via git commit. **Outbound push (net-new, not an interface method):** commit+push the exported mirror, fetch+reconcile first.
+- **Edge Cases:** non-ff on push → reconcile; untrusted author → drop + surface.
+
+### `src/services/RemoteControlService.ts`
+- Register the git providers in the existing `_poll()` loop (started via manual `start()`; `pingFrequencySeconds` cadence). No auto-start here — that's the reconciler plan.
+
+### `src/services/PlanAutoFetchService.ts`
+- Extend `_getAllowedRoots()`/`_runCycleForRoot` to also target the control-plane root (§5), reusing the guard chain at `RemoteControlService`'s cadence; add the discard-of-`MIRROR_FILE_RE` step before `merge --ff-only`.
+
+### `src/services/ControlPlaneMigrationService.ts`
+- Opt-in `git init` + `git remote add` + generated `.gitignore` (managed-subdir exclusions from `WorkspaceIdentityService` mappings); suppress the line-574 warning for opted-in control planes.
+
+### Settings + setup UI
+- `boardStateExport: none | control-plane | wiki | notion | linear`, default `none`, no auto-detection.
+
+## Verification Plan
+
+### Automated Tests
+> Suite run separately per session directive.
+1. **Inbound state delta:** a commit changing a plan's `**Column:**` line → one local column move via the existing validation guard; SHA cursor advances once.
+2. **Inbound comment:** appended block since `lastSeenSha` → local `## Inbound Comment` + column-agent dispatch; untrusted author → dropped + surfaced, no dispatch.
+3. **Outbound push:** local card move → debounced commit+push; a concurrent inbound commit → fetch+reconcile, no non-ff failure.
+4. **§5 discard-before-merge:** dirty mirror files + ff-merge touching them → discard (only `MIRROR_FILE_RE`) then merge succeeds; no non-mirror file discarded.
+5. **Default off:** fresh workspace → `none`, zero git footprint, no push loop.
+6. **Startup resume:** with the reconciler present, an offline period's remote column change reconciles on next startup poll.
+
 ## Dependencies
 
 - `PlanAutoFetchService.ts` dirty-tree fix (commit `faf4d82`) — stays in place; this plan makes the underlying commit-to-`main` behavior it was patching around go away by default, rather than replacing the fix.
@@ -109,5 +197,9 @@ This is the concrete case the §5 interval decision above is sized for — it fa
 ## Metadata
 
 **Complexity:** 8
-**Tags:** backend, git, remote-control, integrations, experimental
+**Tags:** backend, infrastructure, api, reliability, feature
 **Repo:** switchboard
+
+## Recommendation
+
+Complexity **8** (net-new outbound push half, a new git provider, a security-sensitive dispatch path, and multi-file coordination across `KanbanDatabase`, `RemoteControlService`, a new `GitStateProvider`, `ControlPlaneMigrationService`, and `PlanAutoFetchService`). → **Send to Lead Coder.**
