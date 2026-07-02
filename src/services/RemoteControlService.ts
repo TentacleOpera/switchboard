@@ -1,8 +1,10 @@
+import * as path from 'path';
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import type { RemoteProvider, RemoteStateDelta } from './remote/RemoteProvider';
+import type { GitStateProvider, GitProviderKind } from './remote/GitStateProvider';
 
 /**
- * §7/§9/§10 — Remote Control (provider-agnostic: Linear or Notion).
+ * §7/§9/§10 — Remote Control (provider-agnostic: Linear, Notion, or git-backed).
  *
  * Polls the active provider on a timer (no webhooks) for the user's selected boards and:
  *  - mirrors remote state changes onto the Kanban column, dispatching that column's agent
@@ -29,7 +31,7 @@ import type { RemoteProvider, RemoteStateDelta } from './remote/RemoteProvider';
  *    on the next poll (delayed, not lost).
  */
 
-export type RemoteProviderKind = 'linear' | 'notion';
+export type RemoteProviderKind = 'linear' | 'notion' | 'control-plane' | 'wiki';
 
 export interface RemoteConfig {
     /** Which remote backend drives the board. One active at a time (no hot-swap). */
@@ -73,12 +75,23 @@ export class RemoteControlService {
     private _timer?: NodeJS.Timeout;
     private _polling = false;
     private _active = false;
+    private _gitProviders = new Map<GitProviderKind, GitStateProvider>();
 
     constructor(deps: RemoteControlDeps) {
         this._deps = deps;
     }
 
     public get isActive(): boolean { return this._active; }
+
+    /** Register a git-backed provider for outbound push and inbound polling. */
+    public registerGitProvider(provider: GitStateProvider): void {
+        this._gitProviders.set(provider.gitKind, provider);
+    }
+
+    /** Get a registered git provider by kind (for outbound push). */
+    public getGitProvider(kind: GitProviderKind): GitStateProvider | undefined {
+        return this._gitProviders.get(kind);
+    }
 
     private _log(msg: string): void {
         (this._deps.log || ((m) => console.log(m)))(`[RemoteControl] ${msg}`);
@@ -94,7 +107,7 @@ export class RemoteControlService {
             if (!raw) { return { ...DEFAULT_REMOTE_CONFIG }; }
             const parsed = JSON.parse(raw);
             return {
-                provider: parsed.provider === 'notion' ? 'notion' : 'linear',
+                provider: this._normalizeProviderKind(parsed.provider),
                 boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
                 pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds)
@@ -108,7 +121,7 @@ export class RemoteControlService {
         const db = this._deps.getDb();
         if (!db || !(await db.ensureReady())) { return; }
         const normalized: RemoteConfig = {
-            provider: config.provider === 'notion' ? 'notion' : 'linear',
+            provider: this._normalizeProviderKind(config.provider),
             boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
             pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds)
@@ -118,6 +131,12 @@ export class RemoteControlService {
             // Restart the timer with the new cadence.
             this._scheduleTimer(normalized.pingFrequencySeconds);
         }
+    }
+
+    private _normalizeProviderKind(value: unknown): RemoteProviderKind {
+        const valid: RemoteProviderKind[] = ['linear', 'notion', 'control-plane', 'wiki'];
+        const str = String(value || '');
+        return valid.includes(str as RemoteProviderKind) ? (str as RemoteProviderKind) : 'linear';
     }
 
     /**
@@ -207,6 +226,16 @@ export class RemoteControlService {
 
             await this._pollState(db, provider, byRemoteId);
             await this._pollComments(db, provider, byRemoteId);
+
+            // Outbound push: if the active provider is git-backed, push the exported
+            // mirror after processing inbound deltas. Debounced/single-flight inside
+            // GitStateProvider.pushExportedState().
+            if (config.provider === 'control-plane' || config.provider === 'wiki') {
+                const gitProvider = this._gitProviders.get(config.provider as GitProviderKind);
+                if (gitProvider) {
+                    void gitProvider.pushExportedState();
+                }
+            }
         } catch (e) {
             this._log(`Poll error: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
@@ -228,7 +257,7 @@ export class RemoteControlService {
                 if ((p.sourceType === 'linear-import' || p.sourceType === 'linear-automation') && p.linearIssueId) {
                     map.set(p.linearIssueId, p);
                 }
-            } else {
+            } else if (kind === 'notion') {
                 // Notion: key on page-id presence (set by the one-time setup backup), NOT
                 // sourceType. The common case is enabling Notion remote on an EXISTING board
                 // whose plans are 'local'/etc; reclassifying them to 'notion-*' would clobber
@@ -236,13 +265,25 @@ export class RemoteControlService {
                 if (p.notionPageId) {
                     map.set(p.notionPageId, p);
                 }
+            } else if (kind === 'control-plane' || kind === 'wiki') {
+                // Git providers: key on plan file basename (without extension), matching
+                // how GitStateProvider parses remoteIds from diff paths.
+                if (p.planFile) {
+                    const basename = path.basename(p.planFile, '.md');
+                    map.set(basename, p);
+                }
             }
         }
         return map;
     }
 
     private _remoteIdOf(kind: RemoteProviderKind, plan: KanbanPlanRecord): string {
-        return (kind === 'linear' ? plan.linearIssueId : plan.notionPageId) || '';
+        if (kind === 'linear') { return plan.linearIssueId || ''; }
+        if (kind === 'notion') { return plan.notionPageId || ''; }
+        if (kind === 'control-plane' || kind === 'wiki') {
+            return plan.planFile ? path.basename(plan.planFile, '.md') : '';
+        }
+        return '';
     }
 
     // ── State stream (§9) ───────────────────────────────────────────
@@ -255,9 +296,28 @@ export class RemoteControlService {
         const key = stateCursorKey(provider.kind);
         const cursor = await db.getConfig(key);
         if (!cursor) {
-            // Seed-on-first-poll: baseline to "now" and process nothing, so an existing
-            // board's history isn't replayed as a burst of agent runs.
-            await db.setConfig(key, new Date().toISOString());
+            // Seed-on-first-poll: for API providers baseline to "now" and process nothing,
+            // so an existing board's history isn't replayed as a burst of agent runs.
+            // For git providers, seed with the current HEAD SHA (no timestamp ambiguity).
+            if (provider.kind === 'control-plane' || provider.kind === 'wiki') {
+                const gitProvider = this._gitProviders.get(provider.kind as GitProviderKind);
+                const root = gitProvider?.getExportRoot();
+                if (root) {
+                    try {
+                        const { promisify } = require('util');
+                        const { execFile } = require('child_process');
+                        const execFileAsync = promisify(execFile);
+                        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root, timeout: 5000 });
+                        await db.setConfig(key, stdout.trim());
+                    } catch {
+                        await db.setConfig(key, new Date().toISOString());
+                    }
+                } else {
+                    await db.setConfig(key, new Date().toISOString());
+                }
+            } else {
+                await db.setConfig(key, new Date().toISOString());
+            }
             return;
         }
 
@@ -432,5 +492,17 @@ export class RemoteControlService {
         let arr = Array.from(seen);
         if (arr.length > COMMENT_SEEN_CAP) { arr = arr.slice(arr.length - COMMENT_SEEN_CAP); }
         await db.setConfig(commentSeenKey(kind), JSON.stringify(arr));
+    }
+
+    // ── Git provider root resolution (for cursor seeding) ──────────
+
+    private _getControlPlaneRoot(): string | null {
+        const cp = this._gitProviders.get('control-plane');
+        return cp ? cp.getExportRoot() : null;
+    }
+
+    private _getWikiRoot(): string | null {
+        const cp = this._gitProviders.get('wiki');
+        return cp ? cp.getExportRoot() : null;
     }
 }

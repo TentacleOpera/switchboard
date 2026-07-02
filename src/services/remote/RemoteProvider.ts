@@ -86,7 +86,7 @@ export interface RemoteCommentDelta {
 }
 
 export interface RemoteProvider {
-    readonly kind: 'linear' | 'notion';
+    readonly kind: 'linear' | 'notion' | 'control-plane' | 'wiki';
 
     /** Declared capabilities — gate callers on these, never on `kind`. */
     readonly capabilities: RemoteProviderCapabilities;

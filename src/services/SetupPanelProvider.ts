@@ -305,6 +305,53 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'controlPlaneFreshSetupResult', ...result });
                     break;
                 }
+                case 'setBoardStateExport': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (workspaceRoot) {
+                        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(workspaceRoot));
+                        const value = typeof message.value === 'string' ? message.value : 'none';
+                        await config.update('boardStateExport', value, vscode.ConfigurationTarget.WorkspaceFolder);
+                    }
+                    break;
+                }
+                case 'setBoardStateExportRemoteUrl': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (workspaceRoot) {
+                        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(workspaceRoot));
+                        const value = typeof message.value === 'string' ? message.value : '';
+                        await config.update('boardStateExport.remoteUrl', value, vscode.ConfigurationTarget.WorkspaceFolder);
+                    }
+                    break;
+                }
+                case 'initControlPlaneGit': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
+                    // Resolve the control-plane root
+                    let cpRoot = workspaceRoot;
+                    try {
+                        const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
+                        cpRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+                    } catch { /* fall through */ }
+                    const remoteUrl = typeof message.remoteUrl === 'string' ? message.remoteUrl : undefined;
+                    const result = await ControlPlaneMigrationService.initGitForControlPlane(cpRoot, remoteUrl);
+                    this._panel?.webview.postMessage({
+                        type: 'controlPlaneGitInitResult',
+                        ...result
+                    });
+                    if (result.success) {
+                        vscode.window.showInformationMessage(
+                            result.alreadyInitialized
+                                ? 'Control plane git repo already initialized.'
+                                : 'Control plane git repo initialized successfully.'
+                        );
+                    } else {
+                        vscode.window.showWarningMessage(`Control plane git init failed: ${result.error || 'unknown error'}`);
+                    }
+                    break;
+                }
                 case 'scaffoldMultiRepo': {
                     try {
                         const result = await vscode.window.withProgress(

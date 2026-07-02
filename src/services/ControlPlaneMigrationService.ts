@@ -2,6 +2,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as cp from 'child_process';
+import { promisify } from 'util';
 import * as vscode from 'vscode';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { importPlanFiles } from './PlanFileImporter';
@@ -14,6 +16,8 @@ import {
     CLAUDE_BLOCK_END,
     CLAUDE_PREAMBLE,
 } from './ClaudeCodeMirrorService';
+
+const execFileAsync = promisify(cp.execFile);
 
 export type DiscoveredRepo = {
     repoName: string;
@@ -571,7 +575,17 @@ export class ControlPlaneMigrationService {
             warnings.push('The detected parent folder does not contain at least two immediate child git repositories yet.');
         }
         if (parentIsGitRepo) {
-            warnings.push('Your parent folder is a git repository. You may still need .gitignore entries for .switchboard/ here.');
+            // Suppress the "parent folder is a git repo" warning when boardStateExport
+            // is 'control-plane' — the opposite guidance applies (the control-plane
+            // SHOULD be a git repo when opted in for mirror push).
+            let isExportOptedIn = false;
+            try {
+                const exportConfig = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(normalizedParent));
+                isExportOptedIn = exportConfig.get<string>('boardStateExport', 'none') === 'control-plane';
+            } catch { /* outside extension host */ }
+            if (!isExportOptedIn) {
+                warnings.push('Your parent folder is a git repository. You may still need .gitignore entries for .switchboard/ here.');
+            }
         }
         if (alreadyControlPlane) {
             warnings.push('This parent folder already has a control-plane kanban database.');
@@ -1117,5 +1131,125 @@ export class ControlPlaneMigrationService {
         }
 
         return insertionIndex;
+    }
+
+    // ── Git-backed control-plane setup (§2) ─────────────────────────
+
+    /**
+     * Initialize the control-plane directory as a git repo with a remote,
+     * for workspaces that opt into `control-plane` as their boardStateExport
+     * destination. This is opt-in, not automatic.
+     *
+     * Steps:
+     *  1. `git init` (if not already a repo)
+     *  2. `git remote add origin <url>` (if a remoteUrl is provided and no origin exists)
+     *  3. Generate/verify `.gitignore` excluding every managed project subdirectory
+     *     (derived from WorkspaceIdentityService mappings) plus a catch-all safety net
+     */
+    public static async initGitForControlPlane(
+        controlPlaneRoot: string,
+        remoteUrl?: string
+    ): Promise<{ success: boolean; error?: string; alreadyInitialized?: boolean }> {
+        const resolvedRoot = path.resolve(controlPlaneRoot);
+        const gitDir = path.join(resolvedRoot, '.git');
+        const alreadyInitialized = fs.existsSync(gitDir);
+
+        try {
+            if (!alreadyInitialized) {
+                await execFileAsync('git', ['init'], { cwd: resolvedRoot, timeout: 10000 });
+            }
+
+            // Add remote if URL provided and no origin exists
+            if (remoteUrl && remoteUrl.trim()) {
+                let hasOrigin = false;
+                try {
+                    await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: resolvedRoot, timeout: 5000 });
+                    hasOrigin = true;
+                } catch {
+                    hasOrigin = false;
+                }
+
+                if (!hasOrigin) {
+                    await execFileAsync('git', ['remote', 'add', 'origin', remoteUrl.trim()], { cwd: resolvedRoot, timeout: 10000 });
+                }
+            }
+
+            // Generate .gitignore with managed subdirectory exclusions
+            await this._generateControlPlaneGitignore(resolvedRoot);
+
+            return { success: true, alreadyInitialized };
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+                alreadyInitialized
+            };
+        }
+    }
+
+    /**
+     * Generate or update the `.gitignore` in the control-plane root to exclude
+     * every managed project subdirectory (derived from WorkspaceIdentityService
+     * mappings) plus a catch-all safety net. The mirror content itself
+     * (.switchboard/kanban-board.md, etc.) is NOT excluded — that's exactly
+     * what should be tracked when the control plane is a git repo.
+     */
+    private static async _generateControlPlaneGitignore(controlPlaneRoot: string): Promise<void> {
+        const gitignorePath = path.join(controlPlaneRoot, '.gitignore');
+
+        // Collect managed subdirectory names from WorkspaceIdentityService mappings
+        const excludedDirs = new Set<string>();
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const m of cfg.mappings) {
+                    const folders: string[] = m.workspaceFolders || [];
+                    for (const wf of folders) {
+                        const expanded = wf.startsWith('~')
+                            ? path.join(os.homedir(), wf.slice(1))
+                            : wf;
+                        const resolved = path.resolve(expanded);
+                        // Only exclude if it's a direct child of the control plane
+                        if (path.dirname(resolved) === controlPlaneRoot) {
+                            excludedDirs.add(path.basename(resolved));
+                        }
+                    }
+                }
+            }
+        } catch { /* mappings unavailable */ }
+
+        // Also scan for direct child directories that contain .git (they're managed repos)
+        try {
+            const entries = await fs.promises.readdir(controlPlaneRoot, { withFileTypes: true });
+            for (const entry of entries) {
+                if (!entry.isDirectory()) { continue; }
+                if (entry.name.startsWith('.')) { continue; }
+                if (fs.existsSync(path.join(controlPlaneRoot, entry.name, '.git'))) {
+                    excludedDirs.add(entry.name);
+                }
+            }
+        } catch { /* scan failed */ }
+
+        // Build the .gitignore content
+        const lines: string[] = [
+            '# Switchboard Control Plane .gitignore',
+            '# Managed project subdirectories are excluded to prevent',
+            '# accidentally staging nested repos.',
+            '',
+        ];
+
+        for (const dir of Array.from(excludedDirs).sort()) {
+            lines.push(`/${dir}/`);
+        }
+
+        // Catch-all safety net: any new directory that appears and contains .git
+        // should not be accidentally staged. This is a defensive line.
+        lines.push('');
+        lines.push('# Catch-all: exclude any child directory containing .git');
+        lines.push('/*/');
+
+        // Write (or overwrite) the .gitignore
+        await fs.promises.writeFile(gitignorePath, `${lines.join('\n')}\n`, 'utf8');
     }
 }

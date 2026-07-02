@@ -1613,6 +1613,29 @@ export class KanbanProvider implements vscode.Disposable {
             },
             log: (m) => this._outputChannel?.appendLine(m)
         });
+
+        // Register git providers for outbound push
+        try {
+            const { GitStateProvider } = require('./remote/GitStateProvider');
+            const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
+            if (cpRoot !== resolved) {
+                service.registerGitProvider(new GitStateProvider('control-plane', {
+                    db: this._getKanbanDb(resolved),
+                    getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
+                    getPlansDir: () => this._getIntegrationImportDir(resolved),
+                    log: (m: string) => this._outputChannel?.appendLine(m),
+                    getExportRoot: () => cpRoot,
+                }));
+            }
+            service.registerGitProvider(new GitStateProvider('wiki', {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
+                getPlansDir: () => this._getIntegrationImportDir(resolved),
+                log: (m: string) => this._outputChannel?.appendLine(m),
+                getExportRoot: () => resolved,
+            }));
+        } catch { /* GitStateProvider unavailable */ }
+
         this._remoteControls.set(resolved, service);
         return service;
     }
@@ -1631,6 +1654,23 @@ export class KanbanProvider implements vscode.Disposable {
                 notion: this._getNotionService(resolved),
                 db: this._getKanbanDb(resolved),
                 getWorkspaceId, getPlansDir, log,
+            });
+        }
+        if (kind === 'control-plane') {
+            const { GitStateProvider } = require('./remote/GitStateProvider');
+            const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
+            return new GitStateProvider('control-plane', {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
+                getExportRoot: () => cpRoot !== resolved ? cpRoot : null,
+            });
+        }
+        if (kind === 'wiki') {
+            const { GitStateProvider } = require('./remote/GitStateProvider');
+            return new GitStateProvider('wiki', {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
+                getExportRoot: () => resolved,
             });
         }
         return new LinearRemoteProvider(this._getLinearService(resolved), {
@@ -5760,7 +5800,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             successCount++;
                             // Soft-delete from source DB so the plan no longer appears on the source board.
                             // If this fails, the plan will still be visible on the source board (acceptable fallback).
-                            await sourceDb.updateStatusByPlanFile(plan.planFile, sourceWorkspaceId, 'deleted');
+                            // Route through archivePlan() so kanban_column moves to COMPLETED — avoids the
+                            // ghost-plan bug (deleted status + stale non-terminal column).
+                            await sourceDb.archivePlan(plan.planFile, sourceWorkspaceId, 'deleted');
                         }
                     } catch (err) {
                         console.error(`[KanbanProvider] reassignPlansWorkspace: failed for session ${sessionId}:`, err);
@@ -8605,6 +8647,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                 this._markConfigDirty(); // defense-in-depth: ensure the post-promotion refresh isn't skipped by the no-op guard
                 await this._refreshBoard(workspaceRoot);
+                // Sync the promoted plan's external issue (best-effort, no children to link yet).
+                await this._syncEpicOutbound(workspaceRoot, newRelPath, plan.planId, effectiveTopic, plan.kanbanColumn, []);
                 break;
             }
             case 'createEpic': {
@@ -8670,6 +8714,13 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     await this._regenerateEpicFile(workspaceRoot, epicId, db);
                 }
                 await this._refreshBoard(workspaceRoot);
+                // Unlink the removed subtask from external trackers (best-effort).
+                const linearSvc = this._getLinearService(workspaceRoot);
+                const clickupSvc = this._getClickUpService(workspaceRoot);
+                await Promise.allSettled([
+                    linearSvc.unlinkSubtasksFromEpic([subtask.planFile]),
+                    clickupSvc.unlinkSubtasksFromEpic([subtask.planFile])
+                ]);
                 break;
             }
             case 'deleteEpic': {
@@ -9583,8 +9634,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
      * Shared entry point for BOTH the webview `createEpic` message and the agent/API
      * path (LocalApiServer `/kanban/epic` → TaskViewerProvider → here). Mirrors the
      * webview behaviour exactly: DB upsert + epic file write + subtask linking +
-     * board refresh. Does NOT sync to Linear/ClickUp — epic creation has never fanned
-     * out to external trackers, and `registerPendingCreation` makes the watcher skip
+     * board refresh. Syncs the epic + subtasks outbound to Linear/ClickUp as parent
+     * issue/task + child issues/tasks IF real-time sync is enabled (best-effort,
+     * does not block on failure). `registerPendingCreation` makes the watcher skip
      * the new file. Returns a result object instead of showing VS Code dialogs so the
      * caller decides how to surface failures.
      */
@@ -9768,6 +9820,14 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         console.log(`[KanbanProvider] createEpicFromPlanIds: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
         this._markConfigDirty(); // defense-in-depth: ensure the post-creation refresh isn't skipped by the no-op guard
         await this._refreshBoard(workspaceRoot);
+        // Sync the epic + subtasks outbound to Linear/ClickUp (best-effort, does not block on failure).
+        const subtaskSyncParams = subtasks.map((st: any) => ({
+            planFile: st.planFile,
+            planId: st.planId,
+            topic: st.topic,
+            complexity: st.complexity
+        }));
+        await this._syncEpicOutbound(workspaceRoot, epicPlanFile, effectiveEpicPlanId, epicName, effectiveColumn, subtaskSyncParams);
         return { success: true, epicPlanId: effectiveEpicPlanId, epicSessionId: sessionId };
     }
 
@@ -9811,6 +9871,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const epicWorktreeModeSnapshot = (await db.getConfig('epic_worktree_mode')) || 'none';
         const assigned: string[] = [];
         const skipped: string[] = [];
+        const assignedRecords: any[] = [];
         for (const pid of ids) {
             const subtask = await db.getPlanByPlanId(pid);
             // Skip-and-report: missing, itself an epic, or already on a different epic.
@@ -9819,12 +9880,69 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             await db.updateEpicStatus(subtask.planId, 0, epic.planId);
             await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, epic.planId, epic.topic, subtask.planId, subtask.topic, epicWorktreeModeSnapshot);
             assigned.push(pid);
+            assignedRecords.push(subtask);
         }
         if (assigned.length > 0) {
             await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
             await this._refreshBoard(workspaceRoot);
+            // Sync the newly assigned subtasks outbound to Linear/ClickUp (best-effort).
+            const subtaskSyncParams = assignedRecords.map((st: any) => ({
+                planFile: st.planFile,
+                planId: st.planId,
+                topic: st.topic,
+                complexity: st.complexity
+            }));
+            await this._syncEpicOutbound(workspaceRoot, epic.planFile, epic.planId, epic.topic, epic.kanbanColumn, subtaskSyncParams);
         }
         return { success: true, assigned, skipped };
+    }
+
+    /**
+     * Best-effort outbound sync of an epic + its subtasks to Linear and ClickUp.
+     * Creates/updates the epic as a parent issue/task, then links subtasks as
+     * children via the tracker's native parent/child fields. Does NOT block on
+     * sync failure — the epic is already created locally; sync is diagnostic-only.
+     * Uses Promise.allSettled so one service failing doesn't affect the other.
+     */
+    private async _syncEpicOutbound(
+        workspaceRoot: string,
+        epicPlanFile: string,
+        epicPlanId: string,
+        epicTopic: string,
+        epicColumn: string,
+        subtasks: Array<{ planFile: string; planId: string; topic: string; complexity: string }>
+    ): Promise<void> {
+        const linear = this._getLinearService(workspaceRoot);
+        const clickup = this._getClickUpService(workspaceRoot);
+        const [linearConfig, clickupConfig] = await Promise.all([
+            linear.loadConfig(),
+            clickup.loadConfig()
+        ]);
+        const linearEnabled = linearConfig?.setupComplete === true && linearConfig.realTimeSyncEnabled === true;
+        const clickupEnabled = clickupConfig?.setupComplete === true && clickupConfig.realTimeSyncEnabled === true;
+        if (!linearEnabled && !clickupEnabled) { return; }
+
+        const linearSubtasks = subtasks.map(s => ({ planFile: s.planFile, topic: s.topic, complexity: s.complexity }));
+        const clickupSubtasks = subtasks.map(s => ({ planFile: s.planFile, planId: s.planId, topic: s.topic, complexity: s.complexity }));
+
+        const results = await Promise.allSettled([
+            linearEnabled ? linear.syncEpicWithSubtasks({
+                epicPlanFile, epicTopic, epicColumn, subtasks: linearSubtasks
+            }) : Promise.resolve(null),
+            clickupEnabled ? clickup.syncEpicWithSubtasks({
+                epicPlanFile, epicPlanId, epicTopic, epicColumn, subtasks: clickupSubtasks
+            }) : Promise.resolve(null)
+        ]);
+
+        const linearResult = results[0].status === 'fulfilled' ? results[0].value : null;
+        const clickupResult = results[1].status === 'fulfilled' ? results[1].value : null;
+        if (results[0].status === 'rejected') {
+            console.warn(`[KanbanProvider] epic sync: linear rejected — ${results[0].reason}`);
+        }
+        if (results[1].status === 'rejected') {
+            console.warn(`[KanbanProvider] epic sync: clickup rejected — ${results[1].reason}`);
+        }
+        console.log(`[KanbanProvider] epic sync: linear linked=${linearResult?.linked.length ?? 0} failed=${linearResult?.failed.length ?? 0}, clickup linked=${clickupResult?.linked.length ?? 0} failed=${clickupResult?.failed.length ?? 0}`);
     }
 
     /**
@@ -9866,7 +9984,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
 6. BACKLOG (optional) — ask the user; only proceed if they say yes.
 
-Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. It does NOT sync to Linear/ClickUp.`;
+Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. Epic creation syncs the epic as a parent issue/task and links subtasks as children in Linear/ClickUp IF real-time sync is enabled.`;
             }
         }
         // Strip YAML frontmatter (the skill description is for model-invocation discovery,

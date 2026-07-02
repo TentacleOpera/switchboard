@@ -712,6 +712,33 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     The Control Plane creates a parent workspace (e.g. <code>~/Projects/</code>) that holds the shared <code>.switchboard/</code>, <code>.agents/</code>, and <code>AGENTS.md</code> configuration. Your actual repositories live as sibling folders and share this external configuration.
                 </div>
                 <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">OPEN CONTROL PLANE SETUP</button>
+
+                <div style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+                    <div style="font-size: 10px; color: var(--text-secondary); margin: 0 0 8px; font-family: var(--font-mono); letter-spacing: 1px;">
+                        BOARD STATE EXPORT
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
+                        Choose where the kanban board state (<code>kanban-board.md</code>, <code>kanban-state-*.md</code>) gets mirrored for remote/web-agent visibility. <strong>Default: none</strong> — no git footprint. Notion/Linear are governed by their existing provider config.
+                    </div>
+                    <label class="startup-row" style="display:block; margin-top:8px;">
+                        <span style="display:block; margin-bottom:4px;">Export destination</span>
+                        <select id="board-state-export-select" style="width:100%; padding:4px 8px; background:var(--panel-bg); color:var(--text-primary); border:1px solid var(--border-color); border-radius:3px;">
+                            <option value="none">none — no git footprint</option>
+                            <option value="control-plane">control-plane — push to the control-plane repo</option>
+                            <option value="wiki">wiki — push to &lt;remote&gt;.wiki.git</option>
+                        </select>
+                    </label>
+                    <div id="board-state-export-remote-url-row" class="hidden" style="margin-top:8px;">
+                        <label class="startup-row" style="display:block;">
+                            <span style="display:block; margin-bottom:4px;">Git remote URL (optional — auto-detected if empty)</span>
+                            <input id="board-state-export-remote-url" type="text" placeholder="https://github.com/org/control-plane.git" style="width:100%;">
+                        </label>
+                    </div>
+                    <div id="board-state-export-init-git-row" class="hidden" style="margin-top:8px;">
+                        <button id="btn-init-control-plane-git" class="secondary-btn w-full">INITIALIZE CONTROL PLANE GIT REPO</button>
+                        <div id="control-plane-git-init-status" style="font-size:10px; color:var(--text-secondary); margin-top:4px;"></div>
+                    </div>
+                </div>
             </div>
 
         <div class="shared-tab-content" id="mappings-fields" data-tab-content="mappings">
@@ -3409,6 +3436,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (e.target.id === 'control-plane-modal') closeControlPlaneModal();
         });
 
+        // Board state export handlers
+        document.getElementById('board-state-export-select')?.addEventListener('change', (e) => {
+            const value = e.target.value;
+            const remoteUrlRow = document.getElementById('board-state-export-remote-url-row');
+            const initGitRow = document.getElementById('board-state-export-init-git-row');
+            if (remoteUrlRow) remoteUrlRow.classList.toggle('hidden', value === 'none');
+            if (initGitRow) initGitRow.classList.toggle('hidden', value !== 'control-plane');
+            vscode.postMessage({ type: 'setBoardStateExport', value });
+        });
+        document.getElementById('board-state-export-remote-url')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setBoardStateExportRemoteUrl', value: e.target.value });
+        });
+        document.getElementById('btn-init-control-plane-git')?.addEventListener('click', () => {
+            const remoteUrl = document.getElementById('board-state-export-remote-url')?.value || '';
+            vscode.postMessage({ type: 'initControlPlaneGit', remoteUrl });
+        });
+
         // Agent dir cleanup button handlers
         document.getElementById('btn-agent-dir-cleanup')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'getAgentDirCleanupState' });
@@ -4734,6 +4778,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
+                case 'boardStateExportSetting': {
+                    runSetupHydration(() => {
+                        const select = document.getElementById('board-state-export-select');
+                        if (select) select.value = message.value || 'none';
+                        const remoteUrlRow = document.getElementById('board-state-export-remote-url-row');
+                        const initGitRow = document.getElementById('board-state-export-init-git-row');
+                        const remoteUrlInput = document.getElementById('board-state-export-remote-url');
+                        if (remoteUrlRow) remoteUrlRow.classList.toggle('hidden', (message.value || 'none') === 'none');
+                        if (initGitRow) initGitRow.classList.toggle('hidden', message.value !== 'control-plane');
+                        if (remoteUrlInput) remoteUrlInput.value = message.remoteUrl || '';
+                    });
+                    break;
+                }
                 case 'cyberScanlinesSetting': {
                     runSetupHydration(() => {
                         document.body.classList.toggle('cyber-scanlines-disabled', message.disabled);
@@ -4838,6 +4895,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     setControlPlaneBusy(false);
                     renderControlPlaneExecutionResult(message, 'Fresh Control Plane setup');
                     break;
+                case 'controlPlaneGitInitResult': {
+                    const statusDiv = document.getElementById('control-plane-git-init-status');
+                    if (statusDiv) {
+                        if (message.success) {
+                            statusDiv.textContent = message.alreadyInitialized ? 'Already initialized.' : 'Initialized successfully.';
+                            statusDiv.style.color = 'var(--accent-teal)';
+                        } else {
+                            statusDiv.textContent = 'Failed: ' + (message.error || 'unknown error');
+                            statusDiv.style.color = 'var(--accent-warning)';
+                        }
+                    }
+                    break;
+                }
                 case 'multiRepoScaffoldResult':
                     setMultiRepoBusy(false);
                     renderMultiRepoScaffoldResult(message.result);
