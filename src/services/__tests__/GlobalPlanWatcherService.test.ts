@@ -421,6 +421,40 @@ suite('GlobalPlanWatcherService', () => {
             const statFailedCall = logCalls.find((c: any) => c.args[0].includes('stat() failed'));
             assert.ok(statFailedCall, 'Expected output channel to log stat() failure');
         });
+
+        test('existing plan with empty project is NOT reassigned to active project on update', async () => {
+            dbStub.getPlanByPlanFile = sandbox.stub().resolves({
+                planId: 'plan-1',
+                sessionId: '',
+                topic: 'Existing plan',
+                planFile: relativePath,
+                kanbanColumn: 'CREATED',
+                status: 'active',
+                complexity: '3',
+                tags: '',
+                project: '',           // ← no project assigned
+                workspaceId: 'ws-123',
+                projectId: null,
+            } as any);
+
+            // Simulate the board having "Project A" as the active filter
+            dbStub.getConfig = sandbox.stub().withArgs('kanban.activeProjectFilter').resolves('Project A');
+            const insertSpy = sandbox.stub().resolves(true);
+            dbStub.insertFileDerivedPlan = insertSpy;
+
+            sandbox.stub(fs.promises, 'stat').resolves({
+                mtime: fixedMtime,
+                birthtime: fixedBirthtime,
+            } as any);
+            sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nExisting plan');
+            const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
+            parseStub.resolves({ sessionId: '', topic: 'Existing plan', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+
+            await (service as any)._handlePlanFile(mockUri, workspaceRoot);
+
+            const upserted = insertSpy.getCall(0).args[0];
+            assert.strictEqual(upserted.project, '', 'Existing plan must not be reassigned to active project on update');
+        });
     });
 
     suite('setCurrentProject', () => {
