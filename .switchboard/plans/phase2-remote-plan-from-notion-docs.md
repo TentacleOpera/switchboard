@@ -41,3 +41,7 @@ Also fold in the consolidation: this is the **one** orientation skill (the dupli
 **Complexity:** 2
 **Tags:** docs, cli
 **Repo:** switchboard
+
+## Review Findings
+
+Reviewed against commit 03fb102. The "Ground every plan in the synced project context (read this FIRST)" section was added to `.agents/skills/switchboard_remote_notion.md` (the source of truth) covering all plan requirements: locate context on Notion/Linear, read constitution→PRD→Dev Docs in order, cite concrete paths/symbols, staleness handling, no-edit-on-tracker rule, and fallback when no context is synced. The `.claude/skills/switchboard-remote-notion/SKILL.md` mirror is stale but regenerates automatically via `ClaudeCodeMirrorService.generateClaudeMirror` on extension activation — not a defect. One NIT: the plan's consolidation claim (delete a duplicate `/switchboard-remote` stub, single `/sw-remote` entry) could not be acted on because no such stub exists in this repo; that consolidation belongs to epic 3 (Remote Planning Infrastructure). No CRITICAL/MAJOR findings; no code changes required for this plan.

@@ -40,3 +40,7 @@ Writing context to a Notion page must obey the **Notion overwrite guard** (`noti
 **Complexity:** 5
 **Tags:** backend, api, feature, reliability, ui
 **Repo:** switchboard
+
+## Review Findings
+
+Reviewed against commits 6c5297d + 20efbab. `projectContextSync.ts` assembles Dev Docs + PRDs + constitution with a coarse sha256 change gate (timestamp excluded); state persists in the kanban DB `config` table. `NotionRemoteProvider.pushProjectContext` implements the overwrite guard correctly (list children → protected types → append-by-default → fail-safe on inconclusive listing → scoped block delete + rewrite only when verified childless). `LinearRemoteProvider.pushProjectContext` upserts a project document via GraphQL. One MAJOR finding fixed: `projectContextSyncNow` had no in-flight guard, so a debounced auto-sync (5s) could run concurrently with a manual "Sync Now" push, duplicating content on the Notion append path and racing on the shared state row — added a per-workspace `_projectContextSyncInFlight` Set that skips auto runs while a push is active (manual always proceeds). File changed: `src/services/KanbanProvider.ts`. Remaining risk: the Linear GraphQL document mutations (`documentCreate`/`documentUpdate`) are not statically verifiable against the live Linear schema and should be confirmed end-to-end.
