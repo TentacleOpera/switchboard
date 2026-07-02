@@ -317,5 +317,9 @@ For line 16358, confirm `planRecord` is in scope at that point (the dispatch pat
 - New unit test: `buildPrdReferenceBlock` — empty/undefined `prdReferences` → `''`; single ref → link-only block; two refs → labelled multi-section block (links only, no content).
 - New unit test: `generateUnifiedPrompt` — a batch with one project-tagged plan and one no-project plan produces a `prdReferences` with exactly one entry (the no-project plan does not contribute a ref).
 
+## Review Findings
+
+**CRITICAL fix applied**: `KanbanProvider.ts:3353` tester guard checked `resolvedOptions.prdEnabled` — a field no longer populated after the `prdReferences` rewrite — causing the tester role to unconditionally throw. Fixed to check `resolvedOptions.prdReferences` presence. Files changed: `src/services/KanbanProvider.ts` (tester guard + stale comment at line 3302), `src/services/agentPromptBuilder.ts` (stale JSDoc at line 382). All project-threading sites verified: `_cardsToPromptPlans`, `expandEpicSubtaskPlans` (with `epicProject` param), and all three TaskViewerProvider CLI-dispatch sites populate `project`. Per-plan distinct-project resolution confirmed in both built-in and custom-agent branches. Remaining risk: a no-project plan dispatched alone as tester now correctly throws (no PRD to accept against) — this is intended per the plan but is a user-visible behavior change that should be documented in release notes.
+
 ## Recommendation
 Complexity 5/10 → **Send to Coder**.

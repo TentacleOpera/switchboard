@@ -6,6 +6,8 @@ description: 'Tracker-Structure Round-Trip (Tickets-Tab Import + Outbound Epic S
 
 **Plan ID:** 6fbbc3b6-9404-41f1-8314-eb5140b6db2f
 
+**Coordination contract:** [Remote Control Production Readiness — Cross-Epic Sequencing & Coordination Plan](../plans/feature_plan_20260701_remote-control-production-sequencing.md) — **epic 5 of 7** in the program dispatch order (Notion + Linear slice only; the ClickUp members are parked, out of program scope).
+
 > **This is a separate feature from the remote-control program.** Formerly "Cross-Provider Epic Structure (Import, Sync, Mirroring)." It has been **split**: the remote-control slice (remote epic-aware mirroring + Notion epic schema) moved to the **Remote Epic Structure (Notion + Linear)** epic. What remains here is the **planning.html Tickets-tab manual import** feature and its outbound counterpart — mapping tracker parent/subtask hierarchies to Switchboard epics, and creating tracker parent/child issues from local epics.
 
 ## Goal

@@ -6,6 +6,8 @@ description: 'Remote Epic Structure (Notion + Linear)'
 
 **Plan ID:** 5edae55e-ceb3-4d15-99fb-c910bd97d629
 
+**Coordination contract:** [Remote Control Production Readiness — Cross-Epic Sequencing & Coordination Plan](../plans/feature_plan_20260701_remote-control-production-sequencing.md) — **epic 4 of 7** in the program dispatch order.
+
 ## Goal
 
 Make **epic parent/child structure flow through the remote-control loop** for the two driving providers, Notion (primary) and Linear (secondary). When a remote agent creates or re-links an epic on the tracker, Switchboard's poll must detect it and mirror the structure locally; and Notion must carry the schema (`Is Epic` + `Epic` relation) needed to represent an epic at all.

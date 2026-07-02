@@ -2,6 +2,8 @@
 
 **Complexity:** 8
 
+**Coordination contract:** [Remote Control Production Readiness — Cross-Epic Sequencing & Coordination Plan](../plans/feature_plan_20260701_remote-control-production-sequencing.md) — **epic 6 of 7** in the program dispatch order.
+
 ## Goal
 
 Manifest import is the working git-native remote-control path today: a repo-connected web agent writes plan files plus a manifest.json and the extension ingests them. The board-state mirror is its outbound counterpart. This epic makes the git channel production-grade in both directions: ingest stops silently swallowing entries and surfaces rejections, while the mirror gains explicit, configurable destinations with bidirectional state deltas instead of forced commits to main.

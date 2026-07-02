@@ -39,6 +39,8 @@ export interface CustomAgentAddons {
     // Per-project PRD (project-context toggle; resolved at dispatch, not a saved per-agent flag)
     prdLink?: string;
     prdContent?: string;
+    /** Per-project PRD links resolved from the plans' own project fields (link-only). */
+    prdReferences?: Array<{ projectName: string; prdLink: string }>;
 
     // Workflow
     workflowFilePathEnabled?: boolean;

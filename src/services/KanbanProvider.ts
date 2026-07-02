@@ -3299,13 +3299,13 @@ export class KanbanProvider implements vscode.Disposable {
             remoteControlActive: await this._isRemoteActiveForDispatch(workspaceRoot, plans),
         };
 
-        // Per-project PRD (Decision #1): a SINGLE project-level toggle injects the
-        // active project's PRD into EVERY dispatched prompt via the shared
-        // dispatchPrefixCore (all roles) — it is NOT a per-role add-on. Keyed on the
-        // active project NAME via getDisplayedProjectForRoot, which already returns
-        // null for "No Project"/unfiltered boards and for dispatches targeting a
-        // different workspace than the one on screen (race-tolerant). Resolved here,
-        // before the role branches, so the tester reconciliation below can see it.
+        // Per-project PRD (project-context toggle): resolves PRD links from the
+        // PLANS' OWN project fields (not the board filter) and injects them into
+        // the shared dispatchPrefixCore (all roles) — it is NOT a per-role add-on.
+        // Distinct projects across the batch are collected, each project's PRD
+        // resolved link-only, and the combined prdReferences folded into the prefix.
+        // Resolved here, before the role branches, so the tester reconciliation
+        // below can see it.
         if (await this._resolveProjectContextEnabled(workspaceRoot)) {
             const distinctProjects = [...new Set(
                 plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
@@ -3347,10 +3347,10 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
         } else if (role === 'tester') {
             // The acceptance tester needs an authoritative requirements baseline. The
-            // active project's PRD (resolved above into resolvedOptions.prdEnabled and
-            // injected via the shared prefix) satisfies this; the legacy global design
-            // doc remains a back-compat fallback. Throw ONLY when neither exists.
-            if (!resolvedOptions.prdEnabled) {
+            // active project's PRD (resolved above into resolvedOptions.prdReferences
+            // and injected via the shared prefix) satisfies this; the legacy global
+            // design doc remains a back-compat fallback. Throw ONLY when neither exists.
+            if (!resolvedOptions.prdReferences || resolvedOptions.prdReferences.length === 0) {
                 throw new Error('Acceptance review requires a product requirements baseline: author a PRD for the active project (Projects tab). The workspace constitution, if present, will be enforced as supplementary invariants.');
             }
 

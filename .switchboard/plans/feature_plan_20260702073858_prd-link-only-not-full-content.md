@@ -162,3 +162,7 @@ prdContent?: string;
 3. **Manual**: Dispatch via a custom agent role with project context on. Confirm the custom-agent prompt also uses the link-only form.
 4. **Manual**: Disable PROJECT CONTEXT. Confirm no PRD block appears at all (existing gating unchanged).
 5. **Automated Tests**: Run `npm test`. No test asserts on `prdContent` (verified), so the suite should pass unchanged. If a fixture happens to populate `prdContent` for setup purposes, it remains harmless (the field is still on the interface); only assertions on embedded content would need updating, and none exist.
+
+## Review Findings
+
+Implementation is functionally correct: `_resolveProjectPrd` returns link-only, all three builder call sites (`buildPrdReferenceBlock`, tester acceptance-baseline, custom-agent) emit links via `prdReferences`, and `prdContent` is marked deprecated. Two stale comments were fixed during review: `agentPromptBuilder.ts:382` JSDoc referenced the removed `prdEnabled` gate, and `KanbanProvider.ts:3302` described the old board-filter approach. No CRITICAL or MAJOR issues found for this plan in isolation. Remaining risk: the `prdContent`/`prdEnabled` interface fields are dead but retained — harmless, but a future contributor could re-populate them; the deprecation comment mitigates this.

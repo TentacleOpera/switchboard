@@ -1,5 +1,6 @@
 ## BACKLOG
 
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/gitignore-rules-audit.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/gitignore-rules-audit.md) — Audit `.switchboard/` Git Tracking — Untrack Leaked State, Trim Dead Rules <!-- planId:4ceeb095-dc90-4bbe-ae9c-c4ae7945e163 -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/refactor_onboarding_state_synchronization.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/refactor_onboarding_state_synchronization.md) — Refactor Onboarding State Synchronization <!-- planId:a3cf9c50-31f3-4b20-93e6-34d26984a2bc -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/epic-3051b25c-35ae-48c8-9d21-b70436e0c8a2.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/epic-3051b25c-35ae-48c8-9d21-b70436e0c8a2.md) — design html code improvements <!-- planId:3051b25c-35ae-48c8-9d21-b70436e0c8a2 epic -->
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/design-html-collapsed-state-important-usage.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/design-html-collapsed-state-important-usage.md) — Fix .content-row Collapsed State !important Usage in design.html <!-- planId:sess_1781871737538 subtask-of:"design html code improvements" -->

@@ -8,6 +8,8 @@ description: 'Project Context & Remote UI Hub'
 
 **Complexity:** 5
 
+**Coordination contract:** [Remote Control Production Readiness — Cross-Epic Sequencing & Coordination Plan](../plans/feature_plan_20260701_remote-control-production-sequencing.md) — **epic 1 of 7** in the program dispatch order.
+
 > Formerly "Note codebase docs." Rescoped per the remote-control production decisions: **no codebase code-mirroring.** The remote agent gets curated **developer docs + PRDs + constitution**, authored in `project.html` and synced provider-agnostically to Notion + Linear.
 
 ## Goal

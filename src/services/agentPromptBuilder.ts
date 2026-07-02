@@ -379,7 +379,7 @@ export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote 
  * Build the per-project PRD reference block folded into the shared dispatch
  * prefix (`dispatchPrefixCore`) so it reaches EVERY role — mirroring the §11
  * remote-mode prefix injection, NOT the planner-only constitution block.
- * Gated by `options.prdEnabled` (the project-context toggle + an active PRD).
+ * Gated by `options.prdReferences` presence (the project-context toggle + resolved PRD links).
  */
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
     if (role === 'tester') return '';
