@@ -1560,22 +1560,7 @@ export class KanbanProvider implements vscode.Disposable {
         const service = new RemoteControlService({
             getDb: () => this._getKanbanDb(resolved),
             getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
-            getProvider: (kind: RemoteProviderKind): RemoteProvider | null => {
-                const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
-                const getPlansDir = () => this._getIntegrationImportDir(resolved);
-                const log = (m: string) => this._outputChannel?.appendLine(m);
-                if (kind === 'notion') {
-                    return new NotionRemoteProvider({
-                        notion: this._getNotionService(resolved),
-                        db: this._getKanbanDb(resolved),
-                        getWorkspaceId, getPlansDir, log,
-                    });
-                }
-                return new LinearRemoteProvider(this._getLinearService(resolved), {
-                    db: this._getKanbanDb(resolved),
-                    getWorkspaceId, getPlansDir, log,
-                });
-            },
+            getProvider: (kind: RemoteProviderKind): RemoteProvider | null => this._buildRemoteProvider(resolved, kind),
             onColumnMove: async (plan, targetColumn) => {
                 return this._remoteApplyColumnMove(resolved, plan, targetColumn);
             },
@@ -1586,6 +1571,28 @@ export class KanbanProvider implements vscode.Disposable {
         });
         this._remoteControls.set(resolved, service);
         return service;
+    }
+
+    /**
+     * Build a provider for an (already-resolved) workspace root. Shared by the
+     * RemoteControlService deps and the project-context push, so both paths get
+     * identically-wired providers.
+     */
+    private _buildRemoteProvider(resolved: string, kind: RemoteProviderKind): RemoteProvider {
+        const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
+        const getPlansDir = () => this._getIntegrationImportDir(resolved);
+        const log = (m: string) => this._outputChannel?.appendLine(m);
+        if (kind === 'notion') {
+            return new NotionRemoteProvider({
+                notion: this._getNotionService(resolved),
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
+            });
+        }
+        return new LinearRemoteProvider(this._getLinearService(resolved), {
+            db: this._getKanbanDb(resolved),
+            getWorkspaceId, getPlansDir, log,
+        });
     }
 
     /**
@@ -1704,6 +1711,106 @@ export class KanbanProvider implements vscode.Disposable {
         }
         this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
         return this._remoteControlActive;
+    }
+
+    // ── Project-context sync (epic: Project Context & Remote UI Hub) ──────
+    // Dev Docs + PRDs + constitution → Notion context page + Linear project
+    // docs, via the providers' pushProjectContext capability. Switchboard is
+    // the source of truth; the providers receive a mirror.
+
+    /** Current sync state for the Remote tab's controls. */
+    public async projectContextGetStatus(workspaceRoot?: string): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const db = this._getKanbanDb(this.resolveEffectiveWorkspaceRoot(resolved));
+        if (!(await db.ensureReady())) { return null; }
+        const { loadProjectContextState } = require('./remote/projectContextSync');
+        const state = await loadProjectContextState(db);
+        return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+    }
+
+    /** Toggle auto-push (fires after Dev Doc / PRD / constitution saves). */
+    public async projectContextSetEnabled(workspaceRoot: string | undefined, enabled: boolean): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const db = this._getKanbanDb(this.resolveEffectiveWorkspaceRoot(resolved));
+        if (!(await db.ensureReady())) { return null; }
+        const { loadProjectContextState, saveProjectContextState } = require('./remote/projectContextSync');
+        const state = await loadProjectContextState(db);
+        state.enabled = enabled === true;
+        await saveProjectContextState(db, state);
+        return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+    }
+
+    /**
+     * Assemble and push the project context. Auto runs (post-save) respect the
+     * enabled flag and the coarse content-hash gate; a manual Sync Now pushes
+     * unconditionally.
+     */
+    public async projectContextSyncNow(
+        workspaceRoot: string | undefined,
+        opts: { auto?: boolean } = {}
+    ): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const effective = this.resolveEffectiveWorkspaceRoot(resolved);
+        const db = this._getKanbanDb(effective);
+        if (!(await db.ensureReady())) { return null; }
+
+        const {
+            loadProjectContextState, saveProjectContextState,
+            assembleProjectContextBundle, summarizePushResults,
+        } = require('./remote/projectContextSync');
+        const state = await loadProjectContextState(db);
+
+        if (opts.auto && !state.enabled) {
+            return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        }
+
+        const rc = this._getRemoteControl(resolved);
+        const remoteConfig = await rc.getConfig();
+        const { getConstitutionPath } = require('./constitutionUtils');
+        const workspaceId = (await db.getWorkspaceId()) || '';
+        const projectNames: string[] = workspaceId ? await db.getProjects(workspaceId) : [];
+
+        const assembled = await assembleProjectContextBundle({
+            workspaceRoot: effective,
+            workspaceLabel: path.basename(effective),
+            boards: remoteConfig.boards,
+            constitutionPath: getConstitutionPath(this._context, effective),
+            projectNames,
+        });
+
+        if (!assembled) {
+            state.lastSyncAt = new Date().toISOString();
+            state.lastResult = 'nothing to push — no Dev Docs, PRDs, or constitution found';
+            await saveProjectContextState(db, state);
+            return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        }
+
+        // Coarse change gate — auto runs only. Manual Sync Now always pushes.
+        if (opts.auto && assembled.hash === state.lastHash) {
+            return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        }
+
+        const notionResult = await this._buildRemoteProvider(effective, 'notion')
+            .pushProjectContext(assembled.bundle)
+            .catch((e: unknown) => ({ ok: false, detail: e instanceof Error ? e.message : String(e) }));
+        const linearResult = await this._buildRemoteProvider(effective, 'linear')
+            .pushProjectContext(assembled.bundle)
+            .catch((e: unknown) => ({ ok: false, detail: e instanceof Error ? e.message : String(e) }));
+
+        const summary = summarizePushResults({ notion: notionResult, linear: linearResult });
+        state.providers = summary.providers;
+        state.lastResult = summary.lastResult;
+        state.lastSyncAt = assembled.bundle.syncedAt;
+        // Advance the gate only when at least one provider actually accepted the
+        // content — a failed run must retry on the next save, not be gated away.
+        const pushedAnywhere = (notionResult.ok && !notionResult.skipped) || (linearResult.ok && !linearResult.skipped);
+        if (pushedAnywhere) { state.lastHash = assembled.hash; }
+        await saveProjectContextState(db, state);
+        this._outputChannel?.appendLine(`[ProjectContextSync] ${state.lastResult}`);
+        return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
     }
 
     /** §9 — apply a Linear-driven column move, then dispatch the destination column's agent. */

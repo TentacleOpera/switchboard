@@ -1942,6 +1942,27 @@
                         <span id="remote-control-state" style="font-size:10px; color:var(--text-secondary);"></span>
                     </div>
 
+                    <!-- Project-context sync: Dev Docs + PRDs + constitution → Notion context
+                         page + Linear project docs, so the remote agent plans from real context. -->
+                    <div style="margin-top:6px; margin-bottom:12px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
+                        <div class="subsection-header"><span>Project Context Sync</span></div>
+                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                            Mirrors this workspace's <strong>Dev Docs + project PRDs + constitution</strong> to the
+                            remote — a "Switchboard Project Context" page in Notion and a project document in
+                            Linear — so the remote planning agent works from real context instead of the card
+                            text alone. Switchboard is the source of truth; remote edits are overwritten.
+                        </div>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                            <input type="checkbox" id="remote-context-auto">
+                            <span>Auto-sync after saving a Dev Doc, PRD, or the constitution</span>
+                        </label>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <button id="btn-context-sync-now" class="strip-btn">Sync Context Now</button>
+                            <span id="remote-context-status" style="font-size:10px; color:var(--text-secondary);"></span>
+                        </div>
+                        <div id="remote-context-last-result" style="margin-top:6px; font-size:10px; color:var(--text-secondary);"></div>
+                    </div>
+
                     <!-- Notion-only one-time setup: creates the plans + comments databases,
                          backs up the selected boards, and matches the column select to the board. -->
                     <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">

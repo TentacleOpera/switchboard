@@ -2289,6 +2289,26 @@ export class PlanningPanelProvider {
                 remotePanel?.webview.postMessage({ type: 'remoteControlState', active });
                 break;
             }
+            case 'getProjectContextSyncStatus': {
+                const payload = await this._kanbanProvider?.projectContextGetStatus(msg.workspaceRoot);
+                const ctxPanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { ctxPanel?.webview.postMessage(payload); }
+                break;
+            }
+            case 'setProjectContextSyncEnabled': {
+                const payload = await this._kanbanProvider?.projectContextSetEnabled(msg.workspaceRoot, msg.enabled === true);
+                const ctxPanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { ctxPanel?.webview.postMessage(payload); }
+                break;
+            }
+            case 'projectContextSyncNow': {
+                const ctxPanel = isProject ? this._projectPanel : this._panel;
+                ctxPanel?.webview.postMessage({ type: 'projectContextSyncRunning' });
+                const payload = await this._kanbanProvider?.projectContextSyncNow(msg.workspaceRoot, { auto: false });
+                if (payload) { ctxPanel?.webview.postMessage(payload); }
+                else { ctxPanel?.webview.postMessage({ type: 'projectContextSyncStatus', state: null, error: 'No workspace resolved' }); }
+                break;
+            }
 
             // ── Dev Docs (project-context authoring surface) ────────────────
             case 'loadDevDocs': {
@@ -3857,6 +3877,9 @@ export class PlanningPanelProvider {
                         tab: 'constitution',
                         governanceFile: key
                     });
+                    // Only the constitution participates in project-context sync
+                    // (CLAUDE.md/AGENTS.md are local agent governance, not remote context).
+                    if (key === 'constitution') { this._onProjectContextContentChanged(wsRoot); }
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
                     this._postToBothPanels({
@@ -3960,6 +3983,7 @@ export class PlanningPanelProvider {
                         ok,
                         path: filePath
                     });
+                    if (ok) { this._onProjectContextContentChanged(wsRoot); }
                 }
                 break;
             }
@@ -8484,11 +8508,21 @@ Read the current content above. Determine what's missing. Produce a complete epi
 
     /**
      * Called after any project-context content write (dev doc, PRD, constitution).
-     * Hook for the outbound project-context sync — the sync member of this epic
-     * fills it in; a no-op until then.
+     * Debounced auto-push: projectContextSyncNow({auto:true}) respects the user's
+     * enabled flag and the coarse content-hash gate, so this is cheap to fire on
+     * every save. The refreshed status lands in the Remote tab if it's open.
      */
-    private _onProjectContextContentChanged(_workspaceRoot?: string): void {
-        // Intentionally empty — see project-context-sync-to-notion-and-linear.
+    private _projectContextSyncDebounce: NodeJS.Timeout | undefined;
+    private _onProjectContextContentChanged(workspaceRoot?: string): void {
+        const root = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!root || !this._kanbanProvider) { return; }
+        if (this._projectContextSyncDebounce) { clearTimeout(this._projectContextSyncDebounce); }
+        this._projectContextSyncDebounce = setTimeout(() => {
+            this._projectContextSyncDebounce = undefined;
+            void this._kanbanProvider?.projectContextSyncNow(root, { auto: true })
+                .then(payload => { if (payload) { this._projectPanel?.webview.postMessage(payload); } })
+                .catch(err => console.warn('[PlanningPanel] project-context auto-sync failed:', err));
+        }, 5000);
     }
 
     private async _handleAirlockExport(workspaceRoot: string): Promise<{ success: boolean; message: string }> {

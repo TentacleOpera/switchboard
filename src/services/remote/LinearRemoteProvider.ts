@@ -2,7 +2,10 @@ import * as fs from 'fs';
 import type { LinearSyncService } from '../LinearSyncService';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import { hasMarker } from '../commentMarker';
-import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta } from './RemoteProvider';
+import type {
+    RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
+    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult
+} from './RemoteProvider';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
 
 /**
@@ -24,6 +27,7 @@ interface LinearRemoteProviderDeps {
 
 export class LinearRemoteProvider implements RemoteProvider {
     public readonly kind = 'linear' as const;
+    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: true };
     private _linear: LinearSyncService;
     private _deps: LinearRemoteProviderDeps;
     private _stateIdToColumn: Record<string, string> = {};
@@ -149,6 +153,91 @@ export class LinearRemoteProvider implements RemoteProvider {
         const result = await this._linear.postManagedComment(remoteId, body);
         if (!result.success) {
             throw new Error(`Linear postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
+        }
+    }
+
+    // ── Project-context push (epic: Project Context & Remote UI Hub) ──────
+    //
+    // Upserts a "Switchboard Project Context" document (Dev Docs + PRDs +
+    // constitution, markdown) on each Linear project matching a configured
+    // board name. Linear documents take markdown directly — no conversion.
+
+    private static readonly CONTEXT_DOC_TITLE = 'Switchboard Project Context';
+
+    public async pushProjectContext(bundle: ProjectContextBundle): Promise<ProjectContextPushResult> {
+        const config = await this._linear.loadConfig();
+        if (!config?.setupComplete || !config.teamId) {
+            return { ok: true, skipped: true, detail: 'Linear not set up' };
+        }
+
+        let projects: { id: string; name: string }[];
+        try {
+            projects = await this._linear.getAvailableProjects();
+        } catch (e) {
+            return { ok: false, detail: `Could not list Linear projects: ${e instanceof Error ? e.message : String(e)}` };
+        }
+
+        // Board names match Linear project names by the sync convention; fall back
+        // to the configured selected project when no board name resolves.
+        const wanted = new Set(
+            bundle.boards.filter(b => b).map(b => b.toLowerCase())
+        );
+        let targets = projects.filter(p => wanted.has(p.name.toLowerCase()));
+        if (targets.length === 0 && config.selectedProjectName) {
+            targets = projects.filter(p => p.name.toLowerCase() === config.selectedProjectName!.toLowerCase());
+        }
+        if (targets.length === 0) {
+            return { ok: true, skipped: true, detail: 'No Linear project matches the configured boards' };
+        }
+
+        const errors: string[] = [];
+        for (const project of targets) {
+            try {
+                await this._upsertContextDocument(project.id, bundle.combinedMarkdown);
+            } catch (e) {
+                errors.push(`${project.name}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+        if (errors.length === targets.length) {
+            return { ok: false, detail: `All project doc writes failed — ${errors.join('; ')}` };
+        }
+        return {
+            ok: true,
+            detail: errors.length
+                ? `updated ${targets.length - errors.length}/${targets.length} project doc(s); failed: ${errors.join('; ')}`
+                : `updated ${targets.length} project doc(s)`,
+        };
+    }
+
+    /** Find the context document on a project by title and update it, else create it. */
+    private async _upsertContextDocument(projectId: string, markdown: string): Promise<void> {
+        const existing = await this._linear.graphqlRequest(`
+            query($projectId: String!) {
+              project(id: $projectId) { documents { nodes { id title } } }
+            }
+        `, { projectId });
+        const nodes = existing?.data?.project?.documents?.nodes || [];
+        const match = nodes.find((n: any) => String(n?.title || '').trim() === LinearRemoteProvider.CONTEXT_DOC_TITLE);
+
+        if (match?.id) {
+            const updated = await this._linear.graphqlRequest(`
+                mutation($id: String!, $input: DocumentUpdateInput!) {
+                  documentUpdate(id: $id, input: $input) { success }
+                }
+            `, { id: String(match.id), input: { content: markdown } });
+            if (updated?.data?.documentUpdate?.success !== true) {
+                throw new Error('documentUpdate returned success=false');
+            }
+            return;
+        }
+
+        const created = await this._linear.graphqlRequest(`
+            mutation($input: DocumentCreateInput!) {
+              documentCreate(input: $input) { success document { id } }
+            }
+        `, { input: { title: LinearRemoteProvider.CONTEXT_DOC_TITLE, content: markdown, projectId } });
+        if (created?.data?.documentCreate?.success !== true) {
+            throw new Error('documentCreate returned success=false');
         }
     }
 

@@ -53,7 +53,9 @@
                 vscode.postMessage({ type: 'loadDevDocs' });
             } else if (activeTab === 'remote') {
                 const wsSel = document.getElementById('remote-workspace');
-                vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: (wsSel && wsSel.value) || undefined });
+                const remoteWs = (wsSel && wsSel.value) || undefined;
+                vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: remoteWs });
+                vscode.postMessage({ type: 'getProjectContextSyncStatus', workspaceRoot: remoteWs });
             } else if (activeTab === 'notebook') {
                 hydrateNotebookTab();
             }
@@ -1208,6 +1210,28 @@
                         ? `Setup complete — ${msg.backedUp || 0} card(s) backed up. Connect Notion to claude.ai and drive it from there.`
                         : `Setup failed: ${msg.error || 'unknown error'}`;
                 }
+                break;
+            }
+            case 'projectContextSyncRunning': {
+                const statusEl = document.getElementById('remote-context-status');
+                if (statusEl) statusEl.textContent = 'Syncing…';
+                break;
+            }
+            case 'projectContextSyncStatus': {
+                const auto = document.getElementById('remote-context-auto');
+                const statusEl = document.getElementById('remote-context-status');
+                const lastEl = document.getElementById('remote-context-last-result');
+                if (!msg.state) {
+                    if (statusEl) statusEl.textContent = msg.error || '';
+                    break;
+                }
+                if (auto) auto.checked = msg.state.enabled === true;
+                if (statusEl) {
+                    statusEl.textContent = msg.state.lastSyncAt
+                        ? `Last sync: ${new Date(msg.state.lastSyncAt).toLocaleString()}`
+                        : 'Never synced';
+                }
+                if (lastEl) lastEl.textContent = msg.state.lastResult || '';
                 break;
             }
             // ── NotebookLM tab (relocated from planning.html) ─────────────
@@ -3463,12 +3487,29 @@
         if (e.target.id === 'remote-workspace') {
             // Switching workspace: load THAT workspace's own config (no save).
             vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: e.target.value });
+            vscode.postMessage({ type: 'getProjectContextSyncStatus', workspaceRoot: e.target.value });
+            return;
+        }
+        if (e.target.id === 'remote-context-auto') {
+            // Context-sync toggle is its own state blob, not part of RemoteConfig.
+            const wsSel = document.getElementById('remote-workspace');
+            vscode.postMessage({
+                type: 'setProjectContextSyncEnabled',
+                enabled: e.target.checked === true,
+                workspaceRoot: (wsSel && wsSel.value) || undefined
+            });
             return;
         }
         if (e.target.id === 'remote-provider') {
             applyRemoteProviderUi();
         }
         remoteAutosave();
+    });
+    document.getElementById('btn-context-sync-now')?.addEventListener('click', () => {
+        const wsSel = document.getElementById('remote-workspace');
+        const statusEl = document.getElementById('remote-context-status');
+        if (statusEl) statusEl.textContent = 'Syncing…';
+        vscode.postMessage({ type: 'projectContextSyncNow', workspaceRoot: (wsSel && wsSel.value) || undefined });
     });
     // Notion one-time setup sync (creates the plans + comments DBs, backs up boards).
     document.getElementById('btn-notion-remote-setup')?.addEventListener('click', () => {

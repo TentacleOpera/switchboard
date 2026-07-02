@@ -23,6 +23,48 @@ export interface RemoteStateDelta {
     stateKey: string;
 }
 
+/**
+ * Declared provider capabilities. The Remote Sync Refactor (1/3) formalizes the
+ * full declared-capability surface (pull/push/archive, card + project entity
+ * levels) on this same object — project-context push is declared here first so
+ * epic 1's context sync rides the provider seam rather than a parallel pipeline.
+ */
+export interface RemoteProviderCapabilities {
+    /** Provider can receive the project-level context bundle (Dev Docs + PRDs + constitution). */
+    projectContextPush: boolean;
+}
+
+/** One project-context document (a dev doc, a project PRD, or the constitution). */
+export interface ProjectContextDocument {
+    kind: 'devdoc' | 'prd' | 'constitution';
+    /** Display title — dev-doc H1, project name for PRDs, 'Workspace Constitution'. */
+    title: string;
+    /** Raw markdown body. */
+    markdown: string;
+}
+
+/** The assembled project-level context pushed outward. Switchboard is the source of truth. */
+export interface ProjectContextBundle {
+    /** Workspace display name (basename of the workspace root). */
+    workspaceLabel: string;
+    /** Board keys from remote.config ('' = base board) — Linear resolves project docs from these. */
+    boards: string[];
+    documents: ProjectContextDocument[];
+    /** Single combined markdown rendering of all documents (providers may use this or the parts). */
+    combinedMarkdown: string;
+    /** ISO timestamp of this sync run (for staleness banners in the pushed doc). */
+    syncedAt: string;
+}
+
+/** Outcome of a project-context push against one provider. */
+export interface ProjectContextPushResult {
+    ok: boolean;
+    /** true → provider isn't configured for this workspace; not an error. */
+    skipped?: boolean;
+    /** Human-readable outcome: 'replaced', 'appended', or an error/skip reason. */
+    detail?: string;
+}
+
 /** A single inbound comment from the remote agent. */
 export interface RemoteCommentDelta {
     /** Provider id of the card the comment targets. */
@@ -39,6 +81,9 @@ export interface RemoteCommentDelta {
 
 export interface RemoteProvider {
     readonly kind: 'linear' | 'notion';
+
+    /** Declared capabilities — gate callers on these, never on `kind`. */
+    readonly capabilities: RemoteProviderCapabilities;
 
     /**
      * State deltas since `sinceCursor` (an opaque cursor string the provider serializes
@@ -77,4 +122,14 @@ export interface RemoteProvider {
      * (no feedback loop).
      */
     postComment(remoteId: string, body: string): Promise<void>;
+
+    /**
+     * Push the project-level context bundle (Dev Docs + PRDs + constitution) to the
+     * provider's project surface — Notion: the Switchboard context page beside the
+     * plans DB; Linear: a "Switchboard Project Context" document on the matching
+     * project(s). Notion writes MUST obey the overwrite guard: append-by-default,
+     * full replace only after a verified no-inline-children check, and abort (never
+     * destructive-write) when the check can't be made.
+     */
+    pushProjectContext(bundle: ProjectContextBundle): Promise<ProjectContextPushResult>;
 }
