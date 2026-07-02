@@ -7,6 +7,7 @@ import type { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { KanbanDatabase } from './KanbanDatabase';
+import type { RemoteProvider } from './remote/RemoteProvider';
 import type { LiveSyncState, LiveSyncConfig, LiveSyncStatus } from '../models/LiveSyncTypes';
 import { DEFAULT_LIVE_SYNC_CONFIG } from '../models/LiveSyncTypes';
 
@@ -41,14 +42,28 @@ export class ContinuousSyncService implements vscode.Disposable {
   // of pushing `{ [key]: true }` POJOs into `_disposables`, which would have
   // thrown on `dispose()` because plain objects have no `dispose` method.
   private _skipToastsShown: Set<string> = new Set();
+  // Loop prevention: maps issueId → content hash for content that was written by
+  // the inbound (pull) path. The push path checks this map to avoid re-pushing
+  // content we just pulled (pull-write-push feedback loop).
+  private _externallyWrittenHashes = new Map<string, string>();
 
   constructor(
     private readonly _kanbanProvider: KanbanProvider,
     private readonly _globalPlanWatcher: GlobalPlanWatcherService,
     private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
     private readonly _getLinearService: (workspaceRoot: string) => LinearSyncService,
-    private readonly _getKanbanDb: (workspaceRoot: string) => KanbanDatabase
+    private readonly _getKanbanDb: (workspaceRoot: string) => KanbanDatabase,
+    private readonly _getPushProvider?: (workspaceRoot: string, plan: import('./KanbanDatabase').KanbanPlanRecord) => RemoteProvider | null,
+    private readonly _onDescriptionSynced?: (issueId: string, timestamp: string) => void
   ) {}
+
+  /**
+   * Register a content hash for an issue that was written by the inbound (pull) path.
+   * The push path checks this map to avoid re-pushing content we just pulled.
+   */
+  public markExternallyWritten(issueId: string, contentHash: string): void {
+    this._externallyWrittenHashes.set(issueId, contentHash);
+  }
 
   /**
    * Start live sync monitoring for whichever integrations currently have realtime sync enabled.
@@ -470,9 +485,8 @@ export class ContinuousSyncService implements vscode.Disposable {
         }
       }
 
-      // Perform sync — only to the active provider, not both. Syncing both
-      // doubles the hang risk and spends rate-limit budget on disabled
-      // providers.
+      // Perform sync — unified dispatch through the provider registry when available.
+      // Falls back to concrete services if the registry is not injected (backward compat).
       const content = await this._readPlanContent(plan.planFile, workspaceRoot);
 
       // Defensive optional chaining: vscode.workspace may be unavailable in
@@ -480,7 +494,10 @@ export class ContinuousSyncService implements vscode.Disposable {
       // this guard, _executeSync throws before reaching the sync call and
       // every existing regression test fails at the first assertion.
       let syncResult;
-      if (plan.clickupTaskId) {
+      if (this._getPushProvider) {
+        // Unified dispatch: resolve the provider from the plan's remote IDs.
+        syncResult = await this._syncToRemote(plan, content, workspaceRoot, controller.signal);
+      } else if (plan.clickupTaskId) {
         if (plan.linearIssueId) {
           console.log('[ContinuousSync] Plan has both clickupTaskId and linearIssueId; prioritizing ClickUp.');
         }
@@ -894,12 +911,100 @@ export class ContinuousSyncService implements vscode.Disposable {
     if (!(await linear.hasApiToken())) {
       return { skipped: true, reason: 'Linear API token not configured' };
     }
+
+    // Loop prevention: if the content hash matches an externally-written hash,
+    // this push was triggered by our own pull — skip it.
+    const strippedContent = linear._stripH1Header(content);
+    const contentHash = crypto.createHash('sha256').update(strippedContent).digest('hex');
+    const externalHash = this._externallyWrittenHashes.get(plan.linearIssueId);
+    if (externalHash && contentHash === externalHash) {
+      this._externallyWrittenHashes.delete(plan.linearIssueId);
+      return { skipped: true, reason: 'Content matches externally-pulled version' };
+    }
+
     const result = await linear.syncPlanContent(plan.linearIssueId, content, signal);
     if (!result.success) {
       console.warn(`[ContinuousSync] Linear sync failed for ${plan.planFile}: ${result.error}`);
       throw new Error(result.error);
     }
+    // Persist description cursor on successful push (for bidirectional description sync).
+    if (this._onDescriptionSynced) {
+      this._onDescriptionSynced(plan.linearIssueId, new Date().toISOString());
+    }
     return { skipped: false };
+  }
+
+  /**
+   * Unified remote sync dispatch — resolves the provider from the plan's remote IDs
+   * and calls `provider.pushContent`. Replaces the concrete-service dispatch path
+   * when the provider registry is available.
+   */
+  private async _syncToRemote(
+    plan: import('./KanbanDatabase').KanbanPlanRecord,
+    content: string,
+    workspaceRoot: string,
+    signal?: AbortSignal
+  ): Promise<{ skipped: boolean; reason?: string }> {
+    if (!this._getPushProvider) {
+      return { skipped: true, reason: 'No push provider registry' };
+    }
+    const provider = this._getPushProvider(workspaceRoot, plan);
+    if (!provider || !provider.capabilities.push) {
+      return { skipped: true, reason: 'No push-capable provider for this plan' };
+    }
+
+    // Resolve the remote ID from the plan — priority: ClickUp > Linear > Notion
+    // (matches the existing _executeSync priority logic).
+    let remoteId = '';
+    if (plan.clickupTaskId) {
+      remoteId = plan.clickupTaskId;
+    } else if (plan.linearIssueId) {
+      remoteId = plan.linearIssueId;
+    } else if (plan.notionPageId) {
+      remoteId = plan.notionPageId;
+    } else {
+      return { skipped: true, reason: 'No external issue linked' };
+    }
+
+    // Check the realTimeSyncEnabled gate. For Linear/ClickUp, this is a per-service
+    // config flag. For Notion, push is gated by the remote.config push flag (Plan 3/3).
+    // The gate stays at the trigger site (per-service config, not provider capability).
+    if (provider.kind === 'linear') {
+      const linear = this._getLinearService(workspaceRoot);
+      const config = await linear.loadConfig();
+      if (!config?.setupComplete) { return { skipped: true, reason: 'Linear not set up' }; }
+      if (config.realTimeSyncEnabled !== true) { return { skipped: true, reason: 'Real-time sync disabled' }; }
+      if (!(await linear.hasApiToken())) { return { skipped: true, reason: 'Linear API token not configured' }; }
+
+      // Loop prevention for Linear description sync.
+      const strippedContent = linear._stripH1Header(content);
+      const contentHash = crypto.createHash('sha256').update(strippedContent).digest('hex');
+      const externalHash = this._externallyWrittenHashes.get(remoteId);
+      if (externalHash && contentHash === externalHash) {
+        this._externallyWrittenHashes.delete(remoteId);
+        return { skipped: true, reason: 'Content matches externally-pulled version' };
+      }
+    } else if (provider.kind === 'clickup') {
+      const clickup = this._getClickUpService(workspaceRoot);
+      const config = await clickup.loadConfig();
+      if (!config?.setupComplete) { return { skipped: true, reason: 'ClickUp not set up' }; }
+      if (config.realTimeSyncEnabled !== true) { return { skipped: true, reason: 'Real-time sync disabled' }; }
+      if (!(await clickup.hasApiToken())) { return { skipped: true, reason: 'ClickUp API token not configured' }; }
+    }
+    // Notion: no realTimeSyncEnabled flag — push is gated by the remote.config push
+    // flag (checked in KanbanProvider trigger sites, Plan 3/3).
+
+    try {
+      await provider.pushContent(remoteId, content);
+      // Persist description cursor on successful Linear push.
+      if (provider.kind === 'linear' && this._onDescriptionSynced) {
+        this._onDescriptionSynced(remoteId, new Date().toISOString());
+      }
+      return { skipped: false };
+    } catch (e) {
+      console.warn(`[ContinuousSync] Remote sync failed for ${plan.planFile}: ${e instanceof Error ? e.message : String(e)}`);
+      throw e;
+    }
   }
 
   private async _checkIdlePlans(workspaceRoot: string): Promise<void> {

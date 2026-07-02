@@ -21,6 +21,10 @@ export interface RemoteStateDelta {
     remoteId: string;
     /** Opaque provider state key. Linear: state UUID. Notion: the `Kanban Column` select name. */
     stateKey: string;
+    /** ISO timestamp of the remote item's last update. Linear: issue.updatedAt. Notion: page.last_edited_time. */
+    updatedAt?: string;
+    /** Remote item body/description. Linear: issue.description. Notion: undefined (deferred). */
+    description?: string;
 }
 
 /** A single inbound comment from the remote agent. */
@@ -37,8 +41,19 @@ export interface RemoteCommentDelta {
     authoredBySelf: boolean;
 }
 
+/** Declared provider capabilities — gates UI honestly (no toggle offers a capability a provider lacks). */
+export interface RemoteProviderCapabilities {
+    /** Provider can pull/ingest state + comments (Linear, Notion). ClickUp = false. */
+    pull: boolean;
+    /** Provider can push state + content (Linear, ClickUp, Notion-after-2/3). */
+    push: boolean;
+}
+
 export interface RemoteProvider {
-    readonly kind: 'linear' | 'notion';
+    readonly kind: 'linear' | 'notion' | 'clickup';
+
+    /** Declared capabilities — the UI gates controls on this, not on guessing. */
+    readonly capabilities: RemoteProviderCapabilities;
 
     /**
      * State deltas since `sinceCursor` (an opaque cursor string the provider serializes
@@ -77,4 +92,18 @@ export interface RemoteProvider {
      * (no feedback loop).
      */
     postComment(remoteId: string, body: string): Promise<void>;
+
+    /**
+     * Push a column/state change to the remote (outbound status sync).
+     * Implementations delegate to the concrete sync service's syncPlan.
+     * Pull-only providers log and return (no-op stub).
+     */
+    pushState(remoteId: string, column: string): Promise<void>;
+
+    /**
+     * Push plan body/content to the remote description/body (outbound content sync).
+     * Implementations delegate to the concrete sync service's syncPlanContent.
+     * Pull-only providers log and return (no-op stub).
+     */
+    pushContent(remoteId: string, markdown: string): Promise<void>;
 }

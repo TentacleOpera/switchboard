@@ -1,5 +1,8 @@
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import type { RemoteProvider } from './remote/RemoteProvider';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 /**
  * §7/§9/§10 — Remote Control (provider-agnostic: Linear or Notion).
@@ -29,7 +32,7 @@ import type { RemoteProvider } from './remote/RemoteProvider';
  *    on the next poll (delayed, not lost).
  */
 
-export type RemoteProviderKind = 'linear' | 'notion';
+export type RemoteProviderKind = 'linear' | 'notion' | 'clickup';
 
 export interface RemoteConfig {
     /** Which remote backend drives the board. One active at a time (no hot-swap). */
@@ -65,6 +68,14 @@ interface RemoteControlDeps {
     onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
     /** Route an inbound comment to the card's current column agent (§7). */
     onComment: (plan: KanbanPlanRecord, commentBody: string) => Promise<void>;
+    /** Persisted description-sync cursors per issue (issueId → ISO timestamp). */
+    getDescriptionCursors?: (kind: RemoteProviderKind) => Promise<Record<string, string>>;
+    /** Persist a description-sync cursor for an issue. */
+    setDescriptionCursor?: (kind: RemoteProviderKind, issueId: string, timestamp: string) => Promise<void>;
+    /** Called after a description is pulled and written to disk. Registers the content hash for loop prevention. */
+    onDescriptionPulled?: (issueId: string, contentHash: string) => void;
+    /** Resolve the workspace root for file path operations (plan files). */
+    getWorkspaceRoot?: () => string;
     log?: (msg: string) => void;
 }
 
@@ -94,7 +105,7 @@ export class RemoteControlService {
             if (!raw) { return { ...DEFAULT_REMOTE_CONFIG }; }
             const parsed = JSON.parse(raw);
             return {
-                provider: parsed.provider === 'notion' ? 'notion' : 'linear',
+                provider: (parsed.provider === 'notion' || parsed.provider === 'clickup') ? parsed.provider : 'linear',
                 boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
                 pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds)
@@ -108,7 +119,7 @@ export class RemoteControlService {
         const db = this._deps.getDb();
         if (!db || !(await db.ensureReady())) { return; }
         const normalized: RemoteConfig = {
-            provider: config.provider === 'notion' ? 'notion' : 'linear',
+            provider: (config.provider === 'notion' || config.provider === 'clickup') ? config.provider : 'linear',
             boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
             pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds)
@@ -191,8 +202,10 @@ export class RemoteControlService {
             const allPlans = await db.getAllPlans(workspaceId);
             const byRemoteId = this._indexByRemoteId(provider.kind, allPlans, boardSet);
 
-            await this._pollState(db, provider, byRemoteId);
+            const refreshedThisCycle = new Set<string>();
+            await this._pollState(db, provider, byRemoteId, refreshedThisCycle);
             await this._pollComments(db, provider, byRemoteId);
+            await this._pollDescriptions(db, provider, byRemoteId, refreshedThisCycle);
         } catch (e) {
             this._log(`Poll error: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
@@ -214,7 +227,7 @@ export class RemoteControlService {
                 if ((p.sourceType === 'linear-import' || p.sourceType === 'linear-automation') && p.linearIssueId) {
                     map.set(p.linearIssueId, p);
                 }
-            } else {
+            } else if (kind === 'notion') {
                 // Notion: key on page-id presence (set by the one-time setup backup), NOT
                 // sourceType. The common case is enabling Notion remote on an EXISTING board
                 // whose plans are 'local'/etc; reclassifying them to 'notion-*' would clobber
@@ -222,13 +235,21 @@ export class RemoteControlService {
                 if (p.notionPageId) {
                     map.set(p.notionPageId, p);
                 }
+            } else if (kind === 'clickup') {
+                // ClickUp: push-only, but index by clickupTaskId for completeness.
+                if (p.clickupTaskId) {
+                    map.set(p.clickupTaskId, p);
+                }
             }
         }
         return map;
     }
 
     private _remoteIdOf(kind: RemoteProviderKind, plan: KanbanPlanRecord): string {
-        return (kind === 'linear' ? plan.linearIssueId : plan.notionPageId) || '';
+        if (kind === 'linear') { return plan.linearIssueId || ''; }
+        if (kind === 'notion') { return plan.notionPageId || ''; }
+        if (kind === 'clickup') { return plan.clickupTaskId || ''; }
+        return '';
     }
 
     // ── State stream (§9) ───────────────────────────────────────────
@@ -236,7 +257,8 @@ export class RemoteControlService {
     private async _pollState(
         db: KanbanDatabase,
         provider: RemoteProvider,
-        byRemoteId: Map<string, KanbanPlanRecord>
+        byRemoteId: Map<string, KanbanPlanRecord>,
+        refreshedThisCycle: Set<string>
     ): Promise<void> {
         const key = stateCursorKey(provider.kind);
         const cursor = await db.getConfig(key);
@@ -260,7 +282,7 @@ export class RemoteControlService {
             }
             const column = provider.stateKeyToColumn(d.stateKey);
             if (!column) { continue; }
-            await this._applyStateMirror(provider, plan, column);
+            await this._applyStateMirror(provider, plan, column, refreshedThisCycle);
         }
         // Advance AFTER processing. State idempotency comes from the echo guard, so a
         // re-fetched (same-minute / inclusive-cursor) item simply no-ops.
@@ -272,7 +294,8 @@ export class RemoteControlService {
     private async _applyStateMirror(
         provider: RemoteProvider,
         plan: KanbanPlanRecord,
-        targetColumn: string
+        targetColumn: string,
+        refreshedThisCycle: Set<string>
     ): Promise<void> {
         // The whole echo guard: never re-apply the column the card is already in. Our own
         // outbound push re-surfaces as a delta with the column we just set → no-op here.
@@ -283,6 +306,8 @@ export class RemoteControlService {
         try {
             // Pull the remote-authored body/description into the local plan BEFORE dispatch.
             await provider.refreshLocalPlanFromRemote(remoteId);
+            // Track that this card was already refreshed so _pollDescriptions doesn't double-pull.
+            refreshedThisCycle.add(remoteId);
             const { dispatched } = await this._deps.onColumnMove(plan, targetColumn);
             if (dispatched) {
                 provider.postComment(
@@ -368,5 +393,99 @@ export class RemoteControlService {
         let arr = Array.from(seen);
         if (arr.length > COMMENT_SEEN_CAP) { arr = arr.slice(arr.length - COMMENT_SEEN_CAP); }
         await db.setConfig(commentSeenKey(kind), JSON.stringify(arr));
+    }
+
+    // ── Description stream (bidirectional content sync) ─────────────
+
+    /**
+     * Poll for description-only changes (content edits that don't change the column).
+     * Uses a separate per-issue cursor (`remote.descriptionCursor.${kind}`) that only
+     * advances after successful processing. Skips cards already refreshed by
+     * `_applyStateMirror` in the same poll cycle (column+description changed together).
+     *
+     * Only Linear is supported — Notion description pull is deferred. The provider's
+     * `fetchStateDeltas` must populate `description` and `updatedAt` on the deltas.
+     */
+    private async _pollDescriptions(
+        db: KanbanDatabase,
+        provider: RemoteProvider,
+        byRemoteId: Map<string, KanbanPlanRecord>,
+        refreshedThisCycle: Set<string>
+    ): Promise<void> {
+        if (!this._deps.getDescriptionCursors || !this._deps.setDescriptionCursor) { return; }
+        if (provider.kind !== 'linear') { return; } // Linear-only for now
+
+        const key = `remote.descriptionCursor.${provider.kind}`;
+        const cursors = await this._deps.getDescriptionCursors(provider.kind);
+
+        // Re-fetch state deltas to get description data (same query, includes description).
+        // The state cursor is used as the "since" timestamp — this is acceptable because
+        // description changes bump updatedAt, which is the same field the state cursor tracks.
+        const stateCursor = await db.getConfig(stateCursorKey(provider.kind));
+        if (!stateCursor) { return; }
+
+        const { deltas } = await provider.fetchStateDeltas(stateCursor);
+        let cursorsChanged = false;
+
+        for (const d of deltas) {
+            if (!d.description && !d.updatedAt) { continue; }
+            if (refreshedThisCycle.has(d.remoteId)) { continue; } // already refreshed by state mirror
+
+            const plan = byRemoteId.get(d.remoteId);
+            if (!plan) { continue; }
+
+            const cursor = cursors[d.remoteId] || '';
+            if (!d.updatedAt || d.updatedAt <= cursor) { continue; } // already synced
+
+            const pulledBody = d.description || '';
+            if (!pulledBody.trim()) { continue; } // never clobber with empty
+
+            // Large description guard (matches maxContentSizeBytes in LiveSyncTypes)
+            if (pulledBody.length > 102400) { continue; }
+
+            // Reconstruct full file content: preserve existing H1 title + pulled body.
+            // Linear description doesn't include the H1 — it was stripped before push.
+            const workspaceRoot = this._deps.getWorkspaceRoot?.() || '';
+            const planPath = path.isAbsolute(plan.planFile)
+                ? plan.planFile
+                : path.join(workspaceRoot, plan.planFile);
+            let existingContent = '';
+            try { existingContent = await fs.promises.readFile(planPath, 'utf8'); } catch { /* ok */ }
+
+            // Extract existing H1 title line
+            const h1Match = existingContent.match(/^# .+\n?/);
+            const h1Line = h1Match ? h1Match[0] : `# ${plan.topic || 'Untitled'}\n`;
+            const newContent = h1Line + '\n' + pulledBody;
+
+            // Hash-based conflict check: if local content already matches what we'd write, skip
+            const newHash = crypto.createHash('sha256').update(newContent).digest('hex');
+            const existingHash = crypto.createHash('sha256').update(existingContent).digest('hex');
+            if (newHash === existingHash) {
+                // Already in sync — just advance cursor
+                cursors[d.remoteId] = d.updatedAt;
+                cursorsChanged = true;
+                continue;
+            }
+
+            // PULL: write new content to plan file.
+            // Register hash BEFORE write so loop prevention is active when watcher fires.
+            if (this._deps.onDescriptionPulled) {
+                this._deps.onDescriptionPulled(d.remoteId, newHash);
+            }
+            try {
+                await fs.promises.writeFile(planPath, newContent, 'utf8');
+                cursors[d.remoteId] = d.updatedAt;
+                cursorsChanged = true;
+                this._log(`Pulled description for ${d.remoteId} → ${plan.planFile}.`);
+            } catch (e) {
+                this._log(`Failed to pull description for ${d.remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+                // Don't advance cursor — retry on next poll
+            }
+        }
+
+        if (cursorsChanged) {
+            // Persist the whole cursors map to the DB config table.
+            await db.setConfig(key, JSON.stringify(cursors));
+        }
     }
 }

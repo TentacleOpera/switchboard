@@ -35,6 +35,7 @@ const LIMITER_MS = 350;       // Notion ~3 req/sec
 
 export class NotionRemoteProvider implements RemoteProvider {
     public readonly kind = 'notion' as const;
+    public readonly capabilities = { pull: true, push: false } as const;
     private _deps: NotionRemoteProviderDeps;
     private _setup: NotionRemoteSetup | null = null;
     private _botId = '';
@@ -170,6 +171,16 @@ export class NotionRemoteProvider implements RemoteProvider {
         if (!result.success) {
             throw new Error(`Notion postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
+    }
+
+    public async pushState(remoteId: string, column: string): Promise<void> {
+        // Stub — Notion push is implemented in Plan 2/3. Logs and returns.
+        this._log(`pushState not yet implemented for Notion (page ${remoteId}, column ${column}) — skipping.`);
+    }
+
+    public async pushContent(remoteId: string, markdown: string): Promise<void> {
+        // Stub — Notion push is implemented in Plan 2/3. Logs and returns.
+        this._log(`pushContent not yet implemented for Notion (page ${remoteId}) — skipping.`);
     }
 
     public async importRemotePlan(remoteId: string): Promise<KanbanPlanRecord | null> {
