@@ -1713,6 +1713,55 @@ export class KanbanProvider implements vscode.Disposable {
         return this._remoteControlActive;
     }
 
+    /**
+     * Generate the tailored "Linear agent skill" text for the Remote tab's copy
+     * button — instructions for Linear's native AI agent, pre-filled with the
+     * user's actual column→state mappings and poll cadence. Returns an error
+     * string (not a throw) when Linear sync isn't configured.
+     */
+    public async remoteBuildLinearAgentSkillText(workspaceRoot?: string): Promise<{ text?: string; error?: string }> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { error: 'No workspace resolved.' }; }
+        const rc = this._getRemoteControl(resolved);
+        const remoteConfig = await rc.getConfig();
+        const linear = this._getLinearService(resolved);
+        const linearConfig = await linear.loadConfig();
+        if (!linearConfig || !linearConfig.setupComplete ||
+            !linearConfig.columnToStateId ||
+            Object.keys(linearConfig.columnToStateId).length === 0) {
+            return { error: 'Configure Linear sync first (map columns to Linear statuses in Setup).' };
+        }
+        const pingSeconds = remoteConfig.pingFrequencySeconds || 60;
+        const columns = Object.keys(linearConfig.columnToStateId).filter(
+            col => linearConfig.columnToStateId[col] // skip unmapped columns
+        );
+        if (columns.length === 0) {
+            return { error: 'Configure Linear sync first (map columns to Linear statuses in Setup).' };
+        }
+        const mappingLines = columns
+            .map(col => `- Move to "${col}" → dispatches the ${col} agent`)
+            .join('\n');
+        const text = `You are a controller for the Switchboard AI development board.
+
+## How it works
+Switchboard polls Linear every ${pingSeconds}s. When you move an issue to a new state, it dispatches the corresponding local AI agent. Comments you post on an issue are routed to that column's agent; responses appear as new comments.
+
+## Column → Agent mapping
+${mappingLines}
+
+## How to write plans
+Place the implementation plan in the issue description. No special format is required, but use clear sections (Goal, Tasks, Notes). The local agent reads whatever is in the description.
+
+## Responding to questions
+If the user asks a question in a comment, post it as a comment on the issue. The local agent will respond in a follow-up comment within one polling cycle.
+
+## Setup notes
+- Remote control must be enabled (toolbar button in VS Code).
+- Only move issues between states that appear in the mapping above.
+- Do not create new Linear states — only use the ones listed.`;
+        return { text };
+    }
+
     // ── Project-context sync (epic: Project Context & Remote UI Hub) ──────
     // Dev Docs + PRDs + constitution → Notion context page + Linear project
     // docs, via the providers' pushProjectContext capability. Switchboard is

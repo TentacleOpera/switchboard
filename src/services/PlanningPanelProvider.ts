@@ -2289,6 +2289,20 @@ export class PlanningPanelProvider {
                 remotePanel?.webview.postMessage({ type: 'remoteControlState', active });
                 break;
             }
+            case 'copyLinearAgentSkill': {
+                const skillPanel = isProject ? this._projectPanel : this._panel;
+                if (!this._kanbanProvider) {
+                    skillPanel?.webview.postMessage({ type: 'linearAgentSkillText', text: null, error: 'Kanban provider unavailable' });
+                    break;
+                }
+                const result = await this._kanbanProvider.remoteBuildLinearAgentSkillText(msg.workspaceRoot);
+                skillPanel?.webview.postMessage({
+                    type: 'linearAgentSkillText',
+                    text: result.text || null,
+                    error: result.error,
+                });
+                break;
+            }
             case 'getProjectContextSyncStatus': {
                 const payload = await this._kanbanProvider?.projectContextGetStatus(msg.workspaceRoot);
                 const ctxPanel = isProject ? this._projectPanel : this._panel;

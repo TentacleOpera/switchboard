@@ -1212,6 +1212,24 @@
                 }
                 break;
             }
+            case 'linearAgentSkillText':
+                if (msg.text) {
+                    navigator.clipboard.writeText(msg.text).then(() => {
+                        const btn = document.getElementById('btn-copy-linear-agent-skill');
+                        const status = document.getElementById('copy-linear-agent-skill-status');
+                        if (btn) { btn.textContent = 'Copied!'; }
+                        if (status) { status.textContent = ''; }
+                        setTimeout(() => { if (btn) { btn.textContent = 'Copy Linear Agent Skill'; } }, 2000);
+                    }).catch(err => {
+                        console.error('Failed to copy Linear agent skill:', err);
+                        const status = document.getElementById('copy-linear-agent-skill-status');
+                        if (status) { status.textContent = 'Copy failed — check console'; }
+                    });
+                } else if (msg.error) {
+                    const status = document.getElementById('copy-linear-agent-skill-status');
+                    if (status) { status.textContent = msg.error; }
+                }
+                break;
             case 'projectContextSyncRunning': {
                 const statusEl = document.getElementById('remote-context-status');
                 if (statusEl) statusEl.textContent = 'Syncing…';
@@ -3471,6 +3489,11 @@
         if (setup) setup.style.display = provider === 'notion' ? 'block' : 'none';
         const title = document.getElementById('remote-subsection-title');
         if (title) title.textContent = provider === 'notion' ? 'Remote Control (Notion)' : 'Remote Control (Linear)';
+        // Linear-only: agent-skill copy button. Visible whenever the provider is
+        // Linear — the backend answers with an error when mappings are missing,
+        // which avoids a config-fetch round-trip just for visibility.
+        const skillBlock = document.getElementById('remote-linear-agent-skill');
+        if (skillBlock) skillBlock.style.display = provider === 'linear' ? 'block' : 'none';
     }
 
     function remoteAutosave() {
@@ -3510,6 +3533,10 @@
         const statusEl = document.getElementById('remote-context-status');
         if (statusEl) statusEl.textContent = 'Syncing…';
         vscode.postMessage({ type: 'projectContextSyncNow', workspaceRoot: (wsSel && wsSel.value) || undefined });
+    });
+    document.getElementById('btn-copy-linear-agent-skill')?.addEventListener('click', () => {
+        const wsSel = document.getElementById('remote-workspace');
+        vscode.postMessage({ type: 'copyLinearAgentSkill', workspaceRoot: (wsSel && wsSel.value) || undefined });
     });
     // Notion one-time setup sync (creates the plans + comments DBs, backs up boards).
     document.getElementById('btn-notion-remote-setup')?.addEventListener('click', () => {

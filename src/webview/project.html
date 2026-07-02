@@ -1942,6 +1942,16 @@
                         <span id="remote-control-state" style="font-size:10px; color:var(--text-secondary);"></span>
                     </div>
 
+                    <!-- Linear-only: one-time setup helper for Linear's native AI agent.
+                         Generates instructions tailored to the user's column mappings. -->
+                    <div id="remote-linear-agent-skill" style="margin-bottom:12px; display:none;">
+                        <button id="btn-copy-linear-agent-skill" class="strip-btn"
+                                title="Copy tailored instructions for Linear's native AI agent">
+                            Copy Linear Agent Skill
+                        </button>
+                        <span id="copy-linear-agent-skill-status" style="font-size:11px; color:var(--text-secondary); margin-left:8px;"></span>
+                    </div>
+
                     <!-- Project-context sync: Dev Docs + PRDs + constitution → Notion context
                          page + Linear project docs, so the remote agent plans from real context. -->
                     <div style="margin-top:6px; margin-bottom:12px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
