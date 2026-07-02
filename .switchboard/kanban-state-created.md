@@ -1,10 +1,6 @@
 ## CREATED
 
 **Column:** CREATED
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/brain_731fc406d71071ae476fd01bf67fdf5543132914f88bcaf364aacfbdbc6b7420.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/brain_731fc406d71071ae476fd01bf67fdf5543132914f88bcaf364aacfbdbc6b7420.md) — Red Team Findings — Worktree Terminal Creation <!-- planId:731fc406d71071ae476fd01bf67fdf5543132914f88bcaf364aacfbdbc6b7420 -->
-**Column:** CREATED
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/brain_3610e25b0da62909bab4d5dc8e09f8c7790f7542765660b0741e718f22ab8482.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/brain_3610e25b0da62909bab4d5dc8e09f8c7790f7542765660b0741e718f22ab8482.md) — Integration Plan — Worktree Terminal Creation Fixes <!-- planId:3610e25b0da62909bab4d5dc8e09f8c7790f7542765660b0741e718f22ab8482 -->
-**Column:** CREATED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md) — Kanban bottom-bar worktree indicator must reflect the active worktree (project/epic aware) <!-- planId:fba9999b-6521-4c45-85e7-9b91855f9075 -->
 **Column:** CREATED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703064911_kanban_topbar_copy_link_copy_prompt.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703064911_kanban_topbar_copy_link_copy_prompt.md) — Add Copy Link & Copy Prompt buttons to the Kanban document top bar <!-- planId:a1cb17bc-4f2a-4605-b0df-88f75ec482c3 -->

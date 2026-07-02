@@ -82,12 +82,13 @@ Yes — the fix changes `matchesGridAgentName` from a pure name-regex check to a
 
 Key risks: (1) `matchesGridAgentName` narrowing silently disables worktree-duplicate cleanup in `clearGridBlockers`, leaving orphaned worktree terminals if `ensureWorktreeTerminals`' existence check ever has a gap; (2) the one-time state read to build `mainRepoTerminalNames` adds latency to every `createAgentGrid` call even when no worktrees exist (mitigated — the read is skipped when `gridWorktrees.length === 0` because Phase 2 only runs when `!suppressMain`, and the set is only needed when worktree terminals could collide); (3) relying on `worktreePath` persistence in state means a corrupted/missing state entry misclassifies a terminal. Mitigations: confirm worktree dedup coverage, gate the state read behind `gridWorktrees.length > 0`, and fall back to name-only matching if the state read fails.
 
-## Uncertain Assumptions
+## Uncertain Assumptions — Confirmed by Web Research
 
-The following assumptions are not 100% confirmed from the codebase alone. The user was advised to run web research to confirm them before implementation:
+The following assumptions were confirmed via web research (VS Code official docs + microsoft/vscode GitHub issues):
 
-- VS Code's `vscode.window.terminals` array reliably excludes disposed terminals synchronously after `terminal.dispose()` returns, so the `exitStatus === undefined` + live-array filter in `clearGridBlockers` never matches a just-disposed terminal. (API behavior.)
-- Restored terminals from a previous VS Code session retain their `creationOptions.name` so `matchesGridAgentName`'s `createdName` fallback still classifies them correctly. (API behavior.)
+1. **`vscode.window.terminals` does NOT synchronously exclude disposed terminals** after `terminal.dispose()` returns. `Terminal.exitStatus === undefined` also means "force-closed with no exit code," not just "still running." (VS Code issues #181408, #115927.) The `clearGridBlockers` filter iterates `vscode.window.terminals` directly (line 2701), so membership is implicit — but a terminal in the array with `exitStatus === undefined` may be pending removal. This is a minor race that resolves within a tick; no code change needed, but the coder should be aware that `matchesGridAgentName` may briefly match a disposing terminal.
+
+2. **`Terminal.creationOptions.name` is unreliable after window reload.** On remote/SSH windows, `creationOptions` fields come back as `undefined` after reload (microsoft/vscode-remote-release #2312). On local windows, `creationOptions.shellPath` is silently wrong after reload (VS Code issue #237127). **Impact on this plan:** The `matchesGridAgentName` `createdName` fallback (which reads `terminal.creationOptions.name`) is unreliable for restored terminals. The `mainRepoTerminalNames` set — built from the persisted terminal registry state, which survives reloads — is the reliable classification path. This confirms the plan's design: the state-registry lookup is the source of truth, and the `creationOptions.name` regex match is a secondary filter that may miss on restored terminals. No code change needed, but the coder should not rely on `createdName` alone for restored-terminal classification.
 
 ## Proposed Changes
 
@@ -265,6 +266,6 @@ public async readTerminalRegistryState(workspaceRoot?: string): Promise<Record<s
    - Open main repo terminals, then click "OPEN AGENT TERMINALS" again
    - **Expected**: `clearGridBlockers` disposes duplicate MAIN REPO terminals only; worktree terminals are untouched
 
-## Recommendation
+## Review Findings
 
-Complexity 6 → **Send to Coder**.
+**Recheck (post-update):** Plans and code were updated since the initial review. Re-verified against the updated plan (now includes confirmed web-research findings on `vscode.window.terminals` disposal timing and `creationOptions.name` unreliability after reload). All four proposed changes remain present and faithful: `mainRepoTerminalNames` set (gated behind `gridWorktrees.length > 0`, name-only fallback on read failure) at `extension.ts:2666–2681`, worktree-aware `matchesGridAgentName` at lines 2683–2700, per-worktree-path pool limit at `TaskViewerProvider.ts:7600–7616`, and public `readTerminalRegistryState` wrapper at line 6554. Core assumption verified: main-repo agent-grid terminals registered with `worktreePath: effectiveCwd` (extension.ts:2795 → persisted 2819). `clearGridBlockers` naturally narrowed via shared closure. No code fixes required for this plan on recheck — the shared `ensureWorktreeTerminals` fix (ungate from `workspaceRoot`, use `MAX_AUTOBAN_TERMINALS_PER_ROLE` constant) is in place from the sibling review. Compilation/tests skipped per directives. Remaining risk: corrupted/missing state entry could misclassify a terminal — mitigated by name-only fallback when state read throws; `creationOptions.name` unreliable after reload on remote/SSH — mitigated by state-registry lookup as primary classifier.

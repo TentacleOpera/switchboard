@@ -36,8 +36,8 @@ Ship the operational safeguards that make remote control safe to run on the prim
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Switchboard Auto-Archive Rule (Time-in-Column → Completed + Archive)](../plans/linear-free-tier-auto-archive-on-completion.md) — **PLAN REVIEWED**
-- [ ] [Notion Overwrite Data-Loss Guard (Code-Level)](../plans/notion-overwrite-guard.md) — **PLAN REVIEWED**
-- [ ] [Remote-Sync Health & Error Surfacing](../plans/remote-sync-health-surfacing.md) — **PLAN REVIEWED**
-- [ ] [Hide Triage Pipeline + Kanban Mapping/Automation Setup Sections (Pre-Release UI Gate)](../plans/hide-triage-and-automation-setup-sections.md) — **PLAN REVIEWED**
+- [ ] [Switchboard Auto-Archive Rule (Time-in-Column → Completed + Archive)](../plans/linear-free-tier-auto-archive-on-completion.md) — **CODER CODED**
+- [ ] [Notion Overwrite Data-Loss Guard (Code-Level)](../plans/notion-overwrite-guard.md) — **CODER CODED**
+- [ ] [Remote-Sync Health & Error Surfacing](../plans/remote-sync-health-surfacing.md) — **CODER CODED**
+- [ ] [Hide Triage Pipeline + Kanban Mapping/Automation Setup Sections (Pre-Release UI Gate)](../plans/hide-triage-and-automation-setup-sections.md) — **CODER CODED**
 <!-- END SUBTASKS -->

@@ -1,6 +1,12 @@
 ## CODE REVIEWED
 
 **Column:** CODE REVIEWED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/worktree-terminal-creation-237c6a35-9a22-4e69-8975-05afbb14d75e.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/worktree-terminal-creation-237c6a35-9a22-4e69-8975-05afbb14d75e.md) — Worktree terminal creation <!-- planId:237c6a35-9a22-4e69-8975-05afbb14d75e epic project:"Remote sync" -->
+**Column:** CODE REVIEWED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703071500_worktree-terminal-cross-contamination.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703071500_worktree-terminal-cross-contamination.md) — Fix: Worktree terminal cross-contamination with main repo terminals <!-- planId:443c579a-8766-4ec1-b619-27a816acda70 subtask-of:"Worktree terminal creation" -->
+**Column:** CODE REVIEWED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703063949_fix-slow-worktree-terminal-opening.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703063949_fix-slow-worktree-terminal-opening.md) — Fix Slow Sequential Terminal Opening in Worktrees <!-- planId:d70ca1aa-dc75-43c6-95cb-1e4951716919 subtask-of:"Worktree terminal creation" -->
+**Column:** CODE REVIEWED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-sync-outbound.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/epic-sync-outbound.md) — Plan: Outbound Epic Sync to Linear + ClickUp <!-- planId:4d0829dd-7351-4a4f-b19d-bec3d272f6c5 subtask-of:"Tracker-Structure Round-Trip (Tickets-Tab Import + Outbound Epic Sync)" project:"Switchboard" -->
 **Column:** CODE REVIEWED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md) — Tracker-Structure Round-Trip (Tickets-Tab Import + Outbound Epic Sync) <!-- planId:6fbbc3b6-9404-41f1-8314-eb5140b6db2f epic project:"Remote sync" -->

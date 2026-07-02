@@ -72,13 +72,19 @@ Yes — the shift from a fixed `setTimeout(1000)` to the `onDidStartTerminalShel
 
 Key risks: (1) parallel `_autobanState.terminalPools` mutation races that corrupt pool bookkeeping, (2) `onDidStartTerminalShellExecution` listener leaks if not disposed on timeout/disposal, (3) PID-less registry window during which PID-based dispatch routing fails (mitigated — routing uses `worktreePath` first). Mitigations: apply pool updates atomically post-`Promise.all`, mirror the disposable-disposal discipline from `createAgentGrid:2813`, and rely on the existing `worktreePath`-first routing.
 
-## Uncertain Assumptions
+## Uncertain Assumptions — Confirmed by Web Research
 
-The following assumptions about the VS Code terminal API are not 100% confirmed from the codebase alone. The user was advised to run web research to confirm them before implementation:
+The following assumptions were confirmed via web research (VS Code official docs + microsoft/vscode GitHub issues). Findings are incorporated into the Proposed Changes above:
 
-- `terminal.sendText()` is a silent no-op (not a thrown error) when the shell has not yet started — relied upon by the safety-timeout fallback path.
-- `vscode.window.onDidStartTerminalShellExecution` fires reliably for every created terminal across macOS/Linux/Windows and across all supported shells (bash, zsh, pwsh, cmd), so the startup command is not permanently lost when the event is used.
-- `terminal.processId` resolves concurrently without serialization when awaited from multiple parallel branches (i.e., parallel `Promise.all` PID waits do not block each other).
+1. **`terminal.sendText()` is fire-and-forget with no readiness precondition.** It writes to the pty input stream and does not throw if the shell hasn't started — the command is silently dropped or garbled. (VS Code issues #27939, #215402, #47066 closed as "as designed.") The safety-timeout fallback is therefore mandatory, and the fallback `sendText` must be idempotent (per-terminal "already sent" guard) to avoid a double-send race between the event firing and the timeout firing.
+
+2. **`onDidStartTerminalShellExecution` fires ONLY when shell integration is active.** It does NOT fire for `cmd.exe` (no shell integration script), old fish versions, PowerShell with restrictive execution policy, sub-shells, non-Remote-SSH SSH sessions, or shells with Powerlevel10k/Oh My Zsh customizations that unset `$VSCODE_SHELL_INTEGRATION`. (Official docs: "This event will fire only when shell integration is activated for the terminal.") The safety timeout is the ONLY mechanism that sends the startup command on these configurations — it is load-bearing, not defensive. The 5s timeout value is acceptable because the fallback sends the command regardless; users on non-integration shells simply wait 5s instead of 1s, which is still better than the current 9–18s sequential total.
+
+3. **`terminal.processId` can hang indefinitely without rejecting.** VS Code issue #236869 (open) confirms that `createTerminal()` with a bad `cwd` returns a valid `Terminal` object but `processId` never resolves or rejects. Awaiting many `processId` promises via `Promise.all` will hang the aggregate if even one terminal fails to launch. **Fix:** use `Promise.allSettled` with a per-terminal timeout race (race `terminal.processId` against a timeout AND `vscode.window.onDidCloseTerminal` for that terminal instance). The existing `_waitWithTimeout` helper already wraps `processId` with a timeout — confirm it also handles the never-reject case (it should, since it races against a `setTimeout`).
+
+4. **`Terminal.exitStatus === undefined` does not reliably mean "alive."** It also means "force-closed with no exit code." The `onDidStartTerminalShellExecution` callback and the timeout callback must guard against sending to a disposed terminal by checking `terminal.exitStatus === undefined` AND that the terminal is still in `vscode.window.terminals`. The existing `createAgentGrid` pattern (extension.ts:2813) checks `remaining.has(e.terminal)` by reference, which is sufficient.
+
+5. **No hard listener cap for `onDidStartTerminalShellExecution`,** but failing to dispose disposables is a documented anti-pattern causing resource growth. The `terminal.onDidClose` disposal hook (added to the code snippet below) is necessary to avoid listener leaks when the user closes a terminal before the shell-execution event fires.
 
 ## Proposed Changes
 
@@ -154,6 +160,12 @@ if (!pid) {
 }
 
 // AFTER (non-blocking — resolve in background, update state when ready):
+// NOTE (web research): terminal.processId can hang indefinitely without rejecting
+// (VS Code issue #236869). _waitWithTimeout already races against a setTimeout,
+// which protects against the never-resolve case. Do NOT use bare Promise.all on
+// terminal.processId across parallel terminals — use Promise.allSettled at the
+// aggregate layer. Here, each terminal's PID resolution is independent and
+// fire-and-forget, so a stuck PID on one terminal does not block others.
 const suffixedNameForPid = suffixedUniqueName;
 void this._waitWithTimeout(terminal.processId, 10000, undefined)
     .then(pid => {
@@ -200,31 +212,48 @@ Replace the blind `setTimeout(1000)` with the `onDidStartTerminalShellExecution`
 await new Promise(resolve => setTimeout(resolve, 1000));
 terminal.sendText(startupCommand.trim(), true);
 
-// AFTER (event-driven, mirrors createAgentGrid:2813-2830):
+// AFTER (event-driven, mirrors createAgentGrid:2813-2830, hardened per web research):
 const startupCommands = await this.getStartupCommands(workspaceRoot);
 const startupCommand = startupCommands[normalizedRole];
 if (startupCommand && startupCommand.trim()) {
     await new Promise<void>((resolve) => {
+        let sent = false;
         let disposed = false;
-        const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
-            if (e.terminal === terminal && !disposed) {
-                disposable.dispose();
-                disposed = true;
-                if (terminal.exitStatus === undefined) {
-                    terminal.sendText(startupCommand.trim(), true);
-                }
+        const cleanup = () => {
+            if (disposed) return;
+            disposed = true;
+            shellExecDisposable.dispose();
+            closeDisposable.dispose();
+            clearTimeout(safetyTimer);
+        };
+        const sendOnce = () => {
+            if (sent) return;
+            sent = true;
+            if (terminal.exitStatus === undefined) {
+                terminal.sendText(startupCommand.trim(), true);
+            }
+        };
+        const shellExecDisposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+            if (e.terminal === terminal) {
+                sendOnce();
+                cleanup();
                 resolve();
             }
         });
-        // Safety timeout: proceed after 5s even if the shell never reported ready.
-        setTimeout(() => {
+        // Dispose the shell-execution listener if the terminal is closed before the event fires.
+        const closeDisposable = vscode.window.onDidCloseTerminal((closed) => {
+            if (closed === terminal) {
+                cleanup();
+                resolve();
+            }
+        });
+        // Safety timeout: proceed after 5s even if the shell never reported ready
+        // (cmd.exe, old fish, restrictive PowerShell, sub-shells, etc. never fire the event).
+        const safetyTimer = setTimeout(() => {
             if (!disposed) {
-                disposable.dispose();
-                disposed = true;
-                outputChannel?.appendLine(`[TaskViewerProvider] Shell init timeout for worktree terminal '${uniqueName}', sending startup command anyway`);
-                if (terminal.exitStatus === undefined) {
-                    terminal.sendText(startupCommand.trim(), true);
-                }
+                outputChannel?.appendLine(`[TaskViewerProvider] Shell init timeout for worktree terminal '${uniqueName}', sending startup command via fallback`);
+                sendOnce();
+                cleanup();
                 resolve();
             }
         }, 5000);
@@ -237,7 +266,11 @@ if (startupCommand && startupCommand.trim()) {
 }
 ```
 
-**Note:** `outputChannel` access inside `TaskViewerProvider` — verify the class has a logger reference; if not, fall back to `console.warn` for the timeout message (the existing code at line 7075 uses `console.warn`, so this is consistent).
+**Hardening notes (from web research):**
+- The `sent` guard makes the fallback `sendText` idempotent — if the event fires milliseconds before the timeout, only one command is sent.
+- The `closeDisposable` prevents listener leaks when the user closes the terminal before shell integration activates.
+- The `cleanup()` function disposes both disposables and clears the timer, guaranteeing no resource leak across repeated "Open terminals" presses.
+- `outputChannel` access inside `TaskViewerProvider` — verify the class has a logger reference; if not, fall back to `console.warn` (the existing code at line 7075 uses `console.warn`, so this is consistent).
 
 ### 4. `src/services/TaskViewerProvider.ts` — Apply pool bookkeeping atomically (lines 7119–7135)
 
@@ -262,6 +295,6 @@ The `_autobanState.terminalPools` / `managedTerminalPools` mutation currently ru
 9. Test edge case: close a terminal during creation. Confirm no crash, no unhandled promise rejection, and no listener leak (the `onDidStartTerminalShellExecution` disposable is disposed on timeout or terminal-disposal guard).
 10. Test edge case: a shell that never reports ready (e.g., a misconfigured shell). Confirm the 5s safety timeout fires and the startup command is sent anyway, and that the disposable is disposed (no listener leak across repeated "Open terminals" presses).
 
-## Recommendation
+## Review Findings
 
-Complexity 6 → **Send to Coder**.
+**Recheck (post-update):** Plans and code were updated since the initial review. Re-verified against the hardened plan (now includes `sendOnce` idempotency guard, `closeDisposable` via `onDidCloseTerminal`, and unified `cleanup()` function per web-research findings). The implementation at `TaskViewerProvider.ts:7147–7185` now matches the hardened snippet exactly — `sendOnce` prevents double-send between event and timeout, `closeDisposable` prevents listener leaks on early terminal close, `cleanup()` disposes both disposables + clears the timer. The earlier MAJOR fix (ungating the pre-filter loop from `workspaceRoot`) and NIT fix (`MAX_AUTOBAN_TERMINALS_PER_ROLE` constant) are in place at lines 7585–7616. `outputChannel` is not available in `TaskViewerProvider` — `console.warn` fallback at line 7179 is correct per plan note. Atomic pool bookkeeping via `skipStatePoolUpdate=true` + post-`Promise.all` batch at lines 7628–7652 is sound (`_limitAutobanPool` dedupes, `updatedPools[normalizedRole] || seededPool` accumulates correctly across same-role entries). `_createAutobanTerminal` signature change backward-compatible with all 3 non-worktree call sites (lines 7457, 10250 — no return-value assignment, `skipStatePoolUpdate` defaults `false`). No orphaned references to the removed 2s PID-retry block. Compilation/tests skipped per directives. Remaining risk: deferred-PID window — covered by `worktreePath`-first routing (per plan).
