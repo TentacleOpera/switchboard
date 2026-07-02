@@ -233,14 +233,14 @@ export class PlanManifestService {
         // defer this cycle — the .md import pass (run before us) should pick it up
         // next cycle, or the watcher event will. If the file is missing entirely,
         // also defer (staleness guard will eventually drop it).
-        let plan = await db.getPlanByPlanFile(entry.planFile, workspaceId);
+        let plan = await db.getPlanByPlanFile(resolvedPlanFile, workspaceId);
         if (!plan) {
             if (!fs.existsSync(resolved)) {
-                log?.(`[PlanManifest] .md not on disk yet, deferring entry: ${entry.planFile}`);
+                log?.(`[PlanManifest] .md not on disk yet, deferring entry: ${resolvedPlanFile}`);
                 return 'deferred';
             }
             // File exists but row missing — defer; the .md pass or watcher will import it.
-            log?.(`[PlanManifest] Row not yet imported for existing .md, deferring entry: ${entry.planFile}`);
+            log?.(`[PlanManifest] Row not yet imported for existing .md, deferring entry: ${resolvedPlanFile}`);
             return 'deferred';
         }
 
@@ -248,15 +248,15 @@ export class PlanManifestService {
         if (entry.kanbanColumn) {
             if (VALID_KANBAN_COLUMNS.has(entry.kanbanColumn)) {
                 if (plan.kanbanColumn === 'CREATED' && entry.kanbanColumn !== plan.kanbanColumn) {
-                    const moved = await db.movePlanByPlanFile(entry.planFile, workspaceId, entry.kanbanColumn);
+                    const moved = await db.movePlanByPlanFile(resolvedPlanFile, workspaceId, entry.kanbanColumn);
                     if (!moved) {
-                        log?.(`[PlanManifest] movePlanByPlanFile failed for ${entry.planFile} → ${entry.kanbanColumn}`);
+                        log?.(`[PlanManifest] movePlanByPlanFile failed for ${resolvedPlanFile} → ${entry.kanbanColumn}`);
                     }
                 } else if (plan.kanbanColumn !== 'CREATED' && plan.kanbanColumn !== entry.kanbanColumn) {
-                    log?.(`[PlanManifest] Stale-manifest guard: ${entry.planFile} already at '${plan.kanbanColumn}', not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
+                    log?.(`[PlanManifest] Stale-manifest guard: ${resolvedPlanFile} already at '${plan.kanbanColumn}', not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
                 }
             } else {
-                log?.(`[PlanManifest] Invalid kanbanColumn '${entry.kanbanColumn}' for ${entry.planFile}; skipping column override.`);
+                log?.(`[PlanManifest] Invalid kanbanColumn '${entry.kanbanColumn}' for ${resolvedPlanFile}; skipping column override.`);
             }
         }
 
@@ -265,23 +265,23 @@ export class PlanManifestService {
             if (plan.status !== entry.status) {
                 let ok: boolean;
                 if (entry.status === 'archived' || entry.status === 'deleted') {
-                    ok = await db.archivePlan(entry.planFile, workspaceId, entry.status as 'archived' | 'deleted');
+                    ok = await db.archivePlan(resolvedPlanFile, workspaceId, entry.status as 'archived' | 'deleted');
                 } else {
-                    ok = await db.updateStatusByPlanFile(entry.planFile, workspaceId, entry.status as 'active' | 'completed');
+                    ok = await db.updateStatusByPlanFile(resolvedPlanFile, workspaceId, entry.status as 'active' | 'completed');
                 }
                 if (!ok) {
-                    log?.(`[PlanManifest] status update failed for ${entry.planFile} → ${entry.status}`);
+                    log?.(`[PlanManifest] status update failed for ${resolvedPlanFile} → ${entry.status}`);
                 }
             }
         } else if (entry.status && !VALID_STATUSES.has(entry.status)) {
-            log?.(`[PlanManifest] Invalid status '${entry.status}' for ${entry.planFile}; skipping status override.`);
+            log?.(`[PlanManifest] Invalid status '${entry.status}' for ${resolvedPlanFile}; skipping status override.`);
         }
 
         // ── project ──
         if (entry.project) {
-            const ok = await db.updatePlanProjectByPlanFile(entry.planFile, workspaceId, entry.project);
+            const ok = await db.updatePlanProjectByPlanFile(resolvedPlanFile, workspaceId, entry.project);
             if (!ok) {
-                log?.(`[PlanManifest] updatePlanProjectByPlanFile failed (0 rows / race) for ${entry.planFile}`);
+                log?.(`[PlanManifest] updatePlanProjectByPlanFile failed (0 rows / race) for ${resolvedPlanFile}`);
             }
         }
 
@@ -296,7 +296,7 @@ export class PlanManifestService {
                 if (epicPlan) {
                     resolvedEpicId = entry.epicId;
                 } else {
-                    log?.(`[PlanManifest] epicId '${entry.epicId}' does not resolve to an in-batch or DB epic; importing ${entry.planFile} without the link.`);
+                    log?.(`[PlanManifest] epicId '${entry.epicId}' does not resolve to an in-batch or DB epic; importing ${resolvedPlanFile} without the link.`);
                 }
             }
         }

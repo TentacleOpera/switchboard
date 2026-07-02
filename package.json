@@ -539,6 +539,23 @@
           "description": "Optional list of trusted author emails. Defaults to local git config user.email.",
           "scope": "resource"
         },
+        "switchboard.boardStateExport": {
+          "type": "string",
+          "enum": [
+            "none",
+            "control-plane",
+            "wiki"
+          ],
+          "default": "none",
+          "description": "Where (if anywhere) the kanban board state gets mirrored for remote/web-agent visibility. 'none' = no git footprint; 'control-plane' = push to the control-plane repo; 'wiki' = push to <remote>.wiki.git. notion/linear are governed by their existing provider config, not this setting.",
+          "scope": "resource"
+        },
+        "switchboard.boardStateExport.remoteUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Git remote URL for the board-state export destination (used when boardStateExport is 'control-plane' or 'wiki'). If empty for 'control-plane', uses the control-plane's configured remote; for 'wiki', derives from the project repo's origin.",
+          "scope": "resource"
+        },
         "switchboard.planScanner.enabled": {
           "type": "boolean",
           "default": true,

@@ -107,7 +107,7 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
   "version": 1,
   "plans": [
     {
-      "planFile": "feature_plan_20260630_foo.md",
+      "planFile": ".switchboard/plans/feature_plan_20260630_foo.md",
       "planId": "550e8400-e29b-41d4-a716-446655440000",
       "kanbanColumn": "PLAN REVIEWED",
       "status": "active",
@@ -120,7 +120,10 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
 ```
 
 **Field rules:**
-- `planFile` (**required**): relative path as stored in the DB (e.g. `feature_plan_20260630_foo.md` or `.switchboard/epics/epic-<uuid>.md`). Must resolve inside `.switchboard/plans/` or `.switchboard/epics/`; no `..` or absolute paths.
+- `planFile` (**required**): path relative to workspace root, as stored in the DB.
+  Must be `.switchboard/plans/<name>.md` for plans or `.switchboard/epics/<name>.md` for epics.
+  Bare filenames (e.g. `foo.md`) are auto-resolved to `.switchboard/plans/foo.md` but the
+  full path is preferred. No `..` or absolute paths.
 - `planId` (recommended): must match the `**Plan ID:** <uuid>` embedded in the `.md` so identity is stable and `epicId` references resolve.
 - `kanbanColumn`: validated against the board's column set. Invalid → skipped (plan stays `CREATED`).
 - `status`: `active` | `archived` | `completed` | `deleted`.

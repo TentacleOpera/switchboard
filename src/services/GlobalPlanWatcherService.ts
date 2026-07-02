@@ -836,12 +836,17 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
             const workspaceId = await db.getWorkspaceId();
             if (!workspaceId) { return; }
-            await this._manifestService.applyManifest(
+            const result = await this._manifestService.applyManifest(
                 workspaceRoot,
                 workspaceId,
                 db,
                 (msg) => this._outputChannel?.appendLine(msg)
             );
+            if (result.rejected > 0) {
+                vscode.window.showWarningMessage(
+                    `Switchboard: ${result.rejected} manifest entr${result.rejected === 1 ? 'y' : 'ies'} rejected (invalid planFile path). Check the Output panel for details.`
+                );
+            }
         } catch (err) {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manifest processing error in ${workspaceRoot}: ${err}`);
         }

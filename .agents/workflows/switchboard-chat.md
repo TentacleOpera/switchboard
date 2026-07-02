@@ -46,7 +46,7 @@ Emit a **plan-import manifest** ONLY when you group plans into an epic (or other
       "project": "Switchboard"
     },
     {
-      "planFile": "feature_plan_20260630_foo.md",
+      "planFile": ".switchboard/plans/feature_plan_20260630_foo.md",
       "planId": "550e8400-e29b-41d4-a716-446655440000",
       "kanbanColumn": "CREATED",
       "status": "active",
@@ -59,7 +59,10 @@ Emit a **plan-import manifest** ONLY when you group plans into an epic (or other
 ```
 
 **Field rules:**
-- `planFile` (**required**): relative path as stored in the DB. Must resolve inside `.switchboard/plans/` or `.switchboard/epics/`; no `..` or absolute paths.
+- `planFile` (**required**): path relative to workspace root, as stored in the DB.
+  Must be `.switchboard/plans/<name>.md` for plans or `.switchboard/epics/<name>.md` for epics.
+  Bare filenames (e.g. `foo.md`) are auto-resolved to `.switchboard/plans/foo.md` but the
+  full path is preferred. No `..` or absolute paths.
 - `planId` (**required for Trigger B**): must match the `**Plan ID:** <uuid>` embedded in the `.md` so `epicId` references resolve. Epics use the `epic-<uuid>.md` filename convention so the epic's `plan_id` is stable across re-imports.
 - `kanbanColumn`: typically `CREATED` for pure grouping; set a transition column only if a stage advance also applies.
 - `status`: `active` | `archived` | `completed` | `deleted`.

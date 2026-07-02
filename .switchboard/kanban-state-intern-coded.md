@@ -1,6 +1,4 @@
 ## INTERN CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/kanban-db-storage-consistency-afa5ab25-e2f4-4231-be6e-21e00318ff6f.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/kanban-db-storage-consistency-afa5ab25-e2f4-4231-be6e-21e00318ff6f.md) — Kanban DB Storage Consistency <!-- planId:afa5ab25-e2f4-4231-be6e-21e00318ff6f epic project:"Switchboard" -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-archived-plans-leave-ghost-kanban-column.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-archived-plans-leave-ghost-kanban-column.md) — Fix: Archived Plans Leave Ghost kanban_column — Invisible in UI, Visible in DB Queries <!-- planId:9ed3690e-b403-4884-b232-3a7179071e07 subtask-of:"Kanban DB Storage Consistency" -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-imported-docs-relative-paths-convention.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-imported-docs-relative-paths-convention.md) — Fix: `imported_docs.file_path` stores absolute paths, inconsistent with the DB's relative-path convention <!-- planId:f3f08b5d-6806-40b7-a5e9-2a08f6707f4c subtask-of:"Kanban DB Storage Consistency" -->
+_No plans_
 
