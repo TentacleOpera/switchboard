@@ -225,6 +225,10 @@ Add a unit test exercising `closeWorktreeTerminals` against a fake terminal-stat
 4. Manual: trigger a tier-provisioning failure (e.g. make the high/low worktree branch names collide so creation throws) → confirm the terminals opened before the failure are closed by the rollback. Confirms hook (d).
 5. Confirm no confirmation dialog appears at any step.
 
+## Review Findings
+
+Implementation verified against plan: `closeWorktreeTerminals` method at `TaskViewerProvider.ts:7402-7423` (read-then-close-outside pattern, avoids nested `updateState`), and all 4 hook sites present and correctly placed before `git worktree remove`: mergeWorktree (`KanbanProvider.ts:8121`), abandonWorktree (`:8144`), `_removeWorktreeRow` (`:8802`), and `_provisionHighLowTierWorktrees` rollback (`:8730`). `killTerminal` handles suffixed state keys via `_stripIdeSuffix` matching. No code changes needed. No CRITICAL/MAJOR findings. NIT: `killTerminal` triggers `_refreshTerminalStatuses()` per close (N sequential refreshes for N terminals) — existing behavior, not a regression. Remaining risk: low — a terminal created concurrently during merge/abandon (user clicks "Open terminals" mid-operation) would survive the snapshot; acceptable per plan.
+
 ## Recommendation
 
 Complexity 4 → **Send to Coder** (additive method + 4 hook sites; transactional care needed for the `updateState`/`killTerminal` nesting boundary; the rollback-path hook is the trickiest to place correctly).

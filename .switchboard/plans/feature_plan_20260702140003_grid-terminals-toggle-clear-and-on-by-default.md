@@ -193,6 +193,10 @@ The pattern matches V42 exactly: `getMigrationVersion()` reads from `migration_m
 4. Manual: enable "Suppress main repo agent terminals" with one worktree grid-on → click AGENTS → confirm only the worktree terminals open (no main-repo ones); with all worktrees grid-off + suppress on → confirm the "nothing to open" warning still fires.
 5. Hover the checkbox/label → confirm the new tooltip clearly explains the AGENTS-button behavior.
 
+## Review Findings
+
+Implementation verified against plan: checkbox relabeled to "Agent terminals" and promoted to main action line in `kanban.html:9711-9731` (old "Open terminals with grid" label fully removed — grep confirms zero matches, no duplicate rendering); `addWorktree` INSERT at `KanbanDatabase.ts:2665` includes `agents_open_with_grid = 1` for new-worktree default-on; V43 migration at `KanbanDatabase.ts:289-291` (constant) and `:5468-5483` (apply block) follows V42 pattern exactly — version-gated, transactional, rolls back on failure. No code changes needed. No CRITICAL/MAJOR findings. NIT: `vertical-align:middle` CSS added to checkbox/label (not in plan's proposed code, harmless alignment refinement). Remaining risk: the V43 migration flips existing active worktrees that users may have deliberately turned off — behavior change for ~4,000 installs, flagged as User Review Required in plan; release notes must call it out.
+
 ## Recommendation
 
 Complexity 3 → **Send to Intern** (label swap + one-line INSERT + one migration block, all following established patterns; the only judgment call is the User Review gate on the migration, which is flagged).

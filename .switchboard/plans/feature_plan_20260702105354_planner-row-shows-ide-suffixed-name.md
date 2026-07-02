@@ -171,6 +171,10 @@ No other files need changes. The webview already renders `lastPlannerTarget` ver
 7. **No planner terminal alive:** Row falls back to `PLANNER` with no suffix (existing behaviour preserved — `currentPlannerTarget` stays undefined).
 8. **Epic cross-check:** If subtask "Agents Tab Terminal List Does Not Respect Worktree Terminals" is also applied, verify a worktree-sourced planner terminal shows `PLANNER - Planner` (stripped) with the `(worktree)` suffix and the correct worktree terminal is targeted on dispatch.
 
+## Review Findings
+
+Implementation verified against plan: both `_stripIdeSuffix(picked)` edits present at `TaskViewerProvider.ts:18611` (`currentPlannerTarget`) and `:16517` (`nextPlannerTarget`). No code changes needed — the fix is a pure display-string transform with no routing impact (`getRoleTerminalSet` still returns suffixed keys for dispatch). No CRITICAL/MAJOR findings. Remaining risk: none — the payload contract shape (string | undefined) is unchanged; kanban webview ignores `currentPlannerTarget` (dead payload, harmless).
+
 ## Recommendation
 
 Complexity 3 → **Send to Intern** (two-line display fix, well-scoped, no architectural risk).

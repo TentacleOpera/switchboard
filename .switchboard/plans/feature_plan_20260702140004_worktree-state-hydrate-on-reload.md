@@ -146,6 +146,10 @@ If §1 is implemented and verified, §2 is redundant but harmless (idempotent). 
 3. Manual: delete a worktree directory externally (outside the extension) → trigger any board refresh (e.g. move a card) → confirm the indicator reflects the remaining worktrees (the refresh-driven `worktreeConfig` keeps state truthful).
 4. Manual regression: create / merge / abandon / toggle-grid on a worktree → confirm the board still updates correctly (no duplicate or stale worktree config).
 
+## Review Findings
+
+Implementation verified against plan: `await this._sendWorktreeConfig(resolvedWorkspaceRoot)` at `KanbanProvider.ts:1443` in the live `refreshWithData` method (NOT the dead `_refreshBoardImpl`), placed after `updateBoard` postMessage and before `cliTriggersState`. Optional §2 belt-and-suspenders also implemented: unconditional `loadWorktreeConfig()` at `kanban.html:3981` in DOMContentLoaded init. No code changes needed. No CRITICAL/MAJOR findings. NITs: `_sendWorktreeConfig` runs even on no-op refreshes (snapshotUnchanged=true) and duplicates the `getWorktrees()` read from `:1415` — both explicitly accepted by the plan as acceptable chattiness/cost. Double-trigger with WORKTREES-tab activation is safe (idempotent webview handler). Remaining risk: low — chattiness could be optimized later with a signature-based short-circuit if profiling shows it's excessive.
+
 ## Recommendation
 
 Complexity 3 → **Send to Intern** (one-line addition to the active refresh method; the critical insight — targeting `refreshWithData` not the dead `_refreshBoardImpl` — is captured in this plan so the implementer won't misplace the fix).

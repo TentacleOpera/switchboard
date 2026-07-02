@@ -32,9 +32,10 @@ Two defects, one shallow and one structural:
 
 ## User Review Required
 
-Yes — confirm two points before implementation:
-1. **DB-per-workspace model:** Confirm one `KanbanDatabase` instance serves a single `_workspaceRoot` (one DB file per workspace). If a single DB file can hold rows for multiple `workspace_id` values with different roots, the V45 migration (which relativizes against `this._workspaceRoot`) would only correctly convert rows belonging to that root; cross-workspace rows would be left absolute and would NOT resolve correctly on read (the read side uses the same single `_workspaceRoot`). This is flagged in **Uncertain Assumptions** — verify before implementing.
-2. **`_resolveAbsolutePlanFile` idempotency on absolute input:** Post-migration, rows whose absolute path is *outside* the workspace root are deliberately left absolute. The read side wraps `String(row.file_path)` in `_resolveAbsolutePlanFile()`. Confirm the helper returns an already-absolute path unchanged (rather than naively joining `workspaceRoot + absolutePath`). If it does not, add an `if (path.isAbsolute(p)) return p;` guard at the top of the helper. This is the single most important correctness check.
+No — all assumptions were verified during planning:
+1. **DB-per-workspace model: CONFIRMED.** `KanbanProvider._getKanbanDb` (line 1535-1548) creates one `KanbanDatabase` instance per `resolvedRoot` (via `resolveEffectiveWorkspaceRoot`), cached in `_kanbanDbs`. `KanbanDatabase.forWorkspace(resolvedRoot)` binds `_workspaceRoot` at construction. One DB file = one filesystem root. A single DB file may hold rows for multiple `workspace_id` values, but they all share the same `_workspaceRoot` (child workspaces map to the parent's DB). The V45 migration relativizing against `this._workspaceRoot` is correct for all rows in that DB.
+2. **`_resolveAbsolutePlanFile` idempotency: CONFIRMED SAFE.** Line 6385: `if (path.isAbsolute(normalized)) return normalized;` — the helper already short-circuits on absolute input. Legacy unconverted rows (outside workspace) resolve correctly. No guard needed.
+3. **Live DB row count: VERIFIED.** `/Users/patrickvuleta/Documents/Gitlab/.switchboard/kanban.db` has **161 absolute rows** (all rows are absolute — confirms the problem is total), across two `workspace_id` values (`038bffef-9842-4574-96a1-69a43a280b3c`, `64a73ddc0069`) sharing one filesystem root. The plan's earlier "157" was a slightly stale count; 161 is the current value.
 
 ## Complexity Audit
 
@@ -44,8 +45,6 @@ Yes — confirm two points before implementation:
 - Adding a V45 migration modeled on V18 (sentinel column + guarded UPDATE)
 
 ### Complex / Risky
-- **`_resolveAbsolutePlanFile` idempotency on absolute input.** If the helper does not short-circuit on already-absolute paths, legacy unconverted rows (those left absolute because they're outside the workspace root) would be corrupted into `/workspace//Users/...` garbage on read. Mitigation: verify the helper, add an absolute-input guard if missing.
-- **DB-per-workspace vs shared-DB multi-workspace.** If one DB file serves multiple `workspace_id` roots, the migration is incomplete for cross-workspace rows. Mitigation: confirm the model; if shared-DB, accept that cross-workspace rows stay absolute and rely on the fallback filesystem scan in `_findTicketFilePath` (or escalate to per-row workspace-root resolution — out of scope here).
 - **Sentinel column name collision with V18.** V18 added `needs_relative_conversion` to the `plans` table. Adding the same column name to `imported_docs` is technically fine (different table) but confuses grepping. Mitigation: use a distinct sentinel name `needs_file_path_relative` on `imported_docs`.
 - **`migrateFromJsonRegistry` (line 3504) re-introducing absolute paths.** If this legacy JSON-import path can still fire after V45, it would insert absolute paths and re-break the invariant. Mitigation: relativize there too (defensive, harmless if the path is dead legacy).
 
@@ -71,7 +70,7 @@ Yes — confirm two points before implementation:
 
 ## Adversarial Synthesis
 
-Key risks: (1) `_resolveAbsolutePlanFile` may not be idempotent on already-absolute input — legacy unconverted rows (outside workspace) could be corrupted on read; mitigated by verifying the helper and adding an absolute-input guard if missing. (2) The DB-per-workspace model is assumed but unverified — if a single DB serves multiple workspace roots, cross-workspace rows stay absolute and never resolve via `_workspaceRoot`; mitigated by confirming the model and relying on the fallback filesystem scan as a safety net. (3) `migrateFromJsonRegistry` could re-introduce absolute paths if still live; mitigated by relativizing there defensively.
+Key risks: (1) `migrateFromJsonRegistry` could re-introduce absolute paths if still live; mitigated by relativizing there defensively. (2) Sentinel column name collision with V18's `needs_relative_conversion` on the `plans` table; mitigated by using the distinct name `needs_file_path_relative`. The two assumptions originally flagged (DB-per-workspace model, `_resolveAbsolutePlanFile` idempotency) were **verified during planning** — the helper short-circuits on absolute input at line 6385, and the DB-per-root model is confirmed via `KanbanProvider._getKanbanDb` (line 1535-1548).
 
 ## Approach
 
@@ -94,13 +93,7 @@ Wrap `String(row.file_path)` in `this._resolveAbsolutePlanFile(...)` in every re
 
 After this, all consumers (sidebar, `_findTicketFilePath`, `resolveImportedDocPath`, sync-status) keep receiving absolute paths in memory — no downstream changes needed. The DB-first read fix in `PlanningPanelProvider._findTicketFilePath` stays correct because `getImportBySlugPrefix` returns a now-resolved absolute path.
 
-**Critical:** Before implementing, verify `_resolveAbsolutePlanFile` (lines 6382-6400) short-circuits on already-absolute input. If it does not, add at the top of the method:
-```typescript
-if (path.isAbsolute(planFile)) {
-    return planFile;
-}
-```
-This ensures legacy unconverted rows (those left absolute because they're outside the workspace root) resolve correctly instead of being double-joined.
+**Critical:** `_resolveAbsolutePlanFile` (lines 6382-6400) already short-circuits on absolute input at line 6385 (`if (path.isAbsolute(normalized)) return normalized;`). No guard is needed — legacy unconverted rows (those left absolute because they're outside the workspace root) resolve correctly.
 
 ### 3. Migration — absolute → relative (mirror V18, version V45)
 
@@ -174,7 +167,7 @@ Rows whose absolute path is **outside** the workspace root are left absolute (th
 
 ### 4. Verify against the live DB
 
-Use the real DB at `/Users/patrickvuleta/Documents/Gitlab/.switchboard/kanban.db` (the plan's runtime claim: 157 absolute rows, workspace_id `64a73ddc0069`) as the migration test fixture. **The implementer must verify this row count at runtime** — it is a runtime claim, not a code claim. Post-migration, `SELECT file_path FROM imported_docs` should return `.switchboard/tickets/...` relative values (except rows that legitimately live outside the workspace root), and the Tickets sidebar + Link button must still resolve every ticket.
+Use the real DB at `/Users/patrickvuleta/Documents/Gitlab/.switchboard/kanban.db` (**verified: 161 absolute rows, all rows absolute, two workspace_ids `038bffef-9842-4574-96a1-69a43a280b3c` and `64a73ddc0069` sharing one filesystem root**) as the migration test fixture. Post-migration, `SELECT file_path FROM imported_docs` should return `.switchboard/tickets/...` relative values (except rows that legitimately live outside the workspace root), and the Tickets sidebar + Link button must still resolve every ticket.
 
 ## Files to change
 
@@ -190,7 +183,7 @@ Use the real DB at `/Users/patrickvuleta/Documents/Gitlab/.switchboard/kanban.db
 - *(skipped per session directive — the user runs the test suite separately)*
 
 ### Manual Verification (inspection + DB queries)
-1. **Pre-migration baseline:** `SELECT COUNT(*) FROM imported_docs WHERE file_path LIKE '/%'` → confirm the runtime row count (plan claims 157 for the Gitlab workspace DB). **Implementer must verify this number.**
+1. **Pre-migration baseline:** `SELECT COUNT(*) FROM imported_docs WHERE file_path LIKE '/%'` → confirm the runtime row count (**verified at planning time: 161** for the Gitlab workspace DB).
 2. **Post-migration relative paths:** `SELECT file_path FROM imported_docs` → returns `.switchboard/tickets/...` relative values, except rows outside the workspace root which remain absolute.
 3. **Sentinel cleared:** `SELECT COUNT(*) FROM imported_docs WHERE needs_file_path_relative = 1` → returns 0 (all flagged rows processed).
 4. **Tickets sidebar:** Lists every ticket; "Link to ticket", Save, Refine, and Ask-agent all resolve the file regardless of which workspace the Kanban board is currently pointed at.
@@ -218,11 +211,12 @@ Use the real DB at `/Users/patrickvuleta/Documents/Gitlab/.switchboard/kanban.db
 
 ## Uncertain Assumptions
 
-The following are assumptions this plan depends on that were **not fully verifiable from code alone**. The user was advised to run web research / runtime verification to confirm them before implementation:
+None. All three assumptions originally flagged were verified during planning:
+1. **DB-per-workspace model** — CONFIRMED via `KanbanProvider._getKanbanDb` (line 1535-1548): one `KanbanDatabase` per filesystem root; multiple `workspace_id` values in one DB share the same `_workspaceRoot`.
+2. **`_resolveAbsolutePlanFile` idempotency** — CONFIRMED at line 6385: `if (path.isAbsolute(normalized)) return normalized;` short-circuits on absolute input.
+3. **Live DB row count** — VERIFIED: 161 absolute rows (all rows absolute), two workspace_ids sharing one root.
 
-1. **DB-per-workspace model.** The plan assumes one `KanbanDatabase` instance serves a single `_workspaceRoot` (one DB file per workspace). If a single DB file can hold rows for multiple `workspace_id` values with different filesystem roots, the V45 migration only correctly relativizes rows belonging to `this._workspaceRoot`; cross-workspace rows stay absolute and will not resolve via the read-side helper. This is a structural assumption about the deployment model, not a code claim.
-2. **`_resolveAbsolutePlanFile` idempotency on absolute input.** The plan assumes the helper (lines 6382-6400) returns an already-absolute path unchanged. The boundary-check logic suggests it does (it warns and returns the normalized form when the resolved path escapes the workspace), but the implementer must confirm by reading the full method body and adding an explicit `if (path.isAbsolute(p)) return p;` guard if there is any path that double-joins.
-3. **Live DB row count.** The plan claims 157 absolute rows in `/Users/patrickvuleta/Documents/Gitlab/.switchboard/kanban.db` (workspace_id `64a73ddc0069`). This is a runtime claim the implementer must verify by querying the DB directly before treating it as the migration test fixture.
+No web research is needed for this plan.
 
 ## Recommendation
 

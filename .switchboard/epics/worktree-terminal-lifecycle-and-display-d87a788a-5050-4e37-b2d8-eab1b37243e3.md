@@ -16,9 +16,9 @@ Fix and improve the full lifecycle of worktree-spawned terminals from creation t
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Planner Agent Row Shows IDE-Suffixed Terminal Name ("planner - planner-devin")](../plans/feature_plan_20260702105354_planner-row-shows-ide-suffixed-name.md) — **INTERN CODED**
-- [ ] [Agents Tab Terminal List Does Not Respect Worktree Terminals](../plans/feature_plan_20260702114209_agents-tab-worktree-terminal-preference.md) — **INTERN CODED**
-- [ ] [Worktree Delete/Merge/Abandon Must Close Its Spawned Terminals](../plans/feature_plan_20260702140001_worktree-delete-closes-terminals.md) — **INTERN CODED**
-- [ ] [Worktree "Open Terminals With Grid" Toggle — Make It Clear, Prominent, And On By Default](../plans/feature_plan_20260702140003_grid-terminals-toggle-clear-and-on-by-default.md) — **INTERN CODED**
-- [ ] [Worktree State Must Hydrate Automatically After A Window Reload](../plans/feature_plan_20260702140004_worktree-state-hydrate-on-reload.md) — **INTERN CODED**
+- [ ] [Planner Agent Row Shows IDE-Suffixed Terminal Name ("planner - planner-devin")](../plans/feature_plan_20260702105354_planner-row-shows-ide-suffixed-name.md) — **CODE REVIEWED**
+- [ ] [Agents Tab Terminal List Does Not Respect Worktree Terminals](../plans/feature_plan_20260702114209_agents-tab-worktree-terminal-preference.md) — **CODE REVIEWED**
+- [ ] [Worktree Delete/Merge/Abandon Must Close Its Spawned Terminals](../plans/feature_plan_20260702140001_worktree-delete-closes-terminals.md) — **CODE REVIEWED**
+- [ ] [Worktree "Open Terminals With Grid" Toggle — Make It Clear, Prominent, And On By Default](../plans/feature_plan_20260702140003_grid-terminals-toggle-clear-and-on-by-default.md) — **CODE REVIEWED**
+- [ ] [Worktree State Must Hydrate Automatically After A Window Reload](../plans/feature_plan_20260702140004_worktree-state-hydrate-on-reload.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->

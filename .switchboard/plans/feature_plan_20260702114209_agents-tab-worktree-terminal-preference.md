@@ -213,6 +213,10 @@ if (isWtTerm) {
 9. **Test — green-dot status**: With a worktree active, verify the green/red dot on agent rows reflects the worktree terminal's heartbeat (confirms Change 3 updates `isAgentGreen`).
 10. **Epic cross-check**: Apply the planner-suffix fix (sibling subtask) alongside this plan. With a worktree planner terminal active, verify the Planner row shows `PLANNER - Planner` (stripped, unsuffixed) with the `(worktree)` suffix and the correct worktree terminal is targeted on dispatch. Confirms the two display-layer changes compose correctly.
 
+## Review Findings
+
+Implementation verified against plan: `findTerminalByRole` helper at `implementation.html:2701-2712` (with defensive null guard), all 10 terminal-resolution sites rewired (8 `findTerminalFn` callbacks + `isAgentGreen:2963` + `createAnalystRow:3357`), `resolvedTermName` priority at `:2722-2723`, and `(worktree)` suffix fallback at `:2778-2782`. Grep confirms zero orphaned `Object.keys().find()` patterns remain. No code changes needed. No CRITICAL/MAJOR findings. Two NITs noted (pre-existing, not regressions): (1) `displayName` text label uses binary-derived name for non-worktree-route cases — same text for same binary, no visible inconsistency; (2) planner row `(worktree)` suffix fallback doesn't fire when no plan is selected because `explicitTermName` is a stripped name (not a valid suffixed key in `lastTerminals`). Remaining risk: low — both NITs are pre-existing display-layer limitations outside this plan's scope.
+
 ## Recommendation
 
 Complexity 4 → **Send to Coder** (multi-site display-layer change across 10 terminal-resolution sites + priority logic; well-scoped but needs care to cover all sites consistently).

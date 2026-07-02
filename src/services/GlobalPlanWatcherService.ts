@@ -616,19 +616,16 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
             } else {
                 // Existing plan - update metadata.
-                // Re-resolve the active project if the plan currently has none.
-                // Priority: explicit frontmatter project > board's active project (DB config)
-                // > existing DB project (preserved by COALESCE).
+                // Project assignment: only honor an explicit frontmatter project override.
+                // The auto-assign-to-active-project behavior is intentionally FIRST-IMPORT ONLY
+                // (the !plan branch above). Re-stamping on every save causes plans to jump
+                // between projects when the user clicks through the board dropdown while
+                // agents are writing to plan files. If the plan has no project and no
+                // frontmatter override, leave it empty — insertFileDerivedPlan's COALESCE
+                // preserves the existing DB value, and the user can assign manually.
                 let resolvedProject = plan.project;
                 if (metadata.project) {
-                    // Frontmatter explicitly sets a project — honor it (overrides everything)
                     resolvedProject = metadata.project;
-                } else if (!resolvedProject) {
-                    // Plan has no project yet — stamp it with the board's active project,
-                    // read from the same DB the board persists it to. Without this, a plan
-                    // initially imported with project='' (e.g. before the board first
-                    // refreshed) would stay empty forever.
-                    resolvedProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
                 }
                 const updatedRecord: KanbanPlanRecord = {
                     ...plan,

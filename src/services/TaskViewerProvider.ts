@@ -9749,9 +9749,9 @@ Each plan file must include:
                             try {
                                 const workspaceRoot = this._resolveWorkspaceRoot();
                                 const planFile = data.planFile || '';
-                                if (workspaceRoot && planFile && this._kanbanProvider) {
+                                if (workspaceRoot && this._kanbanProvider) {
                                     // Open the plan in the Project panel, same as kanban.html's Review Plan button.
-                                    await this._kanbanProvider.activatePlanInProjectPanel(planFile, workspaceRoot, false);
+                                    await this._kanbanProvider.activatePlanInProjectPanel(planFile, workspaceRoot, false, data.sessionId);
                                 } else {
                                     // Last-resort fallback for ghost/malformed rows with no planFile:
                                     // opens the raw file in VS Code's editor. This re-introduces the old
@@ -15448,28 +15448,49 @@ What would you like to find?`;
                     return col !== 'code reviewed' && col !== 'backlog';
                 };
 
+                const excludeProjectPlans = projectFilter === null || projectFilter === '__unassigned__';
+                const filterByProjectScope = (row: import('./KanbanDatabase').KanbanPlanRecord) => {
+                    if (!excludeProjectPlans) return true;
+                    return !row.project && (row.projectId === null || row.projectId === undefined);
+                };
+
                 const visibleActiveRows = repoScope
-                    ? filterGhostPlans(activeRows).filter(filterByColumn).filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : filterGhostPlans(activeRows).filter(filterByColumn);
+                    ? filterGhostPlans(activeRows).filter(filterByColumn).filter(filterByProjectScope).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(activeRows).filter(filterByColumn).filter(filterByProjectScope);
                 const visibleCompletedRows = repoScope
-                    ? filterGhostPlans(completedRows).filter(filterByColumn).filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : filterGhostPlans(completedRows).filter(filterByColumn);
+                    ? filterGhostPlans(completedRows).filter(filterByColumn).filter(filterByProjectScope).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(completedRows).filter(filterByColumn).filter(filterByProjectScope);
                 const toSheet = (row: import('./KanbanDatabase').KanbanPlanRecord) => ({
                     sessionId: row.sessionId,
                     topic: row.topic || row.planFile || 'Untitled',
                     planFile: row.planFile || '',
                     createdAt: row.createdAt || '',
                     kanbanColumn: row.kanbanColumn || 'CREATED',
+                    isEpic: row.isEpic ?? 0,
+                    epicId: row.epicId || '',
                 });
                 const kanbanStructure = await this.handleGetKanbanStructure(resolvedWorkspaceRoot);
                 const kanbanColumns = kanbanStructure.map(col => ({ id: col.id, label: col.label }));
                 const activeSheets = visibleActiveRows.map(toSheet);
                 const completedSheets = visibleCompletedRows.map(toSheet);
-                this._view.webview.postMessage({ type: 'runSheets', activeSheets, completedSheets, kanbanColumns });
+                const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+                this._view.webview.postMessage({
+                    type: 'runSheets',
+                    activeSheets,
+                    completedSheets,
+                    kanbanColumns,
+                    projectFilter: currentProjectFilter
+                });
             }
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh Run Sheets from DB:', e);
-            this._view?.webview.postMessage({ type: 'runSheets', activeSheets: [], completedSheets: [] });
+            const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+            this._view?.webview.postMessage({
+                type: 'runSheets',
+                activeSheets: [],
+                completedSheets: [],
+                projectFilter: currentProjectFilter
+            });
         }
     }
 
@@ -15518,7 +15539,13 @@ What would you like to find?`;
             await this._refreshRunSheets(resolvedWorkspaceRoot);
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh from DB:', e);
-            this._view?.webview.postMessage({ type: 'runSheets', activeSheets: [], completedSheets: [] });
+            const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+            this._view?.webview.postMessage({
+                type: 'runSheets',
+                activeSheets: [],
+                completedSheets: [],
+                projectFilter: currentProjectFilter
+            });
         }
     }
 
@@ -16764,16 +16791,10 @@ What would you like to find?`;
     }
 
     public async createDraftPlanTicket(): Promise<void> {
-        const title = await vscode.window.showInputBox({
-            prompt: 'Plan title (used for filename and H1 header)',
-            placeHolder: 'Untitled Plan',
-            value: 'Untitled Plan',
-            validateInput: (v) => {
-                // Reject titles that would produce an empty slug
-                if (!v || !v.trim()) return null; // allow empty (falls back to Untitled Plan)
-                return null;
-            }
-        }) || 'Untitled Plan';
+        // No VS Code dialogue — create directly with default title.
+        // The project panel opens in edit mode (autoEdit: true) so the user
+        // can rename the plan immediately in the editor.
+        const title = 'Untitled Plan';
         const createdAt = new Date().toISOString();
         const idea = this._buildDraftPlanContent(title);
 
