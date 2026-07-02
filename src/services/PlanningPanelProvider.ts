@@ -2337,6 +2337,12 @@ export class PlanningPanelProvider {
                 remotePanel?.webview.postMessage({ type: 'remoteControlState', active });
                 break;
             }
+            case 'getRemoteHealth': {
+                const payload = await this._kanbanProvider?.remoteGetHealthPayload(msg.workspaceRoot);
+                const healthPanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { healthPanel?.webview.postMessage(payload); }
+                break;
+            }
             case 'copyLinearAgentSkill': {
                 const skillPanel = isProject ? this._projectPanel : this._panel;
                 if (!this._kanbanProvider) {

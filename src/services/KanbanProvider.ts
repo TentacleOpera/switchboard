@@ -1708,6 +1708,10 @@ export class KanbanProvider implements vscode.Disposable {
                 return config.boards.length > 0 ? config.provider : null;
             },
             getDefaultTriggerColumn: async () => this._getDefaultTriggerColumn(resolved),
+            recordPushResult: (ok, error) => {
+                const rc = this._remoteControls.get(resolved) || this._getRemoteControl(resolved);
+                rc.recordPushResult(ok, error);
+            },
             log: (m) => this._outputChannel?.appendLine(m),
         });
         this._autoArchiveServices.set(resolved, service);
@@ -1920,6 +1924,24 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Remote-sync health snapshot for the Remote tab UI (epic 7). Returns
+     * last poll/push status, rate-limit/backoff state, and consecutive-failure
+     * count so silent failures are visible instead of console-only.
+     */
+    public async remoteGetHealthPayload(workspaceRoot?: string): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        try {
+            const rc = this._getRemoteControl(resolved);
+            const health = await rc.getHealth();
+            return { type: 'remoteSyncHealth', workspaceRoot: resolved, health };
+        } catch (e) {
+            console.error('[KanbanProvider] remoteGetHealthPayload failed:', e);
+            return null;
+        }
+    }
+
+    /**
      * Generate the tailored "Linear agent skill" text for the Remote tab's copy
      * button — instructions for Linear's native AI agent, pre-filled with the
      * user's actual column→state mappings and poll cadence. Returns an error
@@ -2068,6 +2090,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const linearResult = await this._buildRemoteProvider(effective, 'linear')
             .pushProjectContext(assembled.bundle)
             .catch((e: unknown) => ({ ok: false, skipped: false, detail: e instanceof Error ? e.message : String(e) }));
+
+        // Record push health for the Remote tab health UI (epic 7).
+        const healthRc = this._remoteControls.get(effective);
+        if (healthRc) {
+            const pushOk = (notionResult.ok && !notionResult.skipped) || (linearResult.ok && !linearResult.skipped);
+            const pushErr = !pushOk
+                ? [notionResult.skipped ? null : notionResult.detail, linearResult.skipped ? null : linearResult.detail].filter(Boolean).join('; ')
+                : undefined;
+            healthRc.recordPushResult(pushOk, pushErr);
+        }
 
         const summary = summarizePushResults({ notion: notionResult, linear: linearResult });
         state.providers = summary.providers;

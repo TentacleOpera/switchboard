@@ -1953,6 +1953,15 @@
                         <span id="remote-control-state" style="font-size:10px; color:var(--text-secondary);"></span>
                     </div>
 
+                    <!-- Sync health: last poll/push status, rate-limit/backoff, persistent-failure indicator -->
+                    <div id="remote-health-section" style="margin-bottom:12px; padding:8px 10px; border:1px solid var(--border-color, rgba(127,127,127,0.2)); border-radius:4px; font-size:11px; line-height:1.6; display:none;">
+                        <div class="subsection-header" style="margin-bottom:6px;"><span>Sync Health</span></div>
+                        <div id="remote-health-poll" style="color:var(--text-secondary);"></div>
+                        <div id="remote-health-push" style="color:var(--text-secondary);"></div>
+                        <div id="remote-health-throttle" style="color:var(--text-secondary); display:none;"></div>
+                        <div id="remote-health-failure" style="color:var(--text-secondary); display:none; margin-top:4px; font-weight:bold;"></div>
+                    </div>
+
                     <!-- Linear-only: one-time setup helper for Linear's native AI agent.
                          Generates instructions tailored to the user's column mappings. -->
                     <div id="remote-linear-agent-skill" style="margin-bottom:12px; display:none;">

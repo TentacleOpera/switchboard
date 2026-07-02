@@ -1,6 +1,7 @@
 import * as path from 'path';
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
-import type { RemoteProvider, RemoteProviderKind } from './remote/RemoteProvider';
+import type { RemoteProvider } from './remote/RemoteProvider';
+import type { RemoteProviderKind } from './RemoteControlService';
 import { ArchiveManager } from './ArchiveManager';
 
 /**
@@ -49,6 +50,8 @@ export interface AutoArchiveDeps {
     getActiveProviderKind: () => Promise<RemoteProviderKind | null>;
     /** Resolve the column id that sits immediately before COMPLETED (default trigger). */
     getDefaultTriggerColumn: () => Promise<string>;
+    /** Record an outbound push outcome for the Remote tab health UI (epic 7). */
+    recordPushResult?: (ok: boolean, error?: string) => void;
     log?: (msg: string) => void;
 }
 
@@ -217,9 +220,13 @@ export class AutoArchiveService {
                             const result = await provider.archiveCard(remoteId);
                             if (!result.ok && !result.skipped) {
                                 errors.push(`Remote archive failed for ${plan.planFile}: ${result.error || 'unknown'}`);
+                                this._deps.recordPushResult?.(false, result.error);
+                            } else {
+                                this._deps.recordPushResult?.(true);
                             }
                         } catch (e) {
                             errors.push(`Remote archive threw for ${plan.planFile}: ${e instanceof Error ? e.message : String(e)}`);
+                            this._deps.recordPushResult?.(false, e instanceof Error ? e.message : String(e));
                         }
                     }
                 }
@@ -250,7 +257,7 @@ export class AutoArchiveService {
     }
 
     /** Map a KanbanPlanRecord to the ArchiveManager's PlanRecord shape. */
-    private _toArchiveRecord(plan: KanbanPlanRecord): import('./ArchiveManager').PlanRecord {
+    private _toArchiveRecord(plan: KanbanPlanRecord): import('./ArchiveManager.js').PlanRecord {
         return {
             planId: plan.planId,
             sessionId: plan.sessionId,

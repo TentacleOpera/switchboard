@@ -56,6 +56,7 @@
                 const remoteWs = (wsSel && wsSel.value) || undefined;
                 vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: remoteWs });
                 vscode.postMessage({ type: 'getProjectContextSyncStatus', workspaceRoot: remoteWs });
+                vscode.postMessage({ type: 'getRemoteHealth', workspaceRoot: remoteWs });
             } else if (activeTab === 'notebook') {
                 hydrateNotebookTab();
             }
@@ -1212,6 +1213,9 @@
             case 'remoteControlState':
                 remoteControlActive = !!msg.active;
                 applyRemoteControlButtonState();
+                break;
+            case 'remoteSyncHealth':
+                renderRemoteSyncHealth(msg.health);
                 break;
             case 'notionRemoteSetupResult': {
                 const statusEl = document.getElementById('remote-notion-setup-status');
@@ -3463,6 +3467,65 @@
         if (btn) btn.textContent = remoteControlActive ? 'Stop Remote Control' : 'Start Remote Control';
         const stateEl = document.getElementById('remote-control-state');
         if (stateEl) stateEl.textContent = remoteControlActive ? 'Pinging…' : '';
+        // Show/hide the health section based on active state.
+        const healthSection = document.getElementById('remote-health-section');
+        if (healthSection) healthSection.style.display = remoteControlActive ? 'block' : 'none';
+        // Start/stop the health polling timer.
+        if (remoteControlActive && !_remoteHealthTimer) {
+            _remoteHealthTimer = setInterval(requestRemoteHealth, 15000);
+            requestRemoteHealth();
+        } else if (!remoteControlActive && _remoteHealthTimer) {
+            clearInterval(_remoteHealthTimer);
+            _remoteHealthTimer = null;
+        }
+    }
+
+    let _remoteHealthTimer;
+    function requestRemoteHealth() {
+        const wsSel = document.getElementById('remote-workspace');
+        vscode.postMessage({ type: 'getRemoteHealth', workspaceRoot: wsSel ? wsSel.value : undefined });
+    }
+
+    function renderRemoteSyncHealth(health) {
+        if (!health) return;
+        const pollEl = document.getElementById('remote-health-poll');
+        const pushEl = document.getElementById('remote-health-push');
+        const thrEl = document.getElementById('remote-health-throttle');
+        const failEl = document.getElementById('remote-health-failure');
+
+        if (pollEl) {
+            const ts = health.lastPollAt ? new Date(health.lastPollAt).toLocaleTimeString() : 'never';
+            const icon = health.lastPollOk ? '✓' : '✗';
+            const err = health.lastPollError ? ` — ${health.lastPollError.slice(0, 120)}` : '';
+            pollEl.textContent = `Last poll: ${icon} ${ts}${err}`;
+            pollEl.style.color = health.lastPollOk ? 'var(--text-secondary)' : '#e74c3c';
+        }
+        if (pushEl) {
+            const ts = health.lastPushAt ? new Date(health.lastPushAt).toLocaleTimeString() : 'never';
+            const icon = health.lastPushOk ? '✓' : '✗';
+            const err = health.lastPushError ? ` — ${health.lastPushError.slice(0, 120)}` : '';
+            pushEl.textContent = `Last push: ${icon} ${ts}${err}`;
+            pushEl.style.color = health.lastPushOk ? 'var(--text-secondary)' : '#e74c3c';
+        }
+        if (thrEl) {
+            if (health.throttled) {
+                const until = health.throttleUntil ? new Date(health.throttleUntil).toLocaleTimeString() : '';
+                thrEl.textContent = `⏳ Rate-limited — backing off until ${until}`;
+                thrEl.style.display = 'block';
+                thrEl.style.color = '#f39c12';
+            } else {
+                thrEl.style.display = 'none';
+            }
+        }
+        if (failEl) {
+            if (health.consecutiveFailures >= 3) {
+                failEl.textContent = `⚠ ${health.consecutiveFailures} consecutive failures — check token/connection`;
+                failEl.style.display = 'block';
+                failEl.style.color = '#e74c3c';
+            } else {
+                failEl.style.display = 'none';
+            }
+        }
     }
 
     function renderRemoteConfig(config, payload) {

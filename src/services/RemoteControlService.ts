@@ -51,6 +51,26 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     pingFrequencySeconds: 60
 };
 
+/**
+ * Remote-sync health snapshot (epic 7 — Remote-Sync Health & Error Surfacing).
+ * Surfaced in the Remote tab so silent failures (bad token, revoked connection,
+ * rate-limit storm) are visible instead of console-only.
+ */
+export interface RemoteSyncHealth {
+    active: boolean;
+    provider: RemoteProviderKind;
+    lastPollAt: string | null;
+    lastPollOk: boolean;
+    lastPollError: string | null;
+    consecutiveFailures: number;
+    /** True when the provider returned 429/529 and backoff is engaged. */
+    throttled: boolean;
+    throttleUntil: string | null;
+    lastPushAt: string | null;
+    lastPushOk: boolean;
+    lastPushError: string | null;
+}
+
 const REMOTE_CONFIG_KEY = 'remote.config';
 const COMMENT_SEEN_CAP = 500;
 
@@ -76,12 +96,58 @@ export class RemoteControlService {
     private _polling = false;
     private _active = false;
     private _gitProviders = new Map<GitProviderKind, GitStateProvider>();
+    // ── Health state (epic 7 — Remote-Sync Health & Error Surfacing) ──
+    private _lastPollAt: string | null = null;
+    private _lastPollOk = true;
+    private _lastPollError: string | null = null;
+    private _consecutiveFailures = 0;
+    private _throttled = false;
+    private _throttleUntil: string | null = null;
+    private _lastPushAt: string | null = null;
+    private _lastPushOk = true;
+    private _lastPushError: string | null = null;
 
     constructor(deps: RemoteControlDeps) {
         this._deps = deps;
     }
 
     public get isActive(): boolean { return this._active; }
+
+    /**
+     * Health snapshot for the Remote tab UI (epic 7). Reads the in-memory
+     * last-status state recorded by the poll/push loops — no DB hit.
+     */
+    public async getHealth(): Promise<RemoteSyncHealth> {
+        const config = await this.getConfig();
+        // Clear the throttled flag once the backoff window expires.
+        if (this._throttled && this._throttleUntil) {
+            const until = Date.parse(this._throttleUntil);
+            if (isFinite(until) && Date.now() >= until) {
+                this._throttled = false;
+                this._throttleUntil = null;
+            }
+        }
+        return {
+            active: this._active,
+            provider: config.provider,
+            lastPollAt: this._lastPollAt,
+            lastPollOk: this._lastPollOk,
+            lastPollError: this._lastPollError,
+            consecutiveFailures: this._consecutiveFailures,
+            throttled: this._throttled,
+            throttleUntil: this._throttleUntil,
+            lastPushAt: this._lastPushAt,
+            lastPushOk: this._lastPushOk,
+            lastPushError: this._lastPushError,
+        };
+    }
+
+    /** Record an outbound push outcome (called by push dispatch paths). */
+    public recordPushResult(ok: boolean, error?: string): void {
+        this._lastPushAt = new Date().toISOString();
+        this._lastPushOk = ok;
+        this._lastPushError = ok ? null : (error || 'unknown error');
+    }
 
     /** Register a git-backed provider for outbound push and inbound polling. */
     public registerGitProvider(provider: GitStateProvider): void {
@@ -236,8 +302,30 @@ export class RemoteControlService {
                     void gitProvider.pushExportedState();
                 }
             }
+
+            // Health: record successful poll.
+            this._lastPollAt = new Date().toISOString();
+            this._lastPollOk = true;
+            this._lastPollError = null;
+            this._consecutiveFailures = 0;
         } catch (e) {
-            this._log(`Poll error: ${e instanceof Error ? e.message : String(e)}`);
+            const msg = e instanceof Error ? e.message : String(e);
+            this._log(`Poll error: ${msg}`);
+            // Health: record failed poll.
+            this._lastPollAt = new Date().toISOString();
+            this._lastPollOk = false;
+            this._lastPollError = msg;
+            this._consecutiveFailures++;
+            // Detect rate-limit / backoff indicators in the error message.
+            // NotionFetchService.httpRequest retries internally but may surface
+            // a 429/529 after exhausting attempts; Linear graphqlRequest throws.
+            const lower = msg.toLowerCase();
+            if (lower.includes('429') || lower.includes('529') || lower.includes('rate limit') || lower.includes('retry-after')) {
+                this._throttled = true;
+                // Backoff window: 60s default (the internal retry already waited;
+                // this just flags the UI until the next successful poll clears it).
+                this._throttleUntil = new Date(Date.now() + 60000).toISOString();
+            }
         } finally {
             this._polling = false;
         }
