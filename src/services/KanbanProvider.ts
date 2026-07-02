@@ -144,6 +144,8 @@ export class KanbanProvider implements vscode.Disposable {
     private _remoteControls = new Map<string, RemoteControlService>();
     /** §11 — true while any board is under remote control; injects REMOTE_MODE_DIRECTIVE. */
     private _remoteControlActive = false;
+    /** Effective workspace roots with a project-context push in flight (auto/manual guard). */
+    private _projectContextSyncInFlight = new Set<string>();
     private _linearAutomationServices = new Map<string, LinearAutomationService>();
     private _notionServices = new Map<string, NotionFetchService>();
     private _cacheServices = new Map<string, import('./PlanningPanelCacheService').PlanningPanelCacheService>();
@@ -1806,6 +1808,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const db = this._getKanbanDb(effective);
         if (!(await db.ensureReady())) { return null; }
 
+        // In-flight guard: an auto (debounced) sync must not run concurrently
+        // with a manual "Sync Now" or a prior auto run still pushing — the
+        // Notion append path would duplicate content and both would race on the
+        // shared state row. A manual sync always proceeds (user-intent wins).
+        if (this._projectContextSyncInFlight.has(effective)) {
+            if (opts.auto) {
+                const { loadProjectContextState } = require('./remote/projectContextSync');
+                const state = await loadProjectContextState(db);
+                return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+            }
+        }
+        this._projectContextSyncInFlight.add(effective);
+        try {
+
         const {
             loadProjectContextState, saveProjectContextState,
             assembleProjectContextBundle, summarizePushResults,
@@ -1860,6 +1876,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         await saveProjectContextState(db, state);
         this._outputChannel?.appendLine(`[ProjectContextSync] ${state.lastResult}`);
         return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        } finally {
+            this._projectContextSyncInFlight.delete(effective);
+        }
     }
 
     /** §9 — apply a Linear-driven column move, then dispatch the destination column's agent. */
