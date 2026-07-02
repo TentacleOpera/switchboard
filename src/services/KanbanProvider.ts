@@ -8347,7 +8347,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
     private _cardMatchesProjectFilter(card: KanbanCard, projectFilter: string | null): boolean {
         if (projectFilter === null || projectFilter === '') return true; // no filter → all
         const cardProject = card.project || '';
-        if (projectFilter === '__unassigned__') {
+        if (projectFilter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
             return cardProject === ''; // unassigned only
         }
         return cardProject === projectFilter; // specific project

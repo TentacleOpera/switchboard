@@ -239,3 +239,7 @@ No automated tests are added for this change. The change is a one-line tag emiss
 ## Recommendation
 
 Complexity 4 → **Send to Coder**. Localized multi-file wiring with no new patterns, no schema change, and an existing sentinel (`__unassigned__`) reused. The one moderate risk (placeholder leak on direct invocation) is handled by defaulting the substitution to empty string.
+
+## Review Findings
+
+Implementation matches the plan across all four files (`KanbanDatabase.ts`, `KanbanProvider.ts`, `kanban.html`, `.agents/skills/group-into-epics/SKILL.md`). One NIT fixed: `_cardMatchesProjectFilter` used the literal `'__unassigned__'` instead of `KanbanDatabase.UNASSIGNED_PROJECT_FILTER` — corrected to use the constant for consistency with the 11 other usages in `KanbanProvider.ts`. The `.claude` mirror is a runtime artifact (never committed; regenerated on extension activation) and correctly was not hand-edited. No CRITICAL or MAJOR findings. Remaining risk: the project-filter toast count depends on `_lastCards` being fresh at click time — if the board hasn't refreshed after a project assignment, the count could be stale, but this is a pre-existing UI timing concern not introduced by this change.

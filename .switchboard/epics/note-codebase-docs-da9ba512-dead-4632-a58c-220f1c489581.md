@@ -42,8 +42,8 @@ The context pipeline: **NotebookLM (get code into an analysis system) → author
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **CODER CODED**
-- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CODER CODED**
-- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODER CODED**
-- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODER CODED**
+- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **CODE REVIEWED**
+- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CODE REVIEWED**
+- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODE REVIEWED**
+- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
