@@ -71,8 +71,6 @@
             currentVal = ticketsWorkspaceRoot;
         } else if (tabKey === 'research' && researchWorkspaceRoot) {
             currentVal = researchWorkspaceRoot;
-        } else if (tabKey === 'notebook' && notebookWorkspaceRoot) {
-            currentVal = notebookWorkspaceRoot;
         } else if (tabKey === 'docs') {
             currentVal = resolveDocsWorkspaceFilter(_workspaceItems);
         }
@@ -212,7 +210,6 @@
     let ticketsAutoSync = false;
     let researchWorkspaceRoot = '';
     let folderModalScope = 'local';
-    let notebookWorkspaceRoot = '';
     let lastResearchFolderByRoot = {};
 
     function persistResearchState() {
@@ -1495,7 +1492,6 @@
     }
 
     registerWorkspaceDropdown('research-workspace-filter', 'research', false);
-    registerWorkspaceDropdown('notebook-workspace-filter', 'notebook', false);
     registerWorkspaceDropdown('docs-workspace-filter', 'docs');
 
     document.getElementById('research-workspace-filter')?.addEventListener('change', (e) => {
@@ -1504,13 +1500,6 @@
         researchWorkspaceRoot = newRoot;
         persistResearchState();
         restoreResearchStateForRoot();
-    });
-
-    document.getElementById('notebook-workspace-filter')?.addEventListener('change', (e) => {
-        const newRoot = e.target.value;
-        if (!newRoot) return;
-        notebookWorkspaceRoot = newRoot;
-        persistTab('notebook.root', notebookWorkspaceRoot);
     });
 
     const manageResearchFoldersBtn = document.getElementById('btn-manage-research-folders');
@@ -1528,80 +1517,7 @@
         });
     }
 
-    // NotebookLM button handlers
-    const bundleCodeBtn = document.getElementById('btn-bundle-code');
-    const openNotebookLMBtn = document.getElementById('btn-open-notebooklm');
-    const openAirlockFolderBtn = document.getElementById('btn-open-airlock-folder');
-    const copySprintPromptBtn = document.getElementById('btn-copy-sprint-prompt');
-
-    if (bundleCodeBtn) {
-        bundleCodeBtn.addEventListener('click', () => {
-            bundleCodeBtn.disabled = true;
-            bundleCodeBtn.textContent = 'BUNDLING...';
-            vscode.postMessage({
-                type: 'airlock_export',
-                workspaceRoot: notebookWorkspaceRoot || undefined
-            });
-        });
-    }
-
-    if (openNotebookLMBtn) {
-        openNotebookLMBtn.addEventListener('click', () => {
-            vscode.postMessage({
-                type: 'airlock_openNotebookLM',
-                workspaceRoot: notebookWorkspaceRoot || undefined
-            });
-        });
-    }
-
-    if (openAirlockFolderBtn) {
-        openAirlockFolderBtn.addEventListener('click', () => {
-            vscode.postMessage({
-                type: 'airlock_openFolder',
-                workspaceRoot: notebookWorkspaceRoot || undefined
-            });
-        });
-    }
-
-    const openAIStudioBtn = document.getElementById('btn-open-ai-studio');
-    if (openAIStudioBtn) {
-        openAIStudioBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'airlock_openAIStudio' });
-        });
-    }
-
-    if (copySprintPromptBtn) {
-        copySprintPromptBtn.addEventListener('click', () => {
-            const prompt = `Please analyze the uploaded codebase and generate sprint plans. Output each plan separated by this exact format:
-
---- PLAN ---
-[plan 1 content here]
-
---- PLAN ---
-[plan 2 content here]
-
---- PLAN ---
-[plan 3 content here]
-
-Each plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
-            navigator.clipboard.writeText(prompt).then(() => {
-                copySprintPromptBtn.innerText = 'COPIED';
-                setTimeout(() => { copySprintPromptBtn.innerText = 'COPY SPRINT PROMPT'; }, 2000);
-            });
-        });
-    }
-
-    const importNotebookLMBtn = document.getElementById('btn-import-notebooklm-plans');
-    if (importNotebookLMBtn) {
-        importNotebookLMBtn.addEventListener('click', () => {
-            importNotebookLMBtn.disabled = true;
-            importNotebookLMBtn.textContent = 'IMPORTING...';
-            vscode.postMessage({
-                type: 'importNotebookLMPlans',
-                workspaceRoot: notebookWorkspaceRoot || undefined
-            });
-        });
-    }
+    // NotebookLM tab moved to project.html (Project panel) — wiring lives in project.js.
 
     const SOURCE_DISPLAY_NAMES = {
         'clickup': 'ClickUp',
@@ -3497,34 +3413,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         targetPreview.insertBefore(toc, targetPreview.firstChild);
     }
 
-    function handleAirlockExportComplete(msg) {
-        const webaiStatus = document.getElementById('webai-status');
-        const bundleBtn = document.getElementById('btn-bundle-code');
-        if (webaiStatus) {
-            webaiStatus.textContent = msg.message || 'Export complete';
-        }
-        if (bundleBtn) {
-            bundleBtn.disabled = false;
-            bundleBtn.innerText = 'BUNDLE CODE';
-        }
-    }
-
-    function handleImportNotebookLMPlansResult(msg) {
-        const webaiStatus = document.getElementById('webai-status');
-        const importBtn = document.getElementById('btn-import-notebooklm-plans');
-        if (webaiStatus) {
-            const parts = [];
-            if (msg.overwritten > 0) parts.push(`${msg.overwritten} overwritten`);
-            if (msg.created > 0) parts.push(`${msg.created} created`);
-            if (msg.errors > 0) parts.push(`${msg.errors} failed`);
-            webaiStatus.textContent = parts.length > 0 ? `Import: ${parts.join(', ')}` : 'No plans found in clipboard.';
-        }
-        if (importBtn) {
-            importBtn.disabled = false;
-            importBtn.textContent = 'IMPORT PLANS';
-        }
-    }
-
     function handleImportedDocsReady(msg) {
         const { docs } = msg;
 
@@ -3902,17 +3790,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     restoreResearchStateForRoot();
                 }
                 _restoredPanelState.panel['research.root'] = researchWorkspaceRoot;
-                if (!notebookWorkspaceRoot) {
-                    const restoredRoot = _restoredPanelState.panel['notebook.root'];
-                    if (restoredRoot && _workspaceItems.some(item => item.workspaceRoot === restoredRoot)) {
-                        notebookWorkspaceRoot = restoredRoot;
-                    } else if (_workspaceItems.length > 0) {
-                        notebookWorkspaceRoot = _workspaceItems[0].workspaceRoot;
-                    }
-                    const dropdown = document.getElementById('notebook-workspace-filter');
-                    if (dropdown) dropdown.value = notebookWorkspaceRoot;
-                }
-                _restoredPanelState.panel['notebook.root'] = notebookWorkspaceRoot;
+                // 'notebook.root' persistence stays host-side — the NotebookLM tab
+                // now restores it in project.html via the notebookDefaultRoot message.
 
                 // Restore Docs workspace filter (single source of truth; first workspace by default)
                 resolveDocsWorkspaceFilter(_workspaceItems);
@@ -4852,12 +4731,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
 
-            case 'airlock_exportComplete':
-                handleAirlockExportComplete(msg);
-                break;
-            case 'importNotebookLMPlansResult':
-                handleImportNotebookLMPlansResult(msg);
-                break;
             case 'importedDocsReady':
                 handleImportedDocsReady(msg);
                 break;

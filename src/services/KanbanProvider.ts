@@ -1621,6 +1621,91 @@ export class KanbanProvider implements vscode.Disposable {
         };
     }
 
+    // ── §10 public Remote Control API ─────────────────────────────────
+    // The Remote tab lives in project.html (PlanningPanelProvider), but the
+    // per-workspace RemoteControlService instances and their dispatch callbacks
+    // live here. PlanningPanelProvider delegates through these methods so both
+    // webviews (project Remote tab, kanban toolbar toggle) drive the SAME
+    // service instances — never a second polling loop.
+
+    /** Build the full remoteConfig payload for the Remote tab. Null when no workspace resolves. */
+    public async remoteGetConfigPayload(workspaceRoot?: string): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const rc = this._getRemoteControl(resolved);
+        const config = await rc.getConfig();
+        return this._buildRemoteConfigPayload(resolved, config, rc);
+    }
+
+    /** Persist a RemoteConfig and return the echo payload (same shape as remoteGetConfigPayload). */
+    public async remoteSetConfig(workspaceRoot: string | undefined, config: RemoteConfig): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved || !config) { return null; }
+        const rc = this._getRemoteControl(resolved);
+        await rc.setConfig(config);
+        this._remoteControlActive = rc.isActive;
+        const normalized = await rc.getConfig();
+        return this._buildRemoteConfigPayload(resolved, normalized, rc);
+    }
+
+    /** One-time Notion remote setup: creates plans + comments DBs, backs up selected boards. */
+    public async remoteRunNotionSetup(workspaceRoot?: string): Promise<{ success: boolean; backedUp?: number; error?: string }> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { success: false, error: 'No workspace' }; }
+        const rc = this._getRemoteControl(resolved);
+        const config = await rc.getConfig();
+        try {
+            const columns = await this._getCurrentClickUpColumns(resolved);
+            const backup = new NotionBackupService(this.resolveEffectiveWorkspaceRoot(resolved), this._context.secrets);
+            const result = await backup.setupRemoteControl(
+                this.resolveEffectiveWorkspaceRoot(resolved),
+                config.boards,
+                columns
+            );
+            return { success: result.success, backedUp: result.backedUp, error: result.error };
+        } catch (e) {
+            return { success: false, error: e instanceof Error ? e.message : String(e) };
+        }
+    }
+
+    /** Start pinging; returns the resulting active state. Mirrors the state to the kanban toolbar. */
+    public async remoteStart(workspaceRoot?: string): Promise<boolean> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolved) {
+            try {
+                const rc = this._getRemoteControl(resolved);
+                await rc.start();
+                this._remoteControlActive = rc.isActive;
+            } catch (e) {
+                console.error('[KanbanProvider] remoteStart failed:', e);
+                this._remoteControlActive = false;
+            }
+        } else {
+            this._remoteControlActive = false;
+        }
+        this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+        return this._remoteControlActive;
+    }
+
+    /** Stop pinging; returns the resulting active state. Mirrors the state to the kanban toolbar. */
+    public remoteStop(workspaceRoot?: string): boolean {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolved) {
+            try {
+                const rc = this._getRemoteControl(resolved);
+                rc.stop();
+                this._remoteControlActive = rc.isActive;
+            } catch (e) {
+                console.error('[KanbanProvider] remoteStop failed:', e);
+                this._remoteControlActive = false;
+            }
+        } else {
+            this._remoteControlActive = false;
+        }
+        this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+        return this._remoteControlActive;
+    }
+
     /** §9 — apply a Linear-driven column move, then dispatch the destination column's agent. */
     private async _remoteApplyColumnMove(workspaceRoot: string, plan: KanbanPlanRecord, targetColumn: string): Promise<{ dispatched: boolean }> {
         await this.moveCardToColumnByPlanFile(workspaceRoot, plan.planFile, targetColumn);
@@ -5686,88 +5771,31 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
 
             case 'getRemoteConfig': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    const config = await rc.getConfig();
-                    const payload = await this._buildRemoteConfigPayload(workspaceRoot, config, rc);
-                    this._panel?.webview.postMessage(payload);
-                }
+                // The Remote tab now lives in project.html; this case remains for the
+                // kanban toolbar toggle's state hydration on webview boot.
+                const payload = await this.remoteGetConfigPayload(msg.workspaceRoot);
+                if (payload) { this._panel?.webview.postMessage(payload); }
                 break;
             }
             case 'setRemoteConfig': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot && msg.config) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    await rc.setConfig(msg.config as RemoteConfig);
-                    this._remoteControlActive = rc.isActive;
-                    const config = await rc.getConfig();
-                    const payload = await this._buildRemoteConfigPayload(workspaceRoot, config, rc);
-                    this._panel?.webview.postMessage(payload);
-                }
+                const payload = await this.remoteSetConfig(msg.workspaceRoot, msg.config as RemoteConfig);
+                if (payload) { this._panel?.webview.postMessage(payload); }
                 break;
             }
             case 'runNotionRemoteSetup': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    const config = await rc.getConfig();
-                    try {
-                        const columns = await this._getCurrentClickUpColumns(workspaceRoot);
-                        const backup = new NotionBackupService(this.resolveEffectiveWorkspaceRoot(workspaceRoot), this._context.secrets);
-                        const result = await backup.setupRemoteControl(
-                            this.resolveEffectiveWorkspaceRoot(workspaceRoot),
-                            config.boards,
-                            columns
-                        );
-                        this._panel?.webview.postMessage({
-                            type: 'notionRemoteSetupResult',
-                            success: result.success,
-                            backedUp: result.backedUp,
-                            error: result.error,
-                        });
-                    } catch (e) {
-                        this._panel?.webview.postMessage({
-                            type: 'notionRemoteSetupResult',
-                            success: false,
-                            error: e instanceof Error ? e.message : String(e),
-                        });
-                    }
+                    const result = await this.remoteRunNotionSetup(workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'notionRemoteSetupResult', ...result });
                 }
                 break;
             }
             case 'startRemoteControl': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot) {
-                    try {
-                        const rc = this._getRemoteControl(workspaceRoot);
-                        await rc.start();
-                        this._remoteControlActive = rc.isActive;
-                    } catch (e) {
-                        console.error('[KanbanProvider] startRemoteControl failed:', e);
-                        this._remoteControlActive = false;
-                    }
-                } else {
-                    this._remoteControlActive = false;
-                }
-                this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+                await this.remoteStart(msg.workspaceRoot);
                 break;
             }
             case 'stopRemoteControl': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot) {
-                    try {
-                        const rc = this._getRemoteControl(workspaceRoot);
-                        rc.stop();
-                        this._remoteControlActive = rc.isActive;
-                    } catch (e) {
-                        console.error('[KanbanProvider] stopRemoteControl failed:', e);
-                        this._remoteControlActive = false;
-                    }
-                } else {
-                    this._remoteControlActive = false;
-                }
-                this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+                this.remoteStop(msg.workspaceRoot);
                 break;
             }
             case 'triggerAction': {

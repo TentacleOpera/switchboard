@@ -757,36 +757,7 @@
             outline: none;
         }
 
-        /* Remote (Linear) tab controls — themed checkbox list, radios, number input */
-        .remote-checkbox-list {
-            border: 1px solid var(--border-color);
-            border-radius: 3px;
-            background: var(--panel-bg2);
-            padding: 6px 8px;
-            max-height: 160px;
-            overflow-y: auto;
-        }
-        .remote-checkbox-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 11px;
-            color: var(--text-primary);
-            font-family: var(--font-mono);
-            padding: 3px 0;
-        }
-        .remote-checkbox-row input { accent-color: var(--accent-teal); }
-        .remote-number-input {
-            background: var(--panel-bg2);
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 3px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            padding: 3px 6px;
-            width: 120px;
-        }
-        .remote-number-input:focus { outline: none; border-color: var(--accent-teal-dim); }
+        /* Remote (§10) config styles moved to project.html with the Remote tab. */
 
         .column-button-area {
             display: flex;
@@ -2515,7 +2486,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
-        <button class="shared-tab-btn" data-tab="remote">REMOTE</button>
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
         <button class="shared-tab-btn" data-tab="uat">UAT</button>
@@ -2602,67 +2572,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <div id="automation-panel-root" class="automation-panel"></div>
     </div>
 
-    <!-- Remote Tab Content (§10 — config only, Linear) -->
-    <div id="remote-tab-content" class="shared-tab-content">
-        <div style="padding:12px; overflow-y:auto; height:100%; max-width:640px;">
-            <div class="db-subsection">
-                <div class="subsection-header"><span id="remote-subsection-title">Remote Control</span></div>
-                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
-                    Drive your boards remotely. Moving a card between remote states moves it here and
-                    dispatches that column's agent; comments are routed to the current column's agent,
-                    which replies back through the remote. Polling only — no webhooks, nothing to expose.
-                    <br><strong>Notion</strong> has no active-issue cap — pick it when Linear's free-tier
-                    limit gets in the way. Notion is an <em>agent</em> control surface: connect Notion to
-                    claude.ai and let the remote Claude session drive it via the Notion MCP connector.
-                </div>
-
-                <!-- Provider selector -->
-                <label style="display:block; margin-bottom:10px;">
-                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Provider</span>
-                    <select id="remote-provider" class="workspace-project-select">
-                        <option value="linear">Linear</option>
-                        <option value="notion">Notion</option>
-                    </select>
-                </label>
-
-                <!-- Workspace selector -->
-                <label style="display:block; margin-bottom:10px;">
-                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Workspace</span>
-                    <select id="remote-workspace" class="workspace-project-select"></select>
-                </label>
-
-                <!-- Boards to sync: themed checkbox list, includes "No Project" base board -->
-                <div style="margin-bottom:10px;">
-                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
-                    <div id="remote-boards-list" class="remote-checkbox-list"></div>
-                </div>
-
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                    <input type="checkbox" id="remote-silent-sync">
-                    <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
-                </label>
-
-                <label style="display:block; margin-bottom:12px;">
-                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
-                    <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60">
-                </label>
-
-                <!-- Notion-only one-time setup: creates the plans + comments databases,
-                     backs up the selected boards, and matches the column select to the board. -->
-                <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
-                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                        Run this once after selecting boards. It creates the Notion plans + "Switchboard
-                        Comments" databases, backs up the selected boards' cards, and matches the
-                        <code>Kanban Column</code> options to your board.
-                    </div>
-                    <button id="btn-notion-remote-setup" class="strip-btn">Run Notion setup sync</button>
-                    <span id="remote-notion-setup-status" style="display:block; margin-top:6px; font-size:10px; color:var(--text-secondary);"></span>
-                </div>
-
-                <span id="remote-config-status" style="font-size:10px; color:var(--text-secondary);"></span>
-            </div>
-        </div>
-    </div>
+    <!-- The Remote tab (§10) moved to project.html (Project panel). The toolbar
+         start/stop toggle below remains; config UI lives in its new home. -->
 
 
 
@@ -3964,10 +3875,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   renderWorktreesTab();
                 }
 
-                // Hydrate REMOTE tab when activated (§10)
-                if (tabName === 'remote') {
-                  postKanbanMessage({ type: 'getRemoteConfig' });
-                }
             });
         });
 
@@ -6569,22 +6476,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'remoteConfig':
+                    // Config UI moved to project.html — only the toolbar toggle state matters here.
                     if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
-                    renderRemoteConfig(msg.config, msg);
                     break;
                 case 'remoteControlState':
                     remoteControlActive = !!msg.active;
                     applyRemoteControlButtonState();
                     break;
-                case 'notionRemoteSetupResult': {
-                    const statusEl = document.getElementById('remote-notion-setup-status');
-                    if (statusEl) {
-                        statusEl.textContent = msg.success
-                            ? `Setup complete — ${msg.backedUp || 0} card(s) backed up. Connect Notion to claude.ai and drive it from there.`
-                            : `Setup failed: ${msg.error || 'unknown error'}`;
-                    }
-                    break;
-                }
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     if (autobanConfig && autobanConfig.automationMode) {
@@ -7028,122 +6926,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
         });
         // ── Remote Control (§10) ──────────────────────────────────────────────
+        // The Remote config tab moved to project.html; only the toolbar
+        // start/stop toggle lives here. Its state hydrates from the
+        // remoteConfig payload requested at boot and from remoteControlState.
         let remoteControlActive = false;
         function applyRemoteControlButtonState() {
             const btn = document.getElementById('btn-remote-control');
             if (btn) { btn.classList.toggle('is-active', !!remoteControlActive); }
         }
-        let _remoteWorkspaces = [];
-        function renderRemoteConfig(config, payload) {
-            payload = payload || {};
-            // Workspace dropdown
-            const wsSel = document.getElementById('remote-workspace');
-            if (wsSel && Array.isArray(payload.workspaces)) {
-                _remoteWorkspaces = payload.workspaces;
-                wsSel.innerHTML = '';
-                payload.workspaces.forEach(w => {
-                    const opt = document.createElement('option');
-                    opt.value = w.workspaceRoot;
-                    opt.textContent = w.label;
-                    if (w.active) opt.selected = true;
-                    wsSel.appendChild(opt);
-                });
-            }
-
-            // Board checkboxes (base board '' rendered as "No Project")
-            const list = document.getElementById('remote-boards-list');
-            const boardKeys = Array.isArray(payload.boardKeys)
-                ? payload.boardKeys
-                : ['', ...((payload.projects) || [])];   // legacy fallback
-            if (list) {
-                const chosen = new Set((config && config.boards) || []);
-                list.innerHTML = '';
-                boardKeys.forEach(key => {
-                    const row = document.createElement('label');
-                    row.className = 'remote-checkbox-row';
-                    const cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    cb.value = key;                       // '' for the base board
-                    cb.checked = chosen.has(key);
-                    cb.dataset.role = 'remote-board';
-                    const span = document.createElement('span');
-                    span.textContent = key === '' ? 'No Project (base workspace board)' : key;
-                    row.appendChild(cb);
-                    row.appendChild(span);
-                    list.appendChild(row);
-                });
-            }
-
-            if (config) {
-                const providerEl = document.getElementById('remote-provider');
-                if (providerEl) providerEl.value = config.provider === 'notion' ? 'notion' : 'linear';
-                const silent = document.getElementById('remote-silent-sync');
-                if (silent) silent.checked = config.silentSync === true;
-                const freq = document.getElementById('remote-ping-frequency');
-                if (freq) freq.value = config.pingFrequencySeconds || 60;
-            }
-            applyRemoteProviderUi();
-        }
-
-        function remoteCollectConfig() {
-            const boards = Array.from(
-                document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
-            ).map(cb => cb.value);   // keeps '' — do NOT filter by truthiness
-            const providerEl = document.getElementById('remote-provider');
-            return {
-                provider: providerEl && providerEl.value === 'notion' ? 'notion' : 'linear',
-                boards,
-                silentSync: document.getElementById('remote-silent-sync')?.checked === true,
-                pingFrequencySeconds: Math.min(120, Math.max(30,
-                    parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
-            };
-        }
-
-        // Show/hide the Notion-only setup block and keep the header in sync with the provider.
-        function applyRemoteProviderUi() {
-            const providerEl = document.getElementById('remote-provider');
-            const provider = providerEl ? providerEl.value : 'linear';
-            const setup = document.getElementById('remote-notion-setup');
-            if (setup) setup.style.display = provider === 'notion' ? 'block' : 'none';
-            const title = document.getElementById('remote-subsection-title');
-            if (title) title.textContent = provider === 'notion' ? 'Remote Control (Notion)' : 'Remote Control (Linear)';
-        }
-
-        function remoteAutosave() {
-            const wsSel = document.getElementById('remote-workspace');
-            const workspaceRoot = wsSel ? wsSel.value : undefined;
-            const config = remoteCollectConfig();
-            const statusEl = document.getElementById('remote-config-status');
-            if (statusEl) statusEl.textContent = 'Saved.';
-            postKanbanMessage({ type: 'setRemoteConfig', config, workspaceRoot });
-        }
-
-        // Autosave on any control change (delegated, so it covers dynamically-added checkboxes)
-        document.getElementById('remote-tab-content')?.addEventListener('change', (e) => {
-            if (e.target.id === 'remote-workspace') {
-                // Switching workspace: load THAT workspace's own config (no save).
-                postKanbanMessage({ type: 'getRemoteConfig', workspaceRoot: e.target.value });
-                return;
-            }
-            if (e.target.id === 'remote-provider') {
-                applyRemoteProviderUi();
-            }
-            remoteAutosave();
-        });
-        // Notion one-time setup sync (creates the plans + comments DBs, backs up boards).
-        document.getElementById('btn-notion-remote-setup')?.addEventListener('click', () => {
-            const wsSel = document.getElementById('remote-workspace');
-            const statusEl = document.getElementById('remote-notion-setup-status');
-            if (statusEl) statusEl.textContent = 'Running setup sync…';
-            postKanbanMessage({ type: 'runNotionRemoteSetup', workspaceRoot: wsSel ? wsSel.value : undefined });
-        });
-        // Debounce the frequency text input so rapid keystrokes don't spam setRemoteConfig
-        // (each call writes the DB config row and may reschedule the ping timer).
-        let _remoteFreqTimer;
-        document.getElementById('remote-ping-frequency')?.addEventListener('input', () => {
-            clearTimeout(_remoteFreqTimer);
-            _remoteFreqTimer = setTimeout(remoteAutosave, 400);
-        });
         document.getElementById('btn-remote-control')?.addEventListener('click', () => {
             postKanbanMessage({ type: remoteControlActive ? 'stopRemoteControl' : 'startRemoteControl' });
         });
@@ -9197,6 +8987,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Signal to extension that webview is ready to receive data
         postKanbanMessage({ type: 'ready' });
+        // Hydrate the toolbar remote-control toggle (the Remote config tab
+        // lives in project.html now, so this webview no longer requests the
+        // config on tab-switch — only the active flag from the payload is used).
+        postKanbanMessage({ type: 'getRemoteConfig' });
 
 
         function renderUATChecklist(plans) {
