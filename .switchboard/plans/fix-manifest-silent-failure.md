@@ -87,6 +87,19 @@ No — this is a pure bugfix + doc correction with no product-scope decisions.
 
 - None. Independent bugfix.
 
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the original "retain rejected manifest for retry" design would
+have caused an infinite re-toast loop every 10s scan cycle because the staleness guard only
+fires on `anyDeferred`, not `rejected` — rejected entries are permanent, so the fix is to
+consume + warn once, not retain; (2) the plans-only auto-resolve silently misroutes bare
+`epic-*.md` filenames to `.switchboard/plans/` and re-creates the silent-drop bug for the epic
+case — mitigated by a defensive log warning and doc emphasis that epics must use the full
+`.switchboard/epics/` prefix; (3) the path-traversal check must run on `resolvedPlanFile`
+post-auto-resolve or the security ordering becomes ambiguous. Mitigations: consume-not-retain
+model, epic-misroute warning, explicit ordering spec, and `showWarningMessage` confirmed as a
+passive toast (not a CLAUDE.md-banned confirm dialog).
+
 ## Proposed Changes
 
 ### `src/services/PlanManifestService.ts`
@@ -112,8 +125,26 @@ security check at line 189-197 rejects bare filenames silently. The return type 
        resolvedPlanFile = `.switchboard/plans/${resolvedPlanFile}`;
    }
    ```
-   Then use `resolvedPlanFile` in place of `entry.planFile` for the rest of `_applyEntry`
-   (the path resolve, the `getPlanByPlanFile` lookup, the `movePlanByPlanFile` call, etc.).
+   Then use `resolvedPlanFile` in place of `entry.planFile` for **the rest of `_applyEntry`** —
+   including the path-traversal/absolute check at line 185 (which must run on `resolvedPlanFile`
+   AFTER auto-resolve, so a bare `..evil.md` becomes `.switchboard/plans/..evil.md` and is still
+   caught by the `includes('..')` guard), the `path.resolve` at line 189, the
+   `getPlanByPlanFile` lookup, the `movePlanByPlanFile` call, and every other downstream use.
+
+   **Plans-only limitation (documented, not a defect):** auto-resolve prepends
+   `.switchboard/plans/` unconditionally for bare filenames. Epics are stored under
+   `.switchboard/epics/epic-<uuid>.md`. If an agent ever writes a bare epic filename
+   (e.g. `epic-foo.md`), auto-resolve misroutes it to `.switchboard/plans/epic-foo.md` —
+   it passes `insidePlans`, fails `getPlanByPlanFile` (no row), returns `deferred`, and is
+   staleness-dropped after ~3 min. This recreates the silent-failure for the epic case. The
+   workflow docs already mandate full `.switchboard/epics/` paths for epics, so this is
+   defensive only, but add a cheap log warning when a bare filename matches `/^epic-/i` so
+   the misroute is at least visible in the Output channel rather than silent:
+   ```typescript
+   if (/^epic-/i.test(resolvedPlanFile) && !resolvedPlanFile.startsWith('.switchboard/epics/')) {
+       log?.(`[PlanManifest] ⚠️ Bare epic-looking filename '${entry.planFile}' auto-resolved to plans/ — epics must use the full .switchboard/epics/ prefix. This entry will likely defer-then-drop.`);
+   }
+   ```
 
 2. **Add a `'rejected'` return type** — change the signature to
    `Promise<'applied' | 'deferred' | 'rejected'>`. Return `'rejected'` from the three
@@ -122,15 +153,26 @@ security check at line 189-197 rejects bare filenames silently. The return type 
 3. **Track rejected count in `ManifestApplyResult`** — add `rejected: number` to the interface.
    In `applyManifest`, count `'rejected'` returns separately from `'applied'` and `'deferred'`.
 
-4. **Don't consume the manifest if entries were rejected** — in `applyManifest`, if
-   `result.rejected > 0`, do NOT delete the manifest (treat like `anyDeferred`: retain for retry).
-   This gives the user a chance to notice the problem. The staleness guard will eventually drop
-   it, but the rejected count will be visible in the log + notification (see next change).
+4. **Surface rejections, then CONSUME the manifest (do NOT retain for retry)** —
+   rejected entries are **permanent** failures (invalid path / missing planFile never
+   self-heals), unlike `deferred` which is transient (file not on disk yet). Retaining a
+   rejected-only manifest for retry is incoherent AND dangerous: the staleness guard at
+   `PlanManifestService.ts:141-157` only increments inside `if (anyDeferred)`, so a
+   rejected-only manifest (rejected > 0, deferred == 0) sets `anyDeferred = false`, skips
+   the staleness block, and — if not deleted — would be re-processed every 10s scan cycle,
+   re-logging and re-toasting the same rejection **forever**. That trades a silent failure
+   for an infinite noisy loop.
+
+   Correct behavior: in `applyManifest`, after the entry loop, if `result.rejected > 0`:
+   log the rejected summary (see #5), then **delete the manifest** (same `_safeDelete` path
+   as the all-applied case). The toast + log ARE the visibility; the bad paths are captured
+   in the log so the user can fix the source (workflow doc). Do NOT retain. The `rejected`
+   count is still returned in the result so the caller can fire the notification.
 
 5. **Surface rejections via the log callback as a visible summary** — at the end of
    `applyManifest`, if `result.rejected > 0`, log a prominent summary:
    ```typescript
-   log?.(`[PlanManifest] ⚠️ ${result.rejected} entr${result.rejected === 1 ? 'y' : 'ies'} REJECTED (invalid path/planFile). Manifest retained. Check planFile paths — must be bare filename or .switchboard/plans/<name>.md or .switchboard/epics/<name>.md.`);
+   log?.(`[PlanManifest] ⚠️ ${result.rejected} entr${result.rejected === 1 ? 'y' : 'ies'} REJECTED (invalid path/planFile). Manifest consumed (deleted) — rejected entries are permanent; fix the source planFile path. Valid forms: bare filename, .switchboard/plans/<name>.md, or .switchboard/epics/<name>.md.`);
    ```
 
 **Edge Cases:** epics with `.switchboard/epics/` prefix are unaffected (the auto-resolve only
@@ -157,7 +199,10 @@ if (result.rejected > 0) {
 ```
 
 **Edge Cases:** `vscode` is already imported in this file (line 16 uses `vscode.OutputChannel`).
-No new import needed.
+No new import needed. `vscode.window.showWarningMessage(...)` with **no callback arguments** is a
+passive toast notification, NOT a confirm dialog — it does not violate CLAUDE.md's
+confirm-dialog ban (which targets `window.confirm` / modal yes-no gates that block action).
+This call has no modal, no blocking, no yes/no; it only informs.
 
 ### `.agents/workflows/improve-plan.md` + `.claude/skills/improve-plan/SKILL.md`
 
@@ -192,23 +237,32 @@ Also update the field rules (line 119) to be explicit:
   - Manifest with full path `.switchboard/plans/part0.md` → works as before (no regression).
   - Manifest with `.switchboard/epics/epic-foo.md` → works as before (no auto-resolve, no
     regression).
-  - Manifest with `../evil.md` → rejected (path traversal), `rejected` count = 1, manifest NOT
-    deleted.
-  - Manifest with missing `planFile` → rejected, `rejected` count = 1.
+  - Manifest with `../evil.md` → rejected (path traversal), `rejected` count = 1, warning
+    toast fired, manifest **deleted (consumed)** — not retained, not retried.
+  - Manifest with missing `planFile` → rejected, `rejected` count = 1, manifest consumed.
+  - Manifest with bare epic-looking filename `epic-foo.md` → auto-resolved to
+    `.switchboard/plans/epic-foo.md`, epic-misroute warning logged, defers (no row) then
+    staleness-drops — confirms the defensive warning fires.
+  - Manifest mixing one valid + one rejected entry → valid entry applied, rejected counted,
+    warning fired, manifest consumed (valid part is not lost).
 
 ### Manual / Static Verification (this session)
 - **Compilation SKIP** per session directives.
 - Static cross-check (done during review): confirmed `_applyEntry` path check (line 189-197),
-  `_ensureRelativePlanFile` (line 6250-6286), `getPlanByPlanFile` (line 2932-2951), and the
-  workflow example paths against current source.
+  `_ensureRelativePlanFile` (line 6384-6420), `getPlanByPlanFile` (line 2979-2998),
+  `applyManifest` consume/delete flow (line 141-165), and the workflow example paths against
+  current source.
 - Pre-merge checklist: grep for any new `confirm(`/`window.confirm` — forbidden per CLAUDE.md.
 
 ## Acceptance
 - A manifest with bare filenames in `planFile` auto-resolves to `.switchboard/plans/<name>.md`
   and applies successfully (column override, epic links, project, status).
-- A manifest with rejected entries (invalid path, missing planFile) does NOT get silently
-  consumed — the manifest is retained, a warning notification is shown, and the rejected count
-  appears in the output channel log.
+- A manifest with rejected entries (invalid path, missing planFile) is **consumed (deleted)
+  after surfacing a single warning toast + output-channel log** — it is NOT silently dropped,
+  and it is NOT retained for retry (rejected entries are permanent; retrying would spam every
+  10s scan cycle). The rejected count appears in the log.
+- A bare epic-looking filename (`epic-*.md` without `.switchboard/epics/` prefix) logs the
+  misroute warning (defensive visibility for the plans-only auto-resolve limitation).
 - Full-path entries (`.switchboard/plans/foo.md`, `.switchboard/epics/epic-foo.md`) continue to
   work unchanged.
 - Workflow instructions show full `.switchboard/plans/` paths in examples and field rules.

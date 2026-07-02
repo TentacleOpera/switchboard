@@ -30,11 +30,12 @@ import {
     reweightSequence
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import {
     BatchPromptPlan,
     columnToPromptRole,
     resolveWorkingDir,
-    normalizeNewlines
+    normalizeNewlines,
+    resolvePlanPathForWorktree,
+    resolveWorkingDirForWorktree
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -3137,11 +3138,13 @@ Each plan file must include:
                     console.error(`[TaskViewerProvider] Plan file does not exist: ${absolutePath}`);
                     continue;
                 }
+                const resolvedAbsolutePath = resolvePlanPathForWorktree(absolutePath, workspaceRoot, worktreePath);
+                const resolvedWorkingDir = resolveWorkingDirForWorktree(workingDir, worktreePath);
                 validPlans.push({
                     sessionId: sid,
                     topic: topic || planFile || 'Untitled',
-                    absolutePath,
-                    workingDir,
+                    absolutePath: resolvedAbsolutePath,
+                    workingDir: resolvedWorkingDir,
                     epicId,
                     worktreePath,
                     isEpic: !!plan?.isEpic
@@ -16354,8 +16357,11 @@ What would you like to find?`;
         const effectiveWorkspaceRoot = options?.workingDirectory ?? resolvedWorkspaceRoot;
         const effectiveWorkingDir = options?.workingDirectory ?? workingDir;
 
+        const resolvedPlanFileAbsolute = resolvePlanPathForWorktree(planFileAbsolute, resolvedWorkspaceRoot, worktreePath);
+        const resolvedWorkingDir = resolveWorkingDirForWorktree(effectiveWorkingDir, worktreePath);
+
         // Canonical plan object for shared builder
-        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir: effectiveWorkingDir, epicId, worktreePath, isEpic: isEpicPlan };
+        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: resolvedPlanFileAbsolute, workingDir: resolvedWorkingDir, epicId, worktreePath, isEpic: isEpicPlan };
 
         // Epic subtask bundling (parity with the copy/board path `_cardsToPromptPlans` and
         // the configured-dispatch path `_resolveKanbanDispatchPlans`). When an epic card is

@@ -41,7 +41,7 @@ See the coordination plan `feature_plan_20260701_remote-control-production-seque
 
 ## Metadata
 
-**Complexity:** 6
+**Complexity:** 7
 **Tags:** backend, api, database, feature, reliability
 **Repo:** switchboard
 

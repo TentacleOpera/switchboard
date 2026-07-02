@@ -170,7 +170,10 @@ CREATE TABLE IF NOT EXISTS worktrees (
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     status      TEXT NOT NULL DEFAULT 'active',
     project     TEXT,
-    agents_open_with_grid INTEGER DEFAULT 0
+    agents_open_with_grid INTEGER DEFAULT 0,
+    subtask_plan_id TEXT,
+    base_branch TEXT,
+    tier        TEXT
 );
 CREATE TABLE IF NOT EXISTS linear_issue_links (
     issue_id   TEXT PRIMARY KEY,
@@ -652,6 +655,26 @@ const SCHEMA_PLAN_COLUMN_DEFS: Array<{ name: string; def: string }> = (() => {
         })
         .filter((x): x is { name: string; def: string } => x !== null);
 })();
+
+// Additive, nullable columns on the `worktrees` table that were introduced by later
+// migrations (V34: project, agents_open_with_grid; V42: subtask_plan_id, base_branch,
+// tier). Every getWorktrees()/getWorktreeByBranch() SELECT lists these, so if any is
+// missing the query throws "no such column: …" and takes down the ENTIRE board refresh
+// (refreshWithData → getWorktrees → throw, before updateBoard is posted → blank board).
+//
+// The version-gated ALTER migrations only run when migration_meta < their version; a DB
+// stamped at/after V42 whose columns never actually landed (stale sql.js image restored
+// from a .tmp/backup, a partial persist, or a table recreated by an early V24/V25 path)
+// is NEVER healed. Unlike the plans-table reconciliation below, nothing reconciled the
+// worktrees table — this list closes that gap. Only additive NULL-able columns are listed
+// (NOT NULL core columns like branch/path can't be ALTER-ADDed onto a populated table).
+const SCHEMA_WORKTREE_COLUMN_DEFS: Array<{ name: string; def: string }> = [
+    { name: 'project', def: 'TEXT' },
+    { name: 'agents_open_with_grid', def: 'INTEGER DEFAULT 0' },
+    { name: 'subtask_plan_id', def: 'TEXT' },
+    { name: 'base_branch', def: 'TEXT' },
+    { name: 'tier', def: 'TEXT' },
+];
 
 const runtimeRequire = createRequire(__filename);
 
@@ -4106,6 +4129,40 @@ export class KanbanDatabase {
     }
 
     /**
+     * Subtask counts keyed by epic_id (== the epic's plan_id) for a whole workspace,
+     * in ONE grouped query. Counts active + completed subtasks.
+     *
+     * Deliberately UNFILTERED by project/repo scope: an epic's subtask count is an
+     * intrinsic property of the epic, not of the current board view. The kanban board
+     * derives its rows from getBoardFilteredByProject(), so counting subtasks from that
+     * filtered set dropped every subtask living in a different project (or any assigned
+     * project while the board shows the default "__unassigned__" filter) — making every
+     * epic render "0 SUBTASKS". The file-based summaries never hit this because they read
+     * the unfiltered getBoard(). This method gives the board that same unfiltered count.
+     */
+    public async getSubtaskCountsByEpic(workspaceId: string): Promise<Map<string, number>> {
+        const counts = new Map<string, number>();
+        if (!(await this.ensureReady()) || !this._db || !workspaceId) return counts;
+        const stmt = this._db.prepare(
+            `SELECT epic_id AS epicId, COUNT(*) AS cnt FROM plans
+             WHERE workspace_id = ? AND epic_id IS NOT NULL AND epic_id != ''
+               AND status IN ('active', 'completed')
+             GROUP BY epic_id`,
+            [workspaceId]
+        );
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                const epicId = String(row.epicId ?? '');
+                if (epicId) counts.set(epicId, Number(row.cnt) || 0);
+            }
+        } finally {
+            stmt.free();
+        }
+        return counts;
+    }
+
+    /**
      * Active, non-epic plans whose `complexity` column is still 'Unknown'.
      * Used by the one-time backfill reconciliation pass
      * (`KanbanProvider._backfillComplexityColumn`) to self-heal pre-fix installs
@@ -5543,11 +5600,39 @@ export class KanbanDatabase {
         if (addedCount > 0) {
             console.log(`[KanbanDatabase] Schema reconciliation: added ${addedCount} missing column(s) to plans table`);
         }
+
+        // Same safety net for the `worktrees` table. A missing additive column here
+        // (e.g. subtask_plan_id) throws "no such column" inside getWorktrees() and
+        // blanks the whole board, so heal it regardless of the stored migration version.
+        let wtAddedCount = 0;
+        for (const { name, def } of SCHEMA_WORKTREE_COLUMN_DEFS) {
+            if (!this._tableHasColumn('worktrees', name)) {
+                try {
+                    this._db.exec(`ALTER TABLE worktrees ADD COLUMN ${name} ${def}`);
+                    console.warn(`[KanbanDatabase] Schema reconciliation: added missing column '${name}' to worktrees table`);
+                    wtAddedCount++;
+                } catch (e) {
+                    console.error(`[KanbanDatabase] Schema reconciliation: failed to add worktrees column '${name}':`, e);
+                }
+            }
+        }
+        if (wtAddedCount > 0) {
+            console.log(`[KanbanDatabase] Schema reconciliation: added ${wtAddedCount} missing column(s) to worktrees table`);
+        }
     }
 
     private _planTableHasColumn(columnName: string): boolean {
+        return this._tableHasColumn('plans', columnName);
+    }
+
+    /**
+     * True when `table` has a column named `columnName`. `table` MUST be a trusted
+     * literal (PRAGMA cannot be parameterized), so callers only ever pass hardcoded
+     * table names — never user input.
+     */
+    private _tableHasColumn(table: string, columnName: string): boolean {
         if (!this._db) return false;
-        const stmt = this._db.prepare("PRAGMA table_info(plans)");
+        const stmt = this._db.prepare(`PRAGMA table_info(${table})`);
         try {
             while (stmt.step()) {
                 if (String(stmt.getAsObject().name || '') === columnName) {

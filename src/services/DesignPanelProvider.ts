@@ -1651,6 +1651,30 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 break;
             }
 
+            case 'copyClaudeArtifactPrompt': {
+                if (message.error) { showTemporaryNotification(String(message.error)); break; }
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                await vscode.env.clipboard.writeText(prompt);
+                showTemporaryNotification('Copied Claude artifact upload prompt to clipboard.');
+                break;
+            }
+
+            case 'sendClaudeArtifactPrompt': {
+                if (message.error) { showTemporaryNotification(String(message.error)); break; }
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.sendPromptToAgentTerminal('claude_artifacts', prompt, message.workspaceRoot || undefined);
+                    showTemporaryNotification('Sent artifact upload prompt to Claude.');
+                } else {
+                    // No agent terminal wired up — fall back to clipboard so the button still does something.
+                    await vscode.env.clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unavailable — copied artifact upload prompt to clipboard instead.');
+                }
+                break;
+            }
+
             case 'linkToDocument': {
                 // Tree node ids are `${folderIndex}:${relativePath}` — strip the prefix.
                 const rawLinkId = String(message.docId || '');

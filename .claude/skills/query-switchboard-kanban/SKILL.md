@@ -14,15 +14,49 @@ Query kanban board state using direct SQL access to the kanban database. This sk
 1. **Workspace ID and Database Path**: Read from `.switchboard/workspace-id` (two lines: line 1 = workspace ID, line 2 = database path)
 2. **SQL CLI**: Use `sqlite3` CLI (pre-installed on macOS)
 
-## Fast Path: Read Board State (No SQL)
+## Display Format — MANDATORY GROUPING
 
-The kanban board auto-exports its current state to a markdown file on every change. For simple reads, use this instead of SQL:
+The kanban board does NOT present plans as a flat list. It groups them by **project**, then by **epic** (with subtasks nested under their parent epic), then **standalone plans**. Any output you produce from this skill MUST follow the same structure. Never dump a flat table.
 
-```bash
-read_file <workspace_root>/.switchboard/kanban-board.md
+Required output shape:
+
+```
+## <COLUMN NAME>
+
+### <Project Name>            ← omit this header if no projects / single "Unassigned" group
+**Epic: <epic topic>** (cx: N)
+  - <subtask topic> (cx: N)
+  - <subtask topic> (cx: N)
+- <standalone plan topic> (cx: N)
+
+### Unassigned                ← plans with no project_id
+**Epic: <epic topic>** (cx: N)
+  - <subtask topic> (cx: N)
+- <standalone plan topic> (cx: N)
 ```
 
-Use SQL queries only when you need filtering, aggregation, or specific plan lookups that the markdown file doesn't support.
+Rules:
+- **Epics** (`is_epic = 1`) are rendered as bold headers with their subtasks indented beneath.
+- **Subtasks** (`epic_id` non-null) are rendered as indented bullets under their epic. Never list them at the top level.
+- **Standalone plans** (`is_epic = 0` AND `epic_id` NULL) are rendered as top-level bullets.
+- **Projects** group the above. Plans with `project_id` NULL go under an "Unassigned" heading. If every plan is unassigned, omit the project headers entirely.
+- If a subtask's parent epic is NOT in the same column, still render the subtask but note `(parent epic "<name>" in <column>)` so the lineage isn't lost.
+
+## Fast Path: Read Board State (No SQL)
+
+The kanban board auto-exports its current state to per-column markdown files. For simple reads, use these instead of SQL:
+
+1. Read `<workspace_root>/.switchboard/kanban-board.md` for the column index.
+2. Read the relevant per-column file, e.g. `.switchboard/kanban-state-plan-reviewed.md`.
+
+Each entry carries grouping metadata in an HTML comment suffix:
+- `<!-- planId:<id> epic -->` → this row is an epic
+- `<!-- planId:<id> subtask-of:"<epic topic>" -->` → this row is a subtask of the named epic
+- `<!-- planId:<id> -->` (no marker) → standalone plan
+
+Parse these markers to group your output per the Display Format above. The per-column files do NOT carry project grouping — if you need project grouping, use the SQL query below.
+
+Use SQL queries only when you need project grouping, filtering, aggregation, or specific plan lookups that the markdown files don't support.
 
 ## Get Workspace ID and Database Path
 
@@ -61,18 +95,40 @@ fi
 
 ## Common SQL Queries
 
-### Get All Active Plans in a Column
+### Get All Active Plans in a Column (grouped)
+
+This query returns everything needed to render the column per the Display Format: epic/subtask flags, resolved epic name, and project name. **Always use this query (not the flat one) when showing a column to the user.**
 
 ```sql
-SELECT plan_id, session_id, topic, kanban_column, status, complexity
-FROM plans
-WHERE workspace_id = '<workspace_id>' 
-  AND status = 'active' 
-  AND kanban_column = '<column_name>'
-ORDER BY updated_at DESC;
+SELECT
+  p.plan_id,
+  p.topic,
+  p.complexity,
+  p.is_epic,
+  p.epic_id,
+  e.topic   AS epic_name,
+  e.kanban_column AS epic_column,
+  proj.name AS project_name
+FROM plans p
+LEFT JOIN plans e   ON p.epic_id = e.plan_id
+LEFT JOIN projects proj ON p.project_id = proj.id
+WHERE p.workspace_id = '<workspace_id>'
+  AND p.status = 'active'
+  AND p.kanban_column = '<column_name>'
+ORDER BY
+  proj.name IS NULL, proj.name,
+  p.is_epic DESC,
+  p.epic_id IS NULL, p.epic_id,
+  p.updated_at DESC;
 ```
 
 **Valid columns:** CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, LEAD CODED, CODER CODED, CODE REVIEWED, CODED, COMPLETED
+
+**How to read the result for grouping:**
+- `is_epic = 1` → render as a bold epic header.
+- `epic_id` non-null AND `is_epic = 0` → render as indented subtask under the epic named in `epic_name`. If `epic_column` differs from the queried column, append `(parent epic in <epic_column>)`.
+- `is_epic = 0` AND `epic_id` NULL → standalone plan, top-level bullet.
+- `project_name` non-null → group under that project heading; NULL → under "Unassigned".
 
 ### Get Plans for Dependency Check (CREATED, BACKLOG, PLAN REVIEWED)
 

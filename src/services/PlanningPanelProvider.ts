@@ -1957,7 +1957,34 @@ export class PlanningPanelProvider {
     // `${provider}_${id}_` prefix. Mirrors TaskViewerProvider._findTicketDocument:
     // tickets import into nested folder hierarchies that can't be reconstructed
     // from live space/folder/list names, so we scan rather than build a flat path.
-    private _findTicketFilePath(resolvedRoot: string, provider: string, id: string): string | null {
+    private async _findTicketFilePath(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
+        // DB-FIRST. The Tickets sidebar renders every row from the import registry's
+        // recorded absolute file_path (getImportedTickets → dbT.filePath), so the
+        // link/save/refine/ask-agent paths MUST resolve through the SAME source or a
+        // ticket that's plainly visible in the sidebar reports "no local file". That
+        // happened because the fallback scan (below) rebuilds the directory from
+        // _resolveWorkspaceRoot(), which for the Tickets tab falls back to the Kanban
+        // board's currently-selected workspace (extension.ts wires _getWorkspaceRoot
+        // to kanbanProvider.getCurrentWorkspaceRoot()). With no ticketSaveLocation
+        // configured, the scan only ever looks under that one root — so switching the
+        // Kanban board to a different workspace silently pointed the lookup at the
+        // wrong folder even though nothing about the files changed. The DB path is
+        // absolute and workspace-independent: trust it whenever the file still exists.
+        try {
+            if (!this._cacheService) {
+                this._cacheService = this._adapterFactories.getCacheService(resolvedRoot);
+            }
+            const entry = await this._cacheService.getImportBySlugPrefix(`${provider}_${id}`);
+            if (entry && entry.filePath && fs.existsSync(entry.filePath)) {
+                return entry.filePath;
+            }
+        } catch { /* fall through to filesystem scan */ }
+
+        // Fallback: scan for the `${provider}_${id}_` prefix. Covers legacy/unregistered
+        // files and DB rows whose recorded path went stale. Scan the configured global
+        // location, then EVERY allowed workspace root's .switchboard/tickets — not just
+        // the resolved root — so the scan no longer depends on which workspace the
+        // Kanban board happens to point at.
         const prefix = `${provider}_${id}_`;
         const baseDirs: string[] = [];
         try {
@@ -1966,7 +1993,10 @@ export class PlanningPanelProvider {
                 baseDirs.push(path.join(config.ticketSaveLocation, provider));
             }
         } catch { /* ignore */ }
-        baseDirs.push(path.join(resolvedRoot, '.switchboard', 'tickets', provider));
+        const roots = new Set<string>([resolvedRoot, ...this._getAllowedRoots()]);
+        for (const root of roots) {
+            baseDirs.push(path.join(root, '.switchboard', 'tickets', provider));
+        }
         for (const dir of baseDirs) {
             const found = this._scanForTicketFile(dir, prefix);
             if (found) { return found; }
@@ -5183,7 +5213,7 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id, content } = msg;
                 if (!workspaceRoot || !id || typeof content !== 'string') break;
-                let filePath = this._findTicketFilePath(workspaceRoot, provider, id);
+                let filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                 // Create-if-missing: if no local file exists yet (e.g. auto-sync was
                 // OFF when the list was selected, or the ticket was never imported),
                 // import it from the remote first so we have a file + cache entry to
@@ -5201,7 +5231,7 @@ Please format the updated output document strictly as follows:
                             vscode.window.showErrorMessage(`Save failed: ${errMsg}`);
                             break;
                         }
-                        filePath = this._findTicketFilePath(workspaceRoot, provider, id);
+                        filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                     } catch (importErr) {
                         const errMsg = importErr instanceof Error ? importErr.message : String(importErr);
                         vscode.window.showErrorMessage(`Save failed (could not create local file): ${errMsg}`);
@@ -5502,7 +5532,7 @@ Please format the updated output document strictly as follows:
                     this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
                     break;
                 }
-                const filePath = this._findTicketFilePath(workspaceRoot, provider, id);
+                const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) {
                     this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
                     break;
@@ -5533,7 +5563,7 @@ Please format the updated output document strictly as follows:
                 const provider = msg.provider as 'clickup' | 'linear';
                 const id = msg.id;
                 if (!workspaceRoot || !provider || !id) { break; }
-                const filePath = this._findTicketFilePath(workspaceRoot, provider, id);
+                const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) { break; } // parent isn't a local file yet — nothing to enrich
                 try {
                     if (!this._cacheService) {
@@ -5634,7 +5664,7 @@ Please format the updated output document strictly as follows:
                                 // Ticket files are named `${provider}_${id}_<slug>.md` and live in
                                 // nested hierarchies (team/project/sprint), so resolve the real path
                                 // by prefix scan rather than reconstructing a flat path.
-                                const filePath = this._findTicketFilePath(workspaceRoot, providerDir, id);
+                                const filePath = await this._findTicketFilePath(workspaceRoot, providerDir, id);
                                 if (filePath) {
                                     paths.push(filePath);
                                 } else {
@@ -5718,7 +5748,7 @@ Please format the updated output document strictly as follows:
                     // Resolve local ticket file path
                     let localFilePath = '';
                     try {
-                        localFilePath = this._findTicketFilePath(workspaceRoot, provider, id) || '';
+                        localFilePath = await this._findTicketFilePath(workspaceRoot, provider, id) || '';
                     } catch { }
 
                     const prompt = `You are refining a ${provider} ticket into a complete, agent-actionable specification.

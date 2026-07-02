@@ -3748,6 +3748,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <input type="text" id="claude-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
                 <input type="text" id="claude-design-project" class="sidebar-search-input" placeholder="claude.ai/design URL or ID (optional)..." style="max-width: 200px;" />
                 <button id="btn-copy-claude-prompt" class="strip-btn stitch-btn-primary" title="Copy the import prompt to clipboard">Copy import prompt</button>
+                <button id="btn-claude-design-sync-help" class="strip-btn" title="How to sync a local design back into claude.ai/design">Sync to Claude Design…</button>
+                <input type="text" id="claude-artifact-url" class="sidebar-search-input" placeholder="Artifact URL (optional, to redeploy)..." style="max-width: 180px;" />
+                <button id="btn-copy-claude-artifact-prompt" class="strip-btn" title="Copy a prompt to publish the selected HTML file to claude.ai as an Artifact">Copy artifact prompt</button>
+                <button id="btn-send-claude-artifact-prompt" class="strip-btn stitch-btn-primary" title="Send the artifact upload prompt to Claude">⇨ Upload to Claude Artifacts</button>
             </div>
             <div class="content-row">
                 <div id="tree-pane-claude">
@@ -3991,6 +3995,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
                 </div>
                 <div class="modal-body">
+                    <div id="folder-modal-workspace-row" style="display: none; flex-direction: column; gap: 4px; margin-bottom: 12px;">
+                        <label for="folder-modal-workspace-select" style="font-size: 11px; color: var(--text-secondary);">Workspace</label>
+                        <select id="folder-modal-workspace-select" class="workspace-filter-select" style="width: 100%;"></select>
+                    </div>
                     <label id="stitch-html-preview-toggle-row" for="stitch-html-preview-toggle" style="display: none; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 12px;">
                         <input type="checkbox" id="stitch-html-preview-toggle" />
                         <span>Include Stitch screen HTML <span style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px;">(.switchboard/stitch)</span></span>
@@ -4007,6 +4015,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <!-- Folder items rendered by JS -->
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sync-to-Claude-Design Help Modal -->
+        <div class="folder-modal" id="claude-design-sync-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="claude-design-sync-title">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="claude-design-sync-title">Sync a Design Back to claude.ai/design</h3>
+                    <button class="modal-close-btn" id="btn-close-claude-design-sync" aria-label="Close">&times;</button>
+                </div>
+                <div class="modal-body" style="font-size: 12px; line-height: 1.6;">
+                    <p style="margin: 0 0 12px;">There is <strong>no agent or CLI command</strong> that pushes a local design into a claude.ai/design project. The sync-back is done <strong>manually, in the Claude Design web interface</strong>:</p>
+                    <ol style="margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 8px;">
+                        <li>Open your project at <span style="font-family: var(--font-mono);">claude.ai/design</span>.</li>
+                        <li>Bring your local work in using one of Claude Design's own options:
+                            <ul style="margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px;">
+                                <li><strong>Upload a file</strong> — pick your local <span style="font-family: var(--font-mono);">.html</span> file directly.</li>
+                                <li><strong>Link a folder</strong> — point Claude Design at the folder you configured here.</li>
+                                <li><strong>Link a GitHub repo</strong> — connect the repo so Claude Design tracks your committed changes.</li>
+                            </ul>
+                        </li>
+                    </ol>
+                    <p style="margin: 0; color: var(--text-secondary);">Want a shareable, rendered page on claude.ai instead of a Design project? Select an HTML file and use <strong>Upload to Claude Artifacts</strong> — that path <em>is</em> agent-driven and works from here.</p>
                 </div>
             </div>
         </div>

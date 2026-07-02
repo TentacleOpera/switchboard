@@ -15,6 +15,8 @@
         activeDocSourceFolder: null,
         activeFileType: null,
         activeClaudeDocId: null,
+        activeClaudeDocName: '',
+        activeClaudeDocFolder: '',
         designEditMode: false,
         designEditOriginalContent: '',
         designSystemDocEnabled: false,
@@ -2736,6 +2738,8 @@
         persistTab('claude.root', state.claudeWorkspaceRootFilter);
         state.activeClaudeDocId = null;
         state.claudeTargetFolder = '';
+        state.activeClaudeDocName = '';
+        state.activeClaudeDocFolder = '';
         const msg = state._lastClaudeDocsMsg || {};
         const filteredNodes = state.claudeWorkspaceRootFilter
             ? (msg.nodes || []).filter(n => n.metadata?.root === state.claudeWorkspaceRootFilter)
@@ -3749,6 +3753,51 @@
 
     // ===== FOLDER MANAGEMENT & PREVIEW HELPERS =====
     let folderModalScope = 'design'; // design, html, claude, images, stitch, briefs
+    // The concrete workspace the folder modal is currently acting on. The modal always
+    // operates on ONE workspace (never an ambiguous "all workspaces" aggregate) so Add /
+    // Remove are always live and the listed paths always belong to a single workspace.
+    let folderModalSelectedRoot = '';
+
+    // Per-scope accessors so the modal handlers don't each repeat the scope→state mapping.
+    function getScopeTabRoot() {
+        switch (folderModalScope) {
+            case 'design': return state.designWorkspaceRootFilter || '';
+            case 'html': return state.htmlWorkspaceRootFilter || '';
+            case 'claude': return state.claudeWorkspaceRootFilter || '';
+            case 'images': return state.imagesWorkspaceRootFilter || '';
+            case 'stitch': return state.stitchWorkspaceRoot || '';
+            case 'briefs': return state.briefsWorkspaceRootFilter || '';
+            default: return '';
+        }
+    }
+    function getScopeFolderMap() {
+        switch (folderModalScope) {
+            case 'design': return state.designFolderPathsByRoot || {};
+            case 'html': return state.htmlFolderPathsByRoot || {};
+            case 'claude': return state.claudeFolderPathsByRoot || {};
+            case 'images': return state.imagesFolderPathsByRoot || {};
+            case 'stitch': return state.stitchFolderPathsByRoot || {};
+            case 'briefs': return state.briefsFolderPathsByRoot || {};
+            default: return {};
+        }
+    }
+    // The workspace the modal acts on: the user's in-modal choice, else the tab's filter,
+    // else the first available workspace. Empty only when no workspaces are known (the
+    // backend then resolves to the primary workspace).
+    function resolveFolderModalRoot() {
+        if (folderModalSelectedRoot) return folderModalSelectedRoot;
+        return (_workspaceItems[0] && _workspaceItems[0].workspaceRoot) || '';
+    }
+    // First workspace that actually has folders configured for the current scope — used
+    // as the modal's default so it opens on the workspace whose folders you can see/edit.
+    function firstFolderModalRootWithFolders() {
+        const map = getScopeFolderMap();
+        for (const item of _workspaceItems) {
+            const paths = map[item.workspaceRoot];
+            if (paths && paths.length) return item.workspaceRoot;
+        }
+        return '';
+    }
 
     function requestAllFolders(root) {
         if (!root) return;
@@ -3796,6 +3845,12 @@
 
     function openFoldersModal(scope = 'design') {
         folderModalScope = scope;
+        // Seed the modal's workspace: the tab's current filter, else the workspace that has
+        // folders for this scope, else the first workspace.
+        folderModalSelectedRoot = getScopeTabRoot()
+            || firstFolderModalRootWithFolders()
+            || (_workspaceItems[0] && _workspaceItems[0].workspaceRoot)
+            || '';
         const modal = document.getElementById('folder-modal');
         const modalTitle = document.getElementById('folder-modal-title');
         if (modalTitle) {
@@ -3821,7 +3876,9 @@
     // The Stitch assets folder (.switchboard/stitch) is "included" in HTML previews when its
     // path is present in the HTML folder list — no separate persisted flag needed.
     function getHtmlModalRoot() {
-        return state.htmlWorkspaceRootFilter || '';
+        // Follow the modal's selected workspace so the Stitch-include toggle acts on the
+        // same workspace whose folders the modal is showing.
+        return folderModalScope === 'html' ? resolveFolderModalRoot() : (state.htmlWorkspaceRootFilter || '');
     }
     function isStitchHtmlPreviewEnabled(root) {
         const paths = (state.htmlFolderPathsByRoot && state.htmlFolderPathsByRoot[root]) || [];
@@ -3844,51 +3901,44 @@
         if (!folderListModal) return;
         folderListModal.innerHTML = '';
 
-        let root = '';
-        let folderMap = null;
-        if (folderModalScope === 'design') {
-            root = state.designWorkspaceRootFilter || '';
-            folderMap = state.designFolderPathsByRoot;
-        } else if (folderModalScope === 'html') {
-            root = state.htmlWorkspaceRootFilter || '';
-            folderMap = state.htmlFolderPathsByRoot;
-        } else if (folderModalScope === 'claude') {
-            root = state.claudeWorkspaceRootFilter || '';
-            folderMap = state.claudeFolderPathsByRoot;
-        } else if (folderModalScope === 'images') {
-            root = state.imagesWorkspaceRootFilter || '';
-            folderMap = state.imagesFolderPathsByRoot;
-        } else if (folderModalScope === 'stitch') {
-            root = state.stitchWorkspaceRoot || '';
-            folderMap = state.stitchFolderPathsByRoot;
-        } else if (folderModalScope === 'briefs') {
-            root = state.briefsWorkspaceRootFilter || '';
-            folderMap = state.briefsFolderPathsByRoot;
+        const folderMap = getScopeFolderMap();
+        const effectiveRoot = resolveFolderModalRoot();
+
+        // Populate the in-modal workspace selector. The modal always targets ONE concrete
+        // workspace, so Add/Remove are always actionable and every listed path belongs to
+        // that workspace (no confusing cross-workspace aggregate, no disabled buttons).
+        const wsRow = document.getElementById('folder-modal-workspace-row');
+        const wsSelect = document.getElementById('folder-modal-workspace-select');
+        if (wsSelect) {
+            wsSelect.innerHTML = '';
+            for (const item of _workspaceItems) {
+                const opt = document.createElement('option');
+                opt.value = item.workspaceRoot;
+                opt.textContent = item.label || item.workspaceRoot;
+                if (item.workspaceRoot === effectiveRoot) opt.selected = true;
+                wsSelect.appendChild(opt);
+            }
+            wsSelect.onchange = (e) => {
+                folderModalSelectedRoot = e.target.value || '';
+                renderFolderListModal();
+            };
         }
-        const folderPaths = getCurrentFolderPaths(folderMap || {}, root);
-        const isAggregate = !root;
+        // Only surface the selector when there's an actual choice between workspaces.
+        if (wsRow) wsRow.style.display = _workspaceItems.length > 1 ? 'flex' : 'none';
+
+        const folderPaths = getCurrentFolderPaths(folderMap, effectiveRoot);
 
         const addBtn = document.getElementById('btn-add-folder-modal');
         if (addBtn) {
-            addBtn.disabled = isAggregate;
-            addBtn.title = isAggregate ? 'Select a specific workspace to add a folder' : '';
-            addBtn.style.opacity = isAggregate ? '0.5' : '';
-        }
-
-        if (isAggregate) {
-            const hint = document.createElement('div');
-            hint.className = 'folder-list-hint';
-            hint.style.cssText = 'padding: 8px 4px; font-size: 11px; color: var(--text-secondary); opacity: 0.85;';
-            hint.textContent = 'Viewing all workspaces. Select a specific workspace to add or remove folders.';
-            folderListModal.appendChild(hint);
+            addBtn.disabled = false;
+            addBtn.title = '';
+            addBtn.style.opacity = '';
         }
 
         if (folderPaths.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'folder-list-empty';
-            empty.textContent = isAggregate
-                ? 'No folders configured in any workspace.'
-                : 'No folders configured. Click Add Folder to get started.';
+            empty.textContent = 'No folders configured. Click Add Folder to get started.';
             folderListModal.appendChild(empty);
             syncStitchHtmlPreviewToggle();
             return;
@@ -3914,28 +3964,22 @@
             removeBtn.className = 'folder-list-remove-btn strip-btn';
             removeBtn.textContent = 'Remove';
             removeBtn.style.color = '#ff6b6b';
-            if (isAggregate) {
-                removeBtn.disabled = true;
-                removeBtn.title = 'Select a specific workspace to remove its folders';
-                removeBtn.style.opacity = '0.5';
-            } else {
-                removeBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (folderModalScope === 'design') {
-                        vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: root });
-                    } else if (folderModalScope === 'html') {
-                        vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: root });
-                    } else if (folderModalScope === 'claude') {
-                        vscode.postMessage({ type: 'removeClaudeFolder', folderPath: path, workspaceRoot: root });
-                    } else if (folderModalScope === 'images') {
-                        vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: root });
-                    } else if (folderModalScope === 'stitch') {
-                        vscode.postMessage({ type: 'removeStitchFolder', folderPath: path, workspaceRoot: root });
-                    } else if (folderModalScope === 'briefs') {
-                        vscode.postMessage({ type: 'removeBriefsFolder', folderPath: path, workspaceRoot: root });
-                    }
-                });
-            }
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (folderModalScope === 'design') {
+                    vscode.postMessage({ type: 'removeDesignFolder', folderPath: path, workspaceRoot: effectiveRoot });
+                } else if (folderModalScope === 'html') {
+                    vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path, workspaceRoot: effectiveRoot });
+                } else if (folderModalScope === 'claude') {
+                    vscode.postMessage({ type: 'removeClaudeFolder', folderPath: path, workspaceRoot: effectiveRoot });
+                } else if (folderModalScope === 'images') {
+                    vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: effectiveRoot });
+                } else if (folderModalScope === 'stitch') {
+                    vscode.postMessage({ type: 'removeStitchFolder', folderPath: path, workspaceRoot: effectiveRoot });
+                } else if (folderModalScope === 'briefs') {
+                    vscode.postMessage({ type: 'removeBriefsFolder', folderPath: path, workspaceRoot: effectiveRoot });
+                }
+            });
 
             row.appendChild(pathSpan);
             row.appendChild(removeBtn);
@@ -3979,6 +4023,10 @@
                     folderModalOpen: false,
                     folderModalScope: null
                 });
+            }
+            const syncModal = document.getElementById('claude-design-sync-modal');
+            if (syncModal && syncModal.style.display !== 'none') {
+                syncModal.style.display = 'none';
             }
             const menu = document.getElementById('stitch-variants-dropdown-menu');
             if (menu) {
@@ -4024,47 +4072,38 @@
     });
 
     document.getElementById('btn-refresh-folders-modal')?.addEventListener('click', () => {
-        let root = '';
+        const root = resolveFolderModalRoot();
         if (folderModalScope === 'design') {
-            root = state.designWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listDesignFolders', workspaceRoot: root });
         } else if (folderModalScope === 'html') {
-            root = state.htmlWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
         } else if (folderModalScope === 'claude') {
-            root = state.claudeWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listClaudeFolders', workspaceRoot: root });
         } else if (folderModalScope === 'images') {
-            root = state.imagesWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
         } else if (folderModalScope === 'stitch') {
-            root = state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
         } else if (folderModalScope === 'briefs') {
-            root = state.briefsWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'listBriefsFolders', workspaceRoot: root });
         }
     });
 
     document.getElementById('btn-add-folder-modal')?.addEventListener('click', () => {
-        let root = '';
+        // Target the workspace the modal is currently acting on (its selector), so the
+        // folder lands in the right workspace's config. Empty only when no workspaces are
+        // known, in which case the backend resolves to the primary workspace.
+        const root = resolveFolderModalRoot();
         if (folderModalScope === 'design') {
-            root = state.designWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addDesignFolder', workspaceRoot: root });
         } else if (folderModalScope === 'html') {
-            root = state.htmlWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addHtmlFolder', workspaceRoot: root });
         } else if (folderModalScope === 'claude') {
-            root = state.claudeWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addClaudeFolder', workspaceRoot: root });
         } else if (folderModalScope === 'images') {
-            root = state.imagesWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addImagesFolder', workspaceRoot: root });
         } else if (folderModalScope === 'stitch') {
-            root = state.stitchWorkspaceRoot || '';
             vscode.postMessage({ type: 'addStitchFolder', workspaceRoot: root });
         } else if (folderModalScope === 'briefs') {
-            root = state.briefsWorkspaceRootFilter || '';
             vscode.postMessage({ type: 'addBriefsFolder', workspaceRoot: root });
         }
     });
@@ -4548,6 +4587,15 @@
         parts.pop();
         state.claudeTargetFolder = parts.join('/') || '';
 
+        // Track the selected file for the "Upload to Claude Artifacts" prompt. Kept on
+        // Claude-specific keys — the shared activeDoc* keys are only set by the design/
+        // html/briefs selection path, not this one.
+        const relDir = parts.join('/');
+        state.activeClaudeDocName = docName || '';
+        state.activeClaudeDocFolder = sourceFolder
+            ? (relDir ? sourceFolder.replace(/[\\/]+$/, '') + '/' + relDir : sourceFolder)
+            : relDir;
+
         const initialState = document.getElementById('claude-initial-state');
         const loadingState = document.getElementById('claude-loading-state');
         const iframeWrapper = document.getElementById('claude-preview-wrapper');
@@ -4592,6 +4640,61 @@
         if (select && select.value) return select.value;
         return state.claudeWorkspaceRootFilter || '';
     }
+
+    // ── Claude tab: publish the selected file to claude.ai as an Artifact ──
+    // Pushing BACK to a claude.ai/design project has no agent/CLI command — that is a
+    // manual flow (see the "Sync to Claude Design…" help modal). Artifact upload is the
+    // one export path that IS agent-driven; mirrors the Planning panel's HTML tab.
+    const CLAUDE_ARTIFACT_UPLOAD_PROMPT = ({ url, folder, filename }) =>
+        `Publish a local document back to claude.ai as an Artifact.\n\n` +
+        `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability enabled.\n\n` +
+        `1. Read the file: ${folder ? folder + '/' : ''}${filename}\n` +
+        `2. Verify it is publish-ready before uploading — the host re-wraps and blocks external resources: ensure there are NO <!DOCTYPE>/<html>/<head>/<body> wrappers (strip them if an editor re-added any), and ALL assets are inlined as data: URIs / inline <style>/<script> (no external fonts, CSS, JS, or images — they render locally but silently disappear once published). If an edit introduced an external resource, inline it before publishing.\n` +
+        `3. If it contains a \`switchboard-artifact-source:\` marker comment, redeploy to that existing URL by passing it as the Artifact tool's \`url\`. ` +
+        `NOTE: this only overwrites if I own that artifact. If the tool returns a permission error, publish as a NEW artifact instead and tell me the new url.\n` +
+        (url ? `   (Expected source url: ${url})\n` : ``) +
+        `4. If there is no marker, publish as a new Artifact and report the new url.\n` +
+        `5. Preserve (or refresh) the marker comment, and use the file's <title>/first heading as the artifact title.`;
+
+    function buildClaudeArtifactPrompt() {
+        const filename = state.activeClaudeDocName || '';
+        const folder = state.activeClaudeDocFolder || '';
+        if (!filename) {
+            return { error: 'Select an HTML or Markdown file in the Claude tab first.' };
+        }
+        const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+        if (!['.html', '.htm', '.md', '.markdown'].includes(ext)) {
+            return { error: 'Artifacts support HTML or Markdown files — select an .html or .md file.' };
+        }
+        const urlInput = document.getElementById('claude-artifact-url');
+        const url = urlInput ? urlInput.value.trim() : '';
+        return { prompt: CLAUDE_ARTIFACT_UPLOAD_PROMPT({ url, folder, filename }) };
+    }
+
+    document.getElementById('btn-copy-claude-artifact-prompt')?.addEventListener('click', () => {
+        const { prompt, error } = buildClaudeArtifactPrompt();
+        vscode.postMessage({ type: 'copyClaudeArtifactPrompt', prompt, error });
+    });
+
+    document.getElementById('btn-send-claude-artifact-prompt')?.addEventListener('click', () => {
+        const { prompt, error } = buildClaudeArtifactPrompt();
+        vscode.postMessage({
+            type: 'sendClaudeArtifactPrompt',
+            prompt,
+            error,
+            workspaceRoot: getClaudeWorkspaceRootFallback()
+        });
+    });
+
+    // ── "Sync to Claude Design…" help modal (manual flow; no agent command exists) ──
+    document.getElementById('btn-claude-design-sync-help')?.addEventListener('click', () => {
+        const modal = document.getElementById('claude-design-sync-modal');
+        if (modal) modal.style.display = 'flex';
+    });
+    document.getElementById('btn-close-claude-design-sync')?.addEventListener('click', () => {
+        const modal = document.getElementById('claude-design-sync-modal');
+        if (modal) modal.style.display = 'none';
+    });
 
     function createClaudeDocCard(doc, sourceId, rootEntry) {
         const ext = doc.name.substring(doc.name.lastIndexOf('.')).toLowerCase();

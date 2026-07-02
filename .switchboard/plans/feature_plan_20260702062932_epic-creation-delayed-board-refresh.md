@@ -214,3 +214,7 @@ During manual testing, watch the debug console for:
 
 ### Recommendation
 Complexity 5 → **Send to Coder**.
+
+## Review Findings
+
+**Reviewer pass completed 2026-07-02.** All three proposed changes verified correct in `src/services/KanbanProvider.ts` (lines 1242, 1270, 1278, 1483, 8202, 9344) and `src/services/TaskViewerProvider.ts` (lines 15365, 15388). Core fix (Changes #1+#2): `dataVersionAtRead` captured BEFORE DB reads and threaded through `refreshWithData` → `recordBoardPush`, guaranteeing recorded version ≤ actual data version (safe-direction redundant refresh, never stale skip). Change #3 (`_markConfigDirty()` defense-in-depth) correctly placed before `_refreshBoard` in both `createEpicFromPlanIds` and `promoteToEpic`. No code fixes needed — implementation matches plan exactly. **Remaining risks:** (1) The three automated tests specified in the Verification Plan (unit test for `dataVersionAtRead`, race simulation, intra-read race test) were NOT added — the fix lacks automated regression coverage. (2) `PlanningPanelProvider.createEpic` (line 3469) is a separate epic-creation path that doesn't use `_refreshBoard` and may have a similar stale-board issue — out of scope for this plan but worth a future ticket. **Validation:** typecheck/tests skipped per session instructions; verification by code inspection and full execution-path trace.

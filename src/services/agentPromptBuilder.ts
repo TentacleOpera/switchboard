@@ -62,6 +62,53 @@ export function resolveWorkingDir(workspaceRoot: string, repoScope: string): str
 }
 
 /**
+ * When a worktree is active, re-resolve the plan file path to point inside the
+ * worktree (where the plan exists as a git-tracked file). Falls back to the
+ * original workspace-root path if the file doesn't exist in the worktree yet
+ * (e.g. plan was created after the worktree was branched and not committed).
+ */
+export function resolvePlanPathForWorktree(
+    absolutePath: string,
+    workspaceRoot: string,
+    worktreePath?: string
+): string {
+    if (!worktreePath || !absolutePath) return absolutePath;
+    const rel = path.relative(workspaceRoot, absolutePath);
+    if (!rel || rel.startsWith('..')) return absolutePath; // plan is outside workspace root — can't re-resolve
+    const worktreePath_candidate = path.resolve(worktreePath, rel);
+    if (fs.existsSync(worktreePath_candidate)) {
+        return worktreePath_candidate;
+    }
+    // Plan file not in worktree (uncommitted) — fall back to workspace-root path
+    console.warn(
+        `[resolvePlanPathForWorktree] Plan file not found in worktree: ${worktreePath_candidate}. ` +
+        `Falling back to workspace-root path: ${absolutePath}`
+    );
+    return absolutePath;
+}
+
+/**
+ * When a worktree is active, the effective working directory is the worktree
+ * path (overriding the repoScope-based workingDir). The worktree is a fully
+ * isolated working copy — the agent should operate entirely inside it.
+ */
+export function resolveWorkingDirForWorktree(
+    workingDir: string,
+    worktreePath?: string
+): string {
+    if (!worktreePath) return workingDir;
+    if (!fs.existsSync(worktreePath) || !fs.statSync(worktreePath).isDirectory()) {
+        console.warn(
+            `[resolveWorkingDirForWorktree] worktreePath does not exist or is not a directory: ${worktreePath}. ` +
+            `Falling back to repoScope-based workingDir.`
+        );
+        return workingDir;
+    }
+    return worktreePath;
+}
+
+
+/**
  * Collapse 3+ consecutive newlines down to 2, preserving intentional
  * paragraph breaks while eliminating excessive blank lines.
  */
@@ -821,10 +868,12 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         }
 
         let safetySessionBlock = '';
+        const seenWorktrees = new Set<string>();
         for (const plan of plans) {
-            if (plan.worktreePath) {
+            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
+                seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are reviewing work done in a safety session. The worktree directory is: ${plan.worktreePath}\n` +
-                    `Read the plan file and code changes from that location (not the main directory).\n`;
+                    `The plan file path above is already inside this worktree — read it from there. Review all code changes from this worktree directory.\n`;
             }
         }
         if (safetySessionBlock) {
@@ -939,11 +988,13 @@ For each plan:
         }
 
         let safetySessionBlock = '';
+        const seenWorktrees = new Set<string>();
         for (const plan of plans) {
-            if (plan.worktreePath) {
+            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
+                seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
                     `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `The plan file path above is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
                     `from the parent directory — that is the main branch and will corrupt it.\n`;
             }
         }
@@ -988,11 +1039,13 @@ For each plan:
         }
 
         let safetySessionBlock = '';
+        const seenWorktrees = new Set<string>();
         for (const plan of plans) {
-            if (plan.worktreePath) {
+            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
+                seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
                     `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `The plan file path above is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
                     `from the parent directory — that is the main branch and will corrupt it.\n`;
             }
         }
@@ -1033,11 +1086,13 @@ For each plan:
         }
 
         let safetySessionBlock = '';
+        const seenWorktrees = new Set<string>();
         for (const plan of plans) {
-            if (plan.worktreePath) {
+            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
+                seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
                     `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `The plan file path above is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
                     `from the parent directory — that is the main branch and will corrupt it.\n`;
             }
         }

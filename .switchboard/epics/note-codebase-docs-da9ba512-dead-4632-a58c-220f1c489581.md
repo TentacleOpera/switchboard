@@ -6,7 +6,7 @@ description: 'Project Context & Remote UI Hub'
 
 **Plan ID:** da9ba512-dead-4632-a58c-220f1c489581
 
-**Complexity:** 6
+**Complexity:** 5
 
 > Formerly "Note codebase docs." Rescoped per the remote-control production decisions: **no codebase code-mirroring.** The remote agent gets curated **developer docs + PRDs + constitution**, authored in `project.html` and synced provider-agnostically to Notion + Linear.
 
@@ -40,8 +40,8 @@ The context pipeline: **NotebookLM (get code into an analysis system) → author
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **PLAN REVIEWED**
-- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **PLAN REVIEWED**
-- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **PLAN REVIEWED**
-- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **PLAN REVIEWED**
+- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **CODER CODED**
+- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CODER CODED**
+- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODER CODED**
+- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODER CODED**
 <!-- END SUBTASKS -->

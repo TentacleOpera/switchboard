@@ -18,7 +18,7 @@ import {
     parseDefaultPromptOverrides
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { KanbanMigration } from './KanbanMigration';
@@ -1309,13 +1309,11 @@ export class KanbanProvider implements vscode.Disposable {
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
-            const allRows = [...activeRowsFiltered, ...completedRowsFiltered];
-            const subtaskCountMap = new Map<string, number>();
-            for (const row of allRows) {
-                if (row.epicId) {
-                    subtaskCountMap.set(row.epicId, (subtaskCountMap.get(row.epicId) || 0) + 1);
-                }
-            }
+            // Subtask counts must be computed workspace-wide (unfiltered), NOT from the
+            // project-filtered rows above — otherwise subtasks in a different project (or
+            // any assigned project while the board shows "__unassigned__") are excluded and
+            // every epic renders "0 SUBTASKS". See getSubtaskCountsByEpic.
+            const subtaskCountMap = await db.getSubtaskCountsByEpic(workspaceId ?? '');
 
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
@@ -2288,13 +2286,10 @@ export class KanbanProvider implements vscode.Disposable {
 
                 const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
                     .filter(rec => rec.planFile);
-                const allRows2 = [...activeRows, ...completedRecords];
-                const subtaskCountMap2 = new Map<string, number>();
-                for (const row of allRows2) {
-                    if (row.epicId) {
-                        subtaskCountMap2.set(row.epicId, (subtaskCountMap2.get(row.epicId) || 0) + 1);
-                    }
-                }
+                // Workspace-wide (unfiltered) subtask counts — an epic's count is intrinsic
+                // and must not shrink to 0 when its subtasks fall outside the board's
+                // project/repo filter. See getSubtaskCountsByEpic.
+                const subtaskCountMap2 = await db.getSubtaskCountsByEpic(workspaceId);
 
                 cards = activeRows.map(row => {
                     return {
@@ -2745,11 +2740,18 @@ export class KanbanProvider implements vscode.Disposable {
                 worktreePath = worktreePathMap.values().next().value;
             }
 
+            const resolvedAbsolutePath = resolvePlanPathForWorktree(
+                this._resolvePlanFilePath(workspaceRoot, card.planFile),
+                workspaceRoot,
+                worktreePath
+            );
+            const resolvedWorkingDir = resolveWorkingDirForWorktree(workingDir, worktreePath);
+
             promptPlans.push({
                 topic: card.topic,
-                absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
+                absolutePath: resolvedAbsolutePath,
                 complexity: card.complexity,
-                workingDir,
+                workingDir: resolvedWorkingDir,
                 sessionId: cardKey,
                 worktreePath,
                 epicId,
@@ -2804,11 +2806,21 @@ export class KanbanProvider implements vscode.Disposable {
             const ownWorktreePath = stWtMap.get(String(st.planId));
             const stWorktreePath = ownWorktreePath
                 ?? (st.epicId ? (worktreePathMap?.get(String(st.epicId)) ?? worktreePath) : worktreePath);
+            const resolvedAbsolutePath = resolvePlanPathForWorktree(
+                this._resolvePlanFilePath(workspaceRoot, st.planFile),
+                workspaceRoot,
+                stWorktreePath
+            );
+            const stWorkingDir = resolveWorkingDirForWorktree(
+                st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
+                stWorktreePath
+            );
+
             out.push({
                 topic: `[SUBTASK] ${st.topic}`,
-                absolutePath: this._resolvePlanFilePath(workspaceRoot, st.planFile),
+                absolutePath: resolvedAbsolutePath,
                 complexity: st.complexity,
-                workingDir: st.repoScope ? resolveWorkingDir(workspaceRoot, st.repoScope) : '',
+                workingDir: stWorkingDir,
                 sessionId: st.sessionId || st.planId,
                 worktreePath: stWorktreePath,
                 hasOwnWorktree: !!ownWorktreePath,

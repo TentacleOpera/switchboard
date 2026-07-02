@@ -1,6 +1,10 @@
 # Epics Tab: Make Action Buttons Column-Aware (Respect Board State)
 
+**Plan ID:** 7a3f2c1e-9b8d-4a2e-8f1c-6d5e4c3b2a19
+
 ## Goal
+
+Make the Epics tab's per-card action buttons reflect the epic's current kanban column, so a planned/coded/reviewed epic no longer offers a regressive "Send to Planner" action or a stage-wrong "Copy Planning Prompt" — instead deriving the copy-prompt label and role from the column, mirroring the proven column-aware path the kanban board and kanban plans list already use.
 
 ### Problem
 The Epics tab in `project.html` renders action buttons on each epic card that are **completely static** — they ignore the epic's current kanban column. When an epic is moved from `CREATED` (New) to `PLAN REVIEWED` (Planned) or any later column, the card still shows "Copy Planning Prompt" and "Send to Planner" buttons, which are only meaningful for the pre-planning stage.
@@ -21,29 +25,43 @@ Two layers ignore the column:
 ### Background
 The kanban pipeline stages and their column `kind` values (from `agentConfig.ts:106-116`):
 
-| Column ID | Label | kind | Next-stage role |
-|---|---|---|---|
-| `CREATED` | New | `created` | planner |
-| `PLAN REVIEWED` | Planned | `review` | lead/coder (complexity-routed) |
-| `LEAD CODED` / `CODER CODED` / `INTERN CODED` | Lead/Coder/Intern | `coded` | reviewer |
-| `CODE REVIEWED` | Reviewed | `reviewed` | tester |
-| `ACCEPTANCE TESTED` | Acceptance Tested | `reviewed` | — |
-| `COMPLETED` | Completed | `completed` | — |
+| Column ID | Label | kind | role | Next-stage role |
+|---|---|---|---|---|
+| `CREATED` | New | `created` | — | planner |
+| `RESEARCHER` | Researcher | `review` | `researcher` | researcher |
+| `PLAN REVIEWED` | Planned | `review` | `planner` | lead/coder (complexity-routed) |
+| `LEAD CODED` / `CODER CODED` / `INTERN CODED` | Lead/Coder/Intern | `coded` | lead/coder/intern | reviewer |
+| `CODE REVIEWED` | Reviewed | `reviewed` | `reviewer` | tester |
+| `ACCEPTANCE TESTED` | Acceptance Tested | `reviewed` | `tester` | — |
+| `TICKET UPDATER` | Ticket Updater | `reviewed` | `ticket_updater` | — |
+| `COMPLETED` | Completed | `completed` | — | — |
 
-The `columnToPromptRole` mapping (`agentPromptBuilder.ts:1235-1251`): `CREATED`→planner, `PLAN REVIEWED`→lead, coded columns→reviewer, `CODE REVIEWED`→tester.
+The `columnToPromptRole` mapping (`agentPromptBuilder.ts:1235-1251`): `CREATED`→planner, `PLAN REVIEWED`→lead, coded columns→reviewer, `CODE REVIEWED`→tester, `RESEARCHER`→researcher, `TICKET UPDATER`→ticket_updater, `custom_agent_*`→the column id itself, else `null`.
 
 The kanban board's per-card copy button label logic (`kanban.html:5456-5467`) derives the label from the *destination* column's role: planner→"Copy planning prompt", lead/coder/intern→"Copy coder prompt", reviewer→"Copy review prompt", custom→"Copy advance prompt".
 
+**Important payload caveat (verified):** The webview receives column definitions from the backend (`msg.columns`, project.js:466), but the existing regression-test mock (`planning-copy-labels-regression.test.js:43-50`) reflects the *actual* payload shape, which **omits the `role` field** on standard columns. The backend defines `role` in `DEFAULT_KANBAN_COLUMNS` (agentConfig.ts:108-116), but the serialized webview payload does not reliably include it. Therefore the frontend helper must derive labels from the **column `id` and `kind`**, not from `role`. Any `role`-based clause is dead code in practice and must not be load-bearing.
+
 ## Metadata
-- **Tags:** `epics`, `project-webview`, `kanban`, `ui`, `board-state`
+- **Tags:** frontend, ui, ux, bugfix, feature
 - **Complexity:** 5/10
 
-## Complexity Audit
-**Complex / Risky.** The frontend change is routine (conditional button rendering + label derivation, mirroring an existing pattern in `kanban.html`). The backend change is the risky part: `copyEpicPlannerPrompt` must become column-aware without breaking the epic subtask expansion it already performs, and without diverging from the proven `copyKanbanPlanPrompt` path. The safest approach is to make `copyEpicPlannerPrompt` accept a `column` parameter and resolve the role the same way `_handleCopyPlanLink` does (`columnToPromptRole` + complexity routing for `PLAN REVIEWED`), keeping the existing epic-expansion block intact.
+## User Review Required
 
-Risk factors:
-- The `kanbanPlanPromptCopied` response handler (project.js:775-798) finds the button via `.kanban-plan-copy-prompt[data-session-id]` and restores `oldText` after 2s — the new dynamic label must survive this restore cycle (it captures `btn.textContent` at response time, so a dynamic label is preserved correctly).
-- The response handler only refreshes the list when `activeTab === 'kanban'` (line 795) — it does NOT refresh the epics tab. After a copy-and-advance, the epic card would stay in its old column in the epics list until a manual refresh. This is a secondary bug that should be fixed in the same change.
+Yes — review the chosen label semantics (current-column derivation vs. the kanban board's next-column derivation) and confirm the RESEARCHER / TICKET UPDATER non-standard lanes are acceptable with a generic "Copy Prompt" label (or specify a preferred label). Also confirm that preserving the existing epic `generateUnifiedPrompt` call *without* the `{ instruction, accurateCodingEnabled: false }` options used by `_handleCopyPlanLink` is intentional (see Proposed Changes §2, "Preserved behavior — options omission").
+
+## Complexity Audit
+
+### Routine
+- Frontend conditional button rendering in `renderEpicsList` — mirrors an existing pattern (`kanban.html:5452-5470`).
+- Adding a `data-column` attribute to the existing copy-prompt button and forwarding it in the existing `copyEpicPlannerPrompt` message.
+- Extending the `kanbanPlanPromptCopied` refresh guard from `activeTab === 'kanban'` to also fire for `'epics'` (the `kanbanPlans` response handler already calls `renderEpicsList()` at project.js:523, so this is a one-line guard widening).
+- Adding two imports (`columnToPromptRole`, `parseComplexityScore`) to `PlanningPanelProvider.ts`.
+
+### Complex / Risky
+- Backend `copyEpicPlannerPrompt` must become column-aware (resolve role via `columnToPromptRole` + complexity routing for `PLAN REVIEWED`) **without** breaking the epic subtask expansion it already performs, and without diverging from the proven `_handleCopyPlanLink` path. The role-resolution block must mirror TaskViewerProvider.ts:14303-14310 exactly.
+- The frontend label helper must produce labels that match the kanban board's labels for every standard column, while deriving from the *current* column rather than the *next* column (semantically justified for a management view, but a divergence that must be inline-documented to prevent a future "alignment" regression).
+- RESEARCHER and TICKET UPDATER are non-standard lanes whose `kind` (`review` / `reviewed`) overlaps with standard columns; the helper must not misclassify them.
 
 ## Edge-Case & Dependency Audit
 
@@ -61,19 +79,41 @@ Risk factors:
 
 7. **Custom columns (`kind: 'custom-agent'` / `'custom-user'`):** `columnToPromptRole` returns the column id itself for `custom_agent_*` columns, and `null` otherwise. For unknown/custom columns, fall back to "Copy Advance Prompt" and pass the column through — the backend's `generateUnifiedPrompt` handles custom roles.
 
-8. **`_kanbanAvailableColumns` may lack `kind`/`role` fields:** The webview receives columns from the backend (`msg.columns`, project.js:466). The backend sends full `KanbanColumnDefinition` objects (which include `kind` and `role`). Verified: `PlanningPanelProvider` sends the resolved column definitions. But defensive coding should fall back to `columnToPromptRole`-style ID matching when `kind`/`role` are absent (the kanban board does this: `kanban.html:5459` checks `nextDef.role === 'planner' || nextDef.id === 'PLAN REVIEWED'`).
+8. **`_kanbanAvailableColumns` payload omits `role` (verified):** The webview receives columns from the backend (`msg.columns`, project.js:466), but the actual serialized payload does **not** include `role` on standard columns (confirmed via the existing regression-test mock at `planning-copy-labels-regression.test.js:43-50`). The frontend helper must therefore derive labels from `id` + `kind` only; any `role`-based clause is dead code and must not be load-bearing. (The kanban board's `nextDef.role === 'planner'` check at `kanban.html:5459` works there because the board constructs its own `columnDefinitions` with `role` populated; the epics tab consumes the serialized payload, which lacks it.)
 
-9. **List refresh after copy-and-advance:** The `kanbanPlanPromptCopied` handler (project.js:795) only fires `fetchKanbanPlans` when `activeTab === 'kanban'`. When the epics tab is active, the epic card will not refresh after a copy-and-advance. Must add an `activeTab === 'epics'` branch (or just fire unconditionally — the backend has a request-ID dedup guard).
+9. **RESEARCHER and TICKET UPDATER lanes (non-standard):** `RESEARCHER` has `kind: 'review'` (overlaps PLAN REVIEWED's kind) but `role: 'researcher'`; `columnToPromptRole('RESEARCHER')` returns `'researcher'`. `TICKET UPDATER` has `kind: 'reviewed'` (overlaps CODE REVIEWED's kind) but `role: 'ticket_updater'`; `columnToPromptRole('TICKET UPDATER')` returns `'ticket_updater'`. Because the webview payload omits `role`, the helper cannot distinguish these by role. Decision: handle them by **explicit id** — `RESEARCHER` → "Copy Researcher Prompt", `TICKET UPDATER` → "Copy Ticket Updater Prompt" — and pass the column through so the backend resolves the correct role via `columnToPromptRole`. If a generic label is preferred, fall through to "Copy Prompt" and document it. (User Review Required above covers this choice.)
 
-10. **No migration needed:** This is unreleased dev-work UI behavior (the epics tab button rendering). No persisted state format changes. Clean break.
+10. **List refresh after copy-and-advance:** The `kanbanPlanPromptCopied` handler (project.js:795) only fires `fetchKanbanPlans` when `activeTab === 'kanban'`. When the epics tab is active, the epic card will not refresh after a copy-and-advance. Must add an `activeTab === 'epics'` branch (or just fire unconditionally — the backend has a request-ID dedup guard). **Verified safe:** the `kanbanPlans` response handler (project.js:522-523) calls both `renderKanbanPlans()` and `renderEpicsList()`, so firing `fetchKanbanPlans` from the epics tab does refresh the epic cards.
+
+11. **No migration needed:** This is unreleased dev-work UI behavior (the epics tab button rendering). No persisted state format changes. Clean break.
+
+## Dependencies
+
+- None — this plan is self-contained within the existing epics-tab + copy-prompt code paths. It reuses (does not rebuild) `columnToPromptRole` (`agentPromptBuilder.ts`), `parseComplexityScore` (`complexityScale.ts`), `KanbanProvider.resolveRoutedRole` / `getComplexityFromPlan` / `expandEpicSubtaskPlans` / `_resolvePlanFilePath`, and the `kanbanPlanPromptCopied` → `fetchKanbanPlans` → `renderEpicsList` refresh chain. No prior plan session is a prerequisite.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the frontend label helper must derive from `id`/`kind`, not `role`, because the webview payload omits `role` — any `role`-based clause is dead code; (2) RESEARCHER/TICKET UPDATER lanes share `kind` with standard columns and need explicit-id handling to avoid a generic-label mismatch with the backend role; (3) the backend role fallback must match the proven `_handleCopyPlanLink` path (`|| 'coder'`, not `|| 'planner'`) to avoid parity drift; (4) the current-column (vs. the board's next-column) label derivation is a semantic divergence that must be inline-documented or it will be "fixed" wrong later. Mitigations: strip dead `role` clauses, add explicit-id branches for non-standard lanes, align the fallback, and inline-comment the current-column rationale. The omitted `generateUnifiedPrompt` options (`{ instruction, accurateCodingEnabled: false }` + `copyInstruction`) are **preserved existing behavior**, not a new gap — documented as intentional.
 
 ## Proposed Changes
 
 ### 1. `src/webview/project.js` — `renderEpicsList` (lines 1945-2081)
 
-**Add a helper to derive the copy-prompt button label from the epic's column** (mirroring `kanban.html:5456-5467` but based on the *current* column's next stage, since the epics tab is a management view, not a board column):
+**Add a helper to derive the copy-prompt button label from the epic's column.** This derives from the *current* column's next stage (not the next column itself, as the kanban board does), because the epics tab is a management view, not a board column. For all standard columns the resulting label is identical to the board's next-column derivation. **Inline-comment this rationale** at the helper so a future maintainer does not "align" it to the board and silently flip every label.
+
+The helper derives labels from `id` + `kind` only — **not** `role`, because the webview payload omits `role` (verified, see Edge-Case #8):
 
 ```js
+// Derive the copy-prompt button label from the epic's CURRENT column.
+// NOTE: the kanban board (kanban.html:5452) derives from the NEXT column's role;
+// the epics tab is a management view, not a board column, so we derive from the
+// current column's stage. For standard columns both approaches yield identical
+// labels. Do NOT "align" this to next-column derivation without re-verifying
+// every label — it will silently flip them.
+//
+// IMPORTANT: the webview payload (_kanbanAvailableColumns) does NOT include the
+// `role` field on standard columns (see planning-copy-labels-regression.test.js
+// mock). Derive from `id` + `kind` only — never from `role`.
 function _epicCopyPromptLabel(plan) {
     if (!plan.column) return 'Copy Planning Prompt'; // no column = pre-planning
     const colDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
@@ -81,14 +121,20 @@ function _epicCopyPromptLabel(plan) {
     // CREATED → planner stage
     if (plan.column === 'CREATED' || kind === 'created') return 'Copy Planning Prompt';
     // PLAN REVIEWED → coder stage (complexity-routed on backend)
-    if (plan.column === 'PLAN REVIEWED' || (kind === 'review' && colDef?.role === 'planner')) return 'Copy Coder Prompt';
+    if (plan.column === 'PLAN REVIEWED') return 'Copy Coder Prompt';
     // Coded columns → reviewer stage
     if (kind === 'coded') return 'Copy Review Prompt';
-    // CODE REVIEWED / ACCEPTANCE TESTED → tester / done
+    // CODE REVIEWED → tester stage (next is ACCEPTANCE TESTED)
     if (plan.column === 'CODE REVIEWED') return 'Copy Acceptance Test Prompt';
-    if (kind === 'reviewed' || kind === 'completed') return null; // no next stage
+    // Non-standard lanes — handle by explicit id (kind overlaps standard columns)
+    if (plan.column === 'RESEARCHER') return 'Copy Researcher Prompt';
+    if (plan.column === 'TICKET UPDATER') return 'Copy Ticket Updater Prompt';
+    // Terminal lanes — no next stage
+    if (plan.column === 'ACCEPTANCE TESTED' || kind === 'completed') return null;
     // Custom columns
     if (kind === 'custom-agent' || kind === 'custom-user') return 'Copy Advance Prompt';
+    // Unknown reviewed-kind column that isn't CODE REVIEWED/ACCEPTANCE TESTED/TICKET UPDATER
+    if (kind === 'reviewed') return null;
     return 'Copy Prompt';
 }
 ```
@@ -120,9 +166,11 @@ vscode.postMessage({
 });
 ```
 
+**Note on the `kanbanPlanPromptCopied` restore cycle:** the response handler (project.js:775-798) finds the button via `.kanban-plan-copy-prompt[data-session-id]` and restores `oldText` (captured at response time as `btn.textContent`) after 2s. Because the dynamic label is the button's `textContent` at response time, it is preserved correctly through the restore cycle — no change needed.
+
 ### 2. `src/services/PlanningPanelProvider.ts` — `copyEpicPlannerPrompt` handler (lines 3199-3239)
 
-**Accept `column` and resolve a stage-appropriate role** instead of hardcoding `'planner'`. Mirror `_handleCopyPlanLink` (TaskViewerProvider.ts:14303-14310):
+**Accept `column` and resolve a stage-appropriate role** instead of hardcoding `'planner'`. Mirror `_handleCopyPlanLink` (TaskViewerProvider.ts:14303-14310). Use the **same fallback** as the proven path (`|| 'coder'`, not `|| 'planner'`) to avoid parity drift — `effectiveColumn` defaults to `CREATED`→`planner` so the fallback rarely fires, but consistency with the proven path matters:
 
 ```ts
 case 'copyEpicPlannerPrompt': {
@@ -147,13 +195,15 @@ case 'copyEpicPlannerPrompt': {
         }
         // Resolve effective column: explicit param > epic's DB column > CREATED
         const effectiveColumn = column || epic.kanbanColumn || 'CREATED';
-        // Resolve role from column (mirror _handleCopyPlanLink, TaskViewerProvider.ts:14303-14310)
+        // Resolve role from column (mirror _handleCopyPlanLink, TaskViewerProvider.ts:14303-14310).
+        // Fallback is 'coder' to match the proven path (not 'planner') — effectiveColumn
+        // defaults to CREATED→planner so this fallback rarely fires, but parity matters.
         let role: string;
         if (effectiveColumn === 'PLAN REVIEWED') {
             const complexity = await kp.getComplexityFromPlan(wsRoot, (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile));
             role = kp.resolveRoutedRole(parseComplexityScore(complexity));
         } else {
-            role = columnToPromptRole(effectiveColumn) || 'planner';
+            role = columnToPromptRole(effectiveColumn) || 'coder';
         }
         const plans: import('./agentPromptBuilder').BatchPromptPlan[] = [{
             topic: epic.topic,
@@ -167,6 +217,12 @@ case 'copyEpicPlannerPrompt': {
             wsRoot, epic.planId, epic.topic, epic.kanbanColumn || '', undefined
         );
         for (const sp of subtaskPlans) { plans.push(sp); }
+        // Preserved behavior — options omission: the existing epic handler called
+        // generateUnifiedPrompt WITHOUT the { instruction, accurateCodingEnabled: false }
+        // options and WITHOUT the 'low-complexity' copyInstruction that _handleCopyPlanLink
+        // (TaskViewerProvider.ts:14314-14341) applies for coder/intern roles. This plan
+        // preserves that existing behavior intentionally. Do NOT add the options here
+        // without a deliberate decision — it would change prompt output for every epic.
         const prompt = await kp.generateUnifiedPrompt(role, plans, wsRoot);
         await vscode.env.clipboard.writeText(prompt);
         this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
@@ -177,13 +233,15 @@ case 'copyEpicPlannerPrompt': {
 }
 ```
 
-**Required imports** at the top of `PlanningPanelProvider.ts` (verify presence; add if missing):
-- `columnToPromptRole` from `./agentPromptBuilder`
-- `parseComplexityScore` (from wherever `_handleCopyPlanLink` imports it — check `TaskViewerProvider.ts` imports)
+**Required imports** at the top of `PlanningPanelProvider.ts` (verified absent — add):
+- `columnToPromptRole` from `./agentPromptBuilder` (currently NOT imported; confirmed via grep).
+- `parseComplexityScore` from `./complexityScale` (the file already imports `isValidComplexityValue, legacyToScore` from `./complexityScale` at line 25 — add `parseComplexityScore` to that existing import statement).
+
+**Known tech debt (not introduced by this plan):** `(kp as any)._resolvePlanFilePath` and `(kp as any)._getKanbanDb` access `private` members of `KanbanProvider` via `any`-cast. This pattern is already in the existing handler (lines 3211, 3223). This plan continues it rather than refactoring `KanbanProvider`'s visibility, because widening visibility is out of scope for a button-label fix. Flag for a future cleanup pass.
 
 ### 3. `src/webview/project.js` — `kanbanPlanPromptCopied` handler (lines 795-797)
 
-**Refresh the epics list too**, so the card reflects any column advance the backend performed after copying:
+**Refresh the epics list too**, so the card reflects any column advance the backend performed after copying. Verified safe: the `kanbanPlans` response handler (project.js:522-523) calls both `renderKanbanPlans()` and `renderEpicsList()`, so firing `fetchKanbanPlans` from the epics tab refreshes the epic cards:
 
 ```js
 if (activeTab === 'kanban' || activeTab === 'epics') {
@@ -193,6 +251,10 @@ if (activeTab === 'kanban' || activeTab === 'epics') {
 
 ## Verification Plan
 
+### Automated Tests
+- **Unit test:** Add a test verifying `_epicCopyPromptLabel` returns the correct label for each column kind (created→"Copy Planning Prompt", PLAN REVIEWED→"Copy Coder Prompt", coded→"Copy Review Prompt", CODE REVIEWED→"Copy Acceptance Test Prompt", RESEARCHER→"Copy Researcher Prompt", TICKET UPDATER→"Copy Ticket Updater Prompt", ACCEPTANCE TESTED/COMPLETED→null, custom→"Copy Advance Prompt"). Mirror the existing `src/test/planning-copy-labels-regression.test.js` pattern (extract the function by brace-counting, evaluate with mock columns that **omit `role`** to match the real payload). The test suite will be run separately by the user.
+
+### Manual
 1. **Manual — CREATED epic:** Create a new epic (lands in `CREATED`). Confirm the card shows "Copy Planning Prompt" + "Send to Planner". Click "Copy Planning Prompt" → clipboard contains a planner-role prompt. Click "Send to Planner" → epic moves to `CREATED` (no-op if already there).
 
 2. **Manual — PLAN REVIEWED epic (the reported bug):** Move an epic to `PLAN REVIEWED`. Confirm:
@@ -206,12 +268,17 @@ if (activeTab === 'kanban' || activeTab === 'epics') {
 
 5. **Manual — COMPLETED epic:** Move an epic to `COMPLETED`. Confirm no copy-prompt button and no "Send to Planner" — only "Copy Link" remains.
 
-6. **Manual — list refresh:** On the epics tab, copy a prompt for a `CREATED` epic. Confirm the epics list refreshes (the card updates if the backend advanced the column).
+6. **Manual — RESEARCHER epic:** Move an epic to `RESEARCHER`. Confirm "Copy Researcher Prompt" (or the chosen generic label per User Review). Click → clipboard contains a researcher-role prompt.
 
-7. **Regression — regular kanban plans list:** Confirm the kanban plans list "Copy Prompt" button is unchanged (still uses `copyKanbanPlanPrompt`, still column-aware via the existing path).
+7. **Manual — list refresh:** On the epics tab, copy a prompt for a `CREATED` epic. Confirm the epics list refreshes (the card updates if the backend advanced the column).
 
-8. **Regression — kanban board:** Confirm the kanban board's per-card copy buttons are unchanged (this plan does not touch `kanban.html`).
+8. **Regression — regular kanban plans list:** Confirm the kanban plans list "Copy Prompt" button is unchanged (still uses `copyKanbanPlanPrompt`, still column-aware via the existing path).
 
-9. **Unit test:** Add a test verifying `_epicCopyPromptLabel` returns the correct label for each column kind (created→"Copy Planning Prompt", review/planner→"Copy Coder Prompt", coded→"Copy Review Prompt", reviewed→"Copy Acceptance Test Prompt"/null, completed→null, custom→"Copy Advance Prompt"). Mirror the existing `src/test/planning-copy-labels-regression.test.js` pattern.
+9. **Regression — kanban board:** Confirm the kanban board's per-card copy buttons are unchanged (this plan does not touch `kanban.html`).
 
-10. **Build:** `npm run compile` succeeds with no new type errors (verify `columnToPromptRole` and `parseComplexityScore` imports resolve in `PlanningPanelProvider.ts`).
+### Build
+- `npm run compile` succeeds with no new type errors (verify `columnToPromptRole` and `parseComplexityScore` imports resolve in `PlanningPanelProvider.ts`). Build/compile is run separately by the user; not run as part of this planning session.
+
+---
+
+**Recommendation:** Complexity 5 → **Send to Coder**. Multi-file change (frontend helper + backend role resolution + refresh guard) but mirrors an existing proven pattern (`_handleCopyPlanLink` / `kanban.html` label derivation) with no new architecture, no data-consistency risk, and no migration. The refinements from adversarial review (strip dead `role` clauses, explicit-id handling for RESEARCHER/TICKET UPDATER, align fallback to `|| 'coder'`, inline-document the current-column rationale and the options-omission preservation) are all low-risk hardening of the original design.
