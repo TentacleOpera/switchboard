@@ -37,3 +37,7 @@ Root cause of the "post-it notes" problem this addresses: today a remote claude.
 **Complexity:** 5
 **Tags:** frontend, ui, ux, refactor
 **Repo:** switchboard
+
+## Review Findings
+
+Reviewed against the implemented commits (d3f41be, 6c5297d, d42c6e3, 03fb102). The Dev Docs tab, Remote-tab relocation, and NotebookLM-tab relocation all landed in `project.html`/`project.js` with all required CSS classes (planning-card, remote-checkbox-list, etc.) defined in the new host. Path-traversal protection on dev-doc paths (`_resolveDevDocPath`), workspace persistence for NotebookLM (`notebook.root` survives the move via `notebookDefaultRoot`), and kanban toolbar toggle hydration (`getRemoteConfig` at boot) are all correct. No orphaned references remain in `kanban.html`/`planning.js`. One NIT: `_handleAirlockExport` was activated from a "coming soon" stub to call `bundleWorkspaceContext` — positive scope expansion beyond "relocation only" but low risk. No CRITICAL/MAJOR findings; no code changes required for this plan.

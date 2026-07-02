@@ -235,3 +235,7 @@ No automated tests required per session instructions. The test suite will be run
 ## Recommendation
 
 Complexity 3 → **Send to Coder**
+
+## Review Findings
+
+Reviewed against commit d42c6e3. The button landed in `project.html`'s Remote tab (correctly adapted from the plan's kanban.html target since the tab relocated). `applyRemoteProviderUi` shows/hides the `#remote-linear-agent-skill` block based on provider selection; the click handler delegates to `KanbanProvider.remoteBuildLinearAgentSkillText` which loads `RemoteConfig` + `LinearConfig`, filters unmapped columns, defaults `pingFrequencySeconds` to 60, and returns an error string (not a throw) when Linear isn't configured. The clipboard copy + "Copied!" 2s feedback matches the existing pattern. No confirm dialogs. No CRITICAL/MAJOR findings; no code changes required for this plan.
