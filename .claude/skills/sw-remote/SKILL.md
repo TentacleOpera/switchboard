@@ -147,6 +147,39 @@ execution agent in the wrong direction.
    rows with `From = Switchboard` (the local agent's replies), and/or re-read the
    card's page body.
 
+## Epics (grouping related work)
+
+An **epic** is a parent card that groups related subtask cards. Moving an epic's
+`Kanban Column` cascades the move to all its subtasks on the local machine — so you
+can dispatch a whole group of work in one action.
+
+### To create an epic (Notion)
+1. Create the epic's page in the plans DB (same as any card).
+2. Check the **Is Epic** checkbox property.
+3. The page is now an epic — it can have subtasks.
+
+### To create an epic (Linear)
+1. Create the epic's issue in the mapped Linear project.
+2. Create subtask issues and set their **parent** to the epic issue.
+3. The local poll detects the parent/child relationship and mirrors it — the epic
+   cascades subtask moves automatically.
+
+### To assign a subtask to an epic (Notion)
+1. Create or find the subtask's page.
+2. Set its **Epic** relation property to point to the epic's page.
+3. The local poll mirrors the link — the subtask now moves when the epic moves.
+
+### To trigger a group of work
+1. Set the `Kanban Column` (Notion) or Linear status on the **epic** card (not the subtasks).
+2. The local cascade moves all subtasks to the same column and dispatches each
+   subtask's column agent.
+
+### Constraints
+- A subtask can belong to only **one** epic (single-select relation / single parent).
+- Only create epic/subtask links between cards on the **same synced board** —
+  the local poll can only mirror links between cards it tracks.
+- An epic with no subtasks is harmless (it just cascades to nothing).
+
 ## Edge Cases
 
 - **Neither Linear nor Notion connected**: Skill degrades gracefully — explain the

@@ -295,3 +295,9 @@ For relationship changes, the echo guard needs similar protection: if Switchboar
 ## Recommendation
 
 Complexity is **7** (new delta fields, new mirroring logic, cross-provider coordination, but all additive and the cascade infrastructure already exists). **Send to Coder** after user confirms the two review questions (immediate mirror vs. confirm; no new-issue import via remote control). The Notion side should be implemented alongside or after Plan 5.
+
+---
+
+## Review Findings
+
+**Reviewed:** commit `6d40d30` on `remote-sync-2` branch. All four critical files (`RemoteProvider.ts`, `LinearRemoteProvider.ts`, `NotionRemoteProvider.ts`, `RemoteControlService.ts`) match plan requirements. `RemoteStateDelta` fields are additive; Linear GraphQL query extended with `parent`/`children`; Notion provider reads `Is Epic`/`Epic` with safe falsy fallback; `_mirrorEpicStructure` is idempotent with self-parenting guard and runs before `_applyStateMirror` so cascade sees fresh DB state (`moveCardToColumnByPlanFile` re-fetches from DB at `KanbanProvider.ts:5355`). No CRITICAL or MAJOR findings — no code changes needed. NITs: (1) step-2 linking clobbers step-1 `isEpic` mark when a card has both children and a parent (local model is single-level — unavoidable, no log); (2) `isEpicCandidate === false` does not clear `isEpic=1` (remote agent can promote but not demote via poll — plan-compliant); (3) in-memory `plan` object is stale after `_mirrorEpicStructure` DB write but safe because `moveCardToColumnByPlanFile` re-fetches. Regression analysis: no caller breakage, no double-trigger, no race conditions, no orphaned references. Verification: compilation and tests skipped per session directive.
