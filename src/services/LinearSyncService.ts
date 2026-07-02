@@ -716,6 +716,7 @@ export class LinearSyncService {
     projectId?: string;
     limit?: number;
     updatedAfter?: string;
+    projectScoped?: boolean;
   }): Promise<LinearIssue[]> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || !config.teamId) {
@@ -736,7 +737,7 @@ export class LinearSyncService {
     // Determine if this is a "simple" query that can use cache
     // Simple: no search, stateId, stateName, assigneeId, or updatedAfter filters
     // (project comes from config). Delta queries (updatedAfter set) bypass cache.
-    const isSimpleQuery = !normalizedSearch && !normalizedStateId && !normalizedStateName && !normalizedAssigneeId && !updatedAfter;
+    const isSimpleQuery = !options.projectScoped && !normalizedSearch && !normalizedStateId && !normalizedStateName && !normalizedAssigneeId && !updatedAfter;
     // Cache key MUST include the filter-config fingerprint so that include/
     // exclude project name changes invalidate the cache via key divergence.
     const configFingerprint = this._fingerprintLinearFilterConfig(config);
@@ -757,21 +758,48 @@ export class LinearSyncService {
       }
     }
 
-    // Hybrid optimization: use server-side filter for single include, no excludes
-    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    // Resolve project for scoped queries, else hybrid optimization
+    let resolvedProjectId: string | undefined = undefined;
+    let resolutionFailed = false;
+    if (options.projectScoped) {
+      if (normalizedProjectId) {
+        const projects = await this.getAvailableProjects();
+        const byId = projects.find(p => p.id === normalizedProjectId);
+        if (byId) {
+          resolvedProjectId = byId.id;
+        } else {
+          const byName = projects.find(p => p.name.toLowerCase() === normalizedProjectId.toLowerCase());
+          if (byName) {
+            resolvedProjectId = byName.id;
+          } else {
+            resolutionFailed = true;
+          }
+        }
+      } else {
+        resolutionFailed = true;
+      }
+      if (resolutionFailed) {
+        const res = [] as LinearIssue[];
+        (res as any).resolutionFailed = true;
+        return res;
+      }
+    } else {
+      resolvedProjectId = await this._resolveSingleIncludeProjectId(config) || undefined;
+    }
+
     const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined, updatedAfter || undefined);
 
     const issues: LinearIssue[] = [];
     let cursor: string | null = null;
     const query = this._buildIssueListQuery();
     let pageCount = 0;
-    const maxPages = 10; // Hard cap to prevent runaway pagination
+    const maxPages = options.projectScoped ? 40 : 10; // Hard cap to prevent runaway pagination
 
-    while (issues.length < limit && pageCount < maxPages) {
+    while ((options.projectScoped ? true : issues.length < limit) && pageCount < maxPages) {
       const result = await this.graphqlRequest(query, {
         filter,
         after: cursor,
-        first: Math.min(50, limit - issues.length)
+        first: options.projectScoped ? 50 : Math.min(50, limit - issues.length)
       });
 
       const page = result.data?.issues;
@@ -798,7 +826,7 @@ export class LinearSyncService {
           }
         }
         issues.push(issue);
-        if (issues.length >= limit) {
+        if (!options.projectScoped && issues.length >= limit) {
           break;
         }
       }
@@ -818,7 +846,7 @@ export class LinearSyncService {
     }
 
     // Apply client-side project name filters
-    const filteredIssues = this._applyProjectNameFilters(issues, config);
+    const filteredIssues = options.projectScoped ? issues : this._applyProjectNameFilters(issues, config);
 
     // Update cache and reverse map for simple queries
     if (isSimpleQuery && this._cacheService) {
@@ -1154,6 +1182,48 @@ export class LinearSyncService {
         this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
       } else {
         this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
+  public async updateIssueProject(issueId: string, projectId: string | null): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear project updates require an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $projectId: String) {
+        issueUpdate(id: $id, input: { projectId: $projectId }) { success }
+      }
+    `, { id: normalizedIssueId, projectId: projectId || null });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the project update.`);
+    }
+
+    // Invalidate cache for BOTH the old project and the new project
+    if (this._cacheService) {
+      const oldProjectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (oldProjectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${oldProjectId}`);
+      }
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        // If moving to no project, invalidate all Linear cache as fallback
+        this._cacheService.invalidateTaskCache('linear');
+      }
+      // Update the reverse map
+      if (projectId) {
+        this._issueProjectIndex.set(normalizedIssueId, projectId);
+      } else {
+        this._issueProjectIndex.delete(normalizedIssueId);
       }
     }
   }

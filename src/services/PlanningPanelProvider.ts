@@ -130,6 +130,8 @@ export class PlanningPanelProvider {
     private _activePlanningHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
     private _saveTextDocListener: vscode.Disposable | undefined;
     private _watcherGeneration: number = 0;
+    private _moveTargetsCache = new Map<string, { at: number; targets: Array<{ id: string; name: string; path: string }> }>();
+    private static readonly MOVE_TARGETS_TTL_MS = 60_000;
 
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
     // Type-only reference (avoids a runtime circular import with KanbanProvider).
@@ -2984,7 +2986,7 @@ export class PlanningPanelProvider {
             }
             case 'copyChatPrompt': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined;
-                const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot);
+                const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot, msg.project);
                 if (prompt) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     targetPanel?.webview.postMessage({ type: 'chatPromptCopied' });
@@ -5430,7 +5432,7 @@ Please format the updated output document strictly as follows:
                             // empty the sidebar. (Linear per-project scoping = follow-up.)
                             const scopeId = provider === 'clickup'
                                 ? String((msg.listId as string) || '').trim()
-                                : '';
+                                : String((msg.projectId as string) || '').trim();
 
                             // Map DB entries to the provider-specific tickets output list
                             for (const dbT of dbTickets) {
@@ -5455,7 +5457,7 @@ Please format the updated output document strictly as follows:
                                                 if (sm) { clickStatus = sm[1].trim(); }
                                                 const pm = fm[1].match(/^parentId:\s*(.+)$/m);
                                                 if (pm) { parentId = pm[1].trim(); }
-                                                const idm = fm[1].match(provider === 'clickup' ? /^listId:\s*(.+)$/m : /^projectId:\s*(.+)$/m);
+                                                const idm = fm[1].match(provider === 'clickup' ? /^listId:\s*(.+)$/m : /^projectName:\s*(.+)$/m);
                                                 if (idm) { fileScopeId = idm[1].trim(); }
                                                 // Ticket creation date (source system), written at import time.
                                                 // Drives the sidebar's newest-first sort.
@@ -5724,6 +5726,79 @@ Please format the updated output document strictly as follows:
                     showTemporaryNotification('Diagram prompt copied to clipboard');
                 } catch (err) {
                     vscode.window.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
+                }
+                break;
+            }
+            case 'fetchMoveTargets': {
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    if (!workspaceRoot) {
+                        throw new Error('Workspace root not resolved');
+                    }
+                    const { provider, ticketId, refresh } = msg;
+                    const cached = this._moveTargetsCache.get(provider);
+                    if (!refresh && cached && Date.now() - cached.at < PlanningPanelProvider.MOVE_TARGETS_TTL_MS) {
+                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets: cached.targets });
+                        break;
+                    }
+                    if (provider === 'clickup') {
+                        const clickUpService = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        const spaces = await clickUpService.getSpaces();
+                        const targets: Array<{ id: string; name: string; path: string }> = [];
+                        for (const space of spaces) {
+                            const lists = await clickUpService.getLists(space.id);
+                            for (const list of lists) {
+                                targets.push({ id: list.id, name: list.name, path: `${space.name} / ${list.name}` });
+                            }
+                            const folders = await clickUpService.getFolders(space.id);
+                            for (const folder of folders) {
+                                const folderLists = await clickUpService.getLists(space.id, folder.id);
+                                for (const list of folderLists) {
+                                    targets.push({ id: list.id, name: list.name, path: `${space.name} / ${folder.name} / ${list.name}` });
+                                }
+                            }
+                        }
+                        this._moveTargetsCache.set('clickup', { at: Date.now(), targets });
+                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets });
+                    } else {
+                        const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        const projects = await linearService.getAvailableProjects();
+                        const targets = projects.map(p => ({ id: p.id, name: p.name, path: p.name }));
+                        this._moveTargetsCache.set('linear', { at: Date.now(), targets });
+                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] Failed to fetch move targets:', err);
+                    this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider: msg.provider, ticketId: msg.ticketId, targets: [], error: String(err) });
+                }
+                break;
+            }
+            case 'moveTicket': {
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    if (!workspaceRoot) {
+                        throw new Error('Workspace root not resolved');
+                    }
+                    const { provider, ticketId, targetId } = msg;
+                    if (provider === 'clickup') {
+                        const clickUpService = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        const result = await clickUpService.moveTask(ticketId, targetId);
+                        this._panel?.webview.postMessage({
+                            type: 'moveTicketResult',
+                            success: true,
+                            provider,
+                            ticketId,
+                            warning: result.warning ?? null,
+                            remainsInLists: result.remainsInLists
+                        });
+                    } else {
+                        const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        await linearService.updateIssueProject(ticketId, targetId);
+                        this._panel?.webview.postMessage({ type: 'moveTicketResult', success: true, provider, ticketId, targetId });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] Failed to move ticket:', err);
+                    this._panel?.webview.postMessage({ type: 'moveTicketResult', success: false, provider: msg.provider, ticketId: msg.ticketId, error: String(err) });
                 }
                 break;
             }

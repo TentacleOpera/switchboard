@@ -539,6 +539,122 @@
         _tagsModalOpen = false;
     }
 
+    function showMoveTicketModal(provider, ticketId) {
+        // Remove any existing one first
+        document.getElementById('move-ticket-modal')?.remove();
+
+        const modalHtml = `
+        <div class="folder-modal" id="move-ticket-modal" style="display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000;">
+            <div class="modal-content" style="width: 320px; background: var(--panel-bg, #1e1e1e); border: 1px solid var(--border-color, #333); border-radius: 6px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 12px;">
+                <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">Move Ticket</h3>
+                    <button class="modal-close-btn" id="move-modal-close" style="background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 18px;">&times;</button>
+                </div>
+                <div class="modal-body" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <input type="text" id="move-search-input" placeholder="Search target..." style="flex: 1; padding: 6px 8px; background: var(--input-bg, #2d2d2d); border: 1px solid var(--border-color, #444); color: var(--text-primary); border-radius: 4px;">
+                        <button type="button" id="move-modal-refresh-targets" style="padding: 6px 8px; background: var(--button-secondary-bg, #3a3a3a); color: var(--text-primary); border: 1px solid var(--border-color, #444); border-radius: 4px; cursor: pointer;" title="Refresh list">↻</button>
+                    </div>
+                    <select id="move-target-select" size="10" style="width: 100%; padding: 4px; background: var(--input-bg, #2d2d2d); border: 1px solid var(--border-color, #444); color: var(--text-primary); border-radius: 4px; font-size: 12px; height: 180px;">
+                        <option value="" disabled selected>Loading targets...</option>
+                    </select>
+                    ${provider === 'linear' ? `<div style="font-size: 10px; color: var(--text-secondary);"><label style="display: flex; align-items: center; gap: 4px;"><input type="checkbox" id="move-linear-unassign"> Unassign from project</label></div>` : ''}
+                </div>
+                <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+                    <button type="button" id="move-modal-cancel" style="padding: 6px 12px; background: var(--button-secondary-bg, #3a3a3a); color: var(--text-primary); border: 1px solid var(--border-color, #444); border-radius: 4px; cursor: pointer;">Cancel</button>
+                    <button type="button" id="move-modal-submit" style="padding: 6px 12px; background: var(--accent-color, #007acc); color: #fff; border: none; border-radius: 4px; cursor: pointer;" disabled>Move</button>
+                </div>
+            </div>
+        </div>
+        `;
+
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = modalHtml;
+        const modalEl = wrapper.firstElementChild;
+        document.body.appendChild(modalEl);
+
+        const closeBtn = document.getElementById('move-modal-close');
+        const cancelBtn = document.getElementById('move-modal-cancel');
+        const submitBtn = document.getElementById('move-modal-submit');
+        const select = document.getElementById('move-target-select');
+        const searchInput = document.getElementById('move-search-input');
+        const refreshBtn = document.getElementById('move-modal-refresh-targets');
+        const unassignCheck = document.getElementById('move-linear-unassign');
+
+        const closeModal = () => modalEl.remove();
+        closeBtn.onclick = closeModal;
+        cancelBtn.onclick = closeModal;
+
+        if (unassignCheck) {
+            unassignCheck.onchange = () => {
+                const checked = unassignCheck.checked;
+                select.disabled = checked;
+                searchInput.disabled = checked;
+                submitBtn.disabled = !checked && !select.value;
+            };
+        }
+
+        select.onchange = () => {
+            submitBtn.disabled = !select.value;
+        };
+
+        const fetchTargets = (refresh = false) => {
+            select.innerHTML = '<option value="" disabled selected>Loading targets...</option>';
+            submitBtn.disabled = true;
+            setTicketsLoadingState(true);
+            vscode.postMessage({
+                type: 'fetchMoveTargets',
+                provider,
+                ticketId,
+                refresh,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        };
+
+        refreshBtn.onclick = () => fetchTargets(true);
+
+        searchInput.oninput = () => {
+            const query = searchInput.value.toLowerCase();
+            select.innerHTML = '';
+            const filtered = (window._allMoveTargets || []).filter(t => 
+                (t.path || '').toLowerCase().includes(query) || (t.name || '').toLowerCase().includes(query)
+            );
+            if (filtered.length === 0) {
+                const opt = document.createElement('option');
+                opt.disabled = true;
+                opt.textContent = 'No matches found';
+                select.appendChild(opt);
+                submitBtn.disabled = true;
+            } else {
+                filtered.forEach(t => {
+                    const opt = document.createElement('option');
+                    opt.value = t.id;
+                    opt.textContent = t.path || t.name;
+                    select.appendChild(opt);
+                });
+                submitBtn.disabled = !select.value;
+            }
+        };
+
+        submitBtn.onclick = () => {
+            const isUnassign = unassignCheck && unassignCheck.checked;
+            const targetId = isUnassign ? null : select.value;
+            if (!isUnassign && !targetId) return;
+
+            setTicketsLoadingState(true);
+            vscode.postMessage({
+                type: 'moveTicket',
+                provider,
+                ticketId,
+                targetId,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        };
+
+        // Initial fetch
+        fetchTargets(false);
+    }
+
     function escapeAttr(value) {
         return String(value || '').replace(/"/g, '&quot;');
     }
@@ -888,6 +1004,86 @@
             _cmDraftBackup = '';
         }
     }
+
+    /**
+     * Merge optimistic replies from oldThreads into newThreads.
+     * - For each optimistic reply in oldThreads that has a matching real reply
+     *   in newThreads (matched by body content), the optimistic entry is replaced
+     *   by the real one (which has a proper ID and author info).
+     * - For each optimistic reply with NO match in newThreads, it is preserved
+     *   (appended to the corresponding thread's replies).
+     *
+     * Note: The _optimistic flag is set by the callers of optimisticInsertComment
+     * (lines 827, 7993), not by optimisticInsertComment itself. Backend data
+     * never includes _optimistic.
+     */
+    function mergeOptimisticReplies(oldThreads, newThreads) {
+        if (!oldThreads || !oldThreads.length) return newThreads;
+        const oldOptimistic = [];
+        // Collect all optimistic entries with their parent thread IDs
+        for (const thread of oldThreads) {
+            if (thread._optimistic) {
+                oldOptimistic.push({ entry: thread, parentId: null });
+            }
+            if (thread.replies) {
+                for (const reply of thread.replies) {
+                    if (reply._optimistic) {
+                        oldOptimistic.push({ entry: reply, parentId: thread.id });
+                    }
+                }
+            }
+        }
+        if (!oldOptimistic.length) return newThreads;
+
+        // For each optimistic entry, check if a matching real entry exists in newThreads
+        for (const { entry, parentId } of oldOptimistic) {
+            const matched = findMatchingRealEntry(newThreads, entry, parentId);
+            if (!matched) {
+                // No match — preserve the optimistic entry
+                if (parentId) {
+                    const thread = newThreads.find(t => t.id === parentId);
+                    if (thread) {
+                        thread.replies = thread.replies || [];
+                        if (!thread.replies.some(r => r._optimistic && r.body === entry.body)) {
+                            thread.replies.push(entry);
+                        }
+                    }
+                } else {
+                    // Top-level optimistic thread
+                    if (!newThreads.some(t => t._optimistic && t.body === entry.body)) {
+                        newThreads.push(entry);
+                    }
+                }
+            }
+            // If matched, the real entry is already in newThreads — do nothing (optimistic is dropped)
+        }
+        return newThreads;
+    }
+
+    /**
+     * Check if a real (non-optimistic) entry matching the optimistic entry exists.
+     * Match by body content (trimmed, case-insensitive) within the same thread.
+     * Known limitation: may fail if the API normalizes content differently from
+     * user input (e.g. mention syntax, markdown rendering).
+     */
+    function findMatchingRealEntry(threads, optimisticEntry, parentId) {
+        if (parentId) {
+            const thread = threads.find(t => t.id === parentId);
+            if (thread && thread.replies) {
+                return thread.replies.find(r =>
+                    !r._optimistic &&
+                    (r.body || '').trim().toLowerCase() === (optimisticEntry.body || '').trim().toLowerCase()
+                );
+            }
+        } else {
+            return threads.find(t =>
+                !t._optimistic &&
+                (t.body || '').trim().toLowerCase() === (optimisticEntry.body || '').trim().toLowerCase()
+            );
+        }
+        return null;
+    }
+
 
     function showCommentManagerError(errorMsg) {
         const threadsDiv = document.getElementById('tickets-comment-threads');
@@ -4740,6 +4936,74 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     showTicketsStatus(msg.error || 'Failed to update status', true);
                 }
                 break;
+            case 'moveTargetsResult': {
+                setTicketsLoadingState(false);
+                const select = document.getElementById('move-target-select');
+                const submitBtn = document.getElementById('move-modal-submit');
+                if (select) {
+                    select.innerHTML = '';
+                    window._allMoveTargets = msg.targets || [];
+                    if (window._allMoveTargets.length === 0) {
+                        const opt = document.createElement('option');
+                        opt.disabled = true;
+                        opt.textContent = 'No available move targets found.';
+                        select.appendChild(opt);
+                        if (submitBtn) submitBtn.disabled = true;
+                    } else {
+                        window._allMoveTargets.forEach(t => {
+                            const opt = document.createElement('option');
+                            opt.value = t.id;
+                            opt.textContent = t.path || t.name;
+                            select.appendChild(opt);
+                        });
+                        // Do not enable until something is selected, or if unassigned is checked
+                        const unassignCheck = document.getElementById('move-linear-unassign');
+                        if (submitBtn) submitBtn.disabled = !(unassignCheck && unassignCheck.checked) && !select.value;
+                    }
+                }
+                break;
+            }
+            case 'moveTicketResult': {
+                setTicketsLoadingState(false);
+                const modal = document.getElementById('move-ticket-modal');
+                if (modal) modal.remove();
+                if (msg.success) {
+                    let successText = `Moved ✓`;
+                    if (msg.warning) {
+                        successText += ` Warning: ${msg.warning}`;
+                    }
+                    if (msg.remainsInLists > 0) {
+                        successText += ` (Task remains in ${msg.remainsInLists} other list(s))`;
+                    }
+                    showTicketsStatus(successText, false);
+                    if (msg.provider === 'clickup') {
+                        if (clickUpSelectedListId) {
+                            vscode.postMessage({
+                                type: 'refreshTicketsDelta',
+                                provider: 'clickup',
+                                listId: clickUpSelectedListId,
+                                workspaceRoot: ticketsWorkspaceRoot
+                            });
+                        } else {
+                            loadLocalTicketFiles();
+                        }
+                    } else {
+                        if (linearProjectPickerValue) {
+                            vscode.postMessage({
+                                type: 'refreshTicketsDelta',
+                                provider: 'linear',
+                                projectId: linearProjectPickerValue,
+                                workspaceRoot: ticketsWorkspaceRoot
+                            });
+                        } else {
+                            loadLocalTicketFiles();
+                        }
+                    }
+                } else {
+                    showTicketsStatus(msg.error || 'Failed to move ticket', true);
+                }
+                break;
+            }
             case 'postTicketCommentResult':
                 setTicketsLoadingState(false);
                 if (msg.success) {
@@ -4773,7 +5037,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'ticketCommentsLoaded':
                 setTicketsLoadingState(false);
                 if (msg.success) {
-                    _cmThreads = msg.threads || [];
+                    const newThreads = msg.threads || [];
+                    // Preserve optimistic replies that haven't been confirmed by the API yet.
+                    // Match by body+author+timestamp proximity to replace optimistic with real.
+                    _cmThreads = mergeOptimisticReplies(_cmThreads, newThreads);
                     _cmMembers = msg.members || [];
                     _cmThreadingSupported = msg.threadingSupported !== false;
                     // Refetch stale guard: if a new optimistic insert arrived
@@ -8022,14 +8289,14 @@ Instructions:
         // Project picker (Linear)
         projectPicker?.addEventListener('change', (e) => {
             linearProjectPickerValue = e.target.value;
+            // Context switch: the previously-selected ticket belongs to the old project.
+            // Drop it so the doc preview resets to the empty state instead of showing a
+            // ticket that is no longer in the visible list.
+            selectedLinearIssue = null;
+            _resetSidebarDrillDown();
             renderTicketsLinearList();
+            renderTicketsLinearTaskDetail();
             saveTicketsState();
-            // Wire the picker change to the same delta-aware import path that
-            // the Refresh button and the initial linearProjectLoaded handler use.
-            // The picker value is a project name; send it directly as projectId
-            // to match the existing convention (Refresh button :7661, linearProjectLoaded
-            // handler :4922). The backend uses it as a cursor key label, not a
-            // server-side filter — queryIssues filters via config.includeProjectNames.
             if (linearProjectPickerValue) {
                 vscode.postMessage({
                     type: 'refreshTicketsDelta',
@@ -8190,6 +8457,14 @@ Instructions:
                 const id = linkTicketBtn.dataset.linkTicketId;
                 const provider = linkTicketBtn.dataset.provider;
                 handleLinkToTicket(provider, id, linkTicketBtn);
+                return;
+            }
+            const moveTicketBtn = e.target.closest('[data-move-ticket-id]');
+            if (moveTicketBtn) {
+                const id = moveTicketBtn.dataset.moveTicketId;
+                const provider = moveTicketBtn.dataset.provider;
+                e.stopPropagation();
+                showMoveTicketModal(provider, id);
                 return;
             }
             const refineBtn = e.target.closest('[data-refine-ticket-id]');
@@ -8924,6 +9199,7 @@ Instructions:
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
                 <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Refine</button>
+                <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Move</button>
                 ${openBtn}
             </div>
         </div>
@@ -8951,6 +9227,7 @@ Instructions:
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
                 <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Refine</button>
+                <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Move</button>
                 ${openBtn}
             </div>
         </div>
@@ -9433,6 +9710,8 @@ Instructions:
             clickUpAvailableListsInFolder = [];
             clickUpAvailableDirectLists = [];
             clickUpProjectIssues = [];
+            selectedClickUpIssue = null;
+            _resetSidebarDrillDown();
             if (spaceId) {
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
@@ -9474,6 +9753,8 @@ Instructions:
             clickUpSelectedListId = '';
             clickUpAvailableListsInFolder = [];
             clickUpProjectIssues = [];
+            selectedClickUpIssue = null;
+            _resetSidebarDrillDown();
             if (folderId) {
                 clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
                 clickUpHierarchyLoading = true;
@@ -9522,6 +9803,8 @@ Instructions:
             clickUpSelectedListId = listId;
             clickUpProjectLoading = false;
             clickUpProjectIssues = [];
+            selectedClickUpIssue = null;
+            _resetSidebarDrillDown();
             saveTicketsState();
             if (listId) {
                 const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';

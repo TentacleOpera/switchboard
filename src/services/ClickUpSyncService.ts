@@ -113,6 +113,11 @@ export interface ClickUpMappingSelection {
   listId?: string;
 }
 
+export interface ClickUpMoveResult {
+  warning?: string;
+  remainsInLists: number;
+}
+
 export interface ClickUpApplyOptions {
   createFolder: boolean;
   createLists: boolean;
@@ -1450,6 +1455,100 @@ export class ClickUpSyncService {
     }
 
     return this._normalizeClickUpTask(updateResult.data);
+  }
+
+  /**
+   * Move a ClickUp task to a different HOME list.
+   * Uses the v3 move endpoint: PUT /api/v3/workspaces/{workspace_id}/tasks/{task_id}/home_list/{list_id}
+   * Only the home list changes — additional list memberships (e.g. sprint lists) are untouched.
+   */
+  public async moveTask(
+    taskId: string,
+    targetListId: string,
+    options?: {
+      moveCustomFields?: boolean;
+      statusMappings?: Array<{ source_status: string; destination_status: string }>;
+    }
+  ): Promise<ClickUpMoveResult> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedTaskId = String(taskId || '').trim();
+    const normalizedTargetListId = String(targetListId || '').trim();
+    if (!normalizedTaskId || !normalizedTargetListId) {
+      throw new Error('ClickUp task move requires both a task ID and a target list ID.');
+    }
+
+    const workspaceId = await this.loadWorkspaceIdIfNeeded();
+
+    // One task fetch serves both status auto-mapping and the multi-list residue count.
+    const taskResult = await this.httpRequest('GET', `/task/${normalizedTaskId}`);
+    if (taskResult.status !== 200) {
+      throw new Error(`Failed to load ClickUp task ${normalizedTaskId} before move. Status: ${taskResult.status}`);
+    }
+    const currentStatusName = String(taskResult.data?.status?.status ?? '');
+    const currentStatusId = String(taskResult.data?.status?.id ?? '');
+    const locations: Array<{ id: string }> = Array.isArray(taskResult.data?.locations)
+      ? taskResult.data.locations
+      : [];
+    const remainsInLists = locations.filter(
+      l => String(l.id) !== normalizedTargetListId
+    ).length;
+
+    let statusMappings = options?.statusMappings;
+    let warning: string | undefined;
+
+    if (!statusMappings || statusMappings.length === 0) {
+      const listResult = await this.httpRequest('GET', `/list/${normalizedTargetListId}`);
+      if (listResult.status !== 200) {
+        throw new Error(`Failed to load target list ${normalizedTargetListId} before move. Status: ${listResult.status}`);
+      }
+      const targetStatuses: Array<{ id: string; status: string }> =
+        Array.isArray(listResult.data?.statuses) ? listResult.data.statuses : [];
+      const nameMatch = targetStatuses.find(
+        s => String(s.status).toLowerCase() === currentStatusName.toLowerCase()
+      );
+      if (!nameMatch && targetStatuses.length > 0) {
+        statusMappings = [{ source_status: currentStatusId, destination_status: targetStatuses[0].id }];
+        warning = `Status "${currentStatusName}" does not exist in the target list — task was set to "${targetStatuses[0].status}".`;
+      }
+    }
+
+    const moveBody: Record<string, unknown> = {
+      move_custom_fields: options?.moveCustomFields ?? true
+    };
+    if (statusMappings && statusMappings.length > 0) {
+      moveBody.status_mappings = statusMappings;
+    }
+
+    const moveResult = await this.retry(() =>
+      this.httpRequestV3(
+        'PUT',
+        `/workspaces/${workspaceId}/tasks/${normalizedTaskId}/home_list/${normalizedTargetListId}`,
+        moveBody
+      )
+    );
+    if (moveResult.status !== 200) {
+      const detail = typeof moveResult.data === 'string'
+        ? moveResult.data
+        : JSON.stringify(moveResult.data);
+      throw new Error(`Failed to move ClickUp task ${normalizedTaskId} to list ${normalizedTargetListId}. Status: ${moveResult.status} — ${detail}`);
+    }
+
+    // Invalidate cache for BOTH the old list and the new list
+    if (this._cacheService) {
+      const oldListId = this._taskListIndex.get(normalizedTaskId);
+      if (oldListId) {
+        this._cacheService.invalidateTaskCache('clickup', oldListId);
+      }
+      this._cacheService.invalidateTaskCache('clickup', normalizedTargetListId);
+      // Update the reverse map to reflect the new location
+      this._taskListIndex.set(normalizedTaskId, normalizedTargetListId);
+    }
+
+    return { warning, remainsInLists };
   }
 
   public async getSpaceTags(spaceId: string): Promise<Array<{ name: string; tagFg: string; tagBg: string }>> {
