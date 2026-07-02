@@ -67,10 +67,18 @@ export class NotionBackupService {
         let backedUp = 0;
         const total = allPlans.length;
 
+        // Build planId → notionPageId map for epics so subtasks can set their Epic relation.
+        // Uses existing notionPageId values (set by a prior setup sync). If an epic has no
+        // page id yet, its subtasks get an empty relation — filled on a later backup.
+        const epicIdToNotionPageId = new Map<string, string>();
+        for (const p of allPlans) {
+            if (p.isEpic && p.notionPageId) { epicIdToNotionPageId.set(p.planId, p.notionPageId); }
+        }
+
         for (let i = 0; i < allPlans.length; i++) {
             const plan = allPlans[i];
             progress?.report({ message: `Backing up plan ${i + 1} of ${total}...` });
-            const result = await this._upsertPlanToNotion(config.databaseId, plan);
+            const result = await this._upsertPlanToNotion(config.databaseId, plan, epicIdToNotionPageId);
             if (result.success) { backedUp++; }
             if (total > 1) { await this._delay(350); }
         }
@@ -104,13 +112,16 @@ export class NotionBackupService {
 
         const toRestore: KanbanPlanRecord[] = [];
         const columnUpdates: Array<{ planId: string; column: string }> = [];
+        // Collect epic relation targets for second-pass resolution (notionPageId → planId).
+        const epicLinks: Array<{ plan: KanbanPlanRecord; epicNotionPageId: string }> = [];
         let skipped = 0;
 
         for (let i = 0; i < notionPages.length; i++) {
             const page = notionPages[i];
             progress?.report({ message: `Restoring plan ${i + 1} of ${notionPages.length}...` });
-            const plan = this._notionPageToPlanRecord(page);
-            if (!plan) { continue; }
+            const parsed = this._notionPageToPlanRecord(page);
+            if (!parsed) { continue; }
+            const plan = parsed.plan;
 
             const local = localByPlanId.get(plan.planId);
             if (local) {
@@ -131,6 +142,10 @@ export class NotionBackupService {
                 }
             }
             toRestore.push(plan);
+            if (parsed.epicNotionPageId && parsed.epicNotionPageId !== String(page.id || '')) {
+                // Guard against self-relations (a page pointing to itself).
+                epicLinks.push({ plan, epicNotionPageId: parsed.epicNotionPageId });
+            }
             if (notionPages.length > 1) { await this._delay(10); }
         }
 
@@ -152,6 +167,21 @@ export class NotionBackupService {
                 await kanbanDb.cascadeEpicByPlanId(dbPlan.planId, column, targetStatus, true);
             } else {
                 await kanbanDb.updateColumnByPlanFile(dbPlan.planFile, dbPlan.workspaceId, column);
+            }
+        }
+
+        // Post-restore: resolve Epic relations (Notion page id → local planId) and apply
+        // epic structure. Build a notionPageId → planId map from the restored records
+        // (each has both). Then for each subtask with an Epic relation, set its epicId.
+        if (epicLinks.length > 0) {
+            const notionPageIdToPlanId = new Map<string, string>();
+            for (const r of toRestore) {
+                if (r.notionPageId && r.planId) { notionPageIdToPlanId.set(r.notionPageId, r.planId); }
+            }
+            for (const { plan, epicNotionPageId } of epicLinks) {
+                const epicPlanId = notionPageIdToPlanId.get(epicNotionPageId);
+                if (!epicPlanId || epicPlanId === plan.planId) { continue; } // untracked or self-relation
+                await kanbanDb.updateEpicStatus(plan.planId, 0, epicPlanId);
             }
         }
 
@@ -209,7 +239,11 @@ export class NotionBackupService {
                     { name: 'notion-import', color: 'red' }
                 ] } },
                 'ClickUp Task ID': { rich_text: {} },
-                'Linear Issue ID': { rich_text: {} }
+                'Linear Issue ID': { rich_text: {} },
+                // Epic structure — 'Is Epic' is created up-front; the 'Epic' self-relation
+                // is added post-creation via _ensureEpicProperties (Notion requires the DB
+                // to exist before a relation can reference it).
+                'Is Epic': { checkbox: {} }
             }
         };
 
@@ -274,21 +308,48 @@ export class NotionBackupService {
         const dbColumns = Array.from(new Set(allPlans.map(p => String(p.kanbanColumn || '').trim()).filter(Boolean)));
         const allColumns = Array.from(new Set([...(columnNames || []), ...dbColumns].map(c => String(c).trim()).filter(Boolean)));
         await this._ensureColumnSelectOptions(plansDatabaseId, allColumns);
+        // Ensure epic schema properties (Is Epic checkbox + Epic self-relation) exist.
+        // Idempotent — upgrades existing DBs in-place; no-op if already present.
+        await this._ensureEpicProperties(plansDatabaseId);
 
         // 3. Back up the participating plans and write page ids back.
+        //    Two-pass: Pass 1 creates/updates all pages (with Is Epic but no Epic relation —
+        //    the relation needs the epic's page id, which may not exist yet). Pass 2 PATCHes
+        //    each subtask page to set its Epic relation now that all page ids are known.
         const participating = allPlans.filter(p => p.status !== 'deleted' && boardSet.has(p.project || ''));
         let backedUp = 0;
+        const planIdToPageId = new Map<string, string>(); // collected during Pass 1
         for (let i = 0; i < participating.length; i++) {
             const plan = participating[i];
+            // Pass 1: no epicIdToNotionPageId → Epic relation left empty (filled in Pass 2).
             const result = await this._upsertPlanToNotion(plansDatabaseId, plan);
             if (result.success && result.pageId) {
                 await kanbanDb.updateNotionPageIdByPlanFile(plan.planFile, workspaceId, result.pageId);
                 // Surface the id to the local triager/reply agent (mirror Linear's
                 // `**Linear Issue ID:**`) so it can post replies via the notion_api skill.
                 await this._writeNotionPageIdMetadata(plan.planFile, result.pageId);
+                planIdToPageId.set(plan.planId, result.pageId);
                 backedUp++;
             }
             if (participating.length > 1) { await this._delay(350); }
+        }
+
+        // Pass 2: for each subtask with an epicId, PATCH its page to set the Epic relation.
+        // Only plans whose epic has a known page id (from Pass 1) get the relation.
+        for (const plan of participating) {
+            if (!plan.epicId) { continue; }
+            const epicPageId = planIdToPageId.get(plan.epicId);
+            if (!epicPageId) { continue; } // epic not on this board or not backed up
+            const subtaskPageId = planIdToPageId.get(plan.planId);
+            if (!subtaskPageId) { continue; }
+            try {
+                await this._notionFetchService.httpRequest('PATCH', `/pages/${subtaskPageId}`, {
+                    properties: { 'Epic': { relation: [{ id: epicPageId }] } }
+                }, 10000);
+            } catch (e) {
+                console.warn(`[NotionBackupService] Pass 2: failed to set Epic relation for ${plan.planId}:`, e);
+            }
+            await this._delay(350);
         }
 
         // 4. Ensure the Comments DB.
@@ -364,6 +425,33 @@ export class NotionBackupService {
         }
     }
 
+    /**
+     * Idempotently ensure the `Is Epic` (checkbox) and `Epic` (single-property self-relation)
+     * properties exist on the plans DB. The `Epic` relation is a self-relation — Notion
+     * requires the database to exist before a relation can reference it, so it is PATCHed
+     * in after creation (same pattern as `_ensureColumnSelectOptions`). Safe to call on
+     * every setup — only PATCHes properties that are missing.
+     */
+    private async _ensureEpicProperties(databaseId: string): Promise<void> {
+        try {
+            const dbResult = await this._notionFetchService.httpRequest('GET', `/databases/${databaseId}`, undefined, 10000);
+            if (dbResult.status !== 200) { return; }
+            const props = dbResult.data?.properties || {};
+            const patch: Record<string, any> = {};
+            if (!props['Is Epic']) {
+                patch['Is Epic'] = { checkbox: {} };
+            }
+            if (!props['Epic']) {
+                patch['Epic'] = { relation: { database_id: databaseId, type: 'single_property', single_property: {} } };
+            }
+            if (Object.keys(patch).length > 0) {
+                await this._notionFetchService.httpRequest('PATCH', `/databases/${databaseId}`, { properties: patch }, 10000);
+            }
+        } catch (e) {
+            console.warn('[NotionBackupService] _ensureEpicProperties failed:', e);
+        }
+    }
+
     /** Create the agent-operated "Switchboard Comments" database under the configured parent page. */
     private async _ensureCommentsDatabase(plansDatabaseId: string): Promise<{ databaseId?: string; error?: string }> {
         const notionConfig = await this._notionFetchService.loadConfig();
@@ -405,7 +493,7 @@ export class NotionBackupService {
 
     // ── Private helpers ───────────────────────────────────────────
 
-    private async _upsertPlanToNotion(databaseId: string, plan: KanbanPlanRecord): Promise<{ success: boolean; pageId?: string }> {
+    private async _upsertPlanToNotion(databaseId: string, plan: KanbanPlanRecord, epicIdToNotionPageId?: Map<string, string>): Promise<{ success: boolean; pageId?: string }> {
         try {
             // Query for existing page by Plan ID
             const queryResult = await this._notionFetchService.httpRequest('POST', `/databases/${databaseId}/query`, {
@@ -413,7 +501,7 @@ export class NotionBackupService {
             }, 15000);
             const existing = queryResult.data?.results?.[0];
 
-            const properties = this._planToNotionProperties(plan);
+            const properties = this._planToNotionProperties(plan, epicIdToNotionPageId);
             if (existing) {
                 await this._notionFetchService.httpRequest('PATCH', `/pages/${existing.id}`, { properties }, 10000);
                 return { success: true, pageId: String(existing.id || '') };
@@ -447,7 +535,17 @@ export class NotionBackupService {
         return pages;
     }
 
-    private _planToNotionProperties(plan: KanbanPlanRecord): Record<string, any> {
+    private _planToNotionProperties(plan: KanbanPlanRecord, epicIdToNotionPageId?: Map<string, string>): Record<string, any> {
+        // Epic relation — needs the epic's Notion page id (not the local planId).
+        // If the map is provided and the epic's page exists, set the relation; otherwise
+        // leave it empty (Pass 2 of setup sync fills it after all pages are created).
+        let epicRelation: { relation: any[] };
+        if (plan.epicId && epicIdToNotionPageId) {
+            const epicPageId = epicIdToNotionPageId.get(plan.epicId);
+            epicRelation = { relation: epicPageId ? [{ id: epicPageId }] : [] };
+        } else {
+            epicRelation = { relation: [] };
+        }
         return {
             'Topic': { title: [{ text: { content: plan.topic } }] },
             'Plan ID': { rich_text: [{ text: { content: plan.planId } }] },
@@ -463,11 +561,18 @@ export class NotionBackupService {
             'Last Action': { rich_text: [{ text: { content: plan.lastAction } }] },
             'Source Type': { select: { name: plan.sourceType } },
             'ClickUp Task ID': { rich_text: [{ text: { content: plan.clickupTaskId || '' } }] },
-            'Linear Issue ID': { rich_text: [{ text: { content: plan.linearIssueId || '' } }] }
+            'Linear Issue ID': { rich_text: [{ text: { content: plan.linearIssueId || '' } }] },
+            'Is Epic': { checkbox: Boolean(plan.isEpic) },
+            'Epic': epicRelation
         };
     }
 
-    private _notionPageToPlanRecord(page: any): KanbanPlanRecord | null {
+    /**
+     * Map a Notion page → KanbanPlanRecord. Also returns the `Epic` relation's target
+     * page id (if any) as `epicNotionPageId` — a transient value NOT on KanbanPlanRecord.
+     * The caller (`restoreFromNotion`) resolves it to a local `planId` in a second pass.
+     */
+    private _notionPageToPlanRecord(page: any): { plan: KanbanPlanRecord; epicNotionPageId?: string } | null {
         try {
             const p = page.properties;
             const getRichText = (prop: any): string => prop?.rich_text?.[0]?.plain_text || '';
@@ -477,7 +582,14 @@ export class NotionBackupService {
             const getNumber = (prop: any): number => prop?.number ?? 0;
             const getMultiSelect = (prop: any): string => (prop?.multi_select || []).map((t: any) => t.name).join(',');
 
-            return {
+            // Epic structure — Is Epic checkbox + Epic relation (self-relation to plans DB).
+            // If the properties don't exist (pre-epic-schema setup), these read falsy — safe.
+            const isEpic = p['Is Epic']?.checkbox === true ? 1 : 0;
+            const epicRelation = p['Epic']?.relation;
+            const epicNotionPageId = Array.isArray(epicRelation) && epicRelation.length > 0
+                ? String(epicRelation[0]?.id || '') : '';
+
+            const plan: KanbanPlanRecord = {
                 planId: getRichText(p['Plan ID']),
                 sessionId: getRichText(p['Session ID']),
                 topic: getTitle(p['Topic']),
@@ -500,8 +612,11 @@ export class NotionBackupService {
                 clickupTaskId: getRichText(p['ClickUp Task ID']),
                 linearIssueId: getRichText(p['Linear Issue ID']),
                 // The row's own page id is the Notion Remote-Control linkage.
-                notionPageId: String(page.id || '')
+                notionPageId: String(page.id || ''),
+                isEpic,
+                epicId: '' // resolved by the caller from epicNotionPageId
             };
+            return { plan, epicNotionPageId: epicNotionPageId || undefined };
         } catch {
             return null;
         }

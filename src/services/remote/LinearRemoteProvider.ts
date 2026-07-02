@@ -51,7 +51,7 @@ export class LinearRemoteProvider implements RemoteProvider {
         const QUERY = `
           query {
             issues(filter: { updatedAt: { gt: ${since} } }, first: 100) {
-              nodes { id updatedAt state { id } }
+              nodes { id updatedAt state { id } parent { id } children { nodes { id } } }
             }
           }
         `;
@@ -63,7 +63,17 @@ export class LinearRemoteProvider implements RemoteProvider {
             for (const node of nodes) {
                 const remoteId = String(node.id || '');
                 const stateKey = String(node.state?.id || '');
-                if (remoteId && stateKey) { deltas.push({ remoteId, stateKey }); }
+                if (remoteId && stateKey) {
+                    deltas.push({
+                        remoteId,
+                        stateKey,
+                        // Epic structure — parent/children are native Linear GraphQL fields.
+                        // updatedAt bumps on parentId changes (issue property update), so a
+                        // parent/child link change IS detected by this delta query.
+                        parentRemoteId: String(node.parent?.id || ''),
+                        isEpicCandidate: (node.children?.nodes?.length || 0) > 0,
+                    });
+                }
                 const ts = String(node.updatedAt || '');
                 if (ts && ts > nextCursor) { nextCursor = ts; }
             }

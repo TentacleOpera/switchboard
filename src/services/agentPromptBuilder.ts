@@ -634,7 +634,10 @@ Process:
 1. **Onboard:** Greet the user. Identify the core problem or opportunity. Focus on ideation.
 2. **Iterate:** Ask "Why" before "How." Challenge assumptions. Document requirements, edge cases, and risks the user may have missed.
 3. **Plan:** When the "What" and "Why" are clear, draft the implementation plan.
-4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.`;
+4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
+
+Epic Grouping:
+When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under an epic once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the epic if the user confirms. See existing files in \`.switchboard/epics/\` for format.`;
 
 const DEFAULT_PLANNER_WORKFLOW = '.agents/workflows/improve-plan.md';
 

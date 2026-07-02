@@ -94,6 +94,33 @@ instead of being a "post-it note" that sends the local execution agent in the wr
 6. **Read results.** On a later turn, query the "Switchboard Comments" database for rows with
    `From = Switchboard` (the local agent's replies), and/or re-read the card's page body.
 
+## Epics (grouping related work)
+
+An **epic** is a parent card that groups related subtask cards. Moving an epic's
+`Kanban Column` cascades the move to all its subtasks on the local machine — so you
+can dispatch a whole group of work in one action.
+
+### To create an epic
+1. Create the epic's page in the plans DB (same as any card).
+2. Check the **Is Epic** checkbox property.
+3. The page is now an epic — it can have subtasks.
+
+### To assign a subtask to an epic
+1. Create or find the subtask's page.
+2. Set its **Epic** relation property to point to the epic's page.
+3. The local poll mirrors the link — the subtask now moves when the epic moves.
+
+### To trigger a group of work
+1. Set the `Kanban Column` on the **epic** page (not the subtasks).
+2. The local cascade moves all subtasks to the same column and dispatches each
+   subtask's column agent.
+
+### Constraints
+- A subtask can belong to only **one** epic (single-select relation).
+- Only create epic/subtask links between pages on the **same synced board** —
+  the local poll can only mirror links between cards it tracks.
+- An epic with no subtasks is harmless (it just cascades to nothing).
+
 ## Capability note
 Every Notion MCP connector reliably supports database query, create-page/row, and property
 updates — which is all this flow needs. If your specific connector lacks create-row, fall back

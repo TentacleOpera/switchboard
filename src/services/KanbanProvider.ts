@@ -1696,6 +1696,21 @@ export class KanbanProvider implements vscode.Disposable {
         return this._remoteControlActive;
     }
 
+    /**
+     * One-shot startup reconciliation: resolve the per-root RemoteControlService
+     * and run a single poll cycle (without starting the timer) so cards advance
+     * from remote status changes accumulated while the machine was off.
+     * Wrapped in try/catch so one root's failure doesn't block others.
+     */
+    public async reconcileRemoteOnStartup(workspaceRoot: string): Promise<void> {
+        try {
+            const rc = this._getRemoteControl(workspaceRoot);
+            await rc.reconcileOnce();
+        } catch (e) {
+            console.error(`[KanbanProvider] reconcileRemoteOnStartup failed for ${workspaceRoot}:`, e);
+        }
+    }
+
     /** Stop pinging; returns the resulting active state. Mirrors the state to the kanban toolbar. */
     public remoteStop(workspaceRoot?: string): boolean {
         const resolved = this._resolveWorkspaceRoot(workspaceRoot);

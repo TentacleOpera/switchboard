@@ -69,3 +69,12 @@ Emit a **plan-import manifest** ONLY when you group plans into an epic (or other
 **`**Plan ID:**` embedding (required for Trigger B):** each plan `.md` must embed `**Plan ID:** <uuid>`, and epics use the `epic-<uuid>.md` filename, so `epicId` links resolve and identity is stable across re-imports.
 
 **Stale-manifest guard:** the ingestor only overrides the column when the row is still at `CREATED`; manual board moves are never reverted. The manifest is deleted after all entries apply; idempotent if a delete is missed.
+
+## Epic Grouping
+
+When the work described will span 3 or more plan files on a related topic (sharing a common feature area or root cause):
+
+- **Early (during Iterate):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under an epic?"* Do not create anything yet.
+- **Closing (at Gate):** When the user signals scoping is complete OR once 3+ related plans have been drafted, offer again: *"You now have [N] plans covering [topic] — want me to create an epic to group them?"*
+
+Only create the epic if the user confirms. Refer to existing files in `.switchboard/epics/` for the expected format.

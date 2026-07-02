@@ -96,7 +96,20 @@ export class NotionRemoteProvider implements RemoteProvider {
         for (const row of rows) {
             const remoteId = String(row.id || '');
             const stateKey = String(row.properties?.['Kanban Column']?.select?.name || '').trim();
-            if (remoteId && stateKey) { deltas.push({ remoteId, stateKey }); }
+            if (remoteId && stateKey) {
+                // Epic structure — read Is Epic checkbox + Epic relation (added by
+                // NotionBackupService._ensureEpicProperties). If the properties don't
+                // exist yet (pre-epic-schema setup), these read falsy — safe degradation.
+                const epicRelation = row.properties?.['Epic']?.relation;
+                const parentRemoteId = Array.isArray(epicRelation) && epicRelation.length > 0
+                    ? String(epicRelation[0]?.id || '') : '';
+                deltas.push({
+                    remoteId,
+                    stateKey,
+                    parentRemoteId,
+                    isEpicCandidate: row.properties?.['Is Epic']?.checkbox === true,
+                });
+            }
             const ts = String(row.last_edited_time || '');
             if (ts && ts > nextCursor) { nextCursor = ts; }
         }

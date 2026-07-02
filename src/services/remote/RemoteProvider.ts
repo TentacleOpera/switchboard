@@ -21,6 +21,12 @@ export interface RemoteStateDelta {
     remoteId: string;
     /** Opaque provider state key. Linear: state UUID. Notion: the `Kanban Column` select name. */
     stateKey: string;
+    /** If the remote card's parent changed, the new parent's remote id (or '' if unparented).
+     *  Undefined = no parent change detected (provider didn't query it). */
+    parentRemoteId?: string;
+    /** If the remote card is itself a parent (has children), mark it as an epic candidate.
+     *  Undefined = provider didn't query it. */
+    isEpicCandidate?: boolean;
 }
 
 /**

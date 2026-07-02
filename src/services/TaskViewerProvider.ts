@@ -2625,6 +2625,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     console.log(`[TaskViewerProvider] No DB exists for ${workspaceRoot} - skipping startup initialization`);
                 }
 
+                // Reconcile remote status changes accumulated while the machine was off.
+                // Runs a single poll cycle (no timer) so cards advance from remote edits.
+                try {
+                    await this._kanbanProvider?.reconcileRemoteOnStartup(workspaceRoot);
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] Remote reconcile failed for ${workspaceRoot}:`, e);
+                }
+
                 // Orphan detection is deferred to avoid blocking the startup loop on user input.
                 const effectiveWorkspaceRootForOrphanCheck = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(workspaceRoot) || workspaceRoot;
                 setTimeout(() => {
@@ -2977,7 +2985,8 @@ Each plan file must include:
 ## Important
 - Create ${issues.length} plan file(s) total — one per issue
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
-- Do NOT skip the investigation step — read the relevant code before writing each plan`;
+- Do NOT skip the investigation step — read the relevant code before writing each plan
+- If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create an epic grouping them: "These [N] plans cover related work — want me to create an epic to group them together?" Only create the epic if the user confirms. See ${workspaceRoot}/.switchboard/epics/ for the format.`;
     }
 
     public async dispatchConfiguredKanbanColumnAction(

@@ -44,6 +44,7 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'workflows/accuracy.md', name: 'accuracy', invocation: 'default' },
     { source: 'workflows/improve-plan.md', name: 'improve-plan', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
+    { source: 'workflows/sw-remote.md', name: 'sw-remote', invocation: 'default' },
 
     // Side-effecting proxy skills → disable-model-invocation (explicit /name only).
     { source: 'skills/clickup_api.md', name: 'clickup-api', invocation: 'no-model', allowedTools: 'Bash' },
@@ -54,10 +55,6 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'skills/clickup_create_subpage.md', name: 'clickup-create-subpage', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/linear_api.md', name: 'linear-api', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/notion_api.md', name: 'notion-api', invocation: 'no-model', allowedTools: 'Bash' },
-    {
-        source: 'skills/switchboard_remote_notion.md', name: 'switchboard-remote-notion', invocation: 'no-model',
-        descriptionFallback: 'Orient a claude.ai session on driving a Switchboard board through Notion via the Notion MCP connector (Remote Control).'
-    },
     {
         source: 'skills/get_tickets.md', name: 'get-tickets', invocation: 'no-model', allowedTools: 'Bash',
         descriptionFallback: 'Fetch tickets from the local Switchboard API proxy (ClickUp/Linear) for the current workspace.'

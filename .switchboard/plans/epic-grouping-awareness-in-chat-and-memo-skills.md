@@ -139,3 +139,7 @@ The `sw-remote` skill does not exist yet. Add a requirement to the existing plan
 ## Recommendation
 
 **Complexity: 3 → Send to Intern.** All changes are text additions across 7 files with no logic. The only risk is sync drift — mitigated by the explicit line-number references and the new item 4b. An intern can execute this in a single pass by following the numbered items in order.
+
+## Review Findings
+
+**Files reviewed:** `.claude/skills/switchboard-chat/SKILL.md`, `.agents/workflows/switchboard-chat.md`, `src/services/agentPromptBuilder.ts`, `.claude/skills/memo/SKILL.md`, `.agents/workflows/memo.md`, `src/services/TaskViewerProvider.ts`, `.agents/workflows/sw-remote.md` (item 6 amendment). No code changes applied. All 7 edit locations verified correct and in sync: the Epic Grouping text matches across SKILL.md, workflow mirror, and `DEFAULT_CHAT_BASE_INSTRUCTIONS`; the memo path is synced across both `.claude/` and `.agents/` files with correct step renumbering; the `_buildMemoPlannerPrompt` bullet uses `${workspaceRoot}` interpolation correctly; the sw-remote amendment is fulfilled. **NIT:** plan line numbers are stale (441→622, 2791→2977) but edits landed by content match. **No remaining risks.**
