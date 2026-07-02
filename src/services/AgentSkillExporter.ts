@@ -86,6 +86,7 @@ export class AgentSkillExporter {
     ): CustomAgentAddons | undefined {
         if (!builtinAddons) return undefined;
         const out: CustomAgentAddons = {};
+        // Fields with DIFFERENT names between built-in and CustomAgentAddons schemas
         if (builtinAddons.advancedRegression !== undefined) out.advancedReviewerEnabled = !!builtinAddons.advancedRegression;
         if (builtinAddons.reviewerConciseMode !== undefined) out.reviewerConciseModeEnabled = !!builtinAddons.reviewerConciseMode;
         if (builtinAddons.reviewerCompactPlanUpdate !== undefined) out.reviewerCompactPlanUpdateEnabled = !!builtinAddons.reviewerCompactPlanUpdate;
@@ -94,15 +95,35 @@ export class AgentSkillExporter {
         if (builtinAddons.pairProgramming !== undefined) out.pairProgrammingEnabled = !!builtinAddons.pairProgramming;
         if (builtinAddons.aggressivePairProgramming !== undefined) out.aggressivePairProgramming = !!builtinAddons.aggressivePairProgramming;
         if (builtinAddons.adviseResearch !== undefined) out.researchEnabled = !!builtinAddons.adviseResearch;
+        if (builtinAddons.gitProhibition !== undefined) out.gitProhibitionEnabled = !!builtinAddons.gitProhibition;
+        // Fields with SAME name in both schemas — pass through directly
+        if (builtinAddons.switchboardSafeguards !== undefined) out.switchboardSafeguards = !!builtinAddons.switchboardSafeguards;
+        if (builtinAddons.cavemanOutput !== undefined) out.cavemanOutput = !!builtinAddons.cavemanOutput;
+        if (builtinAddons.suppressWalkthrough !== undefined) out.suppressWalkthrough = !!builtinAddons.suppressWalkthrough;
+        if (builtinAddons.useWorktreesPerPlan !== undefined) out.useWorktreesPerPlan = !!builtinAddons.useWorktreesPerPlan;
+        if (builtinAddons.ticketUpdateMode !== undefined) out.ticketUpdateMode = builtinAddons.ticketUpdateMode;
+        if (builtinAddons.researchEnabled !== undefined) out.researchEnabled = !!builtinAddons.researchEnabled;
+        if (builtinAddons.subagentPolicy !== undefined) {
+            out.subagentPolicy = builtinAddons.subagentPolicy;
+            // Derive useSubagents boolean so the renderer's gate condition fires
+            if (builtinAddons.subagentPolicy === 'useSubagents' || builtinAddons.subagentPolicy === 'customSubagent') {
+                out.useSubagents = true;
+            }
+        }
+        if (builtinAddons.customSubagentName !== undefined) out.customSubagentName = builtinAddons.customSubagentName;
+        // Design system doc
         if (builtinAddons.designSystemDoc !== undefined) out.designSystemDoc = !!builtinAddons.designSystemDoc;
         if (builtinAddons.designSystemDocLink) out.designSystemDocLink = builtinAddons.designSystemDocLink;
         if (builtinAddons.designSystemDocContent) out.designSystemDocContent = builtinAddons.designSystemDocContent;
+        // Constitution (link/content may be present on role configs that reference project-level docs)
         if (builtinAddons.constitutionLink) out.constitutionLink = builtinAddons.constitutionLink;
         if (builtinAddons.constitutionContent) out.constitutionContent = builtinAddons.constitutionContent;
+        if (builtinAddons.workflowFilePathEnabled !== undefined) out.workflowFilePathEnabled = !!builtinAddons.workflowFilePathEnabled;
         if (builtinAddons.workflowFilePath) {
             out.workflowFilePathEnabled = true;
             out.workflowFilePath = builtinAddons.workflowFilePath;
         }
+        // skipCompilation / skipTests / clearAntigravityContext have no CustomAgentAddons equivalent — intentionally omitted.
         return out;
     }
 
@@ -239,14 +260,26 @@ export class AgentSkillExporter {
             lines.push(`- Ticket update behavior: ${addons.ticketUpdateMode}.`);
             lines.push('');
         }
-        if (addons.useSubagents) {
+        if (addons.useSubagents || addons.subagentPolicy) {
+            const policy = addons.subagentPolicy || 'default';
+            // Mirror buildCustomAgentPrompt: useSubagents===true with no explicit policy
+            // still triggers parallel dispatch
+            const parallelDispatch = policy === 'useSubagents'
+                || (policy === 'default' && addons.useSubagents === true);
             lines.push('### Subagent Usage');
-            lines.push('```');
-            lines.push(NO_SUBAGENTS_DIRECTIVE);
-            lines.push('```');
-            lines.push(`- Policy: ${addons.subagentPolicy || 'default'}.`);
-            if (addons.customSubagentName) {
-                lines.push(`- Custom subagent: ${addons.customSubagentName}`);
+            lines.push(`- Policy: ${policy}.`);
+            if (policy === 'noSubagents') {
+                lines.push('```');
+                lines.push(NO_SUBAGENTS_DIRECTIVE);
+                lines.push('```');
+            } else if (parallelDispatch) {
+                lines.push('- If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.');
+            } else if (policy === 'customSubagent' && addons.customSubagentName) {
+                lines.push(`- Use the "${addons.customSubagentName}" subagent.`);
+                lines.push('- If your platform supports parallel sub-agents, dispatch one such sub-agent per plan to execute them concurrently. If not, process them sequentially.');
+            }
+            if (addons.customSubagentName && policy !== 'customSubagent') {
+                lines.push(`- Custom subagent name: ${addons.customSubagentName}`);
             }
             lines.push('');
         }

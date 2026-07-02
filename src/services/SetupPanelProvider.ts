@@ -483,6 +483,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'runSetup':
                     await vscode.commands.executeCommand('switchboard.setup');
+                    this._panel.webview.postMessage({ type: 'setupComplete' });
                     break;
 
                 case 'openDocs':

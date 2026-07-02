@@ -5847,6 +5847,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 const canDispatch = workspaceRoot ? await this._canAssignRole(workspaceRoot, role) : false;
+                // Persist the column move FIRST — decouples the card position from
+                // dispatch success. The card stays where the user dropped it regardless
+                // of whether the agent dispatch succeeds. If dispatch fails, the
+                // prompt-fallback below copies the prompt and glows the copy-prompt button.
+                if (workspaceRoot) {
+                    await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
+                }
                 if (dispatchSpec?.source === 'custom-user' && workspaceRoot && this._taskViewerProvider) {
                     const ppMode = this._autobanState?.pairProgrammingMode ?? 'off';
                     const leadUsesIde = ppMode === 'ide-cli' || ppMode === 'ide-ide';
@@ -5883,6 +5890,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                            }
+                        }
+                        if (!dispatched) {
+                            // Dispatch failed — card is already persisted in target column
+                            // via moveCardToColumn above. Generate the prompt, copy it to the
+                            // clipboard, and signal the webview to glow the copy-prompt button
+                            // orange so the user can paste manually.
+                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                            if (card && workspaceRoot) {
+                                const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                                await vscode.env.clipboard.writeText(prompt);
+                                this._panel?.webview.postMessage({
+                                    type: 'dispatchFailedPromptReady',
+                                    planId: card.planId || sessionId,
+                                    sessionId: card.sessionId,
+                                    targetColumn
+                                });
                             }
                         }
                     }
@@ -5944,6 +5968,38 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 }
                             }
                         }
+                        if (!dispatched && workspaceRoot) {
+                            // Dispatch failed — card is already persisted in target column
+                            // via moveCardToColumn above. Generate the prompt, copy it to the
+                            // clipboard, and signal the webview to glow the copy-prompt button.
+                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                            if (card) {
+                                const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                                await vscode.env.clipboard.writeText(prompt);
+                                this._panel?.webview.postMessage({
+                                    type: 'dispatchFailedPromptReady',
+                                    planId: card.planId || sessionId,
+                                    sessionId: card.sessionId,
+                                    targetColumn
+                                });
+                            }
+                        }
+                    }
+                }
+                if (!canDispatch && workspaceRoot) {
+                    // No agent available to dispatch — card is already persisted in target
+                    // column via moveCardToColumn above. Generate the prompt, copy it to the
+                    // clipboard, and signal the webview to glow the copy-prompt button.
+                    const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                    if (card) {
+                        const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                        await vscode.env.clipboard.writeText(prompt);
+                        this._panel?.webview.postMessage({
+                            type: 'dispatchFailedPromptReady',
+                            planId: card.planId || sessionId,
+                            sessionId: card.sessionId,
+                            targetColumn
+                        });
                     }
                 }
                 // Push authoritative DB state back to the board (~100ms).

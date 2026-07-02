@@ -1230,7 +1230,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Helper commands for Kanban ↔ sidebar delegation
     const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride } as any);
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 

@@ -1034,6 +1034,16 @@
             pointer-events: none;
         }
 
+        /* Card Copy Button — dispatch failed, prompt ready */
+        @keyframes promptReadyGlow {
+            0%, 100% { box-shadow: 0 0 4px 1px rgba(255, 165, 0, 0.6); border-color: rgba(255, 165, 0, 0.8); }
+            50% { box-shadow: 0 0 8px 2px rgba(255, 165, 0, 0.9); border-color: rgba(255, 165, 0, 1); }
+        }
+        .card-btn.copy.prompt-ready {
+            animation: promptReadyGlow 2s ease-in-out infinite;
+            border: 1px solid rgba(255, 165, 0, 0.8);
+        }
+
         /* Column Icon Button Flash (was missing — flashIconBtn() was a no-op) */
         @keyframes iconFlash {
             0% { transform: scale(1); }
@@ -4134,8 +4144,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 promptsExportBtn.addEventListener('click', () => {
                     const roleSelect = document.getElementById('roleSelect');
                     if (roleSelect) {
-                        const agentId = roleSelect.value;
-                        vscode.postMessage({ type: 'exportAgentAsSkill', agentId, workspaceRoot: getActiveWorkspaceRoot() });
+                        const selectedValue = roleSelect.value;
+                        const selectedOpt = roleSelect.options[roleSelect.selectedIndex];
+                        const customGroup = document.getElementById('customAgentsGroup');
+                        const isCustomAgent = !!(customGroup && selectedOpt && customGroup.contains(selectedOpt));
+                        if (isCustomAgent) {
+                            // Custom agent: dropdown value is agent.role, not UUID — look up the actual id
+                            const found = lastCustomAgents.find(a => (a.role || ('custom_agent_' + a.id)) === selectedValue);
+                            const agentId = found ? found.id : undefined;
+                            if (!agentId) {
+                                vscode.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Could not resolve custom agent ID' });
+                                return;
+                            }
+                            vscode.postMessage({ type: 'exportAgentAsSkill', agentId, workspaceRoot: getActiveWorkspaceRoot() });
+                        } else {
+                            // Built-in role: send as role, not agentId
+                            vscode.postMessage({ type: 'exportAgentAsSkill', role: selectedValue, workspaceRoot: getActiveWorkspaceRoot() });
+                        }
                         const orig = promptsExportBtn.textContent;
                         promptsExportBtn.textContent = 'EXPORTED!';
                         setTimeout(() => { promptsExportBtn.textContent = orig; }, 2000);
@@ -5893,7 +5918,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             return;
                         }
 
-                        if (!isColumnAgentAvailable(group.targetColumn)) return;
+                        if (!isColumnAgentAvailable(group.targetColumn)) {
+                            // No agent to dispatch — still persist the card move to the DB.
+                            // Without this, the optimistic DOM move is never persisted and
+                            // the card bounces back on reload. The moveCardForward handler
+                            // will also send a moveCards delta to confirm the UI position.
+                            postKanbanMessage({
+                                type: 'moveCardForward',
+                                sessionIds: groupedIds,
+                                targetColumn: group.targetColumn,
+                                workspaceRoot
+                            });
+                            return;
+                        }
                         if (groupedIds.length === 1) {
                             postKanbanMessage({ type: 'triggerAction', sessionId: groupedIds[0], targetColumn: group.targetColumn, workspaceRoot });
                         } else {
@@ -6612,6 +6649,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
+                case 'dispatchFailedPromptReady': {
+                    const planId = msg.planId || msg.sessionId;
+                    const btn = document.querySelector(`.card-btn.copy[data-plan-id="${CSS.escape(planId)}"]`)
+                        || document.querySelector(`.card-btn.copy[data-session="${CSS.escape(msg.sessionId)}"]`);
+                    if (btn) {
+                        btn.classList.add('prompt-ready');
+                        // Remove the glow after 30 seconds or on click
+                        const removeGlow = () => btn.classList.remove('prompt-ready');
+                        btn.addEventListener('click', removeGlow, { once: true });
+                        setTimeout(removeGlow, 30000);
+                    }
+                    // Show a status message
+                    const statusEl = document.getElementById('status-message');
+                    if (statusEl) {
+                        statusEl.textContent = 'Dispatch failed — prompt copied. Paste manually or click the glowing button.';
+                        statusEl.style.color = 'rgba(255, 165, 0, 1)';
+                        statusEl.style.display = 'inline-block';
+                        statusEl.classList.add('flashing');
+                    }
+                    break;
+                }
                 case 'remoteConfig':
                     if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
                     renderRemoteConfig(msg.config, msg);
@@ -6972,8 +7030,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     return !!cardProject;
                 });
                 if (!hasAnyProjectAssignment) {
-                    // True no-op: same workspace, no project target, and no cards have project assignments
-                    vscode?.postMessage?.({ type: 'showInfo', message: 'Plans are already in this workspace with no project assignment.' });
+                    // Same workspace, no project target, and no cards have a project to clear:
+                    // treat ASSIGN-to-here as "deselect" so the user has a way to clear an
+                    // otherwise-invisible selection. No toast — clearing IS the feedback.
+                    selectedCards.clear();
+                    updateReassignButtonVisibility();
+                    updateEpicActionButton();
+                    document.querySelectorAll('.kanban-card.selected').forEach(el => {
+                        el.classList.remove('selected');
+                    });
                     return;
                 }
             }

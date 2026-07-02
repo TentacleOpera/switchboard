@@ -166,6 +166,8 @@ type ConfiguredKanbanDispatchOptions = {
     /** Override the git safety guardrail for this dispatch (true = include guardrail that permits worktrees/commits but forbids destructive undo; false = omit it entirely, used by worktree sessions that ship their own git policy). */
     gitProhibitionEnabled?: boolean;
     targetTerminalOverride?: string;
+    /** Skip column rollback on dispatch failure. Used by kanban drag-dispatch which persists the column move independently and handles the fallback prompt. */
+    persistColumnOnError?: boolean;
 };
 
 type ClickUpSetupColumnState = {
@@ -3039,7 +3041,8 @@ Each plan file must include:
             additionalInstructions: String(options.additionalInstructions || '').trim() || undefined,
             instruction: options.instruction,
             workspaceRoot: resolvedWorkspaceRoot,
-            targetTerminalOverride: options.targetTerminalOverride
+            targetTerminalOverride: options.targetTerminalOverride,
+            persistColumnOnError: true
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -16645,8 +16648,10 @@ What would you like to find?`;
                 }, requestId);
                 return true;
             } else {
-                // Dispatch failed — roll back the column move
-                if (previousColumn) {
+                // Dispatch failed — roll back the column move UNLESS the caller has
+                // taken responsibility for persisting the column (kanban drag-dispatch
+                // persists the move independently and handles the fallback prompt).
+                if (!options?.persistColumnOnError && previousColumn) {
                     await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
                     this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
                 }
@@ -16655,8 +16660,8 @@ What would you like to find?`;
                 return false;
             }
         } catch (e) {
-            // Dispatch failed — roll back
-            if (previousColumn) {
+            // Dispatch failed — roll back UNLESS caller persists column on error
+            if (!options?.persistColumnOnError && previousColumn) {
                 await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
                 this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
             }

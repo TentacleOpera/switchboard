@@ -1880,6 +1880,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'getCyberAnimationDisabledSetting' });
                     vscode.postMessage({ type: 'getCyberScanlinesDisabledSetting' });
                     vscode.postMessage({ type: 'getColourKanbanIconsSetting' });
+                    vscode.postMessage({ type: 'getUltracodeAnimationSetting' });
+                    vscode.postMessage({ type: 'getPixelFontSetting' });
                     vscode.postMessage({ type: 'getThemeSetting' });
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
@@ -2592,7 +2594,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     buttonEl.textContent = buttonEl.dataset.origLabel;
                     delete buttonEl.dataset.origLabel;
                 }
-                if (buttonEl.id !== 'btn-apply-clickup-config' && buttonEl.id !== 'btn-apply-linear-config' && buttonEl.id !== 'btn-apply-notion-config') {
+                if (buttonEl.id !== 'btn-apply-clickup-config' && buttonEl.id !== 'btn-apply-linear-config') {
                     buttonEl.disabled = false;
                 }
             }
@@ -5006,6 +5008,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (progressEl) progressEl.textContent = `${message.action} plan ${message.current} of ${message.total}...`;
                     break;
                 }
+                case 'setupComplete':
+                    setButtonBusy(document.getElementById('btn-initialize'), false);
+                    break;
                 case 'openSetupSection':
                     if (message.section === 'project-mgmt') {
                         activateTab('integration');

@@ -166,3 +166,7 @@ See Phase 7, step 19 above for the full manual checklist.
 
 ## Recommendation
 Complexity 6 → **Send to Coder**.
+
+## Review Findings
+
+Reviewed all 7 phases against actual source in the main repo. Implementation is thorough: both settings registered in `package.json` with correct defaults; `themeBodyClass.ts` injects first-paint classes with correct polarity; CSS overrides in `planning.html` (2 selectors), `design.html` (2), `project.html` (all 6) match existing h1 pixel rules; `kanban.html` ultracode gate is the third guard in `fireUltracodeBlast()`; all 3 PlanningPanelProvider blocks, both DesignPanelProvider blocks, KanbanProvider, and TaskViewerProvider broadcast listener are wired; client-side handlers in all 5 webviews; Workspace→Global migration with workspace-value clearing applied to all 5 settings. **Fix applied:** added missing `getUltracodeAnimationSetting` and `getPixelFontSetting` requests to the theme tab load handler in `setup.html:1883-1884` (was inconsistent with the 3 existing settings' request+reflect pattern; `postSetupPanelState` covered initial load but tab re-show wouldn't refresh). No CRITICAL or MAJOR issues. Remaining risk: double-broadcast (TaskViewerProvider + per-provider listeners) is by design and idempotent.

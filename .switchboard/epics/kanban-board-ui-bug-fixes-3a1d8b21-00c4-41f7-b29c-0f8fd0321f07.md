@@ -13,6 +13,6 @@ Fix two kanban.html UI behavior bugs. The optimistic column-move bounce-back aft
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Assign To Same Workspace Should Clear The Plan Selection (Not Toast)](../plans/feature_plan_20260702140002_assign-same-workspace-clears-selection.md) — **PLAN REVIEWED**
-- [ ] [Fix: Optimistic Move Bounce-Back After Reload (CODE REVIEWED → LEAD CODED)](../plans/fix-optimistic-move-bounce-back-after-reload.md) — **PLAN REVIEWED**
+- [ ] [Assign To Same Workspace Should Clear The Plan Selection (Not Toast)](../plans/feature_plan_20260702140002_assign-same-workspace-clears-selection.md) — **LEAD CODED**
+- [ ] [Fix: Optimistic Move Bounce-Back After Reload (CODE REVIEWED → LEAD CODED)](../plans/fix-optimistic-move-bounce-back-after-reload.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
