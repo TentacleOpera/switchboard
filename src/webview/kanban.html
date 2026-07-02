@@ -2669,6 +2669,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
                 </div>
             </div>
+
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Auto-Archive Rule</span></div>
+                <div class="setup-section">
+                    <div class="setup-field">
+                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                            Plans that sit in the designated column past the dwell threshold are
+                            automatically moved to Completed and archived. Linear/Notion follow via
+                            push. Solves the "900 stuck plans vs. Linear free-tier cap" problem by
+                            automating the move itself. No backfill — use the manual bulk-archive
+                            buttons for the existing backlog.
+                        </div>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                            <input type="checkbox" id="auto-archive-enabled" style="width:auto; margin:0;">
+                            <span>Enable auto-archive</span>
+                        </label>
+                        <label style="display:block; margin-bottom:8px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Archive-trigger column</span>
+                            <select id="auto-archive-trigger-column" class="workspace-project-select" style="width:100%;"></select>
+                        </label>
+                        <label style="display:block; margin-bottom:8px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Dwell threshold (hours)</span>
+                            <input type="number" id="auto-archive-threshold-hours" min="0.25" max="720" step="0.25" value="2" style="width:100%;">
+                        </label>
+                        <div id="auto-archive-status" style="font-size:10px; color:var(--text-secondary); margin-top:4px;"></div>
+                        <div class="hint-text" style="margin-top:6px;">
+                            Default is the column immediately before Completed. Changing the column
+                            re-targets the rule immediately. The rule is off by default on upgrade.
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -6742,6 +6774,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     renderKanbanStructureList();
                     break;
                 }
+                case 'autoArchiveConfig': {
+                    renderAutoArchiveConfig(msg.config, msg.columns);
+                    break;
+                }
             }
         });
 
@@ -9089,10 +9125,58 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             btn.addEventListener('click', () => {
                 if (btn.dataset.tab === 'setup' && kanbanStructureList) {
                     postKanbanMessage({ type: 'getKanbanStructure' });
+                    postKanbanMessage({ type: 'getAutoArchiveConfig' });
                 }
             });
         });
         // ─── End Kanban Structure Configuration ────────────────────────────────────
+
+        // ─── Auto-Archive Rule Configuration ──────────────────────────────────────
+        let _autoArchiveSaveTimer;
+        function renderAutoArchiveConfig(config, columns) {
+            const enabledEl = document.getElementById('auto-archive-enabled');
+            const colEl = document.getElementById('auto-archive-trigger-column');
+            const thrEl = document.getElementById('auto-archive-threshold-hours');
+            if (!enabledEl || !colEl || !thrEl) return;
+
+            // Populate the column dropdown
+            const cols = Array.isArray(columns) ? columns : [];
+            colEl.innerHTML = cols.map(c => `<option value="${escapeAttr(c.id)}">${escapeHtml(c.label)}</option>`).join('');
+
+            if (config) {
+                enabledEl.checked = config.enabled === true;
+                if (config.triggerColumn) { colEl.value = config.triggerColumn; }
+                thrEl.value = config.thresholdHours || 2;
+            }
+        }
+
+        function autoArchiveCollectConfig() {
+            const enabledEl = document.getElementById('auto-archive-enabled');
+            const colEl = document.getElementById('auto-archive-trigger-column');
+            const thrEl = document.getElementById('auto-archive-threshold-hours');
+            return {
+                enabled: enabledEl ? enabledEl.checked === true : false,
+                triggerColumn: colEl ? colEl.value : '',
+                thresholdHours: parseFloat(thrEl ? thrEl.value : '2') || 2,
+            };
+        }
+
+        function autoArchiveAutosave() {
+            clearTimeout(_autoArchiveSaveTimer);
+            _autoArchiveSaveTimer = setTimeout(() => {
+                const config = autoArchiveCollectConfig();
+                const statusEl = document.getElementById('auto-archive-status');
+                if (statusEl) statusEl.textContent = 'Saving…';
+                postKanbanMessage({ type: 'saveAutoArchiveConfig', config });
+            }, 400);
+        }
+
+        ['change', 'input'].forEach(evt => {
+            document.getElementById('auto-archive-enabled')?.addEventListener(evt, autoArchiveAutosave);
+            document.getElementById('auto-archive-trigger-column')?.addEventListener(evt, autoArchiveAutosave);
+            document.getElementById('auto-archive-threshold-hours')?.addEventListener(evt, autoArchiveAutosave);
+        });
+        // ─── End Auto-Archive Rule Configuration ──────────────────────────────────
 
         // Signal to extension that webview is ready to receive data
         postKanbanMessage({ type: 'ready' });

@@ -847,13 +847,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
     void migrateTriageRuleDefaults().then(() => {
         void kanbanProvider!.initializeIntegrationAutoPull();
+        void kanbanProvider!.startAutoArchiveForAll();
     }).catch(err => {
         console.error('[Switchboard] Error migrating triage rule defaults:', err);
         void kanbanProvider!.initializeIntegrationAutoPull();
+        void kanbanProvider!.startAutoArchiveForAll();
     });
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             void kanbanProvider!.initializeIntegrationAutoPull();
+            void kanbanProvider!.startAutoArchiveForAll();
             // Deferred migration: if activation happened with no workspace folders,
             // run the global integration config migration now that a workspace is open.
             void MigrationService.runMigration();

@@ -35,6 +35,7 @@ import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { LinearAutomationService } from './LinearAutomationService';
 import { LinearSyncService, type LinearConfig } from './LinearSyncService';
 import { RemoteControlService, type RemoteConfig, type RemoteProviderKind } from './RemoteControlService';
+import { AutoArchiveService, type AutoArchiveConfig } from './AutoArchiveService';
 import type { RemoteProvider } from './remote/RemoteProvider';
 import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
@@ -145,6 +146,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _clickUpAutomationServices = new Map<string, ClickUpAutomationService>();
     private _linearServices = new Map<string, LinearSyncService>();
     private _remoteControls = new Map<string, RemoteControlService>();
+    private _autoArchiveServices = new Map<string, AutoArchiveService>();
     /** §11 — true while any board is under remote control; injects REMOTE_MODE_DIRECTIVE. */
     private _remoteControlActive = false;
     /** Effective workspace roots with a project-context push in flight (auto/manual guard). */
@@ -977,6 +979,8 @@ export class KanbanProvider implements vscode.Disposable {
         this._integrationAutoPull.dispose();
         this._remoteControls.forEach(rc => rc.dispose());
         this._remoteControls.clear();
+        this._autoArchiveServices.forEach(aas => aas.dispose());
+        this._autoArchiveServices.clear();
         this._clickUpAutomationServices.clear();
         this._linearAutomationServices.clear();
         this._clickUpSyncWarnings.clear();
@@ -1677,6 +1681,109 @@ export class KanbanProvider implements vscode.Disposable {
             db: this._getKanbanDb(resolved),
             getWorkspaceId, getPlansDir, log,
         });
+    }
+
+    /**
+     * Lazily build the AutoArchiveService for a workspace root. The sweep
+     * callback reuses the existing column-move + archive machinery so an
+     * auto-archived plan behaves identically to a manual archive.
+     */
+    private _getAutoArchive(workspaceRoot: string): AutoArchiveService {
+        const resolved = this.resolveEffectiveWorkspaceRoot(workspaceRoot);
+        const existing = this._autoArchiveServices.get(resolved);
+        if (existing) { return existing; }
+        const service = new AutoArchiveService({
+            getDb: () => this._getKanbanDb(resolved),
+            getWorkspaceRoot: () => resolved,
+            getProvider: (kind: RemoteProviderKind): RemoteProvider | null => this._buildRemoteProvider(resolved, kind),
+            getActiveProviderKind: async () => {
+                const rc = this._remoteControls.get(resolved);
+                if (!rc) {
+                    // Build a temporary RC to read config without starting the poll loop.
+                    const tmp = this._getRemoteControl(resolved);
+                    const config = await tmp.getConfig();
+                    return config.boards.length > 0 ? config.provider : null;
+                }
+                const config = await rc.getConfig();
+                return config.boards.length > 0 ? config.provider : null;
+            },
+            getDefaultTriggerColumn: async () => this._getDefaultTriggerColumn(resolved),
+            log: (m) => this._outputChannel?.appendLine(m),
+        });
+        this._autoArchiveServices.set(resolved, service);
+        return service;
+    }
+
+    /**
+     * Resolve the column id that sits immediately before COMPLETED by board
+     * order. Used as the default archive-trigger column when the user hasn't
+     * explicitly chosen one.
+     */
+    private async _getDefaultTriggerColumn(workspaceRoot: string): Promise<string> {
+        try {
+            const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
+            const customAgents = this._taskViewerProvider
+                ? await this._taskViewerProvider.getCustomAgents(workspaceRoot)
+                : [];
+            const allColumns = await this._buildKanbanColumns(customAgents, customColumns);
+            const visible = allColumns.filter(c => c.id !== 'CREATED' && c.id !== 'COMPLETED');
+            if (visible.length === 0) { return 'CODE REVIEWED'; }
+            // Sort by order ascending; the last visible column before COMPLETED is the default.
+            visible.sort((a, b) => (a.order || 0) - (b.order || 0));
+            return visible[visible.length - 1].id;
+        } catch {
+            return 'CODE REVIEWED';
+        }
+    }
+
+    /** Webview-facing: get the auto-archive config + available columns for the dropdown. */
+    public async autoArchiveGetConfigPayload(workspaceRoot?: string): Promise<Record<string, unknown>> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { type: 'autoArchiveConfig', config: null, columns: [] }; }
+        const service = this._getAutoArchive(resolved);
+        const config = await service.getConfig();
+        // Build the column list for the dropdown (visible non-fixed columns).
+        const customColumns = await this._getCustomKanbanColumns(resolved);
+        const customAgents = this._taskViewerProvider
+            ? await this._taskViewerProvider.getCustomAgents(resolved)
+            : [];
+        const allColumns = await this._buildKanbanColumns(customAgents, customColumns);
+        const columns = allColumns
+            .filter(c => c.id !== 'CREATED' && c.id !== 'COMPLETED')
+            .map(c => ({ id: c.id, label: c.label }))
+            .sort((a, b) => {
+                const ca = allColumns.find(c => c.id === a.id)?.order || 0;
+                const cb = allColumns.find(c => c.id === b.id)?.order || 0;
+                return ca - cb;
+            });
+        return { type: 'autoArchiveConfig', config, columns };
+    }
+
+    /** Webview-facing: save the auto-archive config and (re)start the sweep. */
+    public async autoArchiveSetConfig(workspaceRoot: string | undefined, config: AutoArchiveConfig): Promise<Record<string, unknown>> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { type: 'autoArchiveConfig', config: null, columns: [] }; }
+        const service = this._getAutoArchive(resolved);
+        const normalized = await service.setConfig(config);
+        // (Re)start the sweep if enabled; stop if disabled.
+        service.stop();
+        if (normalized.enabled) {
+            await service.start();
+        }
+        // Return the full payload (with columns) so the webview stays in sync.
+        return this.autoArchiveGetConfigPayload(resolved);
+    }
+
+    /** Start auto-archive sweeps for all known workspace roots (called on board init). */
+    public async startAutoArchiveForAll(): Promise<void> {
+        for (const root of this._getWorkspaceRoots()) {
+            try {
+                const service = this._getAutoArchive(root);
+                await service.start();
+            } catch (e) {
+                console.error(`[KanbanProvider] Failed to start auto-archive for ${root}:`, e);
+            }
+        }
     }
 
     /**
@@ -8019,6 +8126,16 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                break;
+            }
+            case 'getAutoArchiveConfig': {
+                const payload = await this.autoArchiveGetConfigPayload(msg.workspaceRoot);
+                this._panel?.webview.postMessage(payload);
+                break;
+            }
+            case 'saveAutoArchiveConfig': {
+                const payload = await this.autoArchiveSetConfig(msg.workspaceRoot, msg.config);
+                this._panel?.webview.postMessage(payload);
                 break;
             }
             case 'updateKanbanStructure': {

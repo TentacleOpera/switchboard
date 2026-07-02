@@ -4,7 +4,8 @@ import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import { hasMarker } from '../commentMarker';
 import type {
     RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
-    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult
+    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult,
+    ArchiveResult
 } from './RemoteProvider';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
 
@@ -27,7 +28,7 @@ interface LinearRemoteProviderDeps {
 
 export class LinearRemoteProvider implements RemoteProvider {
     public readonly kind = 'linear' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: true };
+    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: true, archive: true };
     private _linear: LinearSyncService;
     private _deps: LinearRemoteProviderDeps;
     private _stateIdToColumn: Record<string, string> = {};
@@ -164,6 +165,21 @@ export class LinearRemoteProvider implements RemoteProvider {
         if (!result.success) {
             throw new Error(`Linear postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
+    }
+
+    public async archiveCard(remoteId: string): Promise<ArchiveResult> {
+        const config = await this._linear.loadConfig();
+        if (!config?.setupComplete) {
+            return { ok: true, skipped: true };
+        }
+        const id = String(remoteId || '').trim();
+        if (!id) {
+            return { ok: false, error: 'No remote id provided' };
+        }
+        const result = await this._linear.archiveIssue(id);
+        return result.success
+            ? { ok: true }
+            : { ok: false, error: result.error };
     }
 
     // ── Project-context push (epic: Project Context & Remote UI Hub) ──────

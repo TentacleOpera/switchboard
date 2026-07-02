@@ -38,6 +38,8 @@ export interface RemoteStateDelta {
 export interface RemoteProviderCapabilities {
     /** Provider can receive the project-level context bundle (Dev Docs + PRDs + constitution). */
     projectContextPush: boolean;
+    /** Provider can archive a card (Linear issueArchive / Notion page archive). */
+    archive: boolean;
 }
 
 /** One project-context document (a dev doc, a project PRD, or the constitution). */
@@ -69,6 +71,14 @@ export interface ProjectContextPushResult {
     skipped?: boolean;
     /** Human-readable outcome: 'replaced', 'appended', or an error/skip reason. */
     detail?: string;
+}
+
+/** Outcome of archiving a single remote card. */
+export interface ArchiveResult {
+    ok: boolean;
+    /** true → provider isn't configured for this workspace; not an error. */
+    skipped?: boolean;
+    error?: string;
 }
 
 /** A single inbound comment from the remote agent. */
@@ -138,4 +148,12 @@ export interface RemoteProvider {
      * destructive-write) when the check can't be made.
      */
     pushProjectContext(bundle: ProjectContextBundle): Promise<ProjectContextPushResult>;
+
+    /**
+     * Archive a remote card (Linear issueArchive / Notion page archive). Called
+     * by the auto-archive rule after the local plan is moved to Completed +
+     * archived locally — the local board is the source of truth and push mirrors
+     * the archive outward. Idempotent: safe to call on an already-archived card.
+     */
+    archiveCard(remoteId: string): Promise<ArchiveResult>;
 }

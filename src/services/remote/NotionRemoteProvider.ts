@@ -3,7 +3,8 @@ import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import type { NotionFetchService } from '../NotionFetchService';
 import type {
     RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
-    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult
+    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult,
+    ArchiveResult
 } from './RemoteProvider';
 import { loadNotionRemoteSetup, saveNotionRemoteSetup, type NotionRemoteSetup } from './notionRemoteConfig';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
@@ -38,7 +39,7 @@ const LIMITER_MS = 350;       // Notion ~3 req/sec
 
 export class NotionRemoteProvider implements RemoteProvider {
     public readonly kind = 'notion' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: true };
+    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: true, archive: true };
     private _deps: NotionRemoteProviderDeps;
     private _setup: NotionRemoteSetup | null = null;
     private _botId = '';
@@ -187,6 +188,25 @@ export class NotionRemoteProvider implements RemoteProvider {
         if (!result.success) {
             throw new Error(`Notion postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
+    }
+
+    public async archiveCard(remoteId: string): Promise<ArchiveResult> {
+        const setup = await this._ensureSetup();
+        if (!setup?.plansDatabaseId) {
+            return { ok: true, skipped: true };
+        }
+        const pageId = String(remoteId || '').trim();
+        if (!pageId) {
+            return { ok: false, error: 'No remote id provided' };
+        }
+        // Notion page archive = PATCH /pages/{id} with archived:true. Idempotent
+        // (archiving an already-archived page is a no-op success).
+        const result = await this._deps.notion.httpRequest('PATCH', `/pages/${pageId}`, { archived: true }, 15000);
+        if (result.status >= 200 && result.status < 300) {
+            this._log(`Archived Notion page ${pageId}.`);
+            return { ok: true };
+        }
+        return { ok: false, error: `Notion archive failed (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}` };
     }
 
     // ── Project-context push (epic: Project Context & Remote UI Hub) ──────
