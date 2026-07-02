@@ -8,6 +8,7 @@ import type {
 } from './RemoteProvider';
 import { loadNotionRemoteSetup, saveNotionRemoteSetup, type NotionRemoteSetup } from './notionRemoteConfig';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
+import { guardedWritePageBody } from './notionOverwriteGuard';
 
 /**
  * Notion backend for Remote Control delta polling (D2/D3/D4/D7).
@@ -229,53 +230,17 @@ export class NotionRemoteProvider implements RemoteProvider {
             return { ok: false, detail: 'Could not create/find the Switchboard Project Context page' };
         }
 
-        // Overwrite guard step 1: list existing children and classify them.
-        const children = await this._listAllChildren(pageId);
-        if (children === null) {
-            // Fail safe: an unverifiable page is never destructively written.
-            return { ok: false, detail: 'Children check failed — aborted without writing (overwrite guard)' };
-        }
-        const PROTECTED_TYPES = new Set(['child_page', 'child_database', 'template']);
-        const hasProtectedChildren = children.some(b => PROTECTED_TYPES.has(String(b.type || '')));
+        // Build the content blocks, prefixed with a heading so the synced
+        // section is unambiguous whether it lands as an append or a replace.
+        const blocks = [
+            this._headingBlock(1, `Project Context (synced ${bundle.syncedAt})`),
+            ...this._markdownToBlocks(bundle.combinedMarkdown),
+        ];
 
-        const blocks = this._markdownToBlocks(bundle.combinedMarkdown);
-
-        if (hasProtectedChildren) {
-            // Append-by-default: nested content survives; the fresh bundle lands
-            // under a divider so the newest section is unambiguous.
-            const appendBlocks = [
-                { object: 'block', type: 'divider', divider: {} },
-                this._headingBlock(1, `Project Context (synced ${bundle.syncedAt})`),
-                ...blocks,
-            ];
-            const appended = await this._appendBlocks(pageId, appendBlocks);
-            return appended
-                ? { ok: true, detail: 'appended (page has nested content — full replace withheld)' }
-                : { ok: false, detail: 'append failed' };
-        }
-
-        // Verified childless of protected content → clear the plain blocks we saw,
-        // then write the fresh bundle. Deleting only the listed block ids keeps the
-        // operation scoped to content we actually verified.
-        for (const block of children) {
-            const id = String(block.id || '');
-            if (!id) { continue; }
-            const del = await this._deps.notion.httpRequest('DELETE', `/blocks/${id}`, undefined, 15000);
-            if (del.status !== 200) {
-                this._log(`pushProjectContext: deleting block ${id} failed (HTTP ${del.status}) — switching to append.`);
-                const appended = await this._appendBlocks(pageId, [
-                    { object: 'block', type: 'divider', divider: {} },
-                    this._headingBlock(1, `Project Context (synced ${bundle.syncedAt})`),
-                    ...blocks,
-                ]);
-                return appended
-                    ? { ok: true, detail: 'appended (replace aborted mid-clear)' }
-                    : { ok: false, detail: 'replace aborted mid-clear and append failed' };
-            }
-            await this._delay(LIMITER_MS);
-        }
-        const written = await this._appendBlocks(pageId, blocks);
-        return written ? { ok: true, detail: 'replaced' } : { ok: false, detail: 'write failed after clear' };
+        // Delegate to the centralized overwrite guard — the single guarded write
+        // path for all Notion body writes (notion-overwrite-guard.md).
+        const outcome = await guardedWritePageBody(this._deps.notion, pageId, blocks, (m) => this._log(m));
+        return { ok: outcome.ok, detail: outcome.detail };
     }
 
     /** Find-or-create the context page. Created beside the plans DB (same parent). */
@@ -317,43 +282,6 @@ export class NotionRemoteProvider implements RemoteProvider {
         this._setup = { ...setup, contextPageId: pageId };
         await saveNotionRemoteSetup(this._deps.db, this._setup);
         return pageId;
-    }
-
-    /** List every child block of a page. Returns null when the listing can't be trusted. */
-    private async _listAllChildren(pageId: string): Promise<any[] | null> {
-        const blocks: any[] = [];
-        let startCursor: string | undefined;
-        for (let page = 0; page < MAX_PAGES; page++) {
-            const qs = `page_size=${PAGE_SIZE}` + (startCursor ? `&start_cursor=${encodeURIComponent(startCursor)}` : '');
-            const result = await this._deps.notion.httpRequest('GET', `/blocks/${pageId}/children?${qs}`, undefined, 15000);
-            if (result.status !== 200) {
-                this._log(`_listAllChildren failed: HTTP ${result.status}`);
-                return null;
-            }
-            blocks.push(...(result.data?.results || []));
-            if (!result.data?.has_more) { return blocks; }
-            startCursor = result.data?.next_cursor || undefined;
-            if (!startCursor) { return blocks; }
-            await this._delay(LIMITER_MS);
-        }
-        // More than MAX_PAGES × PAGE_SIZE children — an unverified tail could hold
-        // nested content, so the childless check is inconclusive. Fail safe.
-        this._log('_listAllChildren: page exceeds listing backstop — treating check as inconclusive.');
-        return null;
-    }
-
-    /** Append blocks in ≤100-block batches (API limit), rate-limited. */
-    private async _appendBlocks(pageId: string, blocks: any[]): Promise<boolean> {
-        for (let i = 0; i < blocks.length; i += 100) {
-            const batch = blocks.slice(i, i + 100);
-            const result = await this._deps.notion.httpRequest('PATCH', `/blocks/${pageId}/children`, { children: batch }, 30000);
-            if (result.status !== 200) {
-                this._log(`_appendBlocks failed at batch ${i / 100} (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}`);
-                return false;
-            }
-            if (i + 100 < blocks.length) { await this._delay(LIMITER_MS); }
-        }
-        return true;
     }
 
     private _headingBlock(level: 1 | 2 | 3, text: string): any {

@@ -2064,10 +2064,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
         const notionResult = await this._buildRemoteProvider(effective, 'notion')
             .pushProjectContext(assembled.bundle)
-            .catch((e: unknown) => ({ ok: false, detail: e instanceof Error ? e.message : String(e) }));
+            .catch((e: unknown) => ({ ok: false, skipped: false, detail: e instanceof Error ? e.message : String(e) }));
         const linearResult = await this._buildRemoteProvider(effective, 'linear')
             .pushProjectContext(assembled.bundle)
-            .catch((e: unknown) => ({ ok: false, detail: e instanceof Error ? e.message : String(e) }));
+            .catch((e: unknown) => ({ ok: false, skipped: false, detail: e instanceof Error ? e.message : String(e) }));
 
         const summary = summarizePushResults({ notion: notionResult, linear: linearResult });
         state.providers = summary.providers;
