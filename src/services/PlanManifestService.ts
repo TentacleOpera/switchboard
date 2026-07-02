@@ -230,9 +230,14 @@ export class PlanManifestService {
         // ── status ──
         if (entry.status && VALID_STATUSES.has(entry.status)) {
             if (plan.status !== entry.status) {
-                const ok = await db.updateStatusByPlanFile(entry.planFile, workspaceId, entry.status as 'active' | 'archived' | 'completed' | 'deleted');
+                let ok: boolean;
+                if (entry.status === 'archived' || entry.status === 'deleted') {
+                    ok = await db.archivePlan(entry.planFile, workspaceId, entry.status as 'archived' | 'deleted');
+                } else {
+                    ok = await db.updateStatusByPlanFile(entry.planFile, workspaceId, entry.status as 'active' | 'completed');
+                }
                 if (!ok) {
-                    log?.(`[PlanManifest] updateStatusByPlanFile failed for ${entry.planFile} → ${entry.status}`);
+                    log?.(`[PlanManifest] status update failed for ${entry.planFile} → ${entry.status}`);
                 }
             }
         } else if (entry.status && !VALID_STATUSES.has(entry.status)) {

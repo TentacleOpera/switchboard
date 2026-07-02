@@ -290,6 +290,9 @@ const MIGRATION_V43_SQL = [
     `UPDATE worktrees SET agents_open_with_grid = 1 WHERE status = 'active' AND agents_open_with_grid = 0`,
 ];
 
+const MIGRATION_V44_SQL: string[] = [];
+
+
 const MIGRATION_V13_SQL = [
     `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)`,
@@ -1865,6 +1868,27 @@ export class KanbanDatabase {
             [status, new Date().toISOString(), normalized, workspaceId]
         );
     }
+
+    /**
+     * Archive or delete a plan in a single atomic update: sets status, moves the
+     * plan to the COMPLETED terminal column, and stamps last_action so the row is
+     * self-documenting for direct DB queries. Use this instead of
+     * updateStatusByPlanFile() when the target status is 'archived' or 'deleted'
+     * so the kanban_column does not go stale (ghost-plan bug).
+     */
+    public async archivePlan(
+        planFile: string,
+        workspaceId: string,
+        status: 'archived' | 'deleted'
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            'UPDATE plans SET status = ?, kanban_column = ?, last_action = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [status, 'COMPLETED', status, new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
 
     /** @deprecated session_id is no longer the unique key; use updateStatusByPlanFile instead. */
     public async updateStatus(sessionId: string, status: KanbanPlanStatus): Promise<boolean> {
@@ -5479,6 +5503,41 @@ export class KanbanDatabase {
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V43 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V44: repair ghost plans — archived/deleted plans left in non-terminal columns.
+        const v44 = await this.getMigrationVersion();
+        if (v44 < 44) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V44_SQL) {
+                    this._db.exec(sql);
+                }
+                const ghostStmt = this._db.prepare(
+                    "SELECT COUNT(*) as cnt FROM plans WHERE status IN ('archived','deleted') AND kanban_column != 'COMPLETED'"
+                );
+                let ghostCount = 0;
+                try {
+                    if (ghostStmt.step()) {
+                        ghostCount = Number(ghostStmt.getAsObject().cnt || 0);
+                    }
+                } finally {
+                    ghostStmt.free();
+                }
+                if (ghostCount > 0) {
+                    this._db.exec(
+                        "UPDATE plans SET kanban_column = 'COMPLETED', last_action = 'archived-ghost-repaired' " +
+                        "WHERE status IN ('archived','deleted') AND kanban_column != 'COMPLETED'"
+                    );
+                    console.log(`[KanbanDatabase] V44 migration: repaired ${ghostCount} archived/deleted ghost plan(s) left in non-COMPLETED columns`);
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(44);
+                console.log('[KanbanDatabase] V44 migration completed: archived/deleted ghost plans repaired');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V44 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
     }

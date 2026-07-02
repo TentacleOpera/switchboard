@@ -5258,6 +5258,7 @@ Each plan file must include:
         if (lnState) { fmLines.push(`status: ${lnState}`); }
         if (lnType) { fmLines.push(`statusType: ${lnType}`); }
         if (issue?.project?.id) { fmLines.push(`projectId: ${String(issue.project.id).trim()}`); }
+        if (issue?.project?.name) { fmLines.push(`projectName: ${String(issue.project.name).trim()}`); }
         if ((issue as any)?.parentId) { fmLines.push(`parentId: ${String((issue as any).parentId).trim()}`); }
         fmLines.push('---', '');
         const yamlFrontmatter = createdAt ? fmLines.join('\n') : '';
@@ -11723,7 +11724,14 @@ What would you like to find?`;
         if (db) {
             const dbStatus = status === 'orphan' ? 'archived' : status;
             for (const sessionId of this._getRegistrySessionIdCandidates(planId, entry.sourceType)) {
-                await db.updateStatus(sessionId, dbStatus as KanbanPlanRecord['status']);
+                if (dbStatus === 'archived' || dbStatus === 'deleted') {
+                    const plan = await db.getPlanBySessionId(sessionId);
+                    if (plan) {
+                        await db.archivePlan(plan.planFile, plan.workspaceId, dbStatus as 'archived' | 'deleted');
+                    }
+                } else {
+                    await db.updateStatus(sessionId, dbStatus as KanbanPlanRecord['status']);
+                }
             }
         }
     }
@@ -19458,11 +19466,17 @@ What would you like to find?`;
                 }
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
-                const issues = await linear.queryIssues({ projectId, limit: 100, ...(deltaSinceIso ? { updatedAfter: deltaSinceIso } : {}) });
-                items = issues;  // Process all fetched issues — limit: 100 matches the sidebar's own limit
+                const issues = await linear.queryIssues({
+                    projectId,
+                    projectScoped: true,
+                    ...(deltaSinceIso ? { updatedAfter: deltaSinceIso } : {})
+                });
+                items = issues;
 
                 const teamName = linear.getTeamName();
-                const projectName = items[0]?.project?.name || '_no-project';
+                const projectName = (issues as any).resolutionFailed
+                    ? '_no-project'
+                    : (items.find((it: any) => it?.project?.name)?.project?.name || '_no-project');
                 segments.push(teamName, projectName);
 
                 const linearConfig = GlobalIntegrationConfigService.loadConfigSync('linear');
@@ -19480,6 +19494,8 @@ What would you like to find?`;
                 const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
                 targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
+
+            const resolutionFailed = provider === 'linear' && (items as any).resolutionFailed;
 
             // Progressive import: only TOP-LEVEL tickets become files. Subtasks are
             // embedded into their parent's file when the parent is opened (importTask-
@@ -19567,7 +19583,7 @@ What would you like to find?`;
             // Locally-modified files (mtime > last_synced_at) are preserved — never
             // destroy unpushed local edits.
             let pruned = 0;
-            if (!isDelta && targetDir && rawItemCount > 0) {
+            if (!isDelta && targetDir && rawItemCount > 0 && !resolutionFailed) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbBySlug = new Map<string, any>(
@@ -19621,7 +19637,7 @@ What would you like to find?`;
             // (which stores the provider name 'linear'/'clickup', not the task ID).
             // Gated on rawItemCount > 0 to match the prune's guard — a transient
             // empty fetch must not wipe all local files.
-            if (!isDelta && rawItemCount > 0) {
+            if (!isDelta && rawItemCount > 0 && !resolutionFailed) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbTicketsSweep = await cacheService.getImportedTickets();
@@ -19728,7 +19744,7 @@ What would you like to find?`;
                 finalIds = tasks.slice(startIndex, startIndex + pageSize).map(t => t.id);
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
-                const issues = await linear.queryIssues({ projectId });
+                const issues = await linear.queryIssues({ projectId, projectScoped: true });
                 const pageSize = 50;
                 const startIndex = (page - 1) * pageSize;
                 finalIds = issues.slice(startIndex, startIndex + pageSize).map(i => i.id);
@@ -20072,6 +20088,11 @@ What would you like to find?`;
             }
 
             // Refetch threads and update JSON
+            // Delay to allow provider API propagation — Linear/ClickUp have eventual consistency
+            // and a fresh query immediately after posting may not include the new reply.
+            // This is a probabilistic mitigation; the merge logic in the frontend is the
+            // deterministic guarantee that preserves optimistic replies.
+            await new Promise(resolve => setTimeout(resolve, 1500));
             const loadResult = await this.loadTicketComments(workspaceRoot, { provider, id });
             if (!loadResult.success) {
                 // Reply posted but refetch failed — still report success
