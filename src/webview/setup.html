@@ -821,17 +821,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                         </div>
                         <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
-                        <button id="btn-enable-triage-clickup" class="action-btn w-full" style="margin-top: 8px;">⚡ ENABLE TRIAGE PIPELINE</button>
-                        <div class="hint-text" style="margin-top:6px;">
+                        <button id="btn-enable-triage-clickup" class="action-btn w-full" style="margin-top: 8px; display:none;">⚡ ENABLE TRIAGE PIPELINE</button>
+                        <div class="hint-text" style="margin-top:6px; display:none;">
                             Enables auto-pull (15-min interval), creates a <strong>"Bug Triage"</strong> project filter, and adds an automation rule that imports <code>triage</code>-tagged tickets, moves them to the <strong>Ticket Updater</strong> column, and dispatches the ticket_updater agent. When the card reaches <strong>Completed</strong>, the result is written back to the ticket. Requires a configured Ticket Updater agent (Prompts tab) and the integration to be set up first.
                         </div>
-                        <div id="clickup-triage-result" style="min-height:16px; font-size:10px; margin-top:6px;"></div>
+                        <div id="clickup-triage-result" style="min-height:16px; font-size:10px; margin-top:6px; display:none;"></div>
                         <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                         <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
 
                     <!-- Section 2: Kanban Board Mapping -->
-                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim); display:none;">
                         <div class="subsection-header" style="margin-bottom:6px;">
                             <span>2. Kanban Board Mapping</span>
                         </div>
@@ -898,7 +898,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
 
                     <!-- Section 3: Kanban Automation -->
-                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none;">
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none; display:none;">
                         <div class="subsection-header" style="margin-bottom:6px;">
                             <span>3. Kanban Automation</span>
                         </div>
@@ -1018,17 +1018,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                         </div>
                         <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
-                        <button id="btn-enable-triage-linear" class="action-btn w-full" style="margin-top: 8px;">⚡ ENABLE TRIAGE PIPELINE</button>
-                        <div class="hint-text" style="margin-top:6px;">
+                        <button id="btn-enable-triage-linear" class="action-btn w-full" style="margin-top: 8px; display:none;">⚡ ENABLE TRIAGE PIPELINE</button>
+                        <div class="hint-text" style="margin-top:6px; display:none;">
                             Enables auto-pull (15-min interval), creates a <strong>"Bug Triage"</strong> project filter, and adds an automation rule that imports <code>triage</code>-tagged tickets, moves them to the <strong>Ticket Updater</strong> column, and dispatches the ticket_updater agent. When the card reaches <strong>Completed</strong>, the result is written back to the ticket. Requires a configured Ticket Updater agent (Prompts tab) and the integration to be set up first.
                         </div>
-                        <div id="linear-triage-result" style="min-height:16px; font-size:10px; margin-top:6px;"></div>
+                        <div id="linear-triage-result" style="min-height:16px; font-size:10px; margin-top:6px; display:none;"></div>
                         <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                         <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     </div>
 
                     <!-- Section 2: Kanban Board Mapping -->
-                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim); display:none;">
                         <div class="subsection-header" style="margin-bottom:6px;">
                             <span>2. Kanban Board Mapping</span>
                         </div>
@@ -1094,7 +1094,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
 
                     <!-- Section 3: Kanban Automation -->
-                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none;">
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none; display:none;">
                         <div class="subsection-header" style="margin-bottom:6px;">
                             <span>3. Kanban Automation</span>
                         </div>
