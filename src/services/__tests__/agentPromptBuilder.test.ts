@@ -30,13 +30,13 @@ suite('agentPromptBuilder', () => {
             });
             assert.ok(!prompt.includes('from the Planned column'), 'Should NOT include source column label');
             assert.ok(!prompt.includes('from the'), 'Should NOT contain "from the" at all');
-            assert.ok(prompt.includes('Please execute the following 2 plans.'), 'Should have clean intro');
+            assert.ok(prompt.includes('Please execute the 2 plans below.'), 'Should have clean intro');
         });
 
         test('omits source column label when not provided', () => {
             const prompt = buildKanbanBatchPrompt('coder', makePlans(2), {});
             assert.ok(!prompt.includes('from the'), 'Should not include "from the" when no sourceColumnLabel');
-            assert.ok(prompt.includes('Please execute the following 2 plans.'), 'Should have default intro');
+            assert.ok(prompt.includes('Please execute the 2 plans below.'), 'Should have default intro');
         });
 
         test('omits complexity and source column for low-complexity coder prompt', () => {
@@ -46,7 +46,7 @@ suite('agentPromptBuilder', () => {
             });
             assert.ok(!prompt.includes('from the TEST column'), 'Should NOT include source column label');
             assert.ok(!prompt.includes('low-complexity'), 'Should NOT include low-complexity text');
-            assert.ok(prompt.includes('Please execute the following 1 plans.'), 'Should have clean intro');
+            assert.ok(prompt.includes('Please execute the plan below.'), 'Should have clean intro');
         });
     });
 
@@ -56,13 +56,13 @@ suite('agentPromptBuilder', () => {
                 sourceColumnLabel: 'Planned'
             });
             assert.ok(!prompt.includes('from the Planned column'), 'Should NOT include source column label');
-            assert.ok(prompt.includes('Please execute the following 2 plans.'), 'Should have clean intro');
+            assert.ok(prompt.includes('Please execute the 2 plans below.'), 'Should have clean intro');
         });
 
         test('omits source column label when not provided', () => {
             const prompt = buildKanbanBatchPrompt('lead', makePlans(2), {});
             assert.ok(!prompt.includes('from the'), 'Should not include "from the" when no sourceColumnLabel');
-            assert.ok(prompt.includes('Please execute the following 2 plans.'), 'Should have default intro');
+            assert.ok(prompt.includes('Please execute the 2 plans below.'), 'Should have default intro');
         });
     });
 

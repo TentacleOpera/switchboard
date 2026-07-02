@@ -25,7 +25,7 @@ const partiallyScopedPlans = [
 ];
 
 const subagentText = 'If your platform supports parallel sub-agents';
-const executionDirective = 'AUTHORIZATION TO EXECUTE';
+const executionDirective = 'AUTHORIZATION:';
 const chatCritiqueText = 'verbatim in your chat response';
 const repoMetadataText = "**Repo:** [bare sub-repo folder name, e.g. 'be'. Omit if not a multi-repo setup or if this plan spans multiple repos.]";
 const missingRepoScopeText = '[not set — add **Repo:** to the plan metadata before dispatching from a control plane]';
@@ -58,31 +58,36 @@ function testMultiplePlans() {
 
 function testExecutionDirective() {
     console.log('Testing execution directive presence...');
-    const roles = ['tester', 'lead', 'coder'];
+    // §5 — tester no longer gets AUTHORIZATION (it's a review role, not execution)
+    const roles = ['lead', 'coder'];
     for (const role of roles) {
         // Test single plan
         const prompt1 = buildKanbanBatchPrompt(role, plans1);
         assert.ok(prompt1.includes(executionDirective), `Role ${role} SHOULD include execution directive (single plan)`);
-        
+
         // Test multiple plans
         const prompt2 = buildKanbanBatchPrompt(role, plans2);
         assert.ok(prompt2.includes(executionDirective), `Role ${role} SHOULD include execution directive (multiple plans)`);
     }
-    const otherRoles = ['planner', 'reviewer'];
+    const otherRoles = ['planner', 'reviewer', 'tester'];
     for (const role of otherRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(executionDirective), `Role ${role} should NOT include execution directive`);
     }
-    console.log('  PASS: Execution directive correctly limited to tester, lead, and coder (all plan counts)');
+    console.log('  PASS: Execution directive correctly limited to lead and coder (all plan counts)');
 }
 
 function testGitProhibitionDirective() {
     console.log('Testing git prohibition directive presence...');
-    const alwaysRoles = ['reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst'];
+    // §6 — analyst is NOT a code-touching role; git guardrail is role-scoped via assembleSuffix.
+    const alwaysRoles = ['reviewer', 'tester', 'lead', 'coder', 'intern'];
     for (const role of alwaysRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(prompt.includes('GIT POLICY'), `Role ${role} SHOULD include git prohibition directive`);
     }
+    // Analyst is NOT code-touching — should NOT include GIT POLICY
+    const analystPrompt = buildKanbanBatchPrompt('analyst', plans1);
+    assert.ok(!analystPrompt.includes('GIT POLICY'), 'Analyst should NOT include git prohibition directive (not code-touching)');
     // Planner: git prohibition is conditional (add-on), NOT included by default
     const plannerPromptDefault = buildKanbanBatchPrompt('planner', plans1);
     assert.ok(!plannerPromptDefault.includes('GIT POLICY'), 'Planner should NOT include git prohibition by default (it is an add-on)');
@@ -93,7 +98,8 @@ function testGitProhibitionDirective() {
 
 function testGitProhibitionDisabledForExecutionRoles() {
     console.log('Testing git prohibition is excluded when disabled for execution roles...');
-    const executionRoles = ['lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+    // §6 — analyst excluded (not code-touching, never gets GIT POLICY)
+    const executionRoles = ['lead', 'coder', 'reviewer', 'tester', 'intern'];
     for (const role of executionRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1, { gitProhibitionEnabled: false });
         assert.ok(!prompt.includes('GIT POLICY'), `Role ${role} should NOT include git prohibition when gitProhibitionEnabled: false`);
@@ -111,7 +117,7 @@ function testGitGuardrailCoexistsWithWorktrees() {
     });
     assert.ok(prompt.includes('GIT POLICY'), 'Guardrail should be present');
     assert.ok(prompt.includes('git worktree'), 'Worktree directive should be present');
-    assert.ok(prompt.includes('git worktree add'), 'Guardrail must explicitly permit worktree creation');
+    assert.ok(prompt.includes('create worktrees'), 'Guardrail must explicitly permit worktree creation');
     assert.ok(!/Do NOT execute state-mutating git commands/.test(prompt), 'Old blanket prohibition wording must be gone');
     console.log('  PASS: Git guardrail and worktree directive coexist without contradiction');
 }
@@ -233,12 +239,11 @@ function testInternAnalystPrompts() {
     const internPrompt = buildKanbanBatchPrompt('intern', plans1);
     const analystPrompt = buildKanbanBatchPrompt('analyst', plans1);
     
-    assert.ok(internPrompt.includes('Please process the following 1 plans.'), 'Intern prompt should start with processing plans');
-    assert.ok(analystPrompt.includes('Please process the following 1 plans.'), 'Analyst prompt should start with processing plans');
-    assert.strictEqual(internPrompt, analystPrompt, 'Intern and analyst prompts should be identical in initial state');
-    
+    assert.ok(internPrompt.includes('Please process the plan below.'), 'Intern prompt should start with processing plans');
+    assert.ok(analystPrompt.includes('Please process the plan below.'), 'Analyst prompt should start with processing plans');
+    // §6 — intern is code-touching (gets GIT POLICY), analyst is not (no GIT POLICY)
     assert.ok(internPrompt.includes('GIT POLICY'), 'Intern prompt should include GIT POLICY');
-    assert.ok(analystPrompt.includes('GIT POLICY'), 'Analyst prompt should include GIT POLICY');
+    assert.ok(!analystPrompt.includes('GIT POLICY'), 'Analyst prompt should NOT include GIT POLICY (not code-touching)');
     console.log('  PASS: Intern and analyst prompt templates correctly implemented');
 }
 

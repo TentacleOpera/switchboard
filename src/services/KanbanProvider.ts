@@ -1613,6 +1613,23 @@ export class KanbanProvider implements vscode.Disposable {
                         getWorkspaceId, getPlansDir, log,
                     });
                 }
+                if (kind === 'control-plane') {
+                    const { GitStateProvider } = require('./remote/GitStateProvider');
+                    const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
+                    return new GitStateProvider('control-plane', {
+                        db: this._getKanbanDb(resolved),
+                        getWorkspaceId, getPlansDir, log,
+                        getExportRoot: () => cpRoot !== resolved ? cpRoot : null,
+                    });
+                }
+                if (kind === 'wiki') {
+                    const { GitStateProvider } = require('./remote/GitStateProvider');
+                    return new GitStateProvider('wiki', {
+                        db: this._getKanbanDb(resolved),
+                        getWorkspaceId, getPlansDir, log,
+                        getExportRoot: () => resolved,
+                    });
+                }
                 return new LinearRemoteProvider(this._getLinearService(resolved), {
                     db: this._getKanbanDb(resolved),
                     getWorkspaceId, getPlansDir, log,
@@ -1626,6 +1643,29 @@ export class KanbanProvider implements vscode.Disposable {
             },
             log: (m) => this._outputChannel?.appendLine(m)
         });
+
+        // Register git providers for outbound push
+        try {
+            const { GitStateProvider } = require('./remote/GitStateProvider');
+            const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
+            if (cpRoot !== resolved) {
+                service.registerGitProvider(new GitStateProvider('control-plane', {
+                    db: this._getKanbanDb(resolved),
+                    getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
+                    getPlansDir: () => this._getIntegrationImportDir(resolved),
+                    log: (m: string) => this._outputChannel?.appendLine(m),
+                    getExportRoot: () => cpRoot,
+                }));
+            }
+            service.registerGitProvider(new GitStateProvider('wiki', {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
+                getPlansDir: () => this._getIntegrationImportDir(resolved),
+                log: (m: string) => this._outputChannel?.appendLine(m),
+                getExportRoot: () => resolved,
+            }));
+        } catch { /* GitStateProvider unavailable */ }
+
         this._remoteControls.set(resolved, service);
         return service;
     }
@@ -2876,7 +2916,7 @@ export class KanbanProvider implements vscode.Disposable {
             );
 
             out.push({
-                topic: `[SUBTASK] ${st.topic}`,
+                topic: st.topic,
                 absolutePath: resolvedAbsolutePath,
                 complexity: st.complexity,
                 workingDir: stWorkingDir,
@@ -3268,6 +3308,24 @@ export class KanbanProvider implements vscode.Disposable {
         return prefix;
     }
 
+    /**
+     * §8 — Shared PRD-resolution helper. Extracts the duplicated loop that
+     * resolves per-project PRD links from the plans' own project fields.
+     * Returns an empty array when project-context is disabled or no PRDs resolve.
+     */
+    private async _resolvePrdReferences(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<Array<{ projectName: string; prdLink: string }>> {
+        if (!(await this._resolveProjectContextEnabled(workspaceRoot))) return [];
+        const distinctProjects = [...new Set(
+            plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+        )];
+        const prdReferences: Array<{ projectName: string; prdLink: string }> = [];
+        for (const projectName of distinctProjects) {
+            const { prdLink } = await this._resolveProjectPrd(workspaceRoot, projectName);
+            if (prdLink) prdReferences.push({ projectName, prdLink });
+        }
+        return prdReferences;
+    }
+
     public async generateUnifiedPrompt(
         role: string,
         plans: BatchPromptPlan[],
@@ -3293,18 +3351,12 @@ export class KanbanProvider implements vscode.Disposable {
                 mergedAddons.constitutionLink = constitutionLink;
                 mergedAddons.constitutionContent = constitutionContent;
             }
+            // §8 — Use shared _resolvePrdReferences helper instead of inline loop.
             // Per-project PRD (project-context toggle) — custom agents are a SEPARATE
             // prompt path; inject the active project's PRD here too. Gated only by the
             // project-context toggle + an active-project PRD (NOT a per-role add-on).
-            if (await this._resolveProjectContextEnabled(workspaceRoot)) {
-                const distinctProjects = [...new Set(
-                    plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
-                )];
-                const prdReferences: Array<{ projectName: string; prdLink: string }> = [];
-                for (const projectName of distinctProjects) {
-                    const { prdLink } = await this._resolveProjectPrd(workspaceRoot, projectName);
-                    if (prdLink) prdReferences.push({ projectName, prdLink });
-                }
+            {
+                const prdReferences = await this._resolvePrdReferences(workspaceRoot, plans);
                 if (prdReferences.length > 0) {
                     mergedAddons.prdReferences = prdReferences;
                 }
@@ -3356,22 +3408,14 @@ export class KanbanProvider implements vscode.Disposable {
             remoteControlActive: await this._isRemoteActiveForDispatch(workspaceRoot, plans),
         };
 
+        // §8 — Use shared _resolvePrdReferences helper instead of inline loop.
         // Per-project PRD (project-context toggle): resolves PRD links from the
         // PLANS' OWN project fields (not the board filter) and injects them into
         // the shared dispatchPrefixCore (all roles) — it is NOT a per-role add-on.
-        // Distinct projects across the batch are collected, each project's PRD
-        // resolved link-only, and the combined prdReferences folded into the prefix.
         // Resolved here, before the role branches, so the tester reconciliation
         // below can see it.
-        if (await this._resolveProjectContextEnabled(workspaceRoot)) {
-            const distinctProjects = [...new Set(
-                plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
-            )];
-            const prdReferences: Array<{ projectName: string; prdLink: string }> = [];
-            for (const projectName of distinctProjects) {
-                const { prdLink } = await this._resolveProjectPrd(workspaceRoot, projectName);
-                if (prdLink) prdReferences.push({ projectName, prdLink });
-            }
+        {
+            const prdReferences = await this._resolvePrdReferences(workspaceRoot, plans);
             if (prdReferences.length > 0) {
                 resolvedOptions.prdReferences = prdReferences;
             }
@@ -5485,7 +5529,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             successCount++;
                             // Soft-delete from source DB so the plan no longer appears on the source board.
                             // If this fails, the plan will still be visible on the source board (acceptable fallback).
-                            await sourceDb.updateStatusByPlanFile(plan.planFile, sourceWorkspaceId, 'deleted');
+                            // Route through archivePlan() so kanban_column moves to COMPLETED — avoids the
+                            // ghost-plan bug (deleted status + stale non-terminal column).
+                            await sourceDb.archivePlan(plan.planFile, sourceWorkspaceId, 'deleted');
                         }
                     } catch (err) {
                         console.error(`[KanbanProvider] reassignPlansWorkspace: failed for session ${sessionId}:`, err);
@@ -7455,7 +7501,7 @@ ${planDetails}
 4. Verify your fixes address the specific feedback provided.
 5. Do not introduce scope changes beyond what's needed to fix the reported issues.
 
-FOCUS DIRECTIVE: Each plan file path above is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
+FOCUS: Each plan file path above is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
 
                 if (msg.action === 'copyPrompt' || msg.action === 'sendToLead') {
                     await vscode.env.clipboard.writeText(prompt);

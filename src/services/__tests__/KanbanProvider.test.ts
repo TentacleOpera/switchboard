@@ -86,8 +86,7 @@ suite('KanbanProvider', () => {
                 cards, 'custom_agent_devin', workspaceRoot, 'Test Column'
             );
 
-            assert.ok(prompt.includes('Please process the following plans.'), 'Should have generic intro');
-            assert.ok(prompt.includes('PLANS TO PROCESS:'), 'Should include plan list header');
+            assert.ok(prompt.includes('PLANS TO PROCESS:'), 'Should include plan list header for custom agent');
             assert.ok(!prompt.includes('Please execute'), 'Should NOT be an execution prompt');
             assert.ok(!prompt.includes('Unknown role'), 'Should NOT throw unknown role error');
         });

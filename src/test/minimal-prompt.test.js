@@ -74,7 +74,7 @@ function testDispatchContextAndPlanListAreIncluded() {
     });
 
     assert.ok(prompt.includes('PLANS TO PROCESS'), 'Prompt should include plan list section');
-    assert.ok(prompt.includes('FOCUS DIRECTIVE'), 'Prompt should include focus directive');
+    assert.ok(prompt.includes('FOCUS:'), 'Prompt should include focus directive');
     console.log('  PASS: Dispatch context and plan list are included');
 }
 
@@ -237,7 +237,7 @@ function testConsistentSpacingBetweenDirectives() {
     const sections = [
         'PAIR PROGRAMMING OPTIMISATION',
         'WORKSPACE TYPE',
-        'FOCUS DIRECTIVE',
+        'FOCUS:',
         'GIT POLICY',
         'PLANS TO PROCESS'
     ];

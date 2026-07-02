@@ -312,6 +312,17 @@ function buildReviewerExecutionModeLine(expectation: string): string {
 - ${expectation}`;
 }
 
+/** Build a plan-count-aware intro sentence. Fixes "1 plans" → "1 plan". */
+function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], epicMode?: boolean): string {
+    if (epicMode) {
+        return `Please ${verb} the epic described below.`;
+    }
+    if (plans.length <= 1) {
+        return `Please ${verb} the plan below.`;
+    }
+    return `Please ${verb} the ${plans.length} plans below.`;
+}
+
 function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): string {
     if (!enabled) {
         return basePayload;
@@ -368,14 +379,33 @@ ${perPlanDirectories}`
     };
 }
 
-export const GIT_PROHIBITION_DIRECTIVE = `GIT POLICY (safety guardrail): You MAY use git for isolation and progress: creating worktrees (git worktree add), creating branches (git branch, git checkout -b), staging (git add), and committing your own work (git commit). You MUST NOT run work-discarding or history-destroying commands — git reset (any mode), git checkout <path> / git restore to discard changes, git clean, git stash drop/clear, force pushes, or branch/worktree deletion — because these silently destroy uncommitted work. Before any deletion or revert, FIRST run git status and confirm the working tree is clean and your work is committed; make deletions as tracked changes you then commit. Never "undo" a mistake by discarding — commit first, then correct forward. Do not push or merge to shared branches; return completed work to the parent agent or user for that.`;
-export const FOCUS_DIRECTIVE = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
+export const GIT_PROHIBITION_DIRECTIVE = `GIT POLICY: You may create worktrees and branches, stage, and commit your own work. You MUST NOT run work-discarding commands: git reset, git checkout <path> / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. Never fix a mistake by discarding — commit first, then correct forward. Do not push or merge to shared branches.`;
+export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
 
 // §11 — injected for ALL roles when the dispatched card's board is under remote control.
 // The user is on their phone, not the terminal, so questions must go to the linked issue
 // as a comment (posted host-side through the LocalApiServer bridge via linear_api/clickup_api),
 // not to terminal input.
 export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using the linear_api skill (or clickup_api). Do NOT wait on terminal input. Continue with any work you can do without the answer.`;
+
+/** §8 — Shared batch execution rules constant, used by both buildKanbanBatchPrompt and buildCustomAgentPrompt. */
+export const BATCH_EXECUTION_RULES = `CRITICAL INSTRUCTIONS:
+1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
+2. Execute each plan fully before moving to the next (if sequential).
+3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
+
+/** §8 — Shared PRD reference block builder from raw refs. Used by both buildPrdReferenceBlock and buildCustomAgentPrompt. */
+function buildPrdReferenceBlockFromRefs(refs: Array<{ projectName: string; prdLink: string }> | undefined): string {
+    if (!refs || refs.length === 0) return '';
+    if (refs.length === 1) {
+        const r = refs[0];
+        return `PROJECT REQUIREMENTS (PRD):\nRead the following product requirements document and respect it throughout this work:\n${r.prdLink}`;
+    }
+    const sections = refs.map(r =>
+        `PROJECT REQUIREMENTS (PRD) — project "${r.projectName}":\nRead ${r.prdLink} and respect it for plans belonging to this project.`
+    );
+    return `PROJECT REQUIREMENTS (PRD) — multiple projects in this batch:\n${sections.join('\n\n')}`;
+}
 
 /**
  * Build the per-project PRD reference block folded into the shared dispatch
@@ -385,19 +415,7 @@ export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote 
  */
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
     if (role === 'tester') return '';
-    const refs = options?.prdReferences;
-    if (!refs || refs.length === 0) return '';
-
-    // Single project (common case) — keep the existing one-block shape.
-    if (refs.length === 1) {
-        const r = refs[0];
-        return `PROJECT REQUIREMENTS (PRD):\nRead the following product requirements document and respect it throughout this work:\n${r.prdLink}`;
-    }
-    // Multi-project batch — one labelled section per project.
-    const sections = refs.map(r =>
-        `PROJECT REQUIREMENTS (PRD) — project "${r.projectName}":\nRead ${r.prdLink} and respect it for plans belonging to this project.`
-    );
-    return `PROJECT REQUIREMENTS (PRD) — multiple projects in this batch:\n${sections.join('\n\n')}`;
+    return buildPrdReferenceBlockFromRefs(options?.prdReferences);
 }
 
 export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
@@ -407,8 +425,8 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 - do NOT start any auxiliary workflow for this step.`;
 
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
-export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do NOT run any project compilation step (e.g. tsc, mvn compile, gradle build, make) as part of the verification plan. The project is assumed to be in a pre-compiled or compilation-free state for this session.`;
-export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (unit, integration, or e2e) as part of the verification plan. The test suite will be run separately by the user.`;
+export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do not run any project compilation step as part of the verification plan.`;
+export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as part of the verification plan.`;
 // The full research-prompt template now lives in .agents/skills/advise_research/SKILL.md (the
 // canonical source). The generateResearchPrompt() function in src/webview/planning.js is a separate
 // UI-driven code path (Research tab) and remains independent — it embeds the same structure for the
@@ -645,6 +663,31 @@ export function PROJECT_LINE_DIRECTIVE(project: string): string {
 
 const DEFAULT_PLANNER_WORKFLOW = '.agents/workflows/improve-plan.md';
 
+/** Roles that touch code and should receive the git safety guardrail. */
+const CODE_TOUCHING_ROLES = new Set(['lead', 'coder', 'intern', 'reviewer', 'tester']);
+
+/**
+ * Shared suffix-block assembler. Canonicalises inclusion rules so they can't
+ * drift per-branch. `gitBlock` is included only for code-touching roles.
+ */
+function assembleSuffix(role: string, parts: {
+    dispatchContextPrefix?: string;
+    focusBlock?: string;
+    gitBlock?: string;
+    antigravityBlock?: string;
+    skipBlock?: string;
+    subagentBlock?: string;
+}): string {
+    return [
+        parts.dispatchContextPrefix,
+        parts.focusBlock,
+        CODE_TOUCHING_ROLES.has(role) ? parts.gitBlock : '',
+        parts.antigravityBlock,
+        parts.skipBlock,
+        parts.subagentBlock
+    ].filter(Boolean).join('\n\n');
+}
+
 /**
  * Canonical prompt builder.  Every UI surface that produces a prompt for an
  * agent role MUST call this function so that "Copy Prompt", "Advance",
@@ -692,10 +735,7 @@ export function buildKanbanBatchPrompt(
         subagentBlock = subagentBlock ? subagentBlock + '\n\n' + WORKTREES_PER_PLAN_DIRECTIVE : WORKTREES_PER_PLAN_DIRECTIVE;
     }
 
-    const batchExecutionRules = `CRITICAL INSTRUCTIONS:
-1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
-2. Execute each plan fully before moving to the next (if sequential).
-3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
+    const batchExecutionRules = BATCH_EXECUTION_RULES;
     const inlineChallengeDirective = INLINE_CHALLENGE_DIRECTIVE;
     const challengeBlock = includeInlineChallenge ? inlineChallengeDirective : '';
     const antigravityBlock = clearAntigravityContext
@@ -707,7 +747,30 @@ export function buildKanbanBatchPrompt(
     ].filter(Boolean).join('\n\n');
     const dispatchContext = buildPromptDispatchContext(plans);
     let planList = dispatchContext.planList;
-    const dispatchContextBlock = dispatchContext.dispatchContextBlock;
+    let dispatchContextBlock = dispatchContext.dispatchContextBlock;
+    // §1 — Build a shared worktree block from deduped plan worktree paths.
+    // Replaces the four per-branch safetySessionBlock loops with one shared
+    // line emitted via dispatchPrefixCore so every role gets it identically.
+    const worktreePaths = [...new Set(plans.map(p => p.worktreePath).filter((p): p is string => !!p))];
+    // In epic mode, the per-subtask/high-low directive variants already list
+    // worktree assignments — skip the generic worktree line to avoid duplication.
+    const epicDirectiveListsWorktrees = options?.epicMode === true
+        && (options?.epicWorktreeMode === 'per-subtask' || options?.epicWorktreeMode === 'high-low')
+        && worktreePaths.length > 0;
+    let worktreeBlock = '';
+    if (worktreePaths.length > 0 && !epicDirectiveListsWorktrees) {
+        worktreeBlock = worktreePaths
+            .map(wt => `WORKTREE: You are working in a git worktree at ${wt} — an isolated sibling checkout of the main repository. Do all work inside it; the plan file paths below already point inside it.`)
+            .join('\n');
+    }
+    // Suppress the WORKING DIRECTORY block when its path equals an emitted
+    // worktree path (it is the same path stated twice today).
+    if (worktreeBlock && dispatchContextBlock.startsWith('WORKING DIRECTORY:')) {
+        const wdPath = dispatchContextBlock.split('\n')[0].replace('WORKING DIRECTORY:', '').trim();
+        if (worktreePaths.includes(wdPath)) {
+            dispatchContextBlock = '';
+        }
+    }
     // §11 — fold the remote-mode directive into the shared dispatch prefix so it reaches
     // every role's suffixBlock without touching each role branch individually.
     const remoteModeBlock = options?.remoteControlActive ? REMOTE_MODE_DIRECTIVE : '';
@@ -715,8 +778,11 @@ export function buildKanbanBatchPrompt(
     // suffixBlock (planner, lead, coder, reviewer, tester, …) without
     // touching each role branch — same pattern as the §11 remote-mode block.
     const prdBlock = buildPrdReferenceBlock(options, role);
-    const dispatchPrefixCore = [dispatchContextBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
+    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
+    // §3 — Epic directive is separated from planList so it can be placed
+    // before the PLANS TO PROCESS heading rather than under it.
+    let epicDirectiveBlock = '';
     if (options?.epicMode && options?.epicTopic) {
         // hasOwnWorktree distinguishes a subtask's OWN dedicated worktree (set by
         // expandEpicSubtaskPlans only when a subtask_plan_id-bound row exists) from an
@@ -731,13 +797,19 @@ export function buildKanbanBatchPrompt(
             options.subtaskCount || 0,
             { subtaskWorktrees, tierWorktrees: options.tierWorktrees }
         );
-        planList = `${directive}\n\n${planList}`;
+        epicDirectiveBlock = directive;
         if (options?.epicPromptTemplate) {
-            planList = `${options.epicPromptTemplate}\n\n${planList}`;
+            epicDirectiveBlock = `${options.epicPromptTemplate}\n\n${epicDirectiveBlock}`;
         }
     }
 
-    const executionDirective = `AUTHORIZATION TO EXECUTE: The plans provided are already authorized. You MUST enter EXECUTION mode immediately. Do NOT enter PLANNING mode or generate an implementation_plan.md. Proceed directly to implementing the changes.`;
+    // §3 — In epic mode, suppress batchExecutionRules (the epic directive owns
+    // grouping/sequencing and says the opposite), and suppress subagentBlock +
+    // WORKTREES_PER_PLAN_DIRECTIVE (the epic directive owns orchestration).
+    const effectiveBatchExecutionRules = (options?.epicMode === true) ? '' : batchExecutionRules;
+    const effectiveSubagentBlock = (options?.epicMode === true) ? '' : subagentBlock;
+
+    const executionDirective = `AUTHORIZATION: These plans are pre-approved — begin implementation immediately; do not produce a separate planning document first.`;
 
     if (role === 'planner') {
         const workflowPath = options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW;
@@ -763,9 +835,9 @@ export function buildKanbanBatchPrompt(
             plannerBase += `ROUTING MAP CONFIGURATION:\nThe user has configured the following custom routing map for complexity scores. When recommending an agent at the end of the plan, you MUST use these exact thresholds instead of any default thresholds:\n- Intern: Complexity ${options.routingMapConfig.intern.join(', ')}\n- Coder: Complexity ${options.routingMapConfig.coder.join(', ')}\n- Lead Coder: Complexity ${options.routingMapConfig.lead.join(', ')}\n\n`;
         }
 
-        // Include batch execution rules for multi-plan dispatches
-        if (plans.length > 1 && switchboardSafeguardsEnabled) {
-            plannerBase += `${batchExecutionRules}\n\n`;
+        // Include batch execution rules for multi-plan dispatches (§3: suppressed in epic mode)
+        if (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules) {
+            plannerBase += `${effectiveBatchExecutionRules}\n\n`;
         }
 
         if (aggressivePairProgramming) {
@@ -795,14 +867,17 @@ export function buildKanbanBatchPrompt(
         // Add dispatch context and plan list
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        const suffixBlock = assembleSuffix('planner', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         if (suffixBlock) {
             plannerPrompt += '\n\n' + suffixBlock;
         }
 
+        if (epicDirectiveBlock) {
+            plannerPrompt += `\n\n${epicDirectiveBlock}`;
+        }
         plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
 
         // `high-low` mode: additive consolidation pass, injected only for the planner role
@@ -845,11 +920,12 @@ export function buildKanbanBatchPrompt(
 CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, the code fixes, and the plan update all in one continuous response.`;
 
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
-        const reviewerExecutionIntro = buildReviewerExecutionIntro(plans.length);
-        const reviewerExecutionMode = buildReviewerExecutionModeLine(`For ${planTarget}, assess the actual code changes against the plan requirements, fix valid material issues in code when needed, then verify.`);
+        // §7 — Merged reviewer framing: intro + short directive in one block.
+        const reviewerExecutionBlock = `${buildReviewerExecutionIntro(plans.length)} Do not start any auxiliary workflow — assess the actual code changes against the plan requirements inline, fix valid material issues, then verify.`;
         const advancedReviewerBlock = advancedReviewerEnabled ? ADVANCED_REVIEWER_DIRECTIVE : '';
-        const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}`
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? `${effectiveBatchExecutionRules}`
             : '';
 
         // WARNING: The string replacements below are coupled to the exact text of
@@ -884,34 +960,21 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             }
         }
 
-        let safetySessionBlock = '';
-        const seenWorktrees = new Set<string>();
-        for (const plan of plans) {
-            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
-                seenWorktrees.add(plan.worktreePath);
-                safetySessionBlock += `\nIMPORTANT: You are reviewing work done in a safety session. The worktree directory is: ${plan.worktreePath}\n` +
-                    `The plan file path in the list below is already inside this worktree — read it from there. Review all code changes from this worktree directory.\n`;
-            }
-        }
-        if (safetySessionBlock) {
-            baseInstructions += '\n\n' + safetySessionBlock.trim();
-        }
-
-
+        // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        const suffixBlock = assembleSuffix('reviewer', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         const promptParts = [
-            reviewerExecutionIntro,
+            reviewerExecutionBlock,
             safeguardsBlock,
-            reviewerExecutionMode,
             advancedReviewerBlock,
             baseInstructions,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
@@ -920,8 +983,9 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
 
     if (role === 'tester') {
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
-        const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}`
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? `${effectiveBatchExecutionRules}`
             : '';
 
         const testerBase = `Mode:
@@ -952,13 +1016,13 @@ For each plan:
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        const suffixBlock = assembleSuffix('tester', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         // Precedence-ordered acceptance-baseline block builder
         const blocks: string[] = [];
-        
+
         if (options?.prdReferences && options.prdReferences.length > 0) {
             for (const r of options.prdReferences) {
                 blocks.push(`PRODUCT REQUIREMENTS (PRD) — project "${r.projectName}" — primary acceptance baseline:\nRead ${r.prdLink.trim()} and accept against it.`);
@@ -975,10 +1039,10 @@ For each plan:
 
         const promptParts = [
             intro,
-            executionDirective,
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             acceptanceBaselineBlock
         ].filter(Boolean).join('\n\n');
@@ -987,8 +1051,9 @@ For each plan:
     }
 
     if (role === 'lead') {
-        const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}\n\n${challengeBlock}`.trim()
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        const batchRulesForLead = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? `${effectiveBatchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
 
         let leadBase = '';
@@ -1004,34 +1069,22 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        let safetySessionBlock = '';
-        const seenWorktrees = new Set<string>();
-        for (const plan of plans) {
-            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
-                seenWorktrees.add(plan.worktreePath);
-                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
-                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `The plan file path in the list below is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
-                    `from the parent directory — that is the main branch and will corrupt it.\n`;
-            }
-        }
-        if (safetySessionBlock) {
-            baseInstructions += '\n\n' + safetySessionBlock.trim();
-        }
+        // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        const suffixBlock = assembleSuffix('lead', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
-            `Please execute the following ${plans.length} plans.`,
+            buildExecutionIntro('execute', plans, options?.epicMode),
             executionDirective,
-            safeguardsBlock,
+            batchRulesForLead,
             baseInstructions,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
@@ -1040,9 +1093,56 @@ For each plan:
     }
 
     if (role === 'coder') {
-        const intro = `Please execute the following ${plans.length} plans.`;
-        const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}\n\n${challengeBlock}`.trim()
+        // §10 — Epic-mode coder dispatch: single epic-file reference instead of
+        // per-subtask enumeration. The epic file's auto-generated SUBTASKS block
+        // already lists every subtask plan link, and its WORKTREES block lists
+        // per-subtask/per-tier worktree assignments — the prompt's per-subtask
+        // enumeration is pure duplication.
+        if (options?.epicMode) {
+            const epicPlan = plans.find(p => !p.isSubtask);
+            const epicFilePath = epicPlan?.absolutePath || '';
+            const epicFileBlock = epicFilePath
+                ? `EPIC FILE:\n${epicFilePath}\n\nRead the epic file above. Its Subtasks section lists all subtask plan files (relative paths resolve inside this worktree). Its Worktrees section lists any per-subtask or per-tier worktree assignments. Execute each subtask plan in full.`
+                : '';
+            const epicExecutionBlock = `EXECUTION MODE: The epic below is pre-approved — begin implementation immediately; do not produce a separate planning document. Execute each subtask plan in full before moving to the next; if a subtask hits an issue, report it clearly and continue with the remaining subtasks when safe. All subtasks are one delivery unit.`;
+
+            let coderBase = '';
+            if (pairProgrammingEnabled) {
+                coderBase += `Additional Instructions: only do Routine (Band A) work.`;
+            }
+
+            let baseInstructions = resolveBaseInstructions('coder', coderBase, options);
+            if (cavemanOutputEnabled) {
+                baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+            }
+
+            // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
+            // no subagent block, no epic directive (replaced by epicExecutionBlock).
+            // gitBlock still included via assembleSuffix.
+            const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+            const suffixBlock = assembleSuffix('coder', {
+                dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
+            });
+
+            const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
+            const promptParts = [
+                buildExecutionIntro('execute', plans, options?.epicMode),
+                epicExecutionBlock,
+                baseInstructions,
+                suffixBlock,
+                epicFileBlock,
+                suppressWalkthroughBlock
+            ].filter(Boolean).join('\n\n');
+
+            const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
+            return normalizeNewlines(coderPrompt);
+        }
+
+        // Non-epic coder dispatch — standard per-plan enumeration path.
+        const intro = buildExecutionIntro('execute', plans, options?.epicMode);
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode (handled above).
+        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? `${effectiveBatchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
 
         let coderBase = '';
@@ -1055,26 +1155,13 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        let safetySessionBlock = '';
-        const seenWorktrees = new Set<string>();
-        for (const plan of plans) {
-            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
-                seenWorktrees.add(plan.worktreePath);
-                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
-                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `The plan file path in the list below is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
-                    `from the parent directory — that is the main branch and will corrupt it.\n`;
-            }
-        }
-        if (safetySessionBlock) {
-            baseInstructions += '\n\n' + safetySessionBlock.trim();
-        }
+        // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        const suffixBlock = assembleSuffix('coder', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
@@ -1083,6 +1170,7 @@ For each plan:
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
@@ -1102,34 +1190,24 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        let safetySessionBlock = '';
-        const seenWorktrees = new Set<string>();
-        for (const plan of plans) {
-            if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
-                seenWorktrees.add(plan.worktreePath);
-                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
-                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `The plan file path in the list below is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
-                    `from the parent directory — that is the main branch and will corrupt it.\n`;
-            }
-        }
-        if (safetySessionBlock) {
-            baseInstructions += '\n\n' + safetySessionBlock.trim();
-        }
+        // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        const suffixBlock = assembleSuffix('intern', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
-            `Please process the following ${plans.length} plans.`,
+            buildExecutionIntro('process', plans, options?.epicMode),
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
@@ -1144,18 +1222,22 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        // §6 — analyst is NOT code-touching; gitBlock excluded by assembleSuffix.
+        const suffixBlock = assembleSuffix('analyst', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         const promptParts = [
-            `Please process the following ${plans.length} plans.`,
+            buildExecutionIntro('process', plans, options?.epicMode),
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
@@ -1202,17 +1284,21 @@ fields above, no speculative implementation detail. Comment only.`;
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        // §6 — ticket_updater is NOT code-touching; gitBlock excluded by assembleSuffix.
+        const suffixBlock = assembleSuffix('ticket_updater', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         const promptParts = [
             baseInstructions,
             safeguardsBlock,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
@@ -1249,17 +1335,21 @@ fields above, no speculative implementation detail. Comment only.`;
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
+            ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
-            .filter(Boolean)
-            .join('\n\n');
+        // §6 — researcher is NOT code-touching; gitBlock excluded by assembleSuffix.
+        const suffixBlock = assembleSuffix('researcher', {
+            dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
+        });
 
         const promptParts = [
             baseInstructions,
             safeguardsBlock,
             suffixBlock,
+            epicDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
@@ -1367,12 +1457,9 @@ export function buildCustomAgentPrompt(
         subagentBlock = subagentBlock ? subagentBlock + '\n\n' + WORKTREES_PER_PLAN_DIRECTIVE : WORKTREES_PER_PLAN_DIRECTIVE;
     }
 
-    // Build safeguards block (batch rules + focus directive)
+    // §8 — Use shared BATCH_EXECUTION_RULES constant instead of inline copy.
     const safeguardsBlock = addons?.switchboardSafeguards
-        ? `CRITICAL INSTRUCTIONS:
-1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
-2. Execute each plan fully before moving to the next (if sequential).
-3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.\n\n${FOCUS_DIRECTIVE}`
+        ? `${BATCH_EXECUTION_RULES}\n\n${FOCUS_DIRECTIVE}`
         : `${FOCUS_DIRECTIVE}`;
 
     let prompt = `${dispatchContextPrefix}${safeguardsBlock}\n\nPLANS TO PROCESS:\n${planList}`;
@@ -1420,18 +1507,12 @@ export function buildCustomAgentPrompt(
         prompt += `\n\nPROJECT CONSTITUTION:\n${addons.constitutionLink}`;
     }
 
+    // §8 — Use shared buildPrdReferenceBlockFromRefs instead of inline copy.
     // Per-project PRD (project-context toggle) — custom agents are a separate prompt
     // path and must carry the PRD too, otherwise they silently miss it.
-    if (addons?.prdReferences && addons.prdReferences.length > 0) {
-        if (addons.prdReferences.length === 1) {
-            const r = addons.prdReferences[0];
-            prompt += `\n\nPROJECT REQUIREMENTS (PRD):\nRead the following product requirements document and respect it throughout this work:\n${r.prdLink}`;
-        } else {
-            const sections = addons.prdReferences.map(r =>
-                `PROJECT REQUIREMENTS (PRD) — project "${r.projectName}":\nRead ${r.prdLink} and respect it for plans belonging to this project.`
-            );
-            prompt += `\n\nPROJECT REQUIREMENTS (PRD) — multiple projects in this batch:\n${sections.join('\n\n')}`;
-        }
+    const customPrdBlock = buildPrdReferenceBlockFromRefs(addons?.prdReferences);
+    if (customPrdBlock) {
+        prompt += `\n\n${customPrdBlock}`;
     }
 
     if (promptInstructions) prompt += `\n\nAdditional Instructions: ${promptInstructions}`;
