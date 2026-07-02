@@ -6551,6 +6551,12 @@ Each plan file must include:
         }
     }
 
+    public async readTerminalRegistryState(workspaceRoot?: string): Promise<Record<string, any>> {
+        const root = workspaceRoot || this._resolveWorkspaceRoot();
+        if (!root) { return {}; }
+        return this._readTerminalRegistryState(root);
+    }
+
     private async _getAliveAutobanTerminalRegistry(workspaceRoot: string): Promise<Record<string, any>> {
         const terminalsMap = await this._readTerminalRegistryState(workspaceRoot);
         const activeTerminals = vscode.window.terminals;
@@ -7032,7 +7038,7 @@ Each plan file must include:
         return true;
     }
 
-    private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string): Promise<void> {
+    private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string, skipStatePoolUpdate: boolean = false): Promise<{ role: string; name: string } | undefined> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showErrorMessage('No workspace folder found. Cannot create an autoban terminal.');
@@ -7077,33 +7083,23 @@ Each plan file must include:
         this._registeredTerminals?.set(suffixedUniqueName, terminal);
         terminal.show();
 
-        let pid: number | undefined;
-        try {
-            pid = await this._waitWithTimeout(terminal.processId, 10000, undefined);
-        } catch {
-            console.warn(`[TaskViewerProvider] Failed to get PID for terminal '${uniqueName}' within 10s. Will retry.`);
-        }
-
-        // If PID capture failed, schedule a retry after 2 seconds
-        if (!pid) {
-            setTimeout(async () => {
-                try {
-                    const retryPid = await this._waitWithTimeout(terminal.processId, 5000, undefined);
-                    if (retryPid) {
-                        await this.updateState(async (state) => {
-                            if (state.terminals?.[suffixedUniqueName]) {
-                                state.terminals[suffixedUniqueName].pid = retryPid;
-                                state.terminals[suffixedUniqueName].childPid = retryPid;
-                                console.log(`[TaskViewerProvider] Retry: Updated PID for terminal '${suffixedUniqueName}' to ${retryPid}`);
-                            }
-                        });
-                        this._refreshTerminalStatuses();
-                    }
-                } catch (e) {
-                    console.error(`[TaskViewerProvider] PID retry failed for terminal '${suffixedUniqueName}':`, e);
+        // Resolve PID asynchronously in the background
+        const suffixedNameForPid = suffixedUniqueName;
+        void this._waitWithTimeout(terminal.processId, 10000, undefined)
+            .then(pid => {
+                if (pid) {
+                    void this.updateState(async (state) => {
+                        if (state.terminals?.[suffixedNameForPid]) {
+                            state.terminals[suffixedNameForPid].pid = pid;
+                            state.terminals[suffixedNameForPid].childPid = pid;
+                        }
+                    });
+                    this._refreshTerminalStatuses();
                 }
-            }, 2000);
-        }
+            })
+            .catch(() => {
+                console.warn(`[TaskViewerProvider] PID resolution failed for terminal '${suffixedNameForPid}'.`);
+            });
 
         await this.updateState(async (state) => {
             if (!state.terminals) {
@@ -7112,8 +7108,8 @@ Each plan file must include:
             state.terminals[suffixedUniqueName] = {
                 purpose: 'autoban-backup',
                 role: normalizedRole,
-                pid: pid,
-                childPid: pid,
+                pid: undefined,
+                childPid: undefined,
                 startTime: new Date().toISOString(),
                 status: 'active',
                 friendlyName: uniqueName,
@@ -7125,39 +7121,66 @@ Each plan file must include:
             };
         });
 
-        const seededPool = configuredPool.length > 0
-            ? configuredPool
-            : await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
-        const nextTerminalPools = {
-            ...this._autobanState.terminalPools,
-            [normalizedRole]: this._limitAutobanPool([...seededPool, suffixedUniqueName])
-        };
-        const nextManagedPools = {
-            ...this._autobanState.managedTerminalPools,
-            [normalizedRole]: this._limitAutobanPool([...this._getManagedAutobanPool(normalizedRole), suffixedUniqueName])
-        };
-        this._autobanState = normalizeAutobanConfigState({
-            ...this._autobanState,
-            terminalPools: nextTerminalPools,
-            managedTerminalPools: nextManagedPools
-        });
-        await this._persistAutobanState();
+        if (!skipStatePoolUpdate) {
+            const seededPool = configuredPool.length > 0
+                ? configuredPool
+                : await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
+            const nextTerminalPools = {
+                ...this._autobanState.terminalPools,
+                [normalizedRole]: this._limitAutobanPool([...seededPool, suffixedUniqueName])
+            };
+            const nextManagedPools = {
+                ...this._autobanState.managedTerminalPools,
+                [normalizedRole]: this._limitAutobanPool([...this._getManagedAutobanPool(normalizedRole), suffixedUniqueName])
+            };
+            this._autobanState = normalizeAutobanConfigState({
+                ...this._autobanState,
+                terminalPools: nextTerminalPools,
+                managedTerminalPools: nextManagedPools
+            });
+            await this._persistAutobanState();
+        }
 
         const startupCommands = await this.getStartupCommands(workspaceRoot);
         const startupCommand = startupCommands[normalizedRole];
         if (startupCommand && startupCommand.trim()) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            terminal.sendText(startupCommand.trim(), true);
+            await new Promise<void>((resolve) => {
+                let disposed = false;
+                const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+                    if (e.terminal === terminal && !disposed) {
+                        disposable.dispose();
+                        disposed = true;
+                        if (terminal.exitStatus === undefined) {
+                            terminal.sendText(startupCommand.trim(), true);
+                        }
+                        resolve();
+                    }
+                });
+                setTimeout(() => {
+                    if (!disposed) {
+                        disposable.dispose();
+                        disposed = true;
+                        console.warn(`[TaskViewerProvider] Shell init timeout for terminal '${uniqueName}', sending startup command anyway`);
+                        if (terminal.exitStatus === undefined) {
+                            terminal.sendText(startupCommand.trim(), true);
+                        }
+                        resolve();
+                    }
+                }, 5000);
+            });
 
-            // NEW: Cache the binary-derived agent display name
+            // Cache the binary-derived agent display name
             const binary = startupCommand.trim().split(/\s+/)[0];
             const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
             this._terminalAgentInfo.set(suffixedUniqueName, { role: normalizedRole, displayName });
         }
 
         this._refreshTerminalStatuses();
-        this._syncSingleColumnTerminalPools();
-        this._postAutobanState();
+        if (!skipStatePoolUpdate) {
+            this._syncSingleColumnTerminalPools();
+            this._postAutobanState();
+        }
+        return { role: normalizedRole, name: suffixedUniqueName };
     }
 
     private async _removeAutobanTerminal(role: string, terminalName: string): Promise<void> {
@@ -7544,33 +7567,74 @@ Each plan file must include:
                 eligiblePoolRoles = new Set(this._autobanPoolRoles(customAgentRoles).map(r => this._normalizeAutobanPoolRole(r)));
             } catch { /* if we can't resolve, fall through and let _createAutobanTerminal validate */ }
         }
+        const rolesToCreate: { role: string; agentName: string }[] = [];
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        const aliveTerminals = workspaceRoot ? await this._getAliveAutobanTerminalRegistry(workspaceRoot) : null;
         for (const role of roles) {
             if (eligiblePoolRoles && !eligiblePoolRoles.has(this._normalizeAutobanPoolRole(role))) {
                 continue;
             }
             const agentName = roleToName[role] || role.charAt(0).toUpperCase() + role.slice(1);
-            
+
             // Check if we already have an alive terminal for this path + role.
-            // strictRole=true: a different role's terminal on the same path must NOT count as a match,
-            // otherwise only the first role ever gets a terminal created.
             const existing = await this._findTerminalNameByWorktreePathAndRole(resolvedPath, role, true);
             if (existing) {
                 continue;
             }
 
-            const workspaceRoot = this._resolveWorkspaceRoot();
-            if (workspaceRoot) {
+            if (workspaceRoot && aliveTerminals) {
                 const normalizedRole = this._normalizeAutobanPoolRole(role);
-                const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
-                const configuredPool = this._getConfiguredAutobanPool(normalizedRole);
-                const poolSize = configuredPool.length > 0 ? configuredPool.length : livePrimaryRoleTerminals.length;
-                if (poolSize >= 5) { // MAX_AUTOBAN_TERMINALS_PER_ROLE is 5
-                    vscode.window.showWarningMessage(`Could not open ${agentName} terminal for ${path.basename(resolvedPath)}: role terminal limit reached`);
+                // Count only terminals for THIS worktree path, not main repo or other worktrees
+                const worktreeTerminalsForRole = Object.entries(aliveTerminals)
+                    .filter(([, info]) => {
+                        const entry = info as any;
+                        return this._normalizeAutobanPoolRole(entry.role) === normalizedRole &&
+                               entry.worktreePath &&
+                               path.resolve(entry.worktreePath) === resolvedPath;
+                    })
+                    .map(([name]) => name);
+
+                if (worktreeTerminalsForRole.length >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
+                    vscode.window.showWarningMessage(`Could not open ${agentName} terminal for ${path.basename(resolvedPath)}: worktree role terminal limit reached`);
                     continue;
                 }
             }
 
-            await this._createAutobanTerminal(role, agentName, resolvedPath);
+            rolesToCreate.push({ role, agentName });
+        }
+
+        // Create all terminals in parallel
+        const results = await Promise.all(
+            rolesToCreate.map(({ role, agentName }) =>
+                this._createAutobanTerminal(role, agentName, resolvedPath, true)
+            )
+        );
+
+        const createdEntries = results.filter((res): res is { role: string; name: string } => res !== undefined);
+        if (createdEntries.length > 0 && workspaceRoot) {
+            // Apply terminal pool state bookkeeping updates atomically
+            let updatedPools = { ...this._autobanState.terminalPools };
+            let updatedManaged = { ...this._autobanState.managedTerminalPools };
+
+            for (const entry of createdEntries) {
+                const normalizedRole = this._normalizeAutobanPoolRole(entry.role);
+                const configuredPool = this._getConfiguredAutobanPool(normalizedRole);
+                const seededPool = configuredPool.length > 0
+                    ? configuredPool
+                    : await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
+                
+                updatedPools[normalizedRole] = this._limitAutobanPool([...(updatedPools[normalizedRole] || seededPool), entry.name]);
+                updatedManaged[normalizedRole] = this._limitAutobanPool([...(updatedManaged[normalizedRole] || this._getManagedAutobanPool(normalizedRole)), entry.name]);
+            }
+
+            this._autobanState = normalizeAutobanConfigState({
+                ...this._autobanState,
+                terminalPools: updatedPools,
+                managedTerminalPools: updatedManaged
+            });
+            await this._persistAutobanState();
+            this._syncSingleColumnTerminalPools();
+            this._postAutobanState();
         }
     }
 
