@@ -292,6 +292,12 @@ const MIGRATION_V43_SQL = [
 
 const MIGRATION_V44_SQL: string[] = [];
 
+const MIGRATION_V45_SQL: string[] = [
+    `ALTER TABLE imported_docs ADD COLUMN needs_file_path_relative INTEGER DEFAULT 0`,
+    `UPDATE imported_docs SET needs_file_path_relative = 1 WHERE file_path LIKE '/%' AND file_path != ''`,
+];
+
+
 
 const MIGRATION_V13_SQL = [
     `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
@@ -2232,7 +2238,7 @@ export class KanbanDatabase {
                 entry.remoteDocId || null,
                 entry.docName,
                 entry.parentDocName || entry.docName,
-                entry.filePath,
+                this._ensureRelativePlanFile(entry.filePath),
                 entry.importedAt,
                 entry.lastSyncedAt || null,
                 entry.contentHash || null,
@@ -2269,7 +2275,7 @@ export class KanbanDatabase {
                     remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
                     docName: String(row.doc_name),
                     parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
-                    filePath: String(row.file_path),
+                    filePath: this._resolveAbsolutePlanFile(String(row.file_path)),
                     importedAt: String(row.imported_at),
                     lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                     contentHash: row.content_hash ? String(row.content_hash) : undefined,
@@ -2298,7 +2304,7 @@ export class KanbanDatabase {
                 remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
                 docName: String(row.doc_name),
                 parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
-                filePath: String(row.file_path),
+                filePath: this._resolveAbsolutePlanFile(String(row.file_path)),
                 importedAt: String(row.imported_at),
                 lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                 contentHash: row.content_hash ? String(row.content_hash) : undefined,
@@ -2345,7 +2351,7 @@ export class KanbanDatabase {
                 remoteDocId,
                 docName,
                 docName,
-                filePath,
+                this._ensureRelativePlanFile(filePath),
                 now,
                 now,
                 contentHash,
@@ -2373,7 +2379,7 @@ export class KanbanDatabase {
                     remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
                     docName: String(row.doc_name),
                     parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
-                    filePath: String(row.file_path),
+                    filePath: this._resolveAbsolutePlanFile(String(row.file_path)),
                     importedAt: String(row.imported_at),
                     lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                     contentHash: row.content_hash ? String(row.content_hash) : undefined,
@@ -2503,7 +2509,7 @@ export class KanbanDatabase {
                             entry.remoteDocId || null,
                             entry.docName,
                             entry.parentDocName || entry.docName,
-                            entry.filePath,
+                            this._ensureRelativePlanFile(entry.filePath),
                             entry.importedAt,
                             entry.lastSyncedAt || null,
                             entry.contentHash || null,
@@ -3536,7 +3542,7 @@ export class KanbanDatabase {
                         item.docId,
                         item.docName,
                         item.parentDocName,
-                        item.filePath,
+                        this._ensureRelativePlanFile(item.filePath),
                         item.importedAt,
                         item.lastSyncedAt,
                         item.hash,
@@ -5538,6 +5544,53 @@ export class KanbanDatabase {
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V44 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V45: repair imported_docs file_path by converting absolute → relative.
+        const v45 = await this.getMigrationVersion();
+        if (v45 < 45) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V45_SQL) {
+                    this._db.exec(sql);
+                }
+                const flagStmt = this._db.prepare(
+                    "SELECT slug_prefix, workspace_id, file_path FROM imported_docs WHERE needs_file_path_relative = 1"
+                );
+                let converted = 0;
+                let skipped = 0;
+                try {
+                    while (flagStmt.step()) {
+                        const row = flagStmt.getAsObject();
+                        const slugPrefix = String(row.slug_prefix);
+                        const wsId = String(row.workspace_id);
+                        const absPath = String(row.file_path);
+                        const relPath = this._ensureRelativePlanFile(absPath);
+                        if (relPath !== absPath) {
+                            this._db.run(
+                                "UPDATE imported_docs SET file_path = ?, needs_file_path_relative = 0 WHERE slug_prefix = ? AND workspace_id = ?",
+                                [relPath, slugPrefix, wsId]
+                            );
+                            converted++;
+                        } else {
+                            this._db.run(
+                                "UPDATE imported_docs SET needs_file_path_relative = 0 WHERE slug_prefix = ? AND workspace_id = ?",
+                                [slugPrefix, wsId]
+                            );
+                            skipped++;
+                            console.warn(`[KanbanDatabase] V45: imported_docs row ${slugPrefix} has file_path outside workspace root, left absolute: ${absPath}`);
+                        }
+                    }
+                } finally {
+                    flagStmt.free();
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(45);
+                console.log(`[KanbanDatabase] V45 migration completed: ${converted} imported_docs file_path(s) relativized, ${skipped} left absolute (outside workspace root)`);
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V45 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
     }
