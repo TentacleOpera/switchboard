@@ -192,3 +192,15 @@ For `'__unassigned__'`, show `— Base Workspace —` as the indicator.
 ## Recommendation
 
 Complexity 5 → **Send to Coder** (multi-file change: backend message payload + handler safety-net call + frontend state + optional UI indicator; the single-flight coalescing needs verification but the changes are additive).
+
+## Review Findings
+
+**Status:** APPROVED with 1 fix applied.
+
+**Files reviewed/changed:** `src/services/TaskViewerProvider.ts` (runSheets posts at lines 15477, 15489, 15544 — all include `projectFilter`), `src/services/KanbanProvider.ts` (setProjectFilter handler, line 5645-5653 — safety-net `refreshUI` call added), `src/webview/implementation.html` (currentProjectFilter state at line 1905, runSheets handler at line 2281, filter indicator at lines 2477-2489, selectedIndex fallback at line 2589).
+
+**Fix applied:** `src/webview/implementation.html:2589` — The fallback `selectedIndex = 0` was landing on the disabled filter-indicator option (prepended at index 0 when a project filter is active), causing `runSheetSelect.value` to be `''` and all action buttons to be disabled. Changed to `selectedIndex = currentProjectFilter ? 1 : 0` to skip the indicator and select the first real plan.
+
+**Verification:** Code inspection confirms all three `runSheets` posts include `projectFilter`. The safety-net `refreshUI` call fires after `_refreshBoard` is awaited (sequential, not concurrent), so the single-flight wrapper does NOT coalesce them — this causes a harmless double-refresh (two DB reads + two postMessages with identical data). The filter indicator is correctly displayed for both project-name and `__unassigned__` filters. Compilation and tests skipped per session directives.
+
+**Remaining risks:** The double-refresh from the safety-net call is a minor performance waste (one extra DB read per filter change). Could be eliminated by removing the direct call and relying solely on the command chain, but the safety net was the plan's explicit intent. No functional risk.

@@ -196,3 +196,13 @@ const toCollisionKey = (sheet) => `${sheet.isEpic === 1 ? '1' : '0'}|${toTopic(s
 ## Recommendation
 
 Complexity 3 → **Send to Intern** (additive fields + simple frontend filter/label; no schema change, no migration, no breaking changes to other consumers).
+
+## Review Findings
+
+**Status:** APPROVED — no code changes needed. Implementation matches plan requirements exactly.
+
+**Files reviewed:** `src/services/TaskViewerProvider.ts` (toSheet at lines 15463-15471 — `isEpic: row.isEpic ?? 0` and `epicId: row.epicId || ''` added), `src/webview/implementation.html` (subtask filter at line 2473, collision key at line 2558, epic prefix at line 2577-2578).
+
+**Verification:** Code inspection confirms `toSheet` includes both `isEpic` (with `?? 0` coercion for undefined) and `epicId` (with `|| ''` fallback). The frontend filter `s.isEpic === 1 || !s.epicId` correctly excludes subtasks (non-epic with non-empty epicId) while keeping epics and standalone plans. The `[EPIC]` prefix is applied before the collision suffix. The collision key includes the epic flag (`${sheet.isEpic === 1 ? '1' : '0'}|...`), preventing epic/standalone collisions. The `isEpic === 1 && epicId` edge case is handled correctly (isEpic check takes priority — shown as epic). No other consumers of the `runSheets` shape are affected (PipelineOrchestrator and SessionActionLog use different data paths). Compilation and tests skipped per session directives.
+
+**Remaining risks:** None material. Subtask plans will no longer appear in the dropdown — users who previously selected a subtask will find it absent, but the existing `selectedIndex` fallback handles this gracefully (now further improved by the Plan 2 fix to skip the filter indicator).

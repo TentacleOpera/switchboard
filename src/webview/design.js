@@ -1085,7 +1085,7 @@
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     if (action === 'Set Context') {
-                        // Activates the kanban "Design Doc Reference" add-on with this doc
+                        // Activates the kanban "Project PRD Reference" add-on with this doc
                         const statusDesign = document.getElementById('status-design');
                         if (statusDesign) {
                             statusDesign.textContent = 'Setting as active design doc...';

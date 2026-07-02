@@ -190,3 +190,13 @@ Also update the other call site at TaskViewerProvider.ts:16764 (in `createDraftP
 ## Recommendation
 
 Complexity 4 → **Send to Coder** (two-file change: handler branch condition + method signature + call site; the optional parameter is backward-compatible but needs care to thread correctly).
+
+## Review Findings
+
+**Status:** APPROVED — no code changes needed. Implementation matches plan requirements exactly.
+
+**Files reviewed:** `src/services/TaskViewerProvider.ts` (reviewPlan handler, line 9746-9767), `src/services/KanbanProvider.ts` (activatePlanInProjectPanel, line 208-234).
+
+**Verification:** Code inspection confirms the `planFile` check was dropped from the branch condition (line 9752: `if (workspaceRoot && this._kanbanProvider)`), `sessionId` is threaded as the 4th optional parameter (line 9754), and `activatePlanInProjectPanel` forwards `sessionId || ''` to the project panel (line 229). The second call site at line 16814 (`createDraftPlanTicket`) correctly omits the 4th arg — `planFile` is always populated there, so the optional parameter defaults to `undefined` → `''`. No orphaned references to the old `viewPlan` path (confirmed dead code, retained intentionally). No race conditions — the handler is async/sequential. Compilation and tests skipped per session directives.
+
+**Remaining risks:** None material. The `viewPlan` case at line 9768 is retained dead code (no frontend sender); harmless but could be removed in a future cleanup.

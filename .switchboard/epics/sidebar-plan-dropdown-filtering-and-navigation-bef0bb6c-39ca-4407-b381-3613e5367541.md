@@ -15,8 +15,8 @@ Fix the implementation.html plan-select dropdown so it correctly respects the ac
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [implementation.html plan select dropdown not opening project.html kanban plans tab](../plans/feature_plan_20260702083640_plan-select-dropdown-not-opening-project-kanban-tab.md) — **CODER CODED**
-- [ ] [implementation.html plan select dropdown must respect active kanban board project filter](../plans/feature_plan_20260702083643_plan-select-dropdown-respect-kanban-project-filter.md) — **CODER CODED**
-- [ ] [Plan Select Dropdown Does Not Filter Out Project Plans in Base Workspace](../plans/feature_plan_20260702114251_plan-dropdown-filter-project-plans-in-base-workspace.md) — **CODER CODED**
-- [ ] [Plan Select Dropdown Does Not Differentiate Epics From Subtask Plans](../plans/feature_plan_20260702114330_plan-dropdown-differentiate-epics-from-subtasks.md) — **CODER CODED**
+- [ ] [implementation.html plan select dropdown not opening project.html kanban plans tab](../plans/feature_plan_20260702083640_plan-select-dropdown-not-opening-project-kanban-tab.md) — **CODE REVIEWED**
+- [ ] [implementation.html plan select dropdown must respect active kanban board project filter](../plans/feature_plan_20260702083643_plan-select-dropdown-respect-kanban-project-filter.md) — **CODE REVIEWED**
+- [ ] [Plan Select Dropdown Does Not Filter Out Project Plans in Base Workspace](../plans/feature_plan_20260702114251_plan-dropdown-filter-project-plans-in-base-workspace.md) — **CODE REVIEWED**
+- [ ] [Plan Select Dropdown Does Not Differentiate Epics From Subtask Plans](../plans/feature_plan_20260702114330_plan-dropdown-differentiate-epics-from-subtasks.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->

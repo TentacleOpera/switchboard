@@ -14,7 +14,7 @@ Fix three reliability issues in the planning.html Tickets tab. Stale doc preview
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Tickets Tab: Picker-Driven Per-Project Import (parity with ClickUp)](../plans/feature_plan_20260629151803_linear-tickets-per-project-import.md) — **PLAN REVIEWED**
-- [ ] [Comments Manager in Tickets Tab Does Not Show Replies After Refetch](../plans/feature_plan_20260701152252_comments-manager-replies-not-showing-after-refetch.md) — **PLAN REVIEWED**
-- [ ] [Tickets: stale doc preview when switching list/project](../plans/feature_plan_20260702105126_tickets-stale-doc-preview-on-list-change.md) — **PLAN REVIEWED**
+- [ ] [Linear Tickets Tab: Picker-Driven Per-Project Import (parity with ClickUp)](../plans/feature_plan_20260629151803_linear-tickets-per-project-import.md) — **CODER CODED**
+- [ ] [Comments Manager in Tickets Tab Does Not Show Replies After Refetch](../plans/feature_plan_20260701152252_comments-manager-replies-not-showing-after-refetch.md) — **CODER CODED**
+- [ ] [Tickets: stale doc preview when switching list/project](../plans/feature_plan_20260702105126_tickets-stale-doc-preview-on-list-change.md) — **CODER CODED**
 <!-- END SUBTASKS -->

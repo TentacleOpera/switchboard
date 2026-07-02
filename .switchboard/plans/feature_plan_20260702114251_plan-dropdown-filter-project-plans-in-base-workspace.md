@@ -141,3 +141,13 @@ The `filterByProjectScope` function is a no-op when a specific project filter is
 ## Recommendation
 
 Complexity 3 → **Send to Intern** (single post-filter addition following established patterns; the critical insight — targeting `'__unassigned__'` not `null` — is captured in this plan so the implementer won't target dead code).
+
+## Review Findings
+
+**Status:** APPROVED — no code changes needed. Implementation matches plan requirements exactly.
+
+**Files reviewed:** `src/services/TaskViewerProvider.ts` (filterByProjectScope at lines 15451-15455, applied to both visibleActiveRows and visibleCompletedRows at lines 15457-15462).
+
+**Verification:** Code inspection confirms the post-filter correctly targets `projectFilter === null || projectFilter === '__unassigned__'` (line 15451). The filter predicate `!row.project && (row.projectId === null || row.projectId === undefined)` correctly excludes plans with either a non-empty `project` text or a non-null `projectId`. All five field combinations verified: (undefined/null → included), (''/null → included), ('Foo'/null → excluded), (''/5 → excluded), ('Foo'/5 → excluded). The filter is a no-op when a specific project filter is active (`excludeProjectPlans` is false → returns true). The filter composes correctly with `repoScope` and `filterByColumn` (applied in sequence). Compilation and tests skipped per session directives.
+
+**Remaining risks:** The string literal `'__unassigned__'` is used instead of `KanbanDatabase.UNASSIGNED_PROJECT_FILTER` (which is already imported at line 66). This is fragile if the constant ever changes, but the value has been stable since inception. No functional risk.

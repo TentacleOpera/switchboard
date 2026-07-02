@@ -2584,7 +2584,9 @@
             if (lastSelected && sheets.find(s => s.sessionId === lastSelected)) {
                 runSheetSelect.value = lastSelected;
             } else {
-                runSheetSelect.selectedIndex = 0;
+                // Skip the disabled filter-indicator option (index 0) when present,
+                // so the first actual plan is selected and action buttons stay enabled.
+                runSheetSelect.selectedIndex = currentProjectFilter ? 1 : 0;
             }
             updatePlanActionStates();
         }
