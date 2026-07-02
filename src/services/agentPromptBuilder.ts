@@ -201,6 +201,8 @@ export interface PromptBuilderOptions {
     skipTests?: boolean;
     /** When true, instructs the planner to emit a research prompt for any assumption it is not 100% sure about. */
     adviseResearchIfUnsure?: boolean;
+    /** When true, instructs the planner to backfill Goal, How the Subtasks Achieve This, and Dependencies & sequencing sections in epic files if missing. */
+    writeEpicDescriptionIfEmpty?: boolean;
     /** When true, instructs the agent to skip walkthrough.md artifact generation at task completion. */
     suppressWalkthroughEnabled?: boolean;
     /** When true, injects caveman communication style directive to reduce token usage. */
@@ -433,6 +435,8 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as p
 // webview and cannot read the extension-side skill file at runtime. Both share the template structure
 // via the skill file as canonical source.
 export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then, at the very end of your chat summary to the user (after everything else), supply the ready-to-run research prompt so they can trigger web research. If you are confident about everything, state that no research is needed and omit both the section and the prompt.`;
+
+export const WRITE_EPIC_DESCRIPTION_IF_EMPTY_DIRECTIVE = `WRITE EPIC DESCRIPTION IF EMPTY: When processing an epic file, check whether it contains the following three sections: \`## Goal\`, \`## How the Subtasks Achieve This\`, and \`## Dependencies & sequencing\`. If any of these sections are missing or empty, backfill them based on the epic's existing content and its subtask plans. For \`## Goal\`, write a concise statement of what the epic accomplishes. For \`## How the Subtasks Achieve This\`, explain how the subtask plans collectively deliver the goal. For \`## Dependencies & sequencing\`, note any ordering constraints or cross-subtask dependencies. Do not overwrite sections that already have content — only backfill empty or missing ones. Follow the same conventions as the group-into-epics skill (\`.agents/skills/group-into-epics/SKILL.md\`).`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 
@@ -711,6 +715,7 @@ export function buildKanbanBatchPrompt(
     const skipCompilation = options?.skipCompilation ?? false;
     const skipTests = options?.skipTests ?? false;
     const adviseResearchIfUnsure = options?.adviseResearchIfUnsure ?? true;
+    const writeEpicDescriptionIfEmpty = options?.writeEpicDescriptionIfEmpty ?? true;
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
     const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? false;
@@ -852,6 +857,9 @@ export function buildKanbanBatchPrompt(
         }
         if (adviseResearchIfUnsure) {
             plannerBase += '\n\n' + ADVISE_RESEARCH_DIRECTIVE;
+        }
+        if (writeEpicDescriptionIfEmpty) {
+            plannerBase += '\n\n' + WRITE_EPIC_DESCRIPTION_IF_EMPTY_DIRECTIVE;
         }
         if (cavemanOutputEnabled) {
             plannerBase += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE + '\nNote: Caveman style applies to reasoning and discussion only. Preserve the theatrical Grumpy Architect voice defined in the workflow for adversarial critique sections. The generated plan artifact (.md file) must remain fully detailed, well-structured, and complete.';
