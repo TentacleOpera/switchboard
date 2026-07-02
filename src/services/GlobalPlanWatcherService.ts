@@ -842,7 +842,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 db,
                 (msg) => this._outputChannel?.appendLine(msg)
             );
-            if (result.rejected > 0) {
+            // Only toast when the manifest was consumed (deleted) — toasting while the
+            // manifest is retained (deferred entries pending) would re-toast every 10s
+            // scan cycle until the staleness guard drops it.
+            if (result.rejected > 0 && result.consumed) {
                 vscode.window.showWarningMessage(
                     `Switchboard: ${result.rejected} manifest entr${result.rejected === 1 ? 'y' : 'ies'} rejected (invalid planFile path). Check the Output panel for details.`
                 );
