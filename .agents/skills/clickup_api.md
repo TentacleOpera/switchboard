@@ -25,10 +25,30 @@ sb_api_call POST /api/clickup \
 ```
 
 ## Parameters
-- method: HTTP method (GET, POST, PUT, DELETE)
-- endpoint: ClickUp API endpoint path (e.g., "/v2/task/12345")
-- query: Optional query parameters object
-- body: Optional request body object
+- **method**: HTTP method (GET, POST, PUT, DELETE)
+- **endpoint**: ClickUp API endpoint path, including the version segment:
+  - "/v2/task/12345" for API v2 endpoints
+  - "/v3/workspaces/{workspace_id}/docs" for API v3 endpoints
+  - Paths without a version prefix default to v2 for backward compatibility
+- **query**: Optional query parameters object
+- **body**: Optional request body object
+
+## API v2 vs v3
+ClickUp's v3 API covers Docs, Chat, Attachments, modern Time Tracking, Move Task, and
+Audit Logs. Core task/list/folder/space/comment CRUD is v2-only. Note the terminology
+shift: v2 "team" = v3 "workspace".
+
+## Example — v3 move task
+```bash
+sb_api_call POST /api/clickup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "PUT",
+    "endpoint": "/v3/workspaces/WORKSPACE_ID/tasks/TASK_ID/home_list/LIST_ID",
+    "query": {},
+    "body": { "move_custom_fields": true }
+  }'
+```
 
 ## Response
 JSON response from ClickUp API or error object with `error` field.
@@ -48,6 +68,6 @@ sb_api_call POST /comment \
   }'
 ```
 
-- provider: "clickup"
-- id: the task id (the `**ClickUp Task ID:**` line in the plan file)
-- body: the comment markdown. Do not add any marker yourself — the host stamps it.
+- **provider**: "clickup"
+- **id**: the task id (the `**ClickUp Task ID:**` line in the plan file)
+- **body**: the comment markdown. Do not add any marker yourself — the host stamps it.
