@@ -2163,6 +2163,31 @@ export class KanbanProvider implements vscode.Disposable {
         }, targetColumn);
     }
 
+    /**
+     * Push a column move to Notion via the provider's pushState.
+     * Only fires if the plan has a notionPageId and Notion remote control is set up.
+     * No realTimeSyncEnabled flag for Notion — push is gated by the remote.config push
+     * flag (formalized in Plan 3/3). For now, push fires if Notion is the active provider.
+     */
+    private async _queueNotionSync(
+        workspaceRoot: string,
+        plan: import('./KanbanDatabase').KanbanPlanRecord,
+        targetColumn: string
+    ): Promise<void> {
+        if (!plan.notionPageId) { return; }
+        try {
+            const rc = this._getRemoteControl(workspaceRoot);
+            const config = await rc.getConfig();
+            // Only push if Notion is the active provider and remote control is active.
+            if (config.provider !== 'notion' || !rc.isActive) { return; }
+            const provider = this._getPushProviderForPlan(workspaceRoot, plan);
+            if (!provider || !provider.capabilities.push) { return; }
+            await provider.pushState(plan.notionPageId, targetColumn);
+        } catch (e) {
+            this._outputChannel?.appendLine(`[KanbanProvider] _queueNotionSync failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
     public async initializeIntegrationAutoPull(): Promise<void> {
         const roots = this._getWorkspaceRoots();
         const liveRoots = new Set(roots.map(root => path.resolve(root)));
@@ -5014,7 +5039,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             await Promise.allSettled([
                 this._queueClickUpSync(workspaceRoot, plan, targetColumn),
-                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+                this._queueLinearSync(workspaceRoot, plan, targetColumn),
+                this._queueNotionSync(workspaceRoot, plan, targetColumn)
             ]);
         } catch (err) {
             console.error('[KanbanProvider] queueIntegrationSyncForSession failed:', err);
@@ -5038,7 +5064,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             await Promise.allSettled([
                 this._queueClickUpSync(workspaceRoot, plan, targetColumn),
-                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+                this._queueLinearSync(workspaceRoot, plan, targetColumn),
+                this._queueNotionSync(workspaceRoot, plan, targetColumn)
             ]);
         } catch (err) {
             console.error('[KanbanProvider] queueIntegrationSyncForPlanFile failed:', err);

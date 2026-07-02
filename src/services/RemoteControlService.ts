@@ -22,7 +22,10 @@ import * as crypto from 'crypto';
  * human editing both sides at once (that's last-write-wins, not a case we defend):
  *  - state: a delta whose column equals the card's CURRENT column is a no-op. Once a move
  *    is applied the local column matches, so our own outbound push re-surfacing as a delta
- *    just no-ops here. That single equality check is the whole guard.
+ *    just no-ops here. That single equality check is the whole guard. This guard is now
+ *    load-bearing for Notion too (pushState bumps last_edited_time → state delta re-fetches
+ *    → column matches → no-op). Content push (pushContent) also bumps last_edited_time,
+ *    but the column hasn't changed → echo guard no-ops the state delta.
  *  - authoredBySelf: outbound comments (Linear marker / Notion `created_by` = bot) are
  *    skipped on ingest;
  *  - processed-comment-id set: this is Notion-API hygiene, not race defense — Notion rounds
