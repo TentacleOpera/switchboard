@@ -2755,12 +2755,13 @@ export class KanbanProvider implements vscode.Disposable {
                 sessionId: cardKey,
                 worktreePath,
                 epicId,
-                isEpic: !!card.isEpic
+                isEpic: !!card.isEpic,
+                project: card.project || undefined
             });
 
             if (card.isEpic && hasDb && card.planId) {
                 const subtaskPlans = await this.expandEpicSubtaskPlans(
-                    workspaceRoot, card.planId, card.topic, card.column, worktreePath, worktreePathMap, subtaskWorktreePathMap
+                    workspaceRoot, card.planId, card.topic, card.column, worktreePath, worktreePathMap, subtaskWorktreePathMap, card.project || undefined
                 );
                 for (const sp of subtaskPlans) { promptPlans.push(sp); }
             }
@@ -2788,7 +2789,8 @@ export class KanbanProvider implements vscode.Disposable {
         epicColumn: string,
         worktreePath?: string,
         worktreePathMap?: Map<string, string>,
-        subtaskWorktreePathMap?: Map<string, string>
+        subtaskWorktreePathMap?: Map<string, string>,
+        epicProject?: string
     ): Promise<BatchPromptPlan[]> {
         const out: BatchPromptPlan[] = [];
         const db = this._getKanbanDb(workspaceRoot);
@@ -2826,7 +2828,8 @@ export class KanbanProvider implements vscode.Disposable {
                 hasOwnWorktree: !!ownWorktreePath,
                 isSubtask: true,
                 epicTopic,
-                epicId: epicPlanId
+                epicId: epicPlanId,
+                project: st.project || epicProject || undefined
             });
         }
         return out;
@@ -3176,15 +3179,12 @@ export class KanbanProvider implements vscode.Disposable {
      * unassigned / no-project case so "No Project" boards inject no PRD. Reads are
      * wrapped so a partially-written file (concurrent Projects-tab save) is tolerated.
      */
-    private async _resolveProjectPrd(workspaceRoot: string, projectName: string | null | undefined): Promise<{ prdLink?: string; prdContent?: string }> {
+    private async _resolveProjectPrd(workspaceRoot: string, projectName: string | null | undefined): Promise<{ prdLink?: string }> {
         if (!projectName || projectName === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return {};
         const { getProjectPrdPath } = require('./prdUtils');
         const filePath = getProjectPrdPath(workspaceRoot, projectName);
         if (fs.existsSync(filePath)) {
-            try {
-                const prdContent = await fs.promises.readFile(filePath, 'utf8');
-                if (prdContent.trim()) return { prdLink: filePath, prdContent };
-            } catch { /* non-fatal */ }
+            return { prdLink: filePath };
         }
         return {};
     }
@@ -3240,10 +3240,16 @@ export class KanbanProvider implements vscode.Disposable {
             // prompt path; inject the active project's PRD here too. Gated only by the
             // project-context toggle + an active-project PRD (NOT a per-role add-on).
             if (await this._resolveProjectContextEnabled(workspaceRoot)) {
-                const { prdLink, prdContent } = await this._resolveProjectPrd(workspaceRoot, this.getDisplayedProjectForRoot(workspaceRoot));
-                if (prdLink || prdContent) {
-                    mergedAddons.prdLink = prdLink;
-                    mergedAddons.prdContent = prdContent;
+                const distinctProjects = [...new Set(
+                    plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+                )];
+                const prdReferences: Array<{ projectName: string; prdLink: string }> = [];
+                for (const projectName of distinctProjects) {
+                    const { prdLink } = await this._resolveProjectPrd(workspaceRoot, projectName);
+                    if (prdLink) prdReferences.push({ projectName, prdLink });
+                }
+                if (prdReferences.length > 0) {
+                    mergedAddons.prdReferences = prdReferences;
                 }
             }
             const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
@@ -3301,11 +3307,16 @@ export class KanbanProvider implements vscode.Disposable {
         // different workspace than the one on screen (race-tolerant). Resolved here,
         // before the role branches, so the tester reconciliation below can see it.
         if (await this._resolveProjectContextEnabled(workspaceRoot)) {
-            const { prdLink, prdContent } = await this._resolveProjectPrd(workspaceRoot, this.getDisplayedProjectForRoot(workspaceRoot));
-            if (prdLink || prdContent) {
-                resolvedOptions.prdEnabled = true;
-                resolvedOptions.prdLink = prdLink;
-                resolvedOptions.prdContent = prdContent;
+            const distinctProjects = [...new Set(
+                plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+            )];
+            const prdReferences: Array<{ projectName: string; prdLink: string }> = [];
+            for (const projectName of distinctProjects) {
+                const { prdLink } = await this._resolveProjectPrd(workspaceRoot, projectName);
+                if (prdLink) prdReferences.push({ projectName, prdLink });
+            }
+            if (prdReferences.length > 0) {
+                resolvedOptions.prdReferences = prdReferences;
             }
         }
 
@@ -8862,10 +8873,12 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Worktrees must live BESIDE the repo, never inside it, to keep `git status` clean.
         // Explicit mode: under the control-plane org folder (already a sibling of the repo).
         // Auto mode: cpStatus.controlPlaneRoot collapses to workspaceRoot, so derive an
-        // explicit sibling from the repo's parent directory instead of nesting inside it.
+        // explicit sibling from the repo's parent directory instead of nesting inside it,
+        // namespaced by repo basename — the parent folder (e.g. ~/Documents/GitHub) is
+        // shared by unrelated repos, so a flat worktrees/ dir would mix their worktrees.
         const worktreesParent = cpStatus.mode === 'explicit'
             ? path.join(cpStatus.controlPlaneRoot, 'worktrees')
-            : path.join(path.dirname(workspaceRoot), 'worktrees');
+            : path.join(path.dirname(workspaceRoot), 'worktrees', path.basename(effectiveGitRoot));
         if (!fs.existsSync(worktreesParent)) {
             fs.mkdirSync(worktreesParent, { recursive: true });
         }

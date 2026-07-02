@@ -30,6 +30,7 @@ import {
     reweightSequence
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
+import {
     BatchPromptPlan,
     columnToPromptRole,
     resolveWorkingDir,
@@ -3147,7 +3148,8 @@ Each plan file must include:
                     workingDir: resolvedWorkingDir,
                     epicId,
                     worktreePath,
-                    isEpic: !!plan?.isEpic
+                    isEpic: !!plan?.isEpic,
+                    project: plan?.project || undefined
                 });
 
                 // Epic subtask bundling (parity with copy/board path). The CLI
@@ -3161,7 +3163,10 @@ Each plan file must include:
                             plan.planId,
                             plan.topic || topic || 'Untitled',
                             plan.kanbanColumn || '',
-                            worktreePath
+                            worktreePath,
+                            undefined,
+                            undefined,
+                            plan.project || undefined
                         );
                         for (const sp of subtaskPlans) {
                             validPlans.push({ ...sp, sessionId: sp.sessionId || sid });
@@ -14313,7 +14318,7 @@ What would you like to find?`;
             }
 
             const workingDir = resolveWorkingDir(resolvedWorkspaceRoot, planRecord?.repoScope || '');
-            const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute, workingDir, isEpic: !!planRecord?.isEpic };
+            const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute, workingDir, isEpic: !!planRecord?.isEpic, project: planRecord?.project || undefined };
             const copyInstruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             const { baseInstruction: resolvedInstruction } = this._getPromptInstructionOptions(role, copyInstruction);
 
@@ -14328,7 +14333,10 @@ What would you like to find?`;
                         planRecord.planId,
                         topic,
                         planRecord.kanbanColumn || '',
-                        undefined
+                        undefined,
+                        undefined,
+                        undefined,
+                        planRecord.project || undefined
                     );
                     for (const sp of subtaskPlans) { plans.push(sp); }
                 } catch (err) {
@@ -16214,11 +16222,13 @@ What would you like to find?`;
         let worktreePath: string | undefined;
         let isEpicPlan = false;
         let epicPlanId: string | undefined;
+        let planRecord: any = undefined;
 
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
         let previousColumn: string | undefined;
         if (db) {
             const plan = await db.getPlanBySessionId(sessionId);
+            planRecord = plan;
             if (plan && plan.planFile) {
                 planFileRelative = plan.planFile;
                 sessionTopic = plan.topic || plan.planFile || 'Untitled';
@@ -16361,7 +16371,7 @@ What would you like to find?`;
         const resolvedWorkingDir = resolveWorkingDirForWorktree(effectiveWorkingDir, worktreePath);
 
         // Canonical plan object for shared builder
-        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: resolvedPlanFileAbsolute, workingDir: resolvedWorkingDir, epicId, worktreePath, isEpic: isEpicPlan };
+        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: resolvedPlanFileAbsolute, workingDir: resolvedWorkingDir, epicId, worktreePath, isEpic: isEpicPlan, project: planRecord?.project || undefined };
 
         // Epic subtask bundling (parity with the copy/board path `_cardsToPromptPlans` and
         // the configured-dispatch path `_resolveKanbanDispatchPlans`). When an epic card is
@@ -16377,7 +16387,10 @@ What would you like to find?`;
                     epicPlanId,
                     sessionTopic,
                     previousColumn || '',
-                    worktreePath
+                    worktreePath,
+                    undefined,
+                    undefined,
+                    planRecord?.project || undefined
                 );
                 for (const sp of subtaskPlans) { dispatchPlans.push(sp); }
             } catch (err) {

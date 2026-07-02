@@ -320,3 +320,7 @@ for (const plan of plans) {
 ---
 
 **Recommendation:** Complexity 4 → Send to Coder.
+
+## Review Findings
+
+Implementation matches the plan: both helpers (`resolvePlanPathForWorktree`, `resolveWorkingDirForWorktree`) added with correct `fs.existsSync` fallback and `..`-guard; all 4 call sites (`KanbanProvider._cardsToPromptPlans`, `expandEpicSubtaskPlans`, `TaskViewerProvider._resolveKanbanDispatchPlans`, single-card dispatch) thread `worktreePath` and apply resolution; `safetySessionBlock` deduplicated via `seenWorktrees` across all 4 role paths. One MAJOR fix applied: the safety block text said "the plan file path **above**" but the `PLANS TO PROCESS` list renders **below** the block in all role paths — reworded to "in the list below" in all 4 occurrences (`agentPromptBuilder.ts:886,1007,1058,1105`). One NIT fixed: `worktreePath_candidate` snake_case → `worktreeCandidate` (camelCase convention). Verification: grep confirms no orphaned "path above" / snake_case references; compilation and tests skipped per session instructions. Remaining risks: the `fs.existsSync` fallback silently re-opens the worktree boundary for uncommitted plan files (accepted trade-off per plan); the 4 duplicate safety-block loops could be extracted to a shared helper (deferred).

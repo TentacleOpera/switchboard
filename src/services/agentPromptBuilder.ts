@@ -41,6 +41,8 @@ export interface BatchPromptPlan {
     // Distinguishes the two so prompt selection doesn't mistake a shared fallback worktree
     // for per-subtask isolation.
     hasOwnWorktree?: boolean;
+    /** The plan's assigned project name (from KanbanCard.project / KanbanPlanRecord.project). Drives per-plan PRD resolution. */
+    project?: string;
 }
 
 /**
@@ -75,13 +77,13 @@ export function resolvePlanPathForWorktree(
     if (!worktreePath || !absolutePath) return absolutePath;
     const rel = path.relative(workspaceRoot, absolutePath);
     if (!rel || rel.startsWith('..')) return absolutePath; // plan is outside workspace root — can't re-resolve
-    const worktreePath_candidate = path.resolve(worktreePath, rel);
-    if (fs.existsSync(worktreePath_candidate)) {
-        return worktreePath_candidate;
+    const worktreeCandidate = path.resolve(worktreePath, rel);
+    if (fs.existsSync(worktreeCandidate)) {
+        return worktreeCandidate;
     }
     // Plan file not in worktree (uncommitted) — fall back to workspace-root path
     console.warn(
-        `[resolvePlanPathForWorktree] Plan file not found in worktree: ${worktreePath_candidate}. ` +
+        `[resolvePlanPathForWorktree] Plan file not found in worktree: ${worktreeCandidate}. ` +
         `Falling back to workspace-root path: ${absolutePath}`
     );
     return absolutePath;
@@ -247,8 +249,14 @@ export interface PromptBuilderOptions {
     prdEnabled?: boolean;
     /** Path/link to the active project's PRD file. */
     prdLink?: string;
-    /** Full content of the active project's PRD, embedded verbatim. */
+    /** Full content of the active project's PRD, embedded verbatim. [DEPRECATED — link-only as of PRD-link-only plan; no longer populated.] */
     prdContent?: string;
+    /**
+     * Per-project PRD links resolved from the plans' own project fields (not the board filter).
+     * Link-only — the agent reads the PRD file itself (per feature_plan_20260702073858).
+     * When empty/absent, no PRD block is emitted.
+     */
+    prdReferences?: Array<{ projectName: string; prdLink: string }>;
     /**
      * The epic's `epic_worktree_mode` snapshot ('none' | 'per-subtask' | 'high-low').
      * Only meaningful when epicMode is true. Selection between the base/per-subtask/high-low
@@ -374,18 +382,20 @@ export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote 
  * Gated by `options.prdEnabled` (the project-context toggle + an active PRD).
  */
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
-    if (role === 'tester') {
-        // tester owns its own acceptance-baseline block (see buildAcceptanceBaselineBlock); suppress the shared-prefix PRD to avoid double-injection.
-        return '';
+    if (role === 'tester') return '';
+    const refs = options?.prdReferences;
+    if (!refs || refs.length === 0) return '';
+
+    // Single project (common case) — keep the existing one-block shape.
+    if (refs.length === 1) {
+        const r = refs[0];
+        return `PROJECT REQUIREMENTS (PRD):\nRead the following product requirements document and respect it throughout this work:\n${r.prdLink}`;
     }
-    if (!options?.prdEnabled) return '';
-    const link = options.prdLink?.trim();
-    const content = options.prdContent?.trim();
-    if (!link && !content) return '';
-    if (content) {
-        return `PROJECT REQUIREMENTS (PRD):\nThe following product requirements apply to the active project and must be respected throughout this work:\n\n${content}`;
-    }
-    return `PROJECT REQUIREMENTS (PRD):\nThe following product requirements document applies to the active project and must be respected throughout this work:\n${link}`;
+    // Multi-project batch — one labelled section per project.
+    const sections = refs.map(r =>
+        `PROJECT REQUIREMENTS (PRD) — project "${r.projectName}":\nRead ${r.prdLink} and respect it for plans belonging to this project.`
+    );
+    return `PROJECT REQUIREMENTS (PRD) — multiple projects in this batch:\n${sections.join('\n\n')}`;
 }
 
 export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
@@ -873,7 +883,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             if (plan.worktreePath && !seenWorktrees.has(plan.worktreePath)) {
                 seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are reviewing work done in a safety session. The worktree directory is: ${plan.worktreePath}\n` +
-                    `The plan file path above is already inside this worktree — read it from there. Review all code changes from this worktree directory.\n`;
+                    `The plan file path in the list below is already inside this worktree — read it from there. Review all code changes from this worktree directory.\n`;
             }
         }
         if (safetySessionBlock) {
@@ -942,10 +952,10 @@ For each plan:
         // Precedence-ordered acceptance-baseline block builder
         const blocks: string[] = [];
         
-        if (options?.prdContent) {
-            blocks.push(`PRODUCT REQUIREMENTS (PRD) — primary acceptance baseline:\n\n${options.prdContent.trim()}`);
-        } else if (options?.prdLink) {
-            blocks.push(`PRODUCT REQUIREMENTS (PRD) — primary acceptance baseline:\n${options.prdLink.trim()}`);
+        if (options?.prdReferences && options.prdReferences.length > 0) {
+            for (const r of options.prdReferences) {
+                blocks.push(`PRODUCT REQUIREMENTS (PRD) — project "${r.projectName}" — primary acceptance baseline:\nRead ${r.prdLink.trim()} and accept against it.`);
+            }
         }
 
         if (options?.constitutionContent) {
@@ -994,7 +1004,7 @@ For each plan:
                 seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
                     `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `The plan file path above is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `The plan file path in the list below is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
                     `from the parent directory — that is the main branch and will corrupt it.\n`;
             }
         }
@@ -1045,7 +1055,7 @@ For each plan:
                 seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
                     `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `The plan file path above is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `The plan file path in the list below is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
                     `from the parent directory — that is the main branch and will corrupt it.\n`;
             }
         }
@@ -1092,7 +1102,7 @@ For each plan:
                 seenWorktrees.add(plan.worktreePath);
                 safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
                     `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
-                    `The plan file path above is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `The plan file path in the list below is already inside this worktree. Navigate into this directory before making any changes. Do NOT run git commands\n` +
                     `from the parent directory — that is the main branch and will corrupt it.\n`;
             }
         }
@@ -1399,10 +1409,16 @@ export function buildCustomAgentPrompt(
 
     // Per-project PRD (project-context toggle) — custom agents are a separate prompt
     // path and must carry the PRD too, otherwise they silently miss it.
-    if (addons?.prdContent) {
-        prompt += `\n\nPROJECT REQUIREMENTS (PRD):\nThe following product requirements apply to the active project and must be respected throughout this work:\n\n${addons.prdContent}`;
-    } else if (addons?.prdLink) {
-        prompt += `\n\nPROJECT REQUIREMENTS (PRD):\nThe following product requirements document applies to the active project and must be respected throughout this work:\n${addons.prdLink}`;
+    if (addons?.prdReferences && addons.prdReferences.length > 0) {
+        if (addons.prdReferences.length === 1) {
+            const r = addons.prdReferences[0];
+            prompt += `\n\nPROJECT REQUIREMENTS (PRD):\nRead the following product requirements document and respect it throughout this work:\n${r.prdLink}`;
+        } else {
+            const sections = addons.prdReferences.map(r =>
+                `PROJECT REQUIREMENTS (PRD) — project "${r.projectName}":\nRead ${r.prdLink} and respect it for plans belonging to this project.`
+            );
+            prompt += `\n\nPROJECT REQUIREMENTS (PRD) — multiple projects in this batch:\n${sections.join('\n\n')}`;
+        }
     }
 
     if (promptInstructions) prompt += `\n\nAdditional Instructions: ${promptInstructions}`;

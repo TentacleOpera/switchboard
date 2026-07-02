@@ -3254,10 +3254,11 @@ export class PlanningPanelProvider {
                         complexity: epic.complexity,
                         sessionId: epic.sessionId || epic.planId,
                         epicId: epic.planId || undefined,
-                        isEpic: true
+                        isEpic: true,
+                        project: epic.project || undefined
                     }];
                     const subtaskPlans = await kp.expandEpicSubtaskPlans(
-                        wsRoot, epic.planId, epic.topic, epic.kanbanColumn || '', undefined
+                        wsRoot, epic.planId, epic.topic, epic.kanbanColumn || '', undefined, undefined, undefined, epic.project || undefined
                     );
                     for (const sp of subtaskPlans) { plans.push(sp); }
                     const prompt = await kp.generateUnifiedPrompt('planner', plans, wsRoot);
