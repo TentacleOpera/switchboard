@@ -1045,13 +1045,13 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importPlansDisposable);
 
-    const copyChatPromptDisposable = vscode.commands.registerCommand('switchboard.copyChatPrompt', async (targetWorkspaceRoot?: string) => {
+    const copyChatPromptDisposable = vscode.commands.registerCommand('switchboard.copyChatPrompt', async (targetWorkspaceRoot?: string, projectName?: string) => {
         const workspaceRoot = targetWorkspaceRoot || kanbanProvider?.getCurrentWorkspaceRoot() || undefined;
         if (!kanbanProvider) {
             vscode.window.showErrorMessage('Switchboard extension not fully initialized.');
             return;
         }
-        const prompt = await kanbanProvider.copyGeneralChatPrompt(workspaceRoot);
+        const prompt = await kanbanProvider.copyGeneralChatPrompt(workspaceRoot, projectName);
         if (!prompt) {
             vscode.window.showWarningMessage('No active workspace selected or found.');
             return;

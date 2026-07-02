@@ -125,3 +125,7 @@ Skipped per session directive. The test suite will be run separately by the user
 ---
 
 **Recommendation:** Complexity 2/10 → Send to Intern.
+
+## Review Findings
+
+Implementation verified correct: section label is PLANS, button row contains only NEW (left) and COPY PROMPT (right), COMPLETE/RECOVER buttons and all associated JS listeners/show-hide logic removed, both `innerText='CREATE'` reset sites updated to `'NEW'`. One MAJOR issue fixed: airlock guidance text at `implementation.html:3182` still referenced the old "CREATE" button name — updated to "NEW" along with the corresponding assertion in `direct-create-ticket-regression.test.js:32`. Two NIT-level dead backend handlers (`recoverPlanFromSidebar`, `completePlan` in TaskViewerProvider.ts) remain as approved by the plan. No compilation or tests run per session directives. Remaining risk: the two dead handlers are harmless but could confuse future readers.

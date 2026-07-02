@@ -46,12 +46,18 @@ export function getThemeBodyClass(): string {
     if (theme === 'afterburner') {
         const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
         const scanlinesDisabled = cfg.get<boolean>('theme.disableCyberScanlines', false);
-        return 'cyber-theme-enabled' + (animDisabled ? ' cyber-animation-disabled' : '') + (scanlinesDisabled ? ' cyber-scanlines-disabled' : '');
+        const ultracodeEnabled = cfg.get<boolean>('theme.ultracodeAnimation', false);
+        return 'cyber-theme-enabled' + 
+            (animDisabled ? ' cyber-animation-disabled' : '') + 
+            (scanlinesDisabled ? ' cyber-scanlines-disabled' : '') +
+            (ultracodeEnabled ? ' ultracode-animation-enabled' : '');
     }
     const colourIcons = getEffectiveColourKanbanIcons();
     const colourClass = colourIcons ? ' kanban-icons-colour' : '';
     if (theme === 'claudify') {
-        return 'theme-claudify' + colourClass;
+        const pixelFontEnabled = cfg.get<boolean>('theme.pixelFont', true);
+        const pixelFontClass = !pixelFontEnabled ? ' claudify-pixel-font-disabled' : '';
+        return 'theme-claudify' + colourClass + pixelFontClass;
     }
     return '';
 }

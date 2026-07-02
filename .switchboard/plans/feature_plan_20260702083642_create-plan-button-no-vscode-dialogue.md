@@ -104,3 +104,7 @@ Skipped per session directive. The test suite will be run separately by the user
 ---
 
 **Recommendation:** Complexity 3/10 → Send to Intern.
+
+## Review Findings
+
+Implementation verified correct: `showInputBox` removed from `createDraftPlanTicket` (`TaskViewerProvider.ts:16793`), replaced with `const title = 'Untitled Plan'`. All three entry points (implementation.html, kanban.html, project.html) converge on the same method via `switchboard.initiatePlan` command — no dialogue on any path. The downstream `activatePlanInProjectPanel(..., true)` auto-edit flow is unchanged. No code fixes needed. No compilation or tests run per session directives. Remaining risk: none — the fallback title was already the behavior on Escape/cancel, so the change is purely UX.

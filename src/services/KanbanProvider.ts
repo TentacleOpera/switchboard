@@ -15,8 +15,11 @@ import {
     KanbanColumnDefinition,
     parseCustomAgents,
     parseCustomKanbanColumns,
-    parseDefaultPromptOverrides
+    parseDefaultPromptOverrides,
+    BUILT_IN_AGENT_LABELS,
+    BuiltInAgentRole
 } from './agentConfig';
+import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
@@ -375,6 +378,10 @@ export class KanbanProvider implements vscode.Disposable {
                 if (e.affectsConfiguration('switchboard.theme.name')) {
                     const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                     this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                }
+                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                    this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                 }
             })
         );
@@ -781,12 +788,25 @@ export class KanbanProvider implements vscode.Disposable {
         return this._currentWorkspaceRoot;
     }
 
-    public async copyGeneralChatPrompt(workspaceRootInput?: string): Promise<string | null> {
+    public async copyGeneralChatPrompt(workspaceRootInput?: string, projectName?: string): Promise<string | null> {
         const workspaceRoot = this._resolveWorkspaceRoot(workspaceRootInput);
         if (!workspaceRoot) { return null; }
 
+        let resolvedProject = projectName;
+        if (!resolvedProject) {
+            const db = this._getKanbanDb(workspaceRoot);
+            const activeProject = await db.getConfig('kanban.activeProjectFilter');
+            if (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                resolvedProject = activeProject;
+            }
+        }
+
         const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
-        const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot, chatPlanDestinations });
+        const prompt = buildKanbanBatchPrompt('chat', [], { 
+            workspaceRoot, 
+            chatPlanDestinations,
+            manifestProject: resolvedProject 
+        });
         await vscode.env.clipboard.writeText(prompt);
         return prompt;
     }
@@ -6770,8 +6790,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }));
                 }
 
+                // Resolve board's active project filter at generation time
+                const db = this._getKanbanDb(workspaceRoot);
+                const activeProject = await db.getConfig('kanban.activeProjectFilter');
+                const manifestProject = (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? activeProject : undefined;
+
                 const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
-                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot, chatPlanDestinations });
+                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot, chatPlanDestinations, manifestProject });
                 await vscode.env.clipboard.writeText(prompt);
                 const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
@@ -7727,6 +7752,37 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 await vscode.commands.executeCommand('switchboard.refreshUI');
+                break;
+            }
+            case 'exportAgentAsSkill': {
+                const agentId = msg.agentId;
+                const role = msg.role; // for built-in agents
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                try {
+                    if (!workspaceRoot) {
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Workspace root not resolved' });
+                        break;
+                    }
+                    if (agentId) {
+                        const customAgents = await this._getCustomAgents(workspaceRoot);
+                        const agent = customAgents.find(a => a.id === agentId);
+                        if (!agent) {
+                            this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Agent not found' });
+                            break;
+                        }
+                        const result = await AgentSkillExporter.exportCustomAgent(agent, workspaceRoot);
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', ...result });
+                    } else if (role) {
+                        const roleConfig: any = this._getRoleConfig(role);
+                        const label = BUILT_IN_AGENT_LABELS[role as BuiltInAgentRole] || role;
+                        const result = await AgentSkillExporter.exportBuiltinAgent(role as BuiltInAgentRole, label, roleConfig, workspaceRoot);
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', ...result });
+                    } else {
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Missing agentId or role' });
+                    }
+                } catch (e: any) {
+                    this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: e.message || String(e) });
+                }
                 break;
             }
             case 'saveCustomAgent': {

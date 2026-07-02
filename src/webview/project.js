@@ -400,6 +400,12 @@
             case 'cyberAnimationSetting':
                 document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
                 break;
+            case 'pixelFontSetting':
+                document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
+                break;
+            case 'ultracodeAnimationSetting':
+                document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);
+                break;
             case 'planAutoFetchState': {
                 const autoFetchEnabledCb = document.getElementById('kanban-auto-fetch-enabled');
                 const autoFetchBranchLabel = document.getElementById('kanban-auto-fetch-branch');
@@ -583,7 +589,11 @@
                     if (state.editMode.kanban) {
                         state.externalChangePending.kanban = true;
                     } else {
-                        kanbanPreviewContent.innerHTML = msg.content || '';
+                        if (msg.error) {
+                            kanbanPreviewContent.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error reading file: ${escapeHtml(msg.error)}</div>`;
+                        } else {
+                            kanbanPreviewContent.innerHTML = msg.content || '';
+                        }
                         state.editOriginalContent.kanban = msg.rawContent || '';
                         const dynamicEditBtn = document.getElementById('btn-edit-kanban');
                         if (dynamicEditBtn) dynamicEditBtn.disabled = false;
@@ -1828,7 +1838,8 @@
         btnChatCopyPrompt.addEventListener('click', () => {
             vscode.postMessage({
                 type: 'copyChatPrompt',
-                workspaceRoot: kanbanWorkspaceFilter ? kanbanWorkspaceFilter.value : ''
+                workspaceRoot: kanbanWorkspaceFilter ? kanbanWorkspaceFilter.value : '',
+                project: _selectedProjectName || ''
             });
         });
     }

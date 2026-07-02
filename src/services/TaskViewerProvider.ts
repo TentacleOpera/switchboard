@@ -36,7 +36,8 @@ import {
     resolveWorkingDir,
     normalizeNewlines,
     resolvePlanPathForWorktree,
-    resolveWorkingDirForWorktree
+    resolveWorkingDirForWorktree,
+    PROJECT_LINE_DIRECTIVE
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -506,6 +507,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         .getConfiguration('switchboard')
                         .get<boolean>('theme.disableCyberScanlines', false);
                     this.broadcastToWebviews({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+                }
+                if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                    const enabled = vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('theme.pixelFont', true);
+                    this.broadcastToWebviews({ type: 'pixelFontSetting', enabled });
+                }
+                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                    const enabled = vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('theme.ultracodeAnimation', false);
+                    this.broadcastToWebviews({ type: 'ultracodeAnimationSetting', enabled });
                 }
             })
         );
@@ -2945,11 +2958,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return entries;
     }
 
-    private _buildMemoPlannerPrompt(issues: string[], workspaceRoot: string): string {
+    private _buildMemoPlannerPrompt(issues: string[], workspaceRoot: string, projectName?: string): string {
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
         const issueList = issues.map((issue, i) => `### Issue ${i + 1}\n${issue}`).join('\n\n');
 
-        return `You are a planner agent. The user has captured the following issues in their memo during testing. Your task is to refine EACH issue into a separate, complete plan file — one plan per issue. Do not combine issues.
+        let prompt = `You are a planner agent. The user has captured the following issues in their memo during testing. Your task is to refine EACH issue into a separate, complete plan file — one plan per issue. Do not combine issues.
 
 ## Issues to Refine
 
@@ -2978,6 +2991,12 @@ Each plan file must include:
 - Create ${issues.length} plan file(s) total — one per issue
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
 - Do NOT skip the investigation step — read the relevant code before writing each plan`;
+
+        if (projectName) {
+            prompt += '\n\n' + PROJECT_LINE_DIRECTIVE(projectName);
+        }
+
+        return prompt;
     }
 
     public async dispatchConfiguredKanbanColumnAction(
@@ -4143,7 +4162,8 @@ Each plan file must include:
 
     public async handleSetCyberAnimationDisabledSetting(disabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.disableCyberAnimation', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetCyberScanlinesDisabledSetting(): boolean {
@@ -4152,7 +4172,8 @@ Each plan file must include:
 
     public async handleSetCyberScanlinesDisabledSetting(disabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.disableCyberScanlines', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetColourKanbanIconsSetting(): boolean {
@@ -4161,7 +4182,28 @@ Each plan file must include:
 
     public async handleSetColourKanbanIconsSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.colourKanbanIcons', undefined, vscode.ConfigurationTarget.Workspace);
+    }
+
+    public handleGetPixelFontSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+    }
+
+    public async handleSetPixelFontSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.pixelFont', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.pixelFont', undefined, vscode.ConfigurationTarget.Workspace);
+    }
+
+    public handleGetUltracodeAnimationSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+    }
+
+    public async handleSetUltracodeAnimationSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.ultracodeAnimation', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.ultracodeAnimation', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetJulesAutoSyncSetting(): boolean {
@@ -4552,6 +4594,16 @@ Each plan file must include:
         this._setupPanelProvider.postMessage({
             type: 'cyberScanlinesDisabledSetting',
             enabled: this.handleGetCyberScanlinesDisabledSetting()
+        });
+
+        this._setupPanelProvider.postMessage({
+            type: 'ultracodeAnimationSetting',
+            enabled: this.handleGetUltracodeAnimationSetting()
+        });
+
+        this._setupPanelProvider.postMessage({
+            type: 'pixelFontSetting',
+            enabled: this.handleGetPixelFontSetting()
         });
 
 
@@ -8138,6 +8190,14 @@ Each plan file must include:
             this._postSidebarConfigurationState(resolvedRoot),
             this.postSetupPanelState(resolvedRoot)
         ]);
+
+        // Auto-export skill so it stays in sync with config.
+        try {
+            const { AgentSkillExporter } = await import('./AgentSkillExporter');
+            await AgentSkillExporter.exportCustomAgent(agent, resolvedRoot);
+        } catch (e) {
+            console.error('[TaskViewerProvider] Auto-export skill failed:', e);
+        }
     }
 
     public async handleDeleteCustomAgent(agentId: string, workspaceRoot?: string): Promise<void> {
@@ -8145,6 +8205,17 @@ Each plan file must include:
         if (!resolvedRoot) {
             return;
         }
+
+        // Capture the key before state mutation
+        let deletedKey: string | undefined = undefined;
+        try {
+            const existing = await this.getCustomAgents(resolvedRoot);
+            const deletedAgent = existing.find((a: CustomAgentConfig) => a.id === agentId);
+            deletedKey = deletedAgent?.id;
+        } catch (e) {
+            // ignore
+        }
+
         await this.updateState((state: any) => {
             const existing = parseCustomAgents(state.customAgents);
             const deletedRole = existing.find((a: CustomAgentConfig) => a.id === agentId)?.role;
@@ -8163,6 +8234,15 @@ Each plan file must include:
             this._postSidebarConfigurationState(resolvedRoot),
             this.postSetupPanelState(resolvedRoot)
         ]);
+
+        if (deletedKey) {
+            try {
+                const { AgentSkillExporter } = await import('./AgentSkillExporter');
+                await AgentSkillExporter.removeExportedSkill(deletedKey, resolvedRoot);
+            } catch (e) {
+                // ignore
+            }
+        }
     }
 
     public async handleSaveDefaultPromptOverrides(data: any): Promise<void> {
@@ -9997,7 +10077,10 @@ Each plan file must include:
                             });
                             break;
                         }
-                        const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot);
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        const activeProject = await db.getConfig('kanban.activeProjectFilter');
+                        const projectName = (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? activeProject : undefined;
+                        const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot, projectName);
 
                         let sendSucceeded = action !== 'send';
                         if (action === 'send') {

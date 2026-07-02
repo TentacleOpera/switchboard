@@ -13,6 +13,6 @@ Fix the shared-disposable bug where closing the Planning panel disposes message 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban Copy Prompt Buttons Broken in Project Panel](../plans/feature_plan_20260702114114_kanban-copy-prompt-broken-project-panel.md) — **PLAN REVIEWED**
-- [ ] [All Previews Broken in Project Panel](../plans/feature_plan_20260702114115_all-previews-broken-project-panel.md) — **PLAN REVIEWED**
+- [ ] [Kanban Copy Prompt Buttons Broken in Project Panel](../plans/feature_plan_20260702114114_kanban-copy-prompt-broken-project-panel.md) — **CODER CODED**
+- [ ] [All Previews Broken in Project Panel](../plans/feature_plan_20260702114115_all-previews-broken-project-panel.md) — **CODER CODED**
 <!-- END SUBTASKS -->

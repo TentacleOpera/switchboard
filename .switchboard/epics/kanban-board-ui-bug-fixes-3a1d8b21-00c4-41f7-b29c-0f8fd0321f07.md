@@ -1,6 +1,6 @@
 # Kanban Board UI Bug Fixes
 
-**Complexity:** 2
+**Complexity:** 7
 
 ## Goal
 

@@ -31,11 +31,11 @@ Switchboard integrates with both ClickUp and Linear through dedicated sync servi
 
 ## Uncertain Assumptions
 
-The following items are NOT 100% confirmed against authoritative sources and were flagged for the user to run web research before implementation (see the research prompt at the end of the chat summary):
+All three uncertainties were resolved via web research (2026-07-02). Findings incorporated into the plan code and comments:
 
-1. **ClickUp v3 move endpoint `status_mappings` payload field names** — the public docs text does not spell out the exact field names inside each `status_mappings` object. The plan assumes `{ oldStatusId, newStatusId }` but this must be confirmed against the interactive schema at developer.clickup.com/reference/movetask or the 400 error body from a probe call.
-2. **ClickUp task `locations` array semantics** — whether the `locations` array returned by `GET /v2/task/{id}` includes the home list, and whether it reflects pre-move or post-move state. The `remainsInLists` count depends on this. Must be verified via a probe call on a task with Tasks-in-Multiple-Lists enabled.
-3. **Linear `issueUpdate` `projectId` nullability** — the plan assumes `projectId` accepts `null` (to unassign from project) and is typed as nullable `String` in the GraphQL schema. If the schema types it as `String!` or does not accept null, the unassign path (Edge Case 3) will error. Verify against the Linear GraphQL schema.
+1. **ClickUp v3 move endpoint `status_mappings` payload field names** — ✅ RESOLVED. Fields are `{ source_status, destination_status }`, NOT `{ oldStatusId, newStatusId }`. Code updated throughout (method signature, auto-mapping builder). Using legacy field names triggers a 400.
+2. **ClickUp task `locations` array semantics** — ✅ RESOLVED. `locations` contains ONLY non-home (additional) list memberships. Home list is the root `list` property, not in `locations`. Elements are `{ id, name }`. Reflects pre-move state. The `remainsInLists` filter excludes only the target list (edge case: target was already an additional membership) — the source home list exclusion was removed as unnecessary.
+3. **Linear `issueUpdate` `projectId` nullability** — ✅ RESOLVED. `projectId` is nullable `String` in `IssueUpdateInput`. Passing `null` unassigns the issue from its project. Omitting the field leaves it unchanged. The plan's approach is correct. ⚠️ Caveat from research: only include `projectId: null` when the user explicitly triggers an unassign — generic form serializers that output `null` for untouched fields will destroy data. The plan's dedicated `updateIssueProject` method avoids this risk by design.
 
 ## User Review Required
 
@@ -99,7 +99,7 @@ Yes — review the UI approach for the move action (Proposed Change #6). The pro
 
 ## Adversarial Synthesis
 
-Key risks: (1) the proposed `/task/clickup/{id}/move` route is unreachable if placed after the existing greedy `PUT /task/clickup/` prefix-match route (line 1012) — it MUST be registered before that route or the generic route must be guarded with `!pathname.endsWith('/move')`; (2) the `remainsInLists` filter excludes the target list instead of the source home list, over-reporting stale memberships; (3) the `status_mappings` payload field names and the `locations` array semantics are unverified against the live API. Mitigations: routing order is now an explicit hard requirement in Change #3; the `remainsInLists` filter is corrected to exclude the source home list via `_taskListIndex`; the three API-shape uncertainties are listed in Uncertain Assumptions and gated behind probe calls in the Verification Plan.
+Key risks: (1) the proposed `/task/clickup/{id}/move` route is unreachable if placed after the existing greedy `PUT /task/clickup/` prefix-match route (line 1012) — it MUST be registered before that route or the generic route must be guarded with `!pathname.endsWith('/move')`; (2) the `status_mappings` payload field names were initially assumed as `{ oldStatusId, newStatusId }` but research confirmed they are `{ source_status, destination_status }` — using the wrong names triggers a 400; (3) v3 error responses may inject `{ status, message }` alongside `{ err, ECODE }` — error message construction should prefer `.message` or `.err` over raw `JSON.stringify`. Mitigations: routing order is an explicit hard requirement in Change #3; field names are corrected throughout the plan code; the `remainsInLists` filter is confirmed correct (excludes target only, since `locations` contains only non-home memberships per research). All three original uncertainties are resolved via web research (2026-07-02).
 
 ## Proposed Changes
 
@@ -132,17 +132,16 @@ Then the method itself:
  * name match needs no mapping (ClickUp maps same-name statuses itself). If there is no
  * match, the method maps to the target list's FIRST status and returns a warning.
  *
- * ⚠️ Implementation-time check: the exact field names inside each status_mappings object
- * are not spelled out in the public docs text — confirm the payload shape against the
- * interactive schema at developer.clickup.com/reference/movetask (or the 400 error body
- * from a probe call) before finalizing the mapping payload below.
+ * Research-confirmed (2026-07-02): status_mappings elements use { source_status, destination_status }
+ * — NOT { oldStatusId, newStatusId }. Using legacy field names triggers a 400 Bad Request.
+ * move_custom_fields defaults to false when omitted; this method defaults to true.
  */
 public async moveTask(
   taskId: string,
   targetListId: string,
   options?: {
     moveCustomFields?: boolean;
-    statusMappings?: Array<{ oldStatusId: string; newStatusId: string }>;
+    statusMappings?: Array<{ source_status: string; destination_status: string }>;
   }
 ): Promise<ClickUpMoveResult> {
   const config = await this.loadConfig();
@@ -165,18 +164,18 @@ public async moveTask(
   }
   const currentStatusName = String(taskResult.data?.status?.status ?? '');
   const currentStatusId = String(taskResult.data?.status?.id ?? '');
-  // `locations` lists the task's list memberships when Tasks in Multiple Lists is on.
-  // ⚠️ Uncertain Assumption #2: verify whether `locations` includes the home list and
-  // whether it reflects pre-move state (it is fetched BEFORE the move call). The filter
-  // below excludes the SOURCE home list (from _taskListIndex), not the target — the move
-  // changes the home list, so the old home entry in `locations` is stale post-move and
-  // must not be counted as a "remaining" membership.
-  const sourceListId = this._taskListIndex.get(normalizedTaskId);
+  // Research-confirmed (2026-07-02): the `locations` array contains ONLY additional
+  // (non-home) list memberships when Tasks in Multiple Lists is enabled. The home list
+  // is NOT in `locations` — it's the root `list` property on the task payload. Elements
+  // are { id, name }. The array reflects state at request time (pre-move).
+  // Therefore: all entries in `locations` are "remaining" memberships after the move,
+  // EXCEPT the target list if it happens to also be an additional membership (edge case:
+  // moving home to a list the task was already a member of).
   const locations: Array<{ id: string }> = Array.isArray(taskResult.data?.locations)
     ? taskResult.data.locations
     : [];
   const remainsInLists = locations.filter(
-    l => String(l.id) !== normalizedTargetListId && String(l.id) !== sourceListId
+    l => String(l.id) !== normalizedTargetListId
   ).length;
 
   let statusMappings = options?.statusMappings;
@@ -193,7 +192,7 @@ public async moveTask(
       s => String(s.status).toLowerCase() === currentStatusName.toLowerCase()
     );
     if (!nameMatch && targetStatuses.length > 0) {
-      statusMappings = [{ oldStatusId: currentStatusId, newStatusId: targetStatuses[0].id }];
+      statusMappings = [{ source_status: currentStatusId, destination_status: targetStatuses[0].id }];
       warning = `Status "${currentStatusName}" does not exist in the target list — task was set to "${targetStatuses[0].status}".`;
     }
   }
@@ -444,7 +443,7 @@ sb_api_call PUT "/task/clickup/$TASK_ID/move" \
 ## Parameters
 - **targetListId** (required): ID of the destination list
 - **moveCustomFields** (optional, default true): Bring custom fields to the new list
-- **statusMappings** (optional): Array of `{ oldStatusId, newStatusId }`. Usually omit it — when the task's status has no name match in the target list, the server auto-maps to the target list's first status and returns a `warning`
+- **statusMappings** (optional): Array of `{ source_status, destination_status }`. Usually omit it — when the task's status has no name match in the target list, the server auto-maps to the target list's first status and returns a `warning`
 
 ## Response
 ```json
@@ -651,13 +650,13 @@ Add to the skill table:
 
 14. **🚨 Routing conflict regression (Change #3)**: send `PUT /task/clickup/{id}/move` and confirm it reaches `_handleMoveClickUpTask` (not `_handleUpdateClickUpTask`). Inspect the routing chain order in `LocalApiServer.ts` — the move route MUST appear before the generic `PUT /task/clickup/` prefix match, or the generic route MUST be guarded with `!pathname.endsWith('/move')`. A move request that silently no-ops or 400s with an update-task error message indicates the routing order bug is present.
 
-15. **`remainsInLists` filter correctness**: move a task whose home list is A and which is also in sprint list S, to target list B. Verify `remainsInLists` counts S only (not A, not B). If it counts A, the filter is excluding the wrong list — see the corrected filter in Change #1 which excludes both the target and the source home list (from `_taskListIndex`).
+15. **`remainsInLists` filter correctness**: move a task whose home list is A and which is also in sprint list S, to target list B. Verify `remainsInLists` counts S only (not A — A is the home list and not in `locations`; not B — B is excluded by the filter). If it counts A, the `locations` array semantics differ from the research finding.
 
-16. **Probe: `status_mappings` field names (Uncertain Assumption #1)**: before finalizing the `moveBody.status_mappings` payload, send a deliberate status-mismatch move with no mappings to capture the 400 error body. Confirm the exact field names against the error body or the interactive schema at developer.clickup.com/reference/movetask. If the field names differ from `{ oldStatusId, newStatusId }`, update the `statusMappings` type and the payload builder.
+16. **`status_mappings` field names (research-confirmed)**: verify at runtime that the `{ source_status, destination_status }` field names are accepted by sending a deliberate status-mismatch move with auto-mapping. Confirm no 400. If a 400 occurs, re-check the field names against the 400 error body — the research finding was authoritative but the API may have evolved.
 
-17. **Probe: `locations` array semantics (Uncertain Assumption #2)**: on a task with Tasks-in-Multiple-Lists enabled, `GET /v2/task/{id}` and inspect the `locations` array. Confirm whether it includes the home list and whether it reflects pre-move state. Adjust the `remainsInLists` filter if the semantics differ from the assumed pre-move-includes-home behavior.
+17. **`locations` array semantics (research-confirmed)**: on a task with Tasks-in-Multiple-Lists enabled, `GET /v2/task/{id}` and confirm `locations` contains only non-home memberships with `{ id, name }` elements. Verify `remainsInLists` counts only the additional (non-home, non-target) lists.
 
-18. **Probe: Linear `projectId` nullability (Uncertain Assumption #3)**: introspect the Linear GraphQL schema for the `issueUpdate` input's `projectId` field. Confirm it accepts `null`. If it does not, the unassign-from-project path (Edge Case 3) must be removed or reworked (e.g. via a separate mutation or by omitting the field — though omitting leaves the project unchanged, not unset).
+18. **Linear `projectId` null (research-confirmed)**: call `updateIssueProject` with `null`. Verify the issue becomes a team-level issue with no project. Confirm the GraphQL mutation accepts `null` without error.
 
 ---
 

@@ -15,6 +15,6 @@ The two plans split cleanly along layer lines — no file overlap, no conflictin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix /improve-plan Manifest Prompting for Local Agents](../plans/feature_plan_20260702112304_improve-plan-manifest-local-vs-remote.md) — **PLAN REVIEWED**
-- [ ] [Pin Plan Project via .md Metadata (Not Manifest) — Eliminate the Project Race](../plans/feature_plan_20260702130028_creator-manifest-project-pinning.md) — **PLAN REVIEWED**
+- [ ] [Fix /improve-plan Manifest Prompting for Local Agents](../plans/feature_plan_20260702112304_improve-plan-manifest-local-vs-remote.md) — **CODER CODED**
+- [ ] [Pin Plan Project via .md Metadata (Not Manifest) — Eliminate the Project Race](../plans/feature_plan_20260702130028_creator-manifest-project-pinning.md) — **CODER CODED**
 <!-- END SUBTASKS -->

@@ -4133,6 +4133,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
                 break;
             }
+            case 'pixelFontSetting': {
+                document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
+                break;
+            }
+            case 'ultracodeAnimationSetting': {
+                document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);
+                break;
+            }
             case 'kanbanPlansReady':
                 handleKanbanPlansReady(msg);
                 break;

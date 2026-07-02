@@ -1223,7 +1223,7 @@ Per-role prompt customization:
 - **Role Selector** — Dropdown to select agent role (includes custom agents).
 - **Planner Config** (shown for Planner role):
   - **Workflow File** — Enable/disable, set workflow file path (e.g., `.agents/workflows/improve-plan.md`), validate path.
-  - **Add-ons** — Switchboard Safeguards, Planning Epic Reference, Project Constitution Reference, Design Doc Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests.
+  - **Add-ons** — Switchboard Safeguards, Planning Epic Reference, Project Constitution Reference, Project PRD Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests.
   - **Subagent Policy** — Not Specified / No Subagents / Use Subagents / Custom Subagent (with name input).
 - **Research Complexity** (shown for Researcher/Code Researcher): Quick / Standard / Deep / Academic. Save to Local Docs toggle.
 - **Non-Planner Add-ons** — Role-specific add-ons (inline challenge, accurate coding, pair programming, etc.).

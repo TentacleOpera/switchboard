@@ -2840,9 +2840,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <!-- Role Selector -->
         <div class="db-subsection">
           <div class="subsection-header"><span>Role Selector</span></div>
-          <div class="role-selector-section">
+          <div class="role-selector-section" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <label for="roleSelect">Role:</label>
-          <select id="roleSelect">
+          <select id="roleSelect" style="flex: 1; min-width: 150px;">
             <option value="planner" selected>Planner</option>
             <option value="lead">Lead Coder</option>
             <option value="coder">Coder</option>
@@ -2855,6 +2855,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <option value="jules">Jules</option>
             <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
           </select>
+          <button id="prompts-tab-btn-export-skill" class="secondary-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">EXPORT AS SKILL</button>
+          </div>
           <div id="roleDescription" class="agent-description" style="margin-top: 8px; margin-left: 0;"></div>
           </div>
         </div>
@@ -3650,12 +3652,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <span class="agents-tab-custom-agent-item-command">${agent.startupCommand}</span>
               <div class="agents-tab-custom-agent-item-actions">
                 <button class="agents-tab-custom-agent-item-btn edit" data-id="${agent.id}">EDIT</button>
+                <button class="agents-tab-custom-agent-item-btn export-skill" data-id="${agent.id}">EXPORT SKILL</button>
                 <button class="agents-tab-custom-agent-item-btn delete" data-id="${agent.id}">DELETE</button>
               </div>
             `;
 
             item.querySelector('.edit').addEventListener('click', () => {
               agentsTabShowInlineForm(agent);
+            });
+
+            item.querySelector('.export-skill').addEventListener('click', () => {
+              vscode.postMessage({ type: 'exportAgentAsSkill', agentId: agent.id, workspaceRoot: getActiveWorkspaceRoot() });
+              const btn = item.querySelector('.export-skill');
+              const orig = btn.textContent;
+              btn.textContent = 'EXPORTED!';
+              setTimeout(() => { btn.textContent = orig; }, 2000);
             });
 
             item.querySelector('.delete').addEventListener('click', () => {
@@ -4118,6 +4129,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     refreshPreview();
                 });
             }
+            const promptsExportBtn = document.getElementById('prompts-tab-btn-export-skill');
+            if (promptsExportBtn) {
+                promptsExportBtn.addEventListener('click', () => {
+                    const roleSelect = document.getElementById('roleSelect');
+                    if (roleSelect) {
+                        const agentId = roleSelect.value;
+                        vscode.postMessage({ type: 'exportAgentAsSkill', agentId, workspaceRoot: getActiveWorkspaceRoot() });
+                        const orig = promptsExportBtn.textContent;
+                        promptsExportBtn.textContent = 'EXPORTED!';
+                        setTimeout(() => { promptsExportBtn.textContent = orig; }, 2000);
+                    }
+                });
+            }
 
         }
         initPromptsTabListeners();
@@ -4305,6 +4329,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function fireUltracodeBlast() {
             if (!document.body.classList.contains('cyber-theme-enabled')) { return; }
             if (document.body.classList.contains('cyber-animation-disabled')) { return; }
+            if (!document.body.classList.contains('ultracode-animation-enabled')) { return; }
             document.getElementById('ultracode-blast')?.remove();
             const blast = document.createElement('div');
             blast.id = 'ultracode-blast';
@@ -6113,6 +6138,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'colourKanbanIconsChanged': {
                     document.body.classList.toggle('kanban-icons-colour', !!msg.enabled);
+                    break;
+                }
+                case 'cyberAnimationSetting': {
+                    document.body.classList.toggle('cyber-animation-disabled', !!msg.disabled);
+                    break;
+                }
+                case 'cyberScanlinesSetting': {
+                    document.body.classList.toggle('cyber-scanlines-disabled', !!msg.disabled);
+                    break;
+                }
+                case 'pixelFontSetting': {
+                    document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
+                    break;
+                }
+                case 'ultracodeAnimationSetting': {
+                    document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);
                     break;
                 }
                 case 'showStatusMessage': {

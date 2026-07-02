@@ -300,6 +300,40 @@ export function generateClaudeMirror(rootDir: string, extensionVersion: string |
             });
         }
 
+        // Dynamically scan for generated agent skills under .agents/skills/
+        const skillsDir = path.join(agentsDir, 'skills');
+        if (fs.existsSync(skillsDir)) {
+            try {
+                const files = fs.readdirSync(skillsDir);
+                for (const file of files) {
+                    if (file.startsWith('switchboard-') && file.endsWith('.md')) {
+                        const name = file.replace(/^switchboard-/, '').replace(/\.md$/, '');
+                        const entry: MirrorEntry = {
+                            source: path.posix.join('skills', file),
+                            name: `switchboard-${name}`,
+                            invocation: 'no-model'
+                        };
+                        const sourceFile = path.join(skillsDir, file);
+                        const raw = fs.readFileSync(sourceFile, 'utf8');
+                        const parsed = parseSource(raw);
+                        if (!parsed.name) {
+                            parsed.name = firstH1(parsed.body);
+                        }
+                        const skillDir = path.join(skillsRoot, entry.name);
+                        fs.mkdirSync(skillDir, { recursive: true });
+                        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), buildSkillMd(entry, parsed), 'utf8');
+                        generatedSkills.push({
+                            source: entry.source,
+                            name: entry.name,
+                            relPath: path.posix.join('.claude', 'skills', entry.name, 'SKILL.md'),
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('[ClaudeCodeMirrorService] Failed to scan generated agent skills:', e);
+            }
+        }
+
         const settingsAllowAdded = mergePermissionsAllowList(claudeDir);
 
         const manifest = {

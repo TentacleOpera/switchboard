@@ -88,11 +88,15 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 
 ## Plan-Import Manifest (Trigger A — column transition)
 
-After updating the plan `.md` file(s), emit a **plan-import manifest** so the reviewed plan lands in the correct kanban column on import instead of defaulting to `CREATED`. This is the completion gate: the column move signals "agent done, pipeline may advance."
+After updating the plan `.md` file(s), the reviewed plan should land in the "PLAN REVIEWED" kanban column.
+
+**Local agents (Switchboard extension running):** Do NOT write a manifest for the column transition. Simply update the plan file and inform the user that the review is complete. The user will move the card to "PLAN REVIEWED" in the extension UI when ready — that card move is what triggers the next pipeline stage.
+
+**Remote agents (no Switchboard extension access):** Emit a **plan-import manifest** so the extension ingests the column transition on its next scan. To determine if you are remote: check whether `.switchboard/api-server-port.txt` exists in the workspace root (walk up from your current directory). If it does not exist, you are remote.
 
 **When to emit:**
-- **Always (Trigger A):** you have adversarially reviewed a plan → set `kanbanColumn: "PLAN REVIEWED"`.
-- **Also (Trigger B):** if you restructured plans into an epic during review → include `isEpic`/`epicId` links for the epic + subtask set.
+- **Trigger A (remote only):** you have adversarially reviewed a plan → set `kanbanColumn: "PLAN REVIEWED"`.
+- **Trigger B (all agents):** if you restructured plans into an epic during review → include `isEpic`/`epicId` links for the epic + subtask set. Trigger B applies regardless of local/remote — epic relationships span multiple files and cannot be expressed via a single card move. **Local agents writing a Trigger B-only manifest:** set `kanbanColumn: "CREATED"` (or omit the field) so the ingestor does not auto-move the card — the user moves it manually.
 - Pure plan creation with no review and no grouping → no manifest.
 
 **Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced/reviewed). Write it **last**, after all `.md` files.

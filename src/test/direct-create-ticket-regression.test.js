@@ -29,7 +29,7 @@ async function run() {
         'sidebar webview should not retain stale airlock modal save status handling'
     );
     assert.ok(
-        implementationHtml.includes('use CREATE to open a new ticket in edit mode'),
+        implementationHtml.includes('use NEW to open a new ticket in edit mode'),
         'airlock guidance should describe the direct ticket creation flow'
     );
 

@@ -1,6 +1,6 @@
 # Kanban DB Storage Consistency
 
-**Complexity:** 3
+**Complexity:** 4
 
 ## Goal
 
@@ -13,6 +13,6 @@ Fix two DB storage convention issues. Archived plans leaving ghost kanban_column
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Archived Plans Leave Ghost kanban_column — Invisible in UI, Visible in DB Queries](../plans/fix-archived-plans-leave-ghost-kanban-column.md) — **PLAN REVIEWED**
-- [ ] [Fix: `imported_docs.file_path` stores absolute paths, inconsistent with the DB's relative-path convention](../plans/fix-imported-docs-relative-paths-convention.md) — **PLAN REVIEWED**
+- [ ] [Fix: Archived Plans Leave Ghost kanban_column — Invisible in UI, Visible in DB Queries](../plans/fix-archived-plans-leave-ghost-kanban-column.md) — **INTERN CODED**
+- [ ] [Fix: `imported_docs.file_path` stores absolute paths, inconsistent with the DB's relative-path convention](../plans/fix-imported-docs-relative-paths-convention.md) — **INTERN CODED**
 <!-- END SUBTASKS -->

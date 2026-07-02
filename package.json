@@ -694,6 +694,18 @@
           "description": "Render kanban board icons in full colour at rest (terracotta for Claudify) instead of flat grey with a colour click-flash. Only affects the Claudify theme.",
           "scope": "window"
         },
+        "switchboard.theme.pixelFont": {
+          "type": "boolean",
+          "default": true,
+          "description": "Claudify only: render document H1 headings in the pixel display font. Turn off to render H1 in the body font like H2–H6.",
+          "scope": "window"
+        },
+        "switchboard.theme.ultracodeAnimation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Afterburner only: play the full-screen ULTRACODE animation when Epic Ultracode is switched on in the kanban board.",
+          "scope": "window"
+        },
         "switchboard.theme.name": {
           "type": "string",
           "enum": [

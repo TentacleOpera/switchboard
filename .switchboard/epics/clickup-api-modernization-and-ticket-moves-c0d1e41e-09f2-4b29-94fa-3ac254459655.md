@@ -1,6 +1,6 @@
 # ClickUp API Modernization and Ticket Moves
 
-**Complexity:** 5
+**Complexity:** 6
 
 ## Goal
 
@@ -13,6 +13,6 @@ Migrate the ClickUp API integration from v2 to v3 with version-aware plumbing, a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Move Tickets Between Lists/Projects (ClickUp and Linear)](../plans/feature_plan_20260702112125_ticket-move-between-lists-projects.md) — **PLAN REVIEWED**
-- [ ] [ClickUp API v2 → v3 Migration (Version-Aware Plumbing + Selective Endpoint Migration)](../plans/feature_plan_20260702120053_clickup-api-v2-to-v3-migration.md) — **PLAN REVIEWED**
+- [ ] [Move Tickets Between Lists/Projects (ClickUp and Linear)](../plans/feature_plan_20260702112125_ticket-move-between-lists-projects.md) — **CODER CODED**
+- [ ] [ClickUp API v2 → v3 Migration (Version-Aware Plumbing + Selective Endpoint Migration)](../plans/feature_plan_20260702120053_clickup-api-v2-to-v3-migration.md) — **CODER CODED**
 <!-- END SUBTASKS -->
