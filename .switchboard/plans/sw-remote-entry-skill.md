@@ -217,6 +217,12 @@ Per session directives, automated tests are **not run** in this planning pass â€
 - The `/improve-remote-plan` skill itself (covered by sibling plan `improve-remote-plan-skill.md`)
 - The startup reconciler (covered by sibling plan `kanban-startup-reconciler.md`)
 
+> **Epic-grouping requirement (amendment from `epic-grouping-awareness-in-chat-and-memo-skills.md`):**
+> The new `.claude/skills/sw-remote/SKILL.md` must include the same `## Epic Grouping`
+> section as `switchboard-chat/SKILL.md` (adapted for remote context: replace
+> `.switchboard/epics/` with the Linear/Notion equivalent for remote sessions, or
+> omit the format reference if no remote epic format is defined yet).
+
 ---
 
 ## Recommendation

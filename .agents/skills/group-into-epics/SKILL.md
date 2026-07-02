@@ -35,6 +35,28 @@ Use the `planId:` value from the comment — NOT the filename — when calling c
 (A path under .switchboard/epics/ also indicates an epic, but subtask detection
 requires the subtask-of tag — do not rely on filenames alone.)
 
+### 1a. DETERMINE PROJECT SCOPE
+
+The active project filter is injected as `{{ACTIVE_PROJECT_FILTER}}` when
+invoked from the **Suggest Epics** board button. This may be:
+- A specific project name (e.g. `Remote sync`)
+- `__unassigned__` (user is viewing plans with no project)
+- Empty / unset / the literal placeholder token (no filter active, OR the
+  skill was loaded directly without the button — include ALL plans)
+
+If the filter is a specific project, skip plans whose `project:"..."` tag
+does not match. If the filter is `__unassigned__`, skip plans that HAVE a
+`project:"..."` tag (only untagged plans are candidates). If the filter is
+empty/unset/the literal placeholder, include all plans (current behavior).
+
+Plans with NO `project:` tag are unassigned and match the `__unassigned__`
+filter; they are excluded from a specific-project filter.
+
+Example filtering:
+- Filter = `Remote sync` → only plans with `project:"Remote sync"` are candidates
+- Filter = `__unassigned__` → only plans with NO `project:` tag are candidates
+- Filter = empty / `{{ACTIVE_PROJECT_FILTER}}` → all plans are candidates
+
 ### 2. READ PLAN BODIES
 
 For each candidate plan in scope, read the full plan file.

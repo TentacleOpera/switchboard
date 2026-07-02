@@ -5981,6 +5981,12 @@ FROM plans
                             const epicTopic = epicTopicById.get(plan.epicId);
                             parts.push(epicTopic ? `subtask-of:"${epicTopic}"` : `subtask-of:${plan.epicId}`);
                         }
+                        // NEW: emit project tag so the Suggest Epics skill can filter by project.
+                        // Empty/missing project → no tag (unassigned by definition).
+                        if (plan.project) {
+                            const safeProject = plan.project.replace(/"/g, '');
+                            parts.push(`project:"${safeProject}"`);
+                        }
                         colMd += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
                     }
                     colMd += `\n`;

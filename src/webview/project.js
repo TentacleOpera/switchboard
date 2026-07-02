@@ -792,7 +792,7 @@
                 // be consistent with the DB (no stale "advanced" state from a prior
                 // action). The fetchKanbanPlans handler in PlanningPanelProvider has a
                 // request-ID dedup guard so duplicate requests are safe.
-                if (activeTab === 'kanban') {
+                if (activeTab === 'kanban' || activeTab === 'epics') {
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 }
                 break;
@@ -1958,13 +1958,49 @@
                    </select>`
                 : '';
 
-            // Every epic is DB-backed/manageable now — standalone epic documents are gone.
+            // Derive the copy-prompt button label from the epic's CURRENT column.
+            // NOTE: the kanban board (kanban.html:5452) derives from the NEXT column's role;
+            // the epics tab is a management view, not a board column, so we derive from the
+            // current column's stage. For standard columns both approaches yield identical
+            // labels. Do NOT "align" this to next-column derivation without re-verifying
+            // every label — it will silently flip them.
+            //
+            // IMPORTANT: the webview payload (_kanbanAvailableColumns) does NOT include the
+            // `role` field on standard columns (see planning-copy-labels-regression.test.js
+            // mock). Derive from `id` + `kind` only — never from `role`.
+            function _epicCopyPromptLabel(plan) {
+                if (!plan.column) return 'Copy Planning Prompt'; // no column = pre-planning
+                const colDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
+                const kind = colDef?.kind;
+                // CREATED → planner stage
+                if (plan.column === 'CREATED' || kind === 'created') return 'Copy Planning Prompt';
+                // PLAN REVIEWED → coder stage (complexity-routed on backend)
+                if (plan.column === 'PLAN REVIEWED') return 'Copy Coder Prompt';
+                // Coded columns → reviewer stage
+                if (kind === 'coded') return 'Copy Review Prompt';
+                // CODE REVIEWED → tester stage (next is ACCEPTANCE TESTED)
+                if (plan.column === 'CODE REVIEWED') return 'Copy Acceptance Test Prompt';
+                // Non-standard lanes — handle by explicit id (kind overlaps standard columns)
+                if (plan.column === 'RESEARCHER') return 'Copy Researcher Prompt';
+                if (plan.column === 'TICKET UPDATER') return 'Copy Ticket Updater Prompt';
+                // Terminal lanes — no next stage
+                if (plan.column === 'ACCEPTANCE TESTED' || kind === 'completed') return null;
+                // Custom columns
+                if (kind === 'custom-agent' || kind === 'custom-user') return 'Copy Advance Prompt';
+                // Unknown reviewed-kind column that isn't CODE REVIEWED/ACCEPTANCE TESTED/TICKET UPDATER
+                if (kind === 'reviewed') return null;
+                return 'Copy Prompt';
+            }
+
+            const copyPromptLabel = _epicCopyPromptLabel(plan);
+            const showSendToPlanner = !plan.column || plan.column === 'CREATED'
+                || (_kanbanAvailableColumns.find(c => c.id === plan.column)?.kind === 'created');
             const actionButtons = `
                 <div class="kanban-plan-actions" style="margin-top: 6px;">
                     ${columnBadge}
                     ${plan.planFile ? `<button class="kanban-plan-copy-link epic-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
-                    ${plan.sessionId || plan.planId ? `<button class="kanban-plan-copy-prompt epic-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Copy Planning Prompt</button>` : ''}
-                    ${plan.sessionId || plan.planId ? `<button class="epic-send-to-planner epic-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
+                    ${copyPromptLabel && (plan.sessionId || plan.planId) ? `<button class="kanban-plan-copy-prompt epic-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-column="${escapeHtml(plan.column || 'CREATED')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">${escapeHtml(copyPromptLabel)}</button>` : ''}
+                    ${showSendToPlanner && (plan.sessionId || plan.planId) ? `<button class="epic-send-to-planner epic-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
                 </div>
             `;
 
@@ -2040,6 +2076,7 @@
                     vscode.postMessage({
                         type: 'copyEpicPlannerPrompt',
                         sessionId: epicCopyPromptBtn.dataset.sessionId,
+                        column: epicCopyPromptBtn.dataset.column,
                         workspaceRoot: epicCopyPromptBtn.dataset.workspaceRoot
                     });
                 });

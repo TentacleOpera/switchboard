@@ -8247,21 +8247,23 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'suggestEpics': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
+                const projectFilter = (msg.projectFilter === undefined ? null : msg.projectFilter) as string | null;
                 // Pre-coding columns are the only place loose plans worth grouping live.
                 // Exclude existing epics and already-assigned subtasks.
                 const preCodingColumns = ['CREATED', 'PLAN REVIEWED'];
                 const candidateCards = this._lastCards.filter(card =>
                     card.workspaceRoot === workspaceRoot &&
                     preCodingColumns.includes(card.column) &&
-                    !card.isEpic && !card.epicId
+                    !card.isEpic && !card.epicId &&
+                    this._cardMatchesProjectFilter(card, projectFilter)
                 );
                 if (candidateCards.length === 0) {
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into epics.', isError: true });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into epics (in the current project scope).', isError: true });
                     break;
                 }
-                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot);
+                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot, projectFilter);
                 await vscode.env.clipboard.writeText(prompt);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s)). Paste into chat.`, isError: false });
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
                 break;
             }
             case 'removeSubtaskFromEpic': {
@@ -8340,6 +8342,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 break;
             }
         }
+    }
+
+    private _cardMatchesProjectFilter(card: KanbanCard, projectFilter: string | null): boolean {
+        if (projectFilter === null || projectFilter === '') return true; // no filter → all
+        const cardProject = card.project || '';
+        if (projectFilter === '__unassigned__') {
+            return cardProject === ''; // unassigned only
+        }
+        return cardProject === projectFilter; // specific project
     }
 
     private _parseVerificationSteps(content: string): string[] {
@@ -9436,7 +9447,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
      * agent can also load the skill directly by description without clicking the button.
      * Falls back to an embedded copy if the skill file is missing (older install / dev).
      */
-    private _buildSuggestEpicsPrompt(workspaceRoot: string): string {
+    private _buildSuggestEpicsPrompt(workspaceRoot: string, projectFilter: string | null = null): string {
         const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'group-into-epics', 'SKILL.md');
         let skillBody = '';
         try {
@@ -9472,6 +9483,9 @@ Note: epic creation updates the Switchboard board and writes a .switchboard/epic
         // Strip YAML frontmatter (the skill description is for model-invocation discovery,
         // not part of the pasted procedure) and substitute the workspace root placeholder.
         const bodyWithoutFrontmatter = skillBody.replace(/^---\n[\s\S]*?\n---\n/, '');
-        return bodyWithoutFrontmatter.replace(/\{\{WORKSPACE_ROOT\}\}/g, workspaceRoot);
+        const activeProject = projectFilter ?? '';
+        return bodyWithoutFrontmatter
+            .replace(/\{\{WORKSPACE_ROOT\}\}/g, workspaceRoot)
+            .replace(/\{\{ACTIVE_PROJECT_FILTER\}\}/g, activeProject);
     }
 }

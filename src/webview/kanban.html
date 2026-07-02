@@ -3866,7 +3866,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         document.getElementById('btn-suggest-epics')?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'suggestEpics', workspaceRoot: getActiveWorkspaceRoot() });
+            postKanbanMessage({ type: 'suggestEpics', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: activeProjectFilter ?? null });
         });
 
         btnDeleteProject?.addEventListener('click', () => {

@@ -22,7 +22,8 @@ import { PlanningPanelCacheService } from './PlanningPanelCacheService';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig, parseCustomAgents } from './agentConfig';
 import { ReviewCommentRequest, ReviewCommentResult } from './reviewTypes';
-import { isValidComplexityValue, legacyToScore } from './complexityScale';
+import { isValidComplexityValue, legacyToScore, parseComplexityScore } from './complexityScale';
+import { columnToPromptRole } from './agentPromptBuilder';
 import { applyManualComplexityOverride } from './planMetadataUtils';
 import { formatReviewLogEntries } from './reviewLogUtils';
 import { PanelStateStore } from './PanelStateStore';
@@ -3228,15 +3229,13 @@ export class PlanningPanelProvider {
             }
             case 'copyEpicPlannerPrompt': {
                 const sessionId = String(msg.sessionId || '');
+                const column = String(msg.column || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId || !this._kanbanProvider) {
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId or kanban provider' });
                     break;
                 }
                 try {
-                    // Build the epic + subtask plans array via the shared expansion helper
-                    // and run it through generateUnifiedPrompt (planner role). Replaces the
-                    // deleted buildEpicOrchestrationPrompt orchestrator preview.
                     const kp = this._kanbanProvider;
                     const db = (kp as any)._getKanbanDb(wsRoot);
                     if (!db || !(await db.ensureReady())) {
@@ -3248,6 +3247,18 @@ export class PlanningPanelProvider {
                         this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
                         break;
                     }
+
+                    // Resolve effective column: explicit param > epic's DB column > CREATED
+                    const effectiveColumn = column || epic.kanbanColumn || 'CREATED';
+                    // Resolve role from column (mirror _handleCopyPlanLink, TaskViewerProvider.ts:14303-14310)
+                    let role: string;
+                    if (effectiveColumn === 'PLAN REVIEWED') {
+                        const complexity = await kp.getComplexityFromPlan(wsRoot, (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile));
+                        role = kp.resolveRoutedRole(parseComplexityScore(complexity));
+                    } else {
+                        role = columnToPromptRole(effectiveColumn) || 'coder';
+                    }
+
                     const plans: import('./agentPromptBuilder').BatchPromptPlan[] = [{
                         topic: epic.topic,
                         absolutePath: (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile),
@@ -3261,7 +3272,7 @@ export class PlanningPanelProvider {
                         wsRoot, epic.planId, epic.topic, epic.kanbanColumn || '', undefined, undefined, undefined, epic.project || undefined
                     );
                     for (const sp of subtaskPlans) { plans.push(sp); }
-                    const prompt = await kp.generateUnifiedPrompt('planner', plans, wsRoot);
+                    const prompt = await kp.generateUnifiedPrompt(role, plans, wsRoot);
                     await vscode.env.clipboard.writeText(prompt);
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
                 } catch (err) {
