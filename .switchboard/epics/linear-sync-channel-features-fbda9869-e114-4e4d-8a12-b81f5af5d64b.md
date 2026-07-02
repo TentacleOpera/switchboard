@@ -8,6 +8,8 @@ description: 'Auto-Archive & Production Hardening'
 
 **Complexity:** 5
 
+**Coordination contract:** [Remote Control Production Readiness — Cross-Epic Sequencing & Coordination Plan](../plans/feature_plan_20260701_remote-control-production-sequencing.md) — **epic 7 of 7** in the program dispatch order (last by design; see the contract's cross-epic seams for the overwrite-guard handshake with epic 2 and the pre-release pull-forward rule for the hide-triage card).
+
 > Formerly "Linear Sync & Channel Features." Rescoped per the remote-control production decisions: the Linear **channel-issues / analyst chat** plan is **cut** (not needed); Linear **bidirectional description sync** moved into the Remote Sync Refactor trunk as a push capability; the auto-archive plan was **reframed from a Linear feature into a Switchboard-level rule**. This epic now owns the two production concerns no other epic covered.
 
 ## Goal

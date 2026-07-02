@@ -217,6 +217,36 @@
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
         }
 
+        @keyframes sb-spin {
+            to { transform: rotate(360deg); }
+        }
+        .action-btn.is-busy,
+        .secondary-btn.is-busy,
+        .db-action-btn.is-busy {
+            position: relative;
+            opacity: 0.65;
+            cursor: wait;
+        }
+        .action-btn.is-busy .sb-btn-spinner,
+        .secondary-btn.is-busy .sb-btn-spinner,
+        .db-action-btn.is-busy .sb-btn-spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            margin-right: 6px;
+            border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: sb-spin 0.6s linear infinite;
+            vertical-align: -2px;
+        }
+        .sb-btn-spinner { display: none; }
+        .action-btn:active:not(:disabled),
+        .secondary-btn:active:not(:disabled),
+        .db-action-btn:active:not(:disabled) {
+            transform: scale(0.97);
+        }
+
         .db-subsection {
             padding-bottom: 12px;
             border-bottom: 1px solid var(--border-dim);
@@ -1236,6 +1266,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the static CRT scanline texture overlay in Afterburner preview panels.</span>
                     </div>
                 </label>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="ultracode-animation-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Epic Ultracode animation</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Play the full-screen ULTRACODE slam when Epic Ultracode is switched on in the kanban board.</span>
+                    </div>
+                </label>
                 <div id="cyber-animation-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
             </div>
             <div id="theme-colour-icons-settings">
@@ -1250,6 +1287,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
                 </label>
                 <div id="colour-kanban-icons-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
+            </div>
+            <div id="theme-pixel-font-settings">
+                <div class="subsection-header">
+                    <span>Pixel Font</span>
+                </div>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="pixel-font-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Pixel-font H1 headings</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Render document H1 headings in the pixel display font. Turn off to match H2–H6.</span>
+                    </div>
+                </label>
+                <div id="pixel-font-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
             </div>
         </div>
 
@@ -1733,6 +1783,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (colourSection) {
                 colourSection.style.display = (t === 'claudify') ? '' : 'none';
             }
+            const pixelFontSection = document.getElementById('theme-pixel-font-settings');
+            if (pixelFontSection) {
+                pixelFontSection.style.display = (t === 'claudify') ? '' : 'none';
+            }
         }
 
         // Initialize tabs
@@ -1826,6 +1880,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'getCyberAnimationDisabledSetting' });
                     vscode.postMessage({ type: 'getCyberScanlinesDisabledSetting' });
                     vscode.postMessage({ type: 'getColourKanbanIconsSetting' });
+                    vscode.postMessage({ type: 'getUltracodeAnimationSetting' });
+                    vscode.postMessage({ type: 'getPixelFontSetting' });
                     vscode.postMessage({ type: 'getThemeSetting' });
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
@@ -1884,11 +1940,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             ].forEach((id) => {
                 const button = document.getElementById(id);
                 if (!button) return;
+                setButtonBusy(button, isBusy);
                 if (id === 'btn-execute-control-plane' && !isBusy && (!lastControlPlanePreview || !(lastControlPlanePreview.sources || []).length)) {
                     button.disabled = true;
-                    return;
                 }
-                button.disabled = isBusy;
             });
         }
 
@@ -2117,11 +2172,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         function setMultiRepoBusy(busy) {
             multiRepoBusy = !!busy;
+            const multiRepoScaffoldButton = document.getElementById('btn-scaffold-multi-repo');
             if (multiRepoScaffoldButton) {
-                multiRepoScaffoldButton.disabled = multiRepoBusy;
-                multiRepoScaffoldButton.textContent = multiRepoBusy
-                    ? 'SCAFFOLDING...'
-                    : 'SCAFFOLD MULTI-REPO CONTROL PLANE';
+                setButtonBusy(multiRepoScaffoldButton, multiRepoBusy, multiRepoBusy ? 'SCAFFOLDING...' : 'SCAFFOLD MULTI-REPO CONTROL PLANE');
             }
         }
 
@@ -2519,15 +2572,44 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             errorEl.textContent = message || '';
         }
 
+        function setButtonBusy(buttonEl, busy, busyLabel) {
+            if (!buttonEl) return;
+            if (busy) {
+                if (!buttonEl.querySelector('.sb-btn-spinner')) {
+                    const spinner = document.createElement('span');
+                    spinner.className = 'sb-btn-spinner';
+                    buttonEl.prepend(spinner);
+                }
+                buttonEl.classList.add('is-busy');
+                buttonEl.disabled = true;
+                if (busyLabel) {
+                    buttonEl.dataset.origLabel = buttonEl.textContent;
+                    buttonEl.textContent = busyLabel;
+                }
+            } else {
+                buttonEl.classList.remove('is-busy');
+                const spinner = buttonEl.querySelector('.sb-btn-spinner');
+                if (spinner) spinner.remove();
+                if (buttonEl.dataset.origLabel) {
+                    buttonEl.textContent = buttonEl.dataset.origLabel;
+                    delete buttonEl.dataset.origLabel;
+                }
+                if (buttonEl.id !== 'btn-apply-clickup-config' && buttonEl.id !== 'btn-apply-linear-config') {
+                    buttonEl.disabled = false;
+                }
+            }
+        }
+
         function setApplyButtonBusy(kind, busy) {
             const buttonId = kind === 'clickup'
                 ? 'btn-apply-clickup-config'
                 : kind === 'linear'
                     ? 'btn-apply-linear-config'
                     : 'btn-apply-notion-config';
-            const button = document.getElementById(buttonId);
-            if (button) {
-                button.disabled = !!busy;
+            const btn = document.getElementById(buttonId);
+            setButtonBusy(btn, busy, busy ? 'APPLYING…' : '');
+            if (!busy) {
+                updateApplyButtonsState();
             }
         }
 
@@ -3232,7 +3314,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
         });
 
-        document.getElementById('btn-initialize')?.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
+        document.getElementById('btn-initialize')?.addEventListener('click', () => {
+            const btn = document.getElementById('btn-initialize');
+            if (btn) { setButtonBusy(btn, true, 'INITIALIZING…'); }
+            vscode.postMessage({ type: 'runSetup' });
+        });
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
         document.getElementById('btn-export-prompts')?.addEventListener('click', () => {
             const statusEl = document.getElementById('prompt-settings-status');
@@ -3456,7 +3542,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (token === '**********') { token = ''; }
             const btn = document.getElementById('btn-enable-triage-clickup');
             const resultEl = document.getElementById('clickup-triage-result');
-            if (btn) { btn.disabled = true; btn.textContent = 'ENABLING…'; }
+            if (btn) { setButtonBusy(btn, true, 'ENABLING…'); }
             if (resultEl) { resultEl.style.color = 'var(--text-secondary)'; resultEl.textContent = ''; }
             vscode.postMessage({ type: 'enableTriagePipeline', provider: 'clickup', token });
         });
@@ -3465,11 +3551,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (token === '**********') { token = ''; }
             const btn = document.getElementById('btn-enable-triage-linear');
             const resultEl = document.getElementById('linear-triage-result');
-            if (btn) { btn.disabled = true; btn.textContent = 'ENABLING…'; }
+            if (btn) { setButtonBusy(btn, true, 'ENABLING…'); }
             if (resultEl) { resultEl.style.color = 'var(--text-secondary)'; resultEl.textContent = ''; }
             vscode.postMessage({ type: 'enableTriagePipeline', provider: 'linear', token });
         });
         document.getElementById('btn-clickup-save-mappings')?.addEventListener('click', () => {
+            const btn = document.getElementById('btn-clickup-save-mappings');
+            if (btn) { setButtonBusy(btn, true, 'SAVING…'); }
             vscode.postMessage({
                 type: 'saveClickUpMappings',
                 mappings: collectClickupMappings()
@@ -3482,6 +3570,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             addClickupRuleCard();
         });
         document.getElementById('btn-clickup-save-automation')?.addEventListener('click', () => {
+            const btn = document.getElementById('btn-clickup-save-automation');
+            if (btn) { setButtonBusy(btn, true, 'SAVING…'); }
             const payload = collectClickupAutomationPayload();
             vscode.postMessage({
                 type: 'saveClickUpAutomation',
@@ -3505,6 +3595,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             addLinearRuleCard();
         });
         document.getElementById('btn-linear-save-automation')?.addEventListener('click', () => {
+            const btn = document.getElementById('btn-linear-save-automation');
+            if (btn) { setButtonBusy(btn, true, 'SAVING…'); }
             const payload = collectLinearAutomationPayload();
             vscode.postMessage({
                 type: 'saveLinearAutomation',
@@ -3706,6 +3798,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'configureNotionBackup', databaseUrl: url, workspaceRoot: db.workspaceRoots[0] });
                 }
                 
+                setButtonBusy(notionBackupBtn, true, 'WORKING…');
                 vscode.postMessage({ type: 'backupToNotion', workspaceRoot: db.workspaceRoots[0] });
                 return;
             }
@@ -3715,6 +3808,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const index = notionRestoreBtn.dataset.dbIndex;
                 const db = lastAllDbPaths[index];
                 if (!db) return;
+                setButtonBusy(notionRestoreBtn, true, 'WORKING…');
                 vscode.postMessage({ type: 'restoreFromNotion', workspaceRoot: db.workspaceRoots[0] });
                 return;
             }
@@ -3724,6 +3818,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const index = notionAutoSetupBtn.dataset.dbIndex;
                 const db = lastAllDbPaths[index];
                 if (!db) return;
+                setButtonBusy(notionAutoSetupBtn, true, 'WORKING…');
                 vscode.postMessage({ type: 'autoCreateNotionDatabase', workspaceRoot: db.workspaceRoots[0] });
                 return;
             }
@@ -3941,6 +4036,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
 
+        document.getElementById('ultracode-animation-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setUltracodeAnimationSetting', enabled: e.target.checked });
+            document.body.classList.toggle('ultracode-animation-enabled', e.target.checked);
+            const statusEl = document.getElementById('cyber-animation-status');
+            if (statusEl) {
+                statusEl.textContent = 'Saved';
+                setTimeout(() => { statusEl.textContent = ''; }, 2000);
+            }
+        });
+
+        document.getElementById('pixel-font-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setPixelFontSetting', enabled: e.target.checked });
+            document.body.classList.toggle('claudify-pixel-font-disabled', !e.target.checked);
+            const statusEl = document.getElementById('pixel-font-status');
+            if (statusEl) {
+                statusEl.textContent = 'Saved';
+                setTimeout(() => { statusEl.textContent = ''; }, 2000);
+            }
+        });
+
         document.querySelectorAll('input[name="theme-selection"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
                 currentSwitchboardTheme = e.target.value;
@@ -4004,6 +4119,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
  
         document.getElementById('btn-save-mappings')?.addEventListener('click', () => {
+            const btn = document.getElementById('btn-save-mappings');
+            if (btn) { setButtonBusy(btn, true, 'SAVING…'); }
             captureMappingsFromDom();
             vscode.postMessage({
                 type: 'saveWorkspaceMappings',
@@ -4160,6 +4277,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         document.getElementById('plan-scanner-add-chat-dest')?.addEventListener('click', () => addPlanScannerChatDestRow(''));
         document.getElementById('plan-scanner-add-custom')?.addEventListener('click', () => addPlanScannerCustomRow({}));
         document.getElementById('plan-scanner-save')?.addEventListener('click', () => {
+            const btn = document.getElementById('plan-scanner-save');
+            if (btn) { setButtonBusy(btn, true, 'SAVING…'); }
             vscode.postMessage({ type: 'setPlanScannerConfig', config: gatherPlanScannerConfig() });
             const status = document.getElementById('plan-scanner-status');
             if (status) { status.textContent = 'Saved.'; setTimeout(() => { if (status) status.textContent = ''; }, 2000); }
@@ -4295,6 +4414,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (message.config) {
                         runSetupHydration(() => renderPlanScannerConfig(message.config));
                     }
+                    setButtonBusy(document.getElementById('plan-scanner-save'), false);
                     break;
                 case 'copyDbSettingsResult': {
                     runSetupHydration(() => {
@@ -4341,6 +4461,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                              statusEl.style.color = 'var(--accent-red, #ff5c5c)';
                         }
                     }
+                    setButtonBusy(document.getElementById('btn-save-mappings'), false);
                     break;
                 }
                 case 'workspaceMappingDbPathSelected': {
@@ -4634,6 +4755,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
+                case 'ultracodeAnimationSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('ultracode-animation-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                        document.body.classList.toggle('ultracode-animation-enabled', message.enabled === true);
+                    });
+                    break;
+                }
+                case 'pixelFontSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('pixel-font-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                        document.body.classList.toggle('claudify-pixel-font-disabled', message.enabled === false);
+                    });
+                    break;
+                }
 
                 case 'gitIgnoreConfig': {
                     runSetupHydration(() => {
@@ -4764,9 +4901,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 case 'clickupMappingsSaved':
+                    setButtonBusy(document.getElementById('btn-clickup-save-mappings'), false);
                     setClickupSetupMessage(message.success === false ? (message.error || 'Failed to save ClickUp mappings.') : 'ClickUp mappings saved.', message.success === false);
                     break;
                 case 'clickupAutomationSaved':
+                    setButtonBusy(document.getElementById('btn-clickup-save-automation'), false);
                     setClickupSetupMessage(message.success === false ? (message.error || 'Failed to save ClickUp automation.') : 'ClickUp automation saved.', message.success === false);
                     break;
                 case 'linearApplyResult':
@@ -4779,7 +4918,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'triagePipelineResult': {
                     const resultEl = document.getElementById(message.provider === 'linear' ? 'linear-triage-result' : 'clickup-triage-result');
                     const btn = document.getElementById(message.provider === 'linear' ? 'btn-enable-triage-linear' : 'btn-enable-triage-clickup');
-                    if (btn) { btn.disabled = false; btn.textContent = '⚡ ENABLE TRIAGE PIPELINE'; }
+                    if (btn) { setButtonBusy(btn, false); }
                     if (resultEl) {
                         if (message.success) {
                             const projName = message.projectName || 'Bug Triage';
@@ -4803,6 +4942,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 case 'linearAutomationSaved':
+                    setButtonBusy(document.getElementById('btn-linear-save-automation'), false);
                     setLinearSetupMessage(message.success === false ? (message.error || 'Failed to save Linear automation.') : 'Linear automation saved.', message.success === false);
                     break;
 
@@ -4829,9 +4969,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         if (backupProgress) backupProgress.textContent = `Partial: ${message.backedUp}/${message.total}`;
                     }
                     // Re-enable buttons
-                    document.getElementById('notion-backup-btn').disabled = false;
-                    document.getElementById('notion-restore-btn').disabled = false;
-                    document.getElementById('notion-auto-setup-btn').disabled = false;
+                    setButtonBusy(document.querySelector('.notion-backup-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-restore-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
                     break;
                 }
                 case 'notionRestoreResult': {
@@ -4843,9 +4983,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     } else {
                         if (restoreError) restoreError.textContent = message.error || 'Restore failed';
                     }
-                    document.getElementById('notion-backup-btn').disabled = false;
-                    document.getElementById('notion-restore-btn').disabled = false;
-                    document.getElementById('notion-auto-setup-btn').disabled = false;
+                    setButtonBusy(document.querySelector('.notion-backup-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-restore-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
                     break;
                 }
                 case 'notionAutoCreateResult': {
@@ -4858,9 +4998,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     } else {
                         if (autoError) autoError.textContent = message.error || 'Auto-create failed';
                     }
-                    document.getElementById('notion-backup-btn').disabled = false;
-                    document.getElementById('notion-restore-btn').disabled = false;
-                    document.getElementById('notion-auto-setup-btn').disabled = false;
+                    setButtonBusy(document.querySelector('.notion-backup-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-restore-btn'), false);
+                    setButtonBusy(document.querySelector('.notion-auto-setup-btn'), false);
                     break;
                 }
                 case 'notionBackupProgress': {
@@ -4868,6 +5008,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (progressEl) progressEl.textContent = `${message.action} plan ${message.current} of ${message.total}...`;
                     break;
                 }
+                case 'setupComplete':
+                    setButtonBusy(document.getElementById('btn-initialize'), false);
+                    break;
                 case 'openSetupSection':
                     if (message.section === 'project-mgmt') {
                         activateTab('integration');

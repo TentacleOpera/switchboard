@@ -8,6 +8,8 @@ description: 'Project Context & Remote UI Hub'
 
 **Complexity:** 5
 
+**Coordination contract:** [Remote Control Production Readiness — Cross-Epic Sequencing & Coordination Plan](../plans/feature_plan_20260701_remote-control-production-sequencing.md) — **epic 1 of 7** in the program dispatch order.
+
 > Formerly "Note codebase docs." Rescoped per the remote-control production decisions: **no codebase code-mirroring.** The remote agent gets curated **developer docs + PRDs + constitution**, authored in `project.html` and synced provider-agnostically to Notion + Linear.
 
 ## Goal
@@ -40,8 +42,8 @@ The context pipeline: **NotebookLM (get code into an analysis system) → author
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **CODER CODED**
-- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CODER CODED**
-- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODER CODED**
-- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODER CODED**
+- [ ] [Linear Remote Tab: Dynamic Agent Skill Copy Button](../plans/linear-remote-agent-skill-copy-button.md) — **CODE REVIEWED**
+- [ ] [Remote Agent Orientation — Plan From Project-Context Docs (No Repo)](../plans/phase2-remote-plan-from-notion-docs.md) — **CODE REVIEWED**
+- [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODE REVIEWED**
+- [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->

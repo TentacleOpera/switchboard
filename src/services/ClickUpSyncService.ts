@@ -1,3 +1,4 @@
+// API version inventory: see docs/clickup-api-versions.md — update when flipping a family to v3.
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -41,6 +42,7 @@ export interface ClickUpConfig {
   deleteSyncEnabled?: boolean;   // default: false — delete ClickUp task when plan is deleted
   completeSyncEnabled?: boolean; // default: false — sync completed status to ClickUp
   excludeBacklog?: boolean;      // default: false — exclude tasks with 'backlog' status from sync
+  ticketSaveLocation?: string;   // base dir for local ticket .md files (set via Setup / migration)
 }
 
 export interface KanbanPlanRecord {
@@ -110,6 +112,11 @@ export interface ClickUpMappingSelection {
   columnId: string;
   strategy: 'create' | 'existing' | 'exclude';
   listId?: string;
+}
+
+export interface ClickUpMoveResult {
+  warning?: string;
+  remainsInLists: number;
 }
 
 export interface ClickUpApplyOptions {
@@ -318,6 +325,7 @@ export class ClickUpSyncService {
       excludeBacklog: raw.excludeBacklog === undefined
         ? false   // Default false — include all tasks by default
         : raw.excludeBacklog === true,
+      ticketSaveLocation: raw.ticketSaveLocation || '',
     };
   }
 
@@ -1450,6 +1458,100 @@ export class ClickUpSyncService {
     return this._normalizeClickUpTask(updateResult.data);
   }
 
+  /**
+   * Move a ClickUp task to a different HOME list.
+   * Uses the v3 move endpoint: PUT /api/v3/workspaces/{workspace_id}/tasks/{task_id}/home_list/{list_id}
+   * Only the home list changes — additional list memberships (e.g. sprint lists) are untouched.
+   */
+  public async moveTask(
+    taskId: string,
+    targetListId: string,
+    options?: {
+      moveCustomFields?: boolean;
+      statusMappings?: Array<{ source_status: string; destination_status: string }>;
+    }
+  ): Promise<ClickUpMoveResult> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedTaskId = String(taskId || '').trim();
+    const normalizedTargetListId = String(targetListId || '').trim();
+    if (!normalizedTaskId || !normalizedTargetListId) {
+      throw new Error('ClickUp task move requires both a task ID and a target list ID.');
+    }
+
+    const workspaceId = await this.loadWorkspaceIdIfNeeded();
+
+    // One task fetch serves both status auto-mapping and the multi-list residue count.
+    const taskResult = await this.httpRequest('GET', `/task/${normalizedTaskId}`);
+    if (taskResult.status !== 200) {
+      throw new Error(`Failed to load ClickUp task ${normalizedTaskId} before move. Status: ${taskResult.status}`);
+    }
+    const currentStatusName = String(taskResult.data?.status?.status ?? '');
+    const currentStatusId = String(taskResult.data?.status?.id ?? '');
+    const locations: Array<{ id: string }> = Array.isArray(taskResult.data?.locations)
+      ? taskResult.data.locations
+      : [];
+    const remainsInLists = locations.filter(
+      l => String(l.id) !== normalizedTargetListId
+    ).length;
+
+    let statusMappings = options?.statusMappings;
+    let warning: string | undefined;
+
+    if (!statusMappings || statusMappings.length === 0) {
+      const listResult = await this.httpRequest('GET', `/list/${normalizedTargetListId}`);
+      if (listResult.status !== 200) {
+        throw new Error(`Failed to load target list ${normalizedTargetListId} before move. Status: ${listResult.status}`);
+      }
+      const targetStatuses: Array<{ id: string; status: string }> =
+        Array.isArray(listResult.data?.statuses) ? listResult.data.statuses : [];
+      const nameMatch = targetStatuses.find(
+        s => String(s.status).toLowerCase() === currentStatusName.toLowerCase()
+      );
+      if (!nameMatch && targetStatuses.length > 0) {
+        statusMappings = [{ source_status: currentStatusId, destination_status: targetStatuses[0].id }];
+        warning = `Status "${currentStatusName}" does not exist in the target list — task was set to "${targetStatuses[0].status}".`;
+      }
+    }
+
+    const moveBody: Record<string, unknown> = {
+      move_custom_fields: options?.moveCustomFields ?? true
+    };
+    if (statusMappings && statusMappings.length > 0) {
+      moveBody.status_mappings = statusMappings;
+    }
+
+    const moveResult = await this.retry(() =>
+      this.httpRequestV3(
+        'PUT',
+        `/workspaces/${workspaceId}/tasks/${normalizedTaskId}/home_list/${normalizedTargetListId}`,
+        moveBody
+      )
+    );
+    if (moveResult.status !== 200) {
+      const detail = typeof moveResult.data === 'string'
+        ? moveResult.data
+        : JSON.stringify(moveResult.data);
+      throw new Error(`Failed to move ClickUp task ${normalizedTaskId} to list ${normalizedTargetListId}. Status: ${moveResult.status} — ${detail}`);
+    }
+
+    // Invalidate cache for BOTH the old list and the new list
+    if (this._cacheService) {
+      const oldListId = this._taskListIndex.get(normalizedTaskId);
+      if (oldListId) {
+        this._cacheService.invalidateTaskCache('clickup', oldListId);
+      }
+      this._cacheService.invalidateTaskCache('clickup', normalizedTargetListId);
+      // Update the reverse map to reflect the new location
+      this._taskListIndex.set(normalizedTaskId, normalizedTargetListId);
+    }
+
+    return { warning, remainsInLists };
+  }
+
   public async getSpaceTags(spaceId: string): Promise<Array<{ name: string; tagFg: string; tagBg: string }>> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || !config.workspaceId) {
@@ -2050,6 +2152,7 @@ export class ClickUpSyncService {
     const token = await this.getApiToken();
     if (!token) { throw new Error('ClickUp API token not configured'); }
 
+    const workspaceId = await this.loadWorkspaceIdIfNeeded();
     const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
     
     return new Promise((resolve, reject) => {
@@ -2062,7 +2165,7 @@ export class ClickUpSyncService {
       
       const req = https.request({
         hostname: 'api.clickup.com',
-        path: `/api/v2/task/${taskId}/attachment`,
+        path: `/api/v3/workspaces/${workspaceId}/tasks/${taskId}/attachments`,
         method: 'POST',
         headers: {
           'Authorization': token,
@@ -2081,7 +2184,7 @@ export class ClickUpSyncService {
             const data = JSON.parse(raw);
             const result = {
               url: String(data?.url || '').trim(),
-              fileName: String(data?.filename || fileName).trim()
+              fileName: String(data?.title || data?.filename || fileName).trim()
             };
             
             // Post comment if provided
@@ -2127,7 +2230,7 @@ export class ClickUpSyncService {
       body.parent = parentPageId;
     }
     
-    const result = await this.httpRequestV3('POST', `/workspace/${workspaceId}/doc/${docId}/page`, body);
+    const result = await this.httpRequestV3('POST', `/workspaces/${workspaceId}/docs/${docId}/page`, body);
     if (result.status !== 200 && result.status !== 201) {
       throw new Error(`ClickUp doc page creation failed with status ${result.status}: ${JSON.stringify(result.data)}`);
     }
@@ -2183,10 +2286,23 @@ export class ClickUpSyncService {
 
   /**
    * Generic API request wrapper for LocalApiServer proxy.
+   * Endpoint contract:
+   *  - "/v2/task/123"          → /api/v2/task/123
+   *  - "/v3/workspaces/1/..."  → /api/v3/workspaces/1/...
+   *  - "/task/123" (no prefix) → /api/v2/task/123   (backward compatible default)
+   * The version prefix is only recognized as a whole leading path segment.
    */
   async makeApiRequest(method: string, endpoint: string, query?: any, body?: any): Promise<any> {
-    const apiPath = endpoint + (query ? '?' + new URLSearchParams(query).toString() : '');
-    const result = await this.httpRequest(method as any, apiPath, body);
+    let version: 'v2' | 'v3' = 'v2';
+    let path = String(endpoint || '');
+    if (!path.startsWith('/')) { path = '/' + path; }
+    const versionMatch = path.match(/^\/(v2|v3)(\/.*)$/);
+    if (versionMatch) {
+      version = versionMatch[1] as 'v2' | 'v3';
+      path = versionMatch[2];
+    }
+    const apiPath = path + (query ? '?' + new URLSearchParams(query).toString() : '');
+    const result = await this.httpRequestVersioned(version, method as any, apiPath, body);
     return result.data;
   }
 
@@ -2230,11 +2346,14 @@ export class ClickUpSyncService {
   }
 
   /**
-   * Authenticated HTTPS request to ClickUp REST API.
-   * All extension-code ClickUp interactions go through this method.
-   * Never logs the Authorization header.
+   * Authenticated HTTPS request to the ClickUp REST API (any version).
+   * Contract (preserved from the previous per-version methods, relied on by all callers):
+   *  - resolves with { status, data } for ANY HTTP status code;
+   *  - rejects only on network error, timeout, or abort;
+   *  - never logs the Authorization header.
    */
-  async httpRequest(
+  private async httpRequestVersioned(
+    version: 'v2' | 'v3',
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     apiPath: string,
     body?: Record<string, unknown>,
@@ -2260,7 +2379,7 @@ export class ClickUpSyncService {
       const payload = body ? JSON.stringify(body) : undefined;
       const req = https.request({
         hostname: 'api.clickup.com',
-        path: `/api/v2${apiPath}`,
+        path: `/api/${version}${apiPath}`,
         method,
         headers: {
           'Authorization': token,
@@ -2270,8 +2389,8 @@ export class ClickUpSyncService {
         timeout: timeoutMs
       }, (res) => {
         let raw = '';
-        res.on('error', (err) => safeReject(new Error(`ClickUp response stream error: ${err.message}`)));
-        res.on('aborted', () => safeReject(new Error('ClickUp response aborted by server')));
+        res.on('error', (err) => safeReject(new Error(`ClickUp ${version} response stream error: ${err.message}`)));
+        res.on('aborted', () => safeReject(new Error(`ClickUp ${version} response aborted by server`)));
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
           try {
@@ -2303,11 +2422,16 @@ export class ClickUpSyncService {
     });
   }
 
-  /**
-   * Authenticated HTTPS request to ClickUp REST API v3.
-   * Used for document operations (docs, pages, etc.).
-   * Never logs the Authorization header.
-   */
+  async httpRequest(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    apiPath: string,
+    body?: Record<string, unknown>,
+    timeoutMs: number = 10000,
+    signal?: AbortSignal
+  ): Promise<{ status: number; data: any }> {
+    return this.httpRequestVersioned('v2', method, apiPath, body, timeoutMs, signal);
+  }
+
   async httpRequestV3(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     apiPath: string,
@@ -2315,65 +2439,7 @@ export class ClickUpSyncService {
     timeoutMs: number = 10000,
     signal?: AbortSignal
   ): Promise<{ status: number; data: any }> {
-    const token = await this.getApiToken();
-    if (!token) { throw new Error('ClickUp API token not configured'); }
-
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const safeResolve = (value: { status: number; data: any }) => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const safeReject = (err: Error) => {
-        if (settled) return;
-        settled = true;
-        reject(err);
-      };
-
-      const payload = body ? JSON.stringify(body) : undefined;
-      const req = https.request({
-        hostname: 'api.clickup.com',
-        path: `/api/v3${apiPath}`,
-        method,
-        headers: {
-          'Authorization': token,
-          'Content-Type': 'application/json',
-          ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
-        },
-        timeout: timeoutMs
-      }, (res) => {
-        let raw = '';
-        res.on('error', (err) => safeReject(new Error(`ClickUp v3 response stream error: ${err.message}`)));
-        res.on('aborted', () => safeReject(new Error('ClickUp v3 response aborted by server')));
-        res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
-        res.on('end', () => {
-          try {
-            safeResolve({ status: res.statusCode || 0, data: JSON.parse(raw) });
-          } catch {
-            safeResolve({ status: res.statusCode || 0, data: raw });
-          }
-        });
-      });
-      req.on('timeout', () => { req.destroy(); safeReject(new Error('Request timed out')); });
-      req.on('error', (err) => safeReject(err));
-
-      if (signal) {
-        if (signal.aborted) {
-          req.destroy(new Error('AbortError'));
-          return safeReject(new Error('AbortError'));
-        }
-        const abortHandler = () => {
-          req.destroy(new Error('AbortError'));
-          safeReject(new Error('AbortError'));
-        };
-        signal.addEventListener('abort', abortHandler);
-        req.on('close', () => signal.removeEventListener('abort', abortHandler));
-      }
-
-      if (payload) { req.write(payload); }
-      req.end();
-    });
+    return this.httpRequestVersioned('v3', method, apiPath, body, timeoutMs, signal);
   }
 
   // ── Availability Check ──────────────────────────────────────

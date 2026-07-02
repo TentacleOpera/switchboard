@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data: file:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
     <title>Switchboard Project</title>
     <style>
         @keyframes spin {
@@ -860,6 +860,17 @@
             letter-spacing: -0.05em;
             font-stretch: 90%;
             color: #D97757;
+        }
+
+        body.theme-claudify.claudify-pixel-font-disabled #kanban-preview-content h1,
+        body.theme-claudify.claudify-pixel-font-disabled #epics-preview-content h1,
+        body.theme-claudify.claudify-pixel-font-disabled #constitution-preview-content h1,
+        body.theme-claudify.claudify-pixel-font-disabled #system-preview-content h1,
+        body.theme-claudify.claudify-pixel-font-disabled #tuning-preview-content h1,
+        body.theme-claudify.claudify-pixel-font-disabled #projects-preview-content h1 {
+            font-family: var(--font-family);
+            letter-spacing: normal;
+            font-stretch: 100%;
         }
 
         /* Claudify: h2-h6 — Hanken, terracotta */

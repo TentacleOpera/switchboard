@@ -282,3 +282,7 @@ if (activeTab === 'kanban' || activeTab === 'epics') {
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder**. Multi-file change (frontend helper + backend role resolution + refresh guard) but mirrors an existing proven pattern (`_handleCopyPlanLink` / `kanban.html` label derivation) with no new architecture, no data-consistency risk, and no migration. The refinements from adversarial review (strip dead `role` clauses, explicit-id handling for RESEARCHER/TICKET UPDATER, align fallback to `|| 'coder'`, inline-document the current-column rationale and the options-omission preservation) are all low-risk hardening of the original design.
+
+## Review Findings
+
+Implementation matches the plan across all three files (`project.js`, `PlanningPanelProvider.ts`). The `_epicCopyPromptLabel` helper, conditional button rendering, `data-column` forwarding, backend role resolution (mirroring `_handleCopyPlanLink` with `|| 'coder'` fallback), and `kanbanPlanPromptCopied` refresh guard widening are all exactly as specified. No CRITICAL or MAJOR findings — no code fixes needed. The `_normalizeLegacyKanbanColumn` omission (vs. the proven path) is safe because `columnToPromptRole` handles the only legacy value (`'CODED'`→`'LEAD CODED'`) internally. The planned unit test for `_epicCopyPromptLabel` was not added (per session directive to skip tests). Remaining risk: backward compat with an old webview sending `copyEpicPlannerPrompt` without `column` — the backend falls back to `epic.kanbanColumn || 'CREATED'`, which is correct but untested in this session.

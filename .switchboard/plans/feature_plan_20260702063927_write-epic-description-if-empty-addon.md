@@ -1,5 +1,7 @@
 # Add "Write Epic Description If Empty" Planner Add-on + Dependencies Section to Suggest Epics Skill
 
+**Plan ID:** 6A880190-1501-47E6-A35E-7E838A237E75
+
 ## Goal
 
 ### Problem
@@ -23,25 +25,39 @@ Two changes:
 
 ## Metadata
 
-- **Tags:** `planner`, `prompt-builder`, `addons`, `epics`, `ui`, `skill`
+- **Tags:** backend, ui, feature, docs
 - **Complexity:** 4
 - **Files touched:** `src/webview/sharedDefaults.js`, `src/webview/kanban.html`, `src/services/agentPromptBuilder.ts`, `src/services/KanbanProvider.ts`, `.agents/skills/group-into-epics/SKILL.md`
 
+## User Review Required
+
+None. The add-on is default-on and purely additive; users who dispatch against epics get better epic files, users who don't are unaffected. The SKILL.md edit is text-only and consumed as a pasted prompt.
+
 ## Complexity Audit
 
-**Routine.** This follows the exact same pattern as every other planner add-on (e.g. `adviseResearch`, `cavemanOutput`, `skipCompilation`). The change is purely additive:
+### Routine
+- New checkbox in hardcoded planner HTML block — mirrors `plannerAddonAdviseResearch` (kanban.html:2956).
+- New entry in `ROLE_ADDONS.planner` array (sharedDefaults.js:59-74) with `default: true`.
+- New key in `DEFAULT_ROLE_CONFIG.planner.addons` (sharedDefaults.js:21) — `writeEpicDescriptionIfEmpty: true`.
+- New load/save line in kanban.html JS; new ID in the listener forEach (kanban.html:4072). The camelCase derivation at :4080 produces `writeEpicDescriptionIfEmpty` correctly — no `addonIdMap` entry needed.
+- New optional field on `PromptBuilderOptions` (agentPromptBuilder.ts:148) after `adviseResearchIfUnsure` (:203).
+- New directive constant near `ADVISE_RESEARCH_DIRECTIVE` (:415).
+- Conditional injection in planner branch after the adviseResearch block (agentPromptBuilder.ts:774-776), gated on `options?.epicMode` (:234, read at :713).
+- New mapping in `KanbanProvider._resolvePromptBuilderOptions` after the `adviseResearchIfUnsure` line (KanbanProvider.ts:3357). `epicMode` is set at KanbanProvider.ts:3408.
+- Text-only edit to `group-into-epics/SKILL.md` PROPOSE step (:68) and EXECUTE step (:89).
 
-1. A new checkbox in the planner add-ons HTML block (mirrors `plannerAddonAdviseResearch`).
-2. A new entry in `ROLE_ADDONS.planner` in `sharedDefaults.js` with `default: true`.
-3. A new key in `DEFAULT_ROLE_CONFIG.planner.addons` with default `true`.
-4. A new `load`/`save` line in the kanban.html JS for the checkbox state.
-5. A new option field on `PromptBuilderOptions` + a new directive constant + conditional injection in the planner branch of `buildKanbanBatchPrompt`.
-6. A new mapping line in `KanbanProvider._resolvePromptBuilderOptions` to pass the config flag through.
-7. A text-only edit to `group-into-epics/SKILL.md` adding `## Dependencies & sequencing` to the PROPOSE and EXECUTE steps.
-
-No schema migrations, no DB changes, no new message types. The SKILL.md edit is low-risk text (the skill is consumed as a pasted prompt, not parsed by code — `_buildSuggestEpicsPrompt` just strips YAML frontmatter and substitutes `{{WORKSPACE_ROOT}}`). The only mild risk is the directive/skill text quality (it must clearly describe the Goal/How/Dependencies format and the "do not touch the auto-generated block" constraint).
+### Complex / Risky
+- None. No schema migrations, no DB changes, no new message types. The SKILL.md is consumed as a pasted prompt (`_buildSuggestEpicsPrompt` strips YAML frontmatter and substitutes `{{WORKSPACE_ROOT}}`) — not parsed by code.
 
 ## Edge-Case & Dependency Audit
+
+**Race Conditions:** None. The directive is generated at prompt-assembly time (single-threaded). The planner writes the epic file during its run; `_regenerateEpicFile` (KanbanProvider.ts:9117) only replaces content between BEGIN/END SUBTASKS (:9142-9147) and BEGIN/END WORKTREES (:9179-9184) markers, preserving everything outside — including newly written sections. No concurrent write path.
+
+**Security:** None. No user input flows into the directive text; the directive is a static constant. The epic file path is already present in the plan list (existing behaviour).
+
+**Side Effects:** The planner will write to the epic `.md` file when sections are missing. This is the intended behaviour and is idempotent (subsequent runs see the sections present and no-op). No other files are touched by the directive.
+
+**Dependencies & Conflicts:** This plan edits `agentPromptBuilder.ts` (planner branch) and `KanbanProvider.ts` (`_resolvePromptBuilderOptions`) — the same files touched by the sibling plan "Prompt Builder Redundancy Cleanup" (feature_plan_20260702123609). **Execution order: that plan must land first** (it restructures the planner branch and the suffix assembly); this plan's additive directive then slots into the refactored branch. If executed in parallel the two will produce merge conflicts on the same lines.
 
 | Edge Case / Dependency | Handling |
 |---|---|
@@ -57,6 +73,14 @@ No schema migrations, no DB changes, no new message types. The SKILL.md edit is 
 | Epic has no cross-epic dependencies (all subtasks are self-contained) | `## Dependencies & sequencing` section should still be written — it documents the internal shipping order (which subtask should land first) and explicitly states "No cross-epic dependencies" if true. An epic with a single subtask can note "Single subtask — no internal ordering." |
 | Suggest Epics skill is used but epic has no dependencies | Same: the PROPOSE step should include a `## Dependencies & sequencing` entry that states "No cross-epic dependencies; subtasks are independent" rather than omitting the section. |
 | Section naming variant: `## Dependencies` vs `## Dependencies & sequencing` | The directive and skill both standardize on `## Dependencies & sequencing` (the most common form in existing epics). If an epic already has `## Dependencies` (without `& sequencing`), the planner should treat it as present and not duplicate — the backfill check matches on `## Dependencies` as a prefix. |
+
+## Dependencies
+
+- `feature_plan_20260702123609_prompt-builder-redundancy-cleanup.md` — Prompt Builder Redundancy Cleanup. Must land FIRST. Both plans edit the planner branch of `agentPromptBuilder.ts` and `_resolvePromptBuilderOptions` in `KanbanProvider.ts`; the redundancy cleanup restructures those branches, this plan adds into them. Reverse order risks merge conflicts on the same lines.
+
+## Adversarial Synthesis
+
+Key risks: (1) line-number drift in the original plan would have sent the coder to wrong locations — corrected against verified source. (2) cross-plan collision on `agentPromptBuilder.ts` / `KanbanProvider.ts` — mitigated by sequencing (redundancy cleanup first). (3) directive text quality — the 200-word directive is correct but dense; acceptable since it mirrors the established `ADVISE_RESEARCH_DIRECTIVE` pattern. No data-migration, schema, or concurrency risks.
 
 ## Proposed Changes
 
@@ -81,7 +105,7 @@ planner: {
 
 ### 2. `src/webview/kanban.html` — add checkbox + load/save wiring
 
-Add the checkbox in the planner add-ons HTML block, after the `plannerAddonAdviseResearch` label (around line 2959, before the Subagent Policy radio group):
+Add the checkbox in the planner add-ons HTML block, after the `plannerAddonAdviseResearch` label (kanban.html:2956, before the Subagent Policy radio group):
 
 ```html
 <label class="checkbox-item" title="When dispatched against an epic, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the epic file">
@@ -91,23 +115,23 @@ Add the checkbox in the planner add-ons HTML block, after the `plannerAddonAdvis
 </label>
 ```
 
-Add the load line in the `if (currentRole === 'planner')` block (after line 3319, the adviseResearch load):
+Add the load line in the `if (currentRole === 'planner')` block (after the adviseResearch load):
 
 ```js
 document.getElementById('plannerAddonWriteEpicDescriptionIfEmpty').checked = config.addons?.writeEpicDescriptionIfEmpty !== false;
 ```
 
-Add the checkbox ID to the planner add-on listener array (line 4069):
+Add the checkbox ID to the planner add-on listener array (kanban.html:4072):
 
 ```js
 ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch', 'plannerAddonWriteEpicDescriptionIfEmpty'].forEach(id => {
 ```
 
-The existing `addonIdMap` + `id.replace('plannerAddon', '')` logic at lines 4073-4078 will derive the correct key `writeEpicDescriptionIfEmpty` automatically (no special mapping needed — the camelCase derivation `addonId.charAt(0).toLowerCase() + addonId.slice(1)` produces `writeEpicDescriptionIfEmpty`).
+The existing `addonIdMap` (kanban.html:4076) + `id.replace('plannerAddon', '')` logic at :4080 will derive the correct key `writeEpicDescriptionIfEmpty` automatically (no special mapping needed — the camelCase derivation `addonId.charAt(0).toLowerCase() + addonId.slice(1)` produces `writeEpicDescriptionIfEmpty`).
 
 ### 3. `src/services/agentPromptBuilder.ts` — add option + directive + injection
 
-Add the option field to `PromptBuilderOptions` (after `adviseResearchIfUnsure` around line 154):
+Add the option field to `PromptBuilderOptions` (agentPromptBuilder.ts:148, after `adviseResearchIfUnsure` at :203):
 
 ```ts
 /** When true (default), instructs the planner to backfill missing ## Goal,
@@ -117,7 +141,7 @@ Add the option field to `PromptBuilderOptions` (after `adviseResearchIfUnsure` a
 writeEpicDescriptionIfEmpty?: boolean;
 ```
 
-Add the directive constant near the other planner directives (after `ADVISE_RESEARCH_DIRECTIVE`, around line 358):
+Add the directive constant near the other planner directives (after `ADVISE_RESEARCH_DIRECTIVE`, agentPromptBuilder.ts:415):
 
 ```ts
 export const WRITE_EPIC_DESCRIPTION_DIRECTIVE = `EPIC DESCRIPTION BACKFILL: The epic file path is included in the plan list above (the entry tagged [EPIC: ...]). Read that file. If it is missing any of these three sections, write them now following this format:
@@ -127,7 +151,7 @@ export const WRITE_EPIC_DESCRIPTION_DIRECTIVE = `EPIC DESCRIPTION BACKFILL: The 
 If all three sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 ```
 
-In the planner branch of `buildKanbanBatchPrompt`, read the option and inject the directive. Add after the `adviseResearchIfUnsure` block (around line 719), gated on `epicMode`:
+In the planner branch of `buildKanbanBatchPrompt`, read the option and inject the directive. Add after the `adviseResearchIfUnsure` block (agentPromptBuilder.ts:774-776), gated on `epicMode` (option at :234, read at :713):
 
 ```ts
 const writeEpicDescriptionIfEmpty = options?.writeEpicDescriptionIfEmpty ?? true;
@@ -137,11 +161,11 @@ if (writeEpicDescriptionIfEmpty && options?.epicMode) {
 }
 ```
 
-The `epicMode` gate ensures the directive only appears when the dispatch actually includes subtask plans of an epic (set at `KanbanProvider.ts` line 3341).
+The `epicMode` gate ensures the directive only appears when the dispatch actually includes subtask plans of an epic (set at `KanbanProvider.ts` line 3408).
 
 ### 4. `src/services/KanbanProvider.ts` — pass the config flag through
 
-In `_resolvePromptBuilderOptions`, add the mapping after the `adviseResearchIfUnsure` line (line 3463):
+In `_resolvePromptBuilderOptions`, add the mapping after the `adviseResearchIfUnsure` line (KanbanProvider.ts:3357):
 
 ```ts
 writeEpicDescriptionIfEmpty: plannerConfig?.addons?.writeEpicDescriptionIfEmpty ?? true,
@@ -162,7 +186,7 @@ The Suggest Epics skill already reads dependencies in step 2 ("Extract: goal, pr
   subtask, note "Single subtask — no internal ordering."
 ```
 
-**Step 5 (EXECUTE)** — update the manual-write instruction (currently line 79-83) to include the new section. The current text says:
+**Step 5 (EXECUTE)** — update the manual-write instruction (currently SKILL.md:101-105) to include the new section. The current text says:
 
 > After all epics are created, write the ## How the Subtasks Achieve This section
 > into each epic file manually (the create-epic script only writes the Goal).
@@ -196,3 +220,7 @@ Change to:
    - Dispatch a planner prompt against a single non-epic plan → confirm the directive is absent.
 4. **Epic file safety:** After a planner run with the directive, confirm `_regenerateEpicFile` does not clobber the newly written `## Goal` / `## How the Subtasks Achieve This` / `## Dependencies & sequencing` sections (it only touches the BEGIN/END SUBTASKS and BEGIN/END WORKTREES blocks).
 5. **Suggest Epics skill check:** Click SUGGEST EPICS on the kanban board → confirm the copied prompt text includes the `Dependencies & sequencing` bullet in the PROPOSE step and the updated EXECUTE step mentioning both `## How the Subtasks Achieve This` and `## Dependencies & sequencing`.
+
+## Recommendation
+
+**Complexity: 4 → Send to Coder.** Sequenced after the sibling redundancy-cleanup plan lands.

@@ -1085,7 +1085,7 @@
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     if (action === 'Set Context') {
-                        // Activates the kanban "Design Doc Reference" add-on with this doc
+                        // Activates the kanban "Project PRD Reference" add-on with this doc
                         const statusDesign = document.getElementById('status-design');
                         if (statusDesign) {
                             statusDesign.textContent = 'Setting as active design doc...';
@@ -3659,6 +3659,12 @@
                 break;
             case 'cyberScanlinesSetting':
                 document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
+                break;
+            case 'pixelFontSetting':
+                document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
+                break;
+            case 'ultracodeAnimationSetting':
+                document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);
                 break;
         }
     });

@@ -36,7 +36,8 @@ import {
     resolveWorkingDir,
     normalizeNewlines,
     resolvePlanPathForWorktree,
-    resolveWorkingDirForWorktree
+    resolveWorkingDirForWorktree,
+    PROJECT_LINE_DIRECTIVE
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -165,6 +166,8 @@ type ConfiguredKanbanDispatchOptions = {
     /** Override the git safety guardrail for this dispatch (true = include guardrail that permits worktrees/commits but forbids destructive undo; false = omit it entirely, used by worktree sessions that ship their own git policy). */
     gitProhibitionEnabled?: boolean;
     targetTerminalOverride?: string;
+    /** Skip column rollback on dispatch failure. Used by kanban drag-dispatch which persists the column move independently and handles the fallback prompt. */
+    persistColumnOnError?: boolean;
 };
 
 type ClickUpSetupColumnState = {
@@ -506,6 +509,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         .getConfiguration('switchboard')
                         .get<boolean>('theme.disableCyberScanlines', false);
                     this.broadcastToWebviews({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+                }
+                if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                    const enabled = vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('theme.pixelFont', true);
+                    this.broadcastToWebviews({ type: 'pixelFontSetting', enabled });
+                }
+                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                    const enabled = vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('theme.ultracodeAnimation', false);
+                    this.broadcastToWebviews({ type: 'ultracodeAnimationSetting', enabled });
                 }
             })
         );
@@ -2953,11 +2968,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return entries;
     }
 
-    private _buildMemoPlannerPrompt(issues: string[], workspaceRoot: string): string {
+    private _buildMemoPlannerPrompt(issues: string[], workspaceRoot: string, projectName?: string): string {
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
         const issueList = issues.map((issue, i) => `### Issue ${i + 1}\n${issue}`).join('\n\n');
 
-        return `You are a planner agent. The user has captured the following issues in their memo during testing. Your task is to refine EACH issue into a separate, complete plan file — one plan per issue. Do not combine issues.
+        let prompt = `You are a planner agent. The user has captured the following issues in their memo during testing. Your task is to refine EACH issue into a separate, complete plan file — one plan per issue. Do not combine issues.
 
 ## Issues to Refine
 
@@ -2987,6 +3002,12 @@ Each plan file must include:
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
 - Do NOT skip the investigation step — read the relevant code before writing each plan
 - If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create an epic grouping them: "These [N] plans cover related work — want me to create an epic to group them together?" Only create the epic if the user confirms. See ${workspaceRoot}/.switchboard/epics/ for the format.`;
+
+        if (projectName) {
+            prompt += '\n\n' + PROJECT_LINE_DIRECTIVE(projectName);
+        }
+
+        return prompt;
     }
 
     public async dispatchConfiguredKanbanColumnAction(
@@ -3029,7 +3050,8 @@ Each plan file must include:
             additionalInstructions: String(options.additionalInstructions || '').trim() || undefined,
             instruction: options.instruction,
             workspaceRoot: resolvedWorkspaceRoot,
-            targetTerminalOverride: options.targetTerminalOverride
+            targetTerminalOverride: options.targetTerminalOverride,
+            persistColumnOnError: true
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -4152,7 +4174,8 @@ Each plan file must include:
 
     public async handleSetCyberAnimationDisabledSetting(disabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.disableCyberAnimation', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetCyberScanlinesDisabledSetting(): boolean {
@@ -4161,7 +4184,8 @@ Each plan file must include:
 
     public async handleSetCyberScanlinesDisabledSetting(disabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.disableCyberScanlines', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetColourKanbanIconsSetting(): boolean {
@@ -4170,7 +4194,28 @@ Each plan file must include:
 
     public async handleSetColourKanbanIconsSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.colourKanbanIcons', undefined, vscode.ConfigurationTarget.Workspace);
+    }
+
+    public handleGetPixelFontSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+    }
+
+    public async handleSetPixelFontSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.pixelFont', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.pixelFont', undefined, vscode.ConfigurationTarget.Workspace);
+    }
+
+    public handleGetUltracodeAnimationSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+    }
+
+    public async handleSetUltracodeAnimationSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.ultracodeAnimation', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('theme.ultracodeAnimation', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetJulesAutoSyncSetting(): boolean {
@@ -4561,6 +4606,16 @@ Each plan file must include:
         this._setupPanelProvider.postMessage({
             type: 'cyberScanlinesDisabledSetting',
             enabled: this.handleGetCyberScanlinesDisabledSetting()
+        });
+
+        this._setupPanelProvider.postMessage({
+            type: 'ultracodeAnimationSetting',
+            enabled: this.handleGetUltracodeAnimationSetting()
+        });
+
+        this._setupPanelProvider.postMessage({
+            type: 'pixelFontSetting',
+            enabled: this.handleGetPixelFontSetting()
         });
 
 
@@ -5267,6 +5322,7 @@ Each plan file must include:
         if (lnState) { fmLines.push(`status: ${lnState}`); }
         if (lnType) { fmLines.push(`statusType: ${lnType}`); }
         if (issue?.project?.id) { fmLines.push(`projectId: ${String(issue.project.id).trim()}`); }
+        if (issue?.project?.name) { fmLines.push(`projectName: ${String(issue.project.name).trim()}`); }
         if ((issue as any)?.parentId) { fmLines.push(`parentId: ${String((issue as any).parentId).trim()}`); }
         fmLines.push('---', '');
         const yamlFrontmatter = createdAt ? fmLines.join('\n') : '';
@@ -7402,6 +7458,35 @@ Each plan file must include:
         });
     }
 
+    /**
+     * Close (dispose + drop from state + remove from autoban pool) EVERY terminal
+     * whose stored worktreePath matches the given path, regardless of role. Used when
+     * a worktree is deleted/merged/abandoned so its spawned terminals don't outlive it.
+     * Best-effort: each terminal is closed independently so one failure doesn't abort the rest.
+     */
+    public async closeWorktreeTerminals(worktreePath: string): Promise<void> {
+        const resolvedTarget = path.resolve(worktreePath);
+        // Collect names inside an updateState transaction so we read a consistent snapshot.
+        const names: string[] = [];
+        await this.updateState(async (state) => {
+            if (state.terminals) {
+                for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                    if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
+                        names.push(name);
+                    }
+                }
+            }
+        });
+
+        for (const name of names) {
+            try {
+                await this.killTerminal(name); // disposes VS Code terminal, drops state + pool refs, refreshes UI
+            } catch (e) {
+                console.warn(`[TaskViewerProvider] closeWorktreeTerminals: failed to close ${name} (continuing):`, e);
+            }
+        }
+    }
+
     /** Resolve the worktree path for a plan based on precedence: subtask worktree -> epic worktree -> project worktree -> undefined. */
     public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { epicId?: string | null; project?: string | null; planId?: string | null }): Promise<string | undefined> {
         const worktrees = await db.getWorktrees();
@@ -8117,6 +8202,14 @@ Each plan file must include:
             this._postSidebarConfigurationState(resolvedRoot),
             this.postSetupPanelState(resolvedRoot)
         ]);
+
+        // Auto-export skill so it stays in sync with config.
+        try {
+            const { AgentSkillExporter } = await import('./AgentSkillExporter');
+            await AgentSkillExporter.exportCustomAgent(agent, resolvedRoot);
+        } catch (e) {
+            console.error('[TaskViewerProvider] Auto-export skill failed:', e);
+        }
     }
 
     public async handleDeleteCustomAgent(agentId: string, workspaceRoot?: string): Promise<void> {
@@ -8124,6 +8217,17 @@ Each plan file must include:
         if (!resolvedRoot) {
             return;
         }
+
+        // Capture the key before state mutation
+        let deletedKey: string | undefined = undefined;
+        try {
+            const existing = await this.getCustomAgents(resolvedRoot);
+            const deletedAgent = existing.find((a: CustomAgentConfig) => a.id === agentId);
+            deletedKey = deletedAgent?.id;
+        } catch (e) {
+            // ignore
+        }
+
         await this.updateState((state: any) => {
             const existing = parseCustomAgents(state.customAgents);
             const deletedRole = existing.find((a: CustomAgentConfig) => a.id === agentId)?.role;
@@ -8142,6 +8246,15 @@ Each plan file must include:
             this._postSidebarConfigurationState(resolvedRoot),
             this.postSetupPanelState(resolvedRoot)
         ]);
+
+        if (deletedKey) {
+            try {
+                const { AgentSkillExporter } = await import('./AgentSkillExporter');
+                await AgentSkillExporter.removeExportedSkill(deletedKey, resolvedRoot);
+            } catch (e) {
+                // ignore
+            }
+        }
     }
 
     public async handleSaveDefaultPromptOverrides(data: any): Promise<void> {
@@ -9729,9 +9842,9 @@ Each plan file must include:
                             try {
                                 const workspaceRoot = this._resolveWorkspaceRoot();
                                 const planFile = data.planFile || '';
-                                if (workspaceRoot && planFile && this._kanbanProvider) {
+                                if (workspaceRoot && this._kanbanProvider) {
                                     // Open the plan in the Project panel, same as kanban.html's Review Plan button.
-                                    await this._kanbanProvider.activatePlanInProjectPanel(planFile, workspaceRoot, false);
+                                    await this._kanbanProvider.activatePlanInProjectPanel(planFile, workspaceRoot, false, data.sessionId);
                                 } else {
                                     // Last-resort fallback for ghost/malformed rows with no planFile:
                                     // opens the raw file in VS Code's editor. This re-introduces the old
@@ -9976,7 +10089,10 @@ Each plan file must include:
                             });
                             break;
                         }
-                        const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot);
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        const activeProject = await db.getConfig('kanban.activeProjectFilter');
+                        const projectName = (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? activeProject : undefined;
+                        const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot, projectName);
 
                         let sendSucceeded = action !== 'send';
                         if (action === 'send') {
@@ -11703,7 +11819,14 @@ What would you like to find?`;
         if (db) {
             const dbStatus = status === 'orphan' ? 'archived' : status;
             for (const sessionId of this._getRegistrySessionIdCandidates(planId, entry.sourceType)) {
-                await db.updateStatus(sessionId, dbStatus as KanbanPlanRecord['status']);
+                if (dbStatus === 'archived' || dbStatus === 'deleted') {
+                    const plan = await db.getPlanBySessionId(sessionId);
+                    if (plan) {
+                        await db.archivePlan(plan.planFile, plan.workspaceId, dbStatus as 'archived' | 'deleted');
+                    }
+                } else {
+                    await db.updateStatus(sessionId, dbStatus as KanbanPlanRecord['status']);
+                }
             }
         }
     }
@@ -15428,28 +15551,49 @@ What would you like to find?`;
                     return col !== 'code reviewed' && col !== 'backlog';
                 };
 
+                const excludeProjectPlans = projectFilter === null || projectFilter === '__unassigned__';
+                const filterByProjectScope = (row: import('./KanbanDatabase').KanbanPlanRecord) => {
+                    if (!excludeProjectPlans) return true;
+                    return !row.project && (row.projectId === null || row.projectId === undefined);
+                };
+
                 const visibleActiveRows = repoScope
-                    ? filterGhostPlans(activeRows).filter(filterByColumn).filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : filterGhostPlans(activeRows).filter(filterByColumn);
+                    ? filterGhostPlans(activeRows).filter(filterByColumn).filter(filterByProjectScope).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(activeRows).filter(filterByColumn).filter(filterByProjectScope);
                 const visibleCompletedRows = repoScope
-                    ? filterGhostPlans(completedRows).filter(filterByColumn).filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : filterGhostPlans(completedRows).filter(filterByColumn);
+                    ? filterGhostPlans(completedRows).filter(filterByColumn).filter(filterByProjectScope).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(completedRows).filter(filterByColumn).filter(filterByProjectScope);
                 const toSheet = (row: import('./KanbanDatabase').KanbanPlanRecord) => ({
                     sessionId: row.sessionId,
                     topic: row.topic || row.planFile || 'Untitled',
                     planFile: row.planFile || '',
                     createdAt: row.createdAt || '',
                     kanbanColumn: row.kanbanColumn || 'CREATED',
+                    isEpic: row.isEpic ?? 0,
+                    epicId: row.epicId || '',
                 });
                 const kanbanStructure = await this.handleGetKanbanStructure(resolvedWorkspaceRoot);
                 const kanbanColumns = kanbanStructure.map(col => ({ id: col.id, label: col.label }));
                 const activeSheets = visibleActiveRows.map(toSheet);
                 const completedSheets = visibleCompletedRows.map(toSheet);
-                this._view.webview.postMessage({ type: 'runSheets', activeSheets, completedSheets, kanbanColumns });
+                const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+                this._view.webview.postMessage({
+                    type: 'runSheets',
+                    activeSheets,
+                    completedSheets,
+                    kanbanColumns,
+                    projectFilter: currentProjectFilter
+                });
             }
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh Run Sheets from DB:', e);
-            this._view?.webview.postMessage({ type: 'runSheets', activeSheets: [], completedSheets: [] });
+            const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+            this._view?.webview.postMessage({
+                type: 'runSheets',
+                activeSheets: [],
+                completedSheets: [],
+                projectFilter: currentProjectFilter
+            });
         }
     }
 
@@ -15498,7 +15642,13 @@ What would you like to find?`;
             await this._refreshRunSheets(resolvedWorkspaceRoot);
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh from DB:', e);
-            this._view?.webview.postMessage({ type: 'runSheets', activeSheets: [], completedSheets: [] });
+            const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+            this._view?.webview.postMessage({
+                type: 'runSheets',
+                activeSheets: [],
+                completedSheets: [],
+                projectFilter: currentProjectFilter
+            });
         }
     }
 
@@ -16494,7 +16644,7 @@ What would you like to find?`;
                         const nextCursor = this.getPlannerRotationCursor(locationKey);
                         const picked = terminals[nextCursor % terminals.length];
                         if (picked && this._isValidAgentName(picked)) {
-                            nextPlannerTarget = picked;
+                            nextPlannerTarget = this._stripIdeSuffix(picked);
                         }
                     }
                 }
@@ -16507,8 +16657,10 @@ What would you like to find?`;
                 }, requestId);
                 return true;
             } else {
-                // Dispatch failed — roll back the column move
-                if (previousColumn) {
+                // Dispatch failed — roll back the column move UNLESS the caller has
+                // taken responsibility for persisting the column (kanban drag-dispatch
+                // persists the move independently and handles the fallback prompt).
+                if (!options?.persistColumnOnError && previousColumn) {
                     await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
                     this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
                 }
@@ -16517,8 +16669,8 @@ What would you like to find?`;
                 return false;
             }
         } catch (e) {
-            // Dispatch failed — roll back
-            if (previousColumn) {
+            // Dispatch failed — roll back UNLESS caller persists column on error
+            if (!options?.persistColumnOnError && previousColumn) {
                 await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
                 this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
             }
@@ -16744,16 +16896,10 @@ What would you like to find?`;
     }
 
     public async createDraftPlanTicket(): Promise<void> {
-        const title = await vscode.window.showInputBox({
-            prompt: 'Plan title (used for filename and H1 header)',
-            placeHolder: 'Untitled Plan',
-            value: 'Untitled Plan',
-            validateInput: (v) => {
-                // Reject titles that would produce an empty slug
-                if (!v || !v.trim()) return null; // allow empty (falls back to Untitled Plan)
-                return null;
-            }
-        }) || 'Untitled Plan';
+        // No VS Code dialogue — create directly with default title.
+        // The project panel opens in edit mode (autoEdit: true) so the user
+        // can rename the plan immediately in the editor.
+        const title = 'Untitled Plan';
         const createdAt = new Date().toISOString();
         const idea = this._buildDraftPlanContent(title);
 
@@ -18588,7 +18734,7 @@ What would you like to find?`;
                     const cursor = this.getPlannerRotationCursor(plannerSet.locationKey);
                     const picked = plannerSet.terminals[cursor % plannerSet.terminals.length];
                     if (picked && this._isValidAgentName(picked)) {
-                        currentPlannerTarget = picked;
+                        currentPlannerTarget = this._stripIdeSuffix(picked);
                     }
                 }
 
@@ -19134,7 +19280,13 @@ What would you like to find?`;
         if (config && config.ticketSaveLocation) {
             return path.join(config.ticketSaveLocation, provider, ...segments.map(s => this._slugify(s).slice(0, 60)));
         }
-        return null;
+        // Fallback: default to the workspace's .switchboard/tickets/ directory.
+        // Matches the read-path fallback in _findTicketDocument and the bulk-import
+        // fallback below. Without this, single-ticket creation (New Ticket button)
+        // fails with "Ticket save location not configured" when ticketSaveLocation
+        // has been stripped from config by _normalizeConfig (which historically did
+        // not include the field).
+        return path.join(resolvedRoot, '.switchboard', 'tickets', provider, ...segments.map(s => this._slugify(s).slice(0, 60)));
     }
 
 
@@ -19411,11 +19563,17 @@ What would you like to find?`;
                 }
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
-                const issues = await linear.queryIssues({ projectId, limit: 100, ...(deltaSinceIso ? { updatedAfter: deltaSinceIso } : {}) });
-                items = issues;  // Process all fetched issues — limit: 100 matches the sidebar's own limit
+                const issues = await linear.queryIssues({
+                    projectId,
+                    projectScoped: true,
+                    ...(deltaSinceIso ? { updatedAfter: deltaSinceIso } : {})
+                });
+                items = issues;
 
                 const teamName = linear.getTeamName();
-                const projectName = items[0]?.project?.name || '_no-project';
+                const projectName = (issues as any).resolutionFailed
+                    ? '_no-project'
+                    : (items.find((it: any) => it?.project?.name)?.project?.name || '_no-project');
                 segments.push(teamName, projectName);
 
                 const linearConfig = GlobalIntegrationConfigService.loadConfigSync('linear');
@@ -19433,6 +19591,8 @@ What would you like to find?`;
                 const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
                 targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
+
+            const resolutionFailed = provider === 'linear' && (items as any).resolutionFailed;
 
             // Progressive import: only TOP-LEVEL tickets become files. Subtasks are
             // embedded into their parent's file when the parent is opened (importTask-
@@ -19520,7 +19680,7 @@ What would you like to find?`;
             // Locally-modified files (mtime > last_synced_at) are preserved — never
             // destroy unpushed local edits.
             let pruned = 0;
-            if (!isDelta && targetDir && rawItemCount > 0) {
+            if (!isDelta && targetDir && rawItemCount > 0 && !resolutionFailed) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbBySlug = new Map<string, any>(
@@ -19574,7 +19734,7 @@ What would you like to find?`;
             // (which stores the provider name 'linear'/'clickup', not the task ID).
             // Gated on rawItemCount > 0 to match the prune's guard — a transient
             // empty fetch must not wipe all local files.
-            if (!isDelta && rawItemCount > 0) {
+            if (!isDelta && rawItemCount > 0 && !resolutionFailed) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbTicketsSweep = await cacheService.getImportedTickets();
@@ -19681,7 +19841,7 @@ What would you like to find?`;
                 finalIds = tasks.slice(startIndex, startIndex + pageSize).map(t => t.id);
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
-                const issues = await linear.queryIssues({ projectId });
+                const issues = await linear.queryIssues({ projectId, projectScoped: true });
                 const pageSize = 50;
                 const startIndex = (page - 1) * pageSize;
                 finalIds = issues.slice(startIndex, startIndex + pageSize).map(i => i.id);
@@ -20025,6 +20185,11 @@ What would you like to find?`;
             }
 
             // Refetch threads and update JSON
+            // Delay to allow provider API propagation — Linear/ClickUp have eventual consistency
+            // and a fresh query immediately after posting may not include the new reply.
+            // This is a probabilistic mitigation; the merge logic in the frontend is the
+            // deterministic guarantee that preserves optimistic replies.
+            await new Promise(resolve => setTimeout(resolve, 1500));
             const loadResult = await this.loadTicketComments(workspaceRoot, { provider, id });
             if (!loadResult.success) {
                 // Reply posted but refetch failed — still report success

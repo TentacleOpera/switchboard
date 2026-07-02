@@ -597,6 +597,91 @@ export class LocalApiServer {
         }
     }
 
+    private async _handleMoveClickUpTask(taskId: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const service = this._options.getClickUpService();
+        if (!service) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'ClickUp service not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const { targetListId, moveCustomFields, statusMappings } = body || {};
+
+            if (!targetListId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'targetListId is required' }));
+                return;
+            }
+
+            const result = await service.moveTask(taskId, targetListId, {
+                moveCustomFields,
+                statusMappings
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                taskId,
+                targetListId,
+                warning: result.warning ?? null,
+                remainsInLists: result.remainsInLists
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] ClickUp task move error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Task move failed' }));
+        }
+    }
+
+    private async _handleMoveLinearIssue(issueId: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const service = this._options.getLinearService();
+        if (!service) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Linear service not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const { targetProjectId } = body || {};
+
+            if (!body || !('targetProjectId' in body)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'targetProjectId is required (use null to unassign)' }));
+                return;
+            }
+
+            await service.updateIssueProject(issueId, targetProjectId || null);
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, issueId, targetProjectId: targetProjectId || null }));
+        } catch (err) {
+            console.error('[LocalApiServer] Linear issue move error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'Issue move failed' }));
+        }
+    }
+
     private async _handleAttachFile(taskId: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -1009,7 +1094,13 @@ export class LocalApiServer {
                 await this._handleGetTask('linear', taskId, res);
             } else if (pathname === '/task/clickup' && req.method === 'POST') {
                 await this._handleCreateClickUpTask(req, res);
-            } else if (pathname.startsWith('/task/clickup/') && req.method === 'PUT') {
+            } else if (pathname.startsWith('/task/clickup/') && pathname.endsWith('/move') && req.method === 'PUT') {
+                const taskId = pathname.split('/')[3];
+                await this._handleMoveClickUpTask(taskId, req, res);
+            } else if (pathname.startsWith('/task/linear/') && pathname.endsWith('/move') && req.method === 'PUT') {
+                const issueId = pathname.split('/')[3];
+                await this._handleMoveLinearIssue(issueId, req, res);
+            } else if (pathname.startsWith('/task/clickup/') && !pathname.endsWith('/move') && req.method === 'PUT') {
                 const taskId = pathname.split('/')[3];
                 await this._handleUpdateClickUpTask(taskId, req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {

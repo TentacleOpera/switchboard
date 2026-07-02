@@ -113,6 +113,8 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `clickup_create_task` | Create ClickUp tasks with optional subtasks via LocalApiServer (replaces clickup_create_task) |
 | `clickup_fetch` | Fetch ClickUp tasks/lists with name resolution (replaces clickup_fetch) |
 | `clickup_modify_task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
+| `clickup_move_task` | Move a ClickUp task to a different list via LocalApiServer |
+| `linear_move_issue` | Move a Linear issue to a different project via LocalApiServer |
 | `generate_diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
 | `review` | User asks to review code changes, a PR, or specific files |
 | `query_switchboard_kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
@@ -158,7 +160,10 @@ When creating plan files in multi-workspace setups, use this decision tree to de
 
 4. **Fallback: Ask the user** — If detection is ambiguous (multiple signals conflict or no signal matches), ask the user which workspace to use. Do NOT silently default to any workspace.
 
-**Edge case**: If the user has multiple workspace folders open in VS Code, the active editor's containing workspace folder is the strongest signal.
+### 📌 Plan Project Pinning
+
+When a chat or memo dispatch prompt carries a PROJECT PIN directive, write `**Project:** <name>` into each plan file's metadata block. The watcher prefers this field over the board's active project at import time, preventing the project race when the user switches projects between copying and running the prompt. No manifest is needed for project pinning — the .md metadata is the carrier.
+
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:claude-protocol:end -->

@@ -60,7 +60,7 @@ const ROLE_ADDONS = {
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
 
         { id: 'constitution', label: 'Project Constitution Reference', tooltip: 'Include project constitution as context for planning', default: false },
-        { id: 'designSystemDoc', label: 'Design Doc Reference', tooltip: 'Include design system doc as context', default: false },
+        { id: 'designSystemDoc', label: 'Project PRD Reference', tooltip: 'Include project PRD as context for planning', default: false },
         { id: 'aggressivePairProgramming', label: 'Aggressive Pair Programming', tooltip: 'Assume Coder can handle more independently', default: false },
         { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: false },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },

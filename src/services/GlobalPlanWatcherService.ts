@@ -515,12 +515,13 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             if (!plan) {
-                // The board writes the currently-displayed project name into this DB's
-                // config table whenever it refreshes (KanbanProvider._refreshBoardImpl).
-                // Read it straight back from the SAME db handle we're importing into —
-                // no resolver, no in-memory mirror, no workspace-root comparison to drift
-                // out of sync. insertFileDerivedPlan resolves project_id from this name
-                // using the exact same lookup the manual "Assign to project" button uses.
+                // The board syncs the currently-displayed project name into this DB's
+                // config table on every refresh (KanbanProvider._refreshBoardImpl) and
+                // on constructor restore from workspaceState. Read it straight back from
+                // the SAME db handle we're importing into — no resolver, no in-memory
+                // mirror, no workspace-root comparison to drift out of sync.
+                // insertFileDerivedPlan resolves project_id from this name using the
+                // exact same lookup the manual "Assign to project" button uses.
                 const activeProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
                 const project = metadata.project || activeProject;
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
@@ -615,19 +616,16 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
             } else {
                 // Existing plan - update metadata.
-                // Re-resolve the active project if the plan currently has none.
-                // Priority: explicit frontmatter project > board's active project (DB config)
-                // > existing DB project (preserved by COALESCE).
+                // Project assignment: only honor an explicit frontmatter project override.
+                // The auto-assign-to-active-project behavior is intentionally FIRST-IMPORT ONLY
+                // (the !plan branch above). Re-stamping on every save causes plans to jump
+                // between projects when the user clicks through the board dropdown while
+                // agents are writing to plan files. If the plan has no project and no
+                // frontmatter override, leave it empty — insertFileDerivedPlan's COALESCE
+                // preserves the existing DB value, and the user can assign manually.
                 let resolvedProject = plan.project;
                 if (metadata.project) {
-                    // Frontmatter explicitly sets a project — honor it (overrides everything)
                     resolvedProject = metadata.project;
-                } else if (!resolvedProject) {
-                    // Plan has no project yet — stamp it with the board's active project,
-                    // read from the same DB the board persists it to. Without this, a plan
-                    // initially imported with project='' (e.g. before the board first
-                    // refreshed) would stay empty forever.
-                    resolvedProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
                 }
                 const updatedRecord: KanbanPlanRecord = {
                     ...plan,
@@ -838,12 +836,17 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
             const workspaceId = await db.getWorkspaceId();
             if (!workspaceId) { return; }
-            await this._manifestService.applyManifest(
+            const result = await this._manifestService.applyManifest(
                 workspaceRoot,
                 workspaceId,
                 db,
                 (msg) => this._outputChannel?.appendLine(msg)
             );
+            if (result.rejected > 0) {
+                vscode.window.showWarningMessage(
+                    `Switchboard: ${result.rejected} manifest entr${result.rejected === 1 ? 'y' : 'ies'} rejected (invalid planFile path). Check the Output panel for details.`
+                );
+            }
         } catch (err) {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manifest processing error in ${workspaceRoot}: ${err}`);
         }

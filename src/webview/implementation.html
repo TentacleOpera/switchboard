@@ -1520,7 +1520,7 @@
         <!-- HEADER: PLAN SELECTION -->
         <div class="header-section">
             <div class="section-header">
-                <div class="section-label">PLAN SELECT</div>
+                <div class="section-label">PLANS</div>
                 <div class="flex gap-2" style="align-items: center;">
                     <button id="btn-mode-toggle" class="icon-btn mode-active" title="Toggle between active and completed plans"
                         aria-label="Toggle plan mode">ACTIVE</button>
@@ -1537,11 +1537,9 @@
                 <div class="select-arrow">▼</div>
             </div>
             <div class="flex gap-2" style="margin-top: 6px;">
-                <button id="btn-complete-plan" class="secondary-btn w-full">COMPLETE</button>
-                <button id="btn-recover-plan" class="secondary-btn w-full hidden">RECOVER</button>
+                <button id="btn-create-plan" class="secondary-btn w-full">NEW</button>
                 <button id="btn-copy-plan-link" class="secondary-btn w-full" title="Copy Markdown link for active plan"
-                    aria-label="Copy plan link">COPY</button>
-                <button id="btn-create-plan" class="secondary-btn w-full">CREATE</button>
+                    aria-label="Copy plan link">COPY PROMPT</button>
             </div>
         </div>
 
@@ -1682,7 +1680,7 @@
                 setTimeout(() => {
                     if (btnCreatePlan.disabled) {
                         btnCreatePlan.disabled = false;
-                        btnCreatePlan.innerText = 'CREATE';
+                        btnCreatePlan.innerText = 'NEW';
                     }
                 }, 3000);
             });
@@ -1861,15 +1859,6 @@
             });
         }
 
-        const btnComplete = document.getElementById('btn-complete-plan');
-        if (btnComplete) {
-            btnComplete.addEventListener('click', () => {
-                const sessionId = runSheetSelect ? runSheetSelect.value : null;
-                if (!sessionId) return;
-                vscode.postMessage({ type: 'completePlan', sessionId });
-            });
-        }
-
         const btnDelete = document.getElementById('btn-delete-plan');
         if (btnDelete) {
             btnDelete.addEventListener('click', () => {
@@ -1895,8 +1884,6 @@
         }
 
         const btnModeToggle = document.getElementById('btn-mode-toggle');
-        const btnCompletePlan = document.getElementById('btn-complete-plan');
-        const btnRecoverPlan = document.getElementById('btn-recover-plan');  // new singular
 
         if (btnModeToggle) {
             btnModeToggle.addEventListener('click', () => {
@@ -1905,21 +1892,8 @@
                 btnModeToggle.textContent = currentPlanMode === 'active' ? 'ACTIVE' : 'COMPLETED';
                 btnModeToggle.classList.toggle('mode-active', currentPlanMode === 'active');
                 btnModeToggle.classList.toggle('mode-completed', currentPlanMode === 'completed');
-                // Show/hide action buttons
-                if (btnCompletePlan) btnCompletePlan.classList.toggle('hidden', currentPlanMode === 'completed');
-                if (btnRecoverPlan) btnRecoverPlan.classList.toggle('hidden', currentPlanMode === 'active');
                 // Re-render dropdown for new mode
                 renderRunSheetDropdown();
-            });
-        }
-
-        // RECOVER (singular) — identical behavior to the per-card Recover button in the kanban Completed column.
-        // Sends recoverPlanFromSidebar → TaskViewerProvider.handleKanbanRestorePlan(sessionId)
-        if (btnRecoverPlan) {
-            btnRecoverPlan.addEventListener('click', () => {
-                const sessionId = runSheetSelect ? runSheetSelect.value : null;
-                if (!sessionId) return;
-                vscode.postMessage({ type: 'recoverPlanFromSidebar', sessionId });
             });
         }
 
@@ -1928,6 +1902,7 @@
         let currentActiveSheets = [];
         let currentCompletedSheets = [];
         let currentKanbanColumns = [];
+        let currentProjectFilter = null;
         let currentPlanMode = 'active';    // 'active' | 'completed'
         let lastTerminals = {};
         let lastAllOpenTerminals = [];
@@ -2303,6 +2278,7 @@
                         currentCompletedSheets = [];
                     }
                     currentKanbanColumns = message.kanbanColumns || [];
+                    currentProjectFilter = message.projectFilter ?? null;
                     renderRunSheetDropdown();
                     break;
                 case 'selectSession':
@@ -2316,7 +2292,7 @@
                      const btnCreatePlan = document.getElementById('btn-create-plan');
                      if (btnCreatePlan) {
                          btnCreatePlan.disabled = false;
-                         btnCreatePlan.innerText = 'CREATE';
+                         btnCreatePlan.innerText = 'NEW';
                      }
                      break;
 
@@ -2491,9 +2467,26 @@
         // --- Rendering ---
 
         function renderRunSheetDropdown() {
-            const sheets = currentPlanMode === 'active' ? currentActiveSheets : currentCompletedSheets;
+            const rawSheets = currentPlanMode === 'active' ? currentActiveSheets : currentCompletedSheets;
+            // Exclude subtask plans (plans with a parent epic that are not themselves epics).
+            // Only epics and standalone plans (no epic parent) should appear in the dropdown.
+            const sheets = rawSheets.filter(s => s.isEpic === 1 || !s.epicId);
             const lastSelected = runSheetSelect.value;
             runSheetSelect.innerHTML = '';
+
+            if (currentProjectFilter && currentProjectFilter !== '__unassigned__') {
+                const filterOpt = document.createElement('option');
+                filterOpt.disabled = true;
+                filterOpt.text = `— PROJECT: ${currentProjectFilter.toUpperCase()} —`;
+                filterOpt.value = '';
+                runSheetSelect.appendChild(filterOpt);
+            } else if (currentProjectFilter === '__unassigned__') {
+                const filterOpt = document.createElement('option');
+                filterOpt.disabled = true;
+                filterOpt.text = `— BASE WORKSPACE —`;
+                filterOpt.value = '';
+                runSheetSelect.appendChild(filterOpt);
+            }
 
             if (!sheets || sheets.length === 0) {
                 const opt = document.createElement('option');
@@ -2562,7 +2555,7 @@
                 return date.toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase();
             };
             const toTopic = (value) => (value || 'UNTITLED').toUpperCase().trim();
-            const toCollisionKey = (sheet) => `${toTopic(sheet.topic)}|${getDayKey(sheet.createdAt)}`;
+            const toCollisionKey = (sheet) => `${sheet.isEpic === 1 ? '1' : '0'}|${toTopic(sheet.topic)}|${getDayKey(sheet.createdAt)}`;
             sorted.forEach(sheet => {
                 const key = toCollisionKey(sheet);
                 collisionTotals.set(key, (collisionTotals.get(key) || 0) + 1);
@@ -2581,7 +2574,8 @@
                     collisionSeen.set(key, seen);
                     const total = collisionTotals.get(key) || 0;
                     const counterSuffix = total > 1 ? ` (${seen})` : '';
-                    opt.text = `${toTopic(sheet.topic)}${counterSuffix} (${getDisplayDate(sheet.createdAt)})`;
+                    const epicPrefix = sheet.isEpic === 1 ? '[EPIC] ' : '';
+                    opt.text = `${epicPrefix}${toTopic(sheet.topic)}${counterSuffix} (${getDisplayDate(sheet.createdAt)})`;
                     group.appendChild(opt);
                 }
                 runSheetSelect.appendChild(group);
@@ -2590,7 +2584,9 @@
             if (lastSelected && sheets.find(s => s.sessionId === lastSelected)) {
                 runSheetSelect.value = lastSelected;
             } else {
-                runSheetSelect.selectedIndex = 0;
+                // Skip the disabled filter-indicator option (index 0) when present,
+                // so the first actual plan is selected and action buttons stay enabled.
+                runSheetSelect.selectedIndex = currentProjectFilter ? 1 : 0;
             }
             updatePlanActionStates();
         }
@@ -2698,6 +2694,19 @@
 
 
 
+        function findTerminalByRole(terminals, role) {
+            if (!terminals) return null;
+            const entries = Object.entries(terminals);
+            // Prefer worktree terminals (worktreePath set) over main workspace terminals
+            const worktreeMatch = entries.find(([, info]) =>
+                info?.role === role && info?.worktreePath
+            );
+            if (worktreeMatch) return worktreeMatch[0];
+            // Fall back to any terminal with matching role
+            const anyMatch = entries.find(([, info]) => info?.role === role);
+            return anyMatch ? anyMatch[0] : null;
+        }
+
         function createAgentRow(label, roleId, actionLabel, findTerminalFn, hideLocate, explicitTermName) {
             const container = document.createElement('div');
             container.className = 'agent-row';
@@ -2706,7 +2715,8 @@
             const dispatchInfo = lastDispatchReadiness && roleId ? lastDispatchReadiness[roleId] : null;
             const dispatchState = dispatchInfo && dispatchInfo.state ? dispatchInfo.state : null;
             const routedTermName = (dispatchInfo && dispatchInfo.terminalName) ? dispatchInfo.terminalName : null;
-            const resolvedTermName = termName || routedTermName;
+            const isWorktreeRoute = dispatchInfo && dispatchInfo.isWorktreeTerminal;
+            const resolvedTermName = (isWorktreeRoute && routedTermName) ? routedTermName : (termName || routedTermName);
             const termData = resolvedTermName ? lastTerminals[resolvedTermName] : null;
 
             // Status Logic
@@ -2761,7 +2771,9 @@
             name.className = 'agent-name';
             if (roleId !== 'jules') {
                 let suffix = '';
-                if (dispatchInfo && dispatchInfo.isWorktreeTerminal) {
+                const isWtTerm = (dispatchInfo && dispatchInfo.isWorktreeTerminal) ||
+                    (resolvedTermName && lastTerminals[resolvedTermName]?.worktreePath);
+                if (isWtTerm) {
                     suffix = ' <span style="font-size:9px; opacity:0.6;">(worktree)</span>';
                 }
 
@@ -2944,7 +2956,7 @@
             if (dispatchState === 'recoverable' || dispatchState === 'not_ready') return false;
             // Fallback: check terminal heartbeat for agents with no dispatch info
             const HEARTBEAT_THRESHOLD_MS = 120_000;
-            const matchedTermName = Object.keys(lastTerminals).find(key => lastTerminals[key]?.role === roleId);
+            const matchedTermName = findTerminalByRole(lastTerminals, roleId);
             if (!matchedTermName) return false;
             const termData = lastTerminals[matchedTermName];
             if (!termData) return false;
@@ -3047,7 +3059,7 @@
             if (va.planner !== false) {
                 agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
                     'IMPROVE PLAN',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner'),
+                    terminals => findTerminalByRole(terminals, 'planner'),
                     false, // hideLocate
                     lastPlannerTarget || undefined
                 ));
@@ -3057,7 +3069,7 @@
             if (va.lead !== false) {
                 agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
                     'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
+                    terminals => findTerminalByRole(terminals, 'lead')
                 ));
             }
 
@@ -3065,7 +3077,7 @@
             if (va.coder !== false) {
                 agentListStandard.appendChild(createAgentRow('CODER', 'coder',
                     'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
+                    terminals => findTerminalByRole(terminals, 'coder')
                 ));
             }
 
@@ -3073,7 +3085,7 @@
             if (va.intern !== false) {
                 agentListStandard.appendChild(createAgentRow('INTERN', 'intern',
                     'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'intern')
+                    terminals => findTerminalByRole(terminals, 'intern')
                 ));
             }
 
@@ -3081,14 +3093,14 @@
             if (va.reviewer !== false) {
                 agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
                     'REVIEW CODE',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'reviewer')
+                    terminals => findTerminalByRole(terminals, 'reviewer')
                 ));
             }
 
             if (va.tester !== false) {
                 agentListStandard.appendChild(createAgentRow('ACCEPTANCE TESTER', 'tester',
                     'TEST REQUIREMENTS',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'tester')
+                    terminals => findTerminalByRole(terminals, 'tester')
                 ));
             }
 
@@ -3115,7 +3127,7 @@
                     customAgent.name.toUpperCase(),
                     customAgent.role,
                     'EXECUTE TASK',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === customAgent.role)
+                    terminals => findTerminalByRole(terminals, customAgent.role)
                 ));
             }
 
@@ -3123,7 +3135,7 @@
             if (va.jules !== false) {
                 agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
                     'START CLOUD CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
+                    terminals => findTerminalByRole(terminals, 'jules'),
                     true
                 ));
             }
@@ -3167,7 +3179,7 @@
             // Intro
             const intro = document.createElement('div');
             intro.style.cssText = 'padding:6px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); line-height:1.5;';
-            intro.innerText = 'The Airlock allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs. Alternatively, use CREATE to open a new ticket in edit mode.';
+            intro.innerText = 'The Airlock allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs. Alternatively, use NEW to open a new ticket in edit mode.';
             container.appendChild(intro);
 
             // Status line (used for bundle export feedback)
@@ -3338,7 +3350,7 @@ Work through all plans in the list, using the marker format above.`;
             const container = document.createElement('div');
             container.className = 'agent-row';
 
-            const termName = Object.keys(lastTerminals).find(key => lastTerminals[key].role === 'analyst');
+            const termName = findTerminalByRole(lastTerminals, 'analyst');
             const termData = termName ? lastTerminals[termName] : null;
 
             let isReady = false;

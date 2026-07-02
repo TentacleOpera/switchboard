@@ -15,8 +15,11 @@ import {
     KanbanColumnDefinition,
     parseCustomAgents,
     parseCustomKanbanColumns,
-    parseDefaultPromptOverrides
+    parseDefaultPromptOverrides,
+    BUILT_IN_AGENT_LABELS,
+    BuiltInAgentRole
 } from './agentConfig';
+import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
@@ -207,7 +210,12 @@ export class KanbanProvider implements vscode.Disposable {
         return !!this._planningPanelProvider;
     }
 
-    public async activatePlanInProjectPanel(planFile: string, workspaceRoot: string, autoEdit?: boolean): Promise<void> {
+    public async activatePlanInProjectPanel(
+        planFile: string,
+        workspaceRoot: string,
+        autoEdit?: boolean,
+        sessionId?: string
+    ): Promise<void> {
         if (!this._planningPanelProvider) { return; }
         if (!this._planningPanelProvider.hasProjectPanel()) {
             await this._planningPanelProvider.openProject();
@@ -223,7 +231,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._planningPanelProvider.postMessageToProjectWebview({
             type: 'activateKanbanTabAndSelectPlan',
             planId: '',
-            sessionId: '',
+            sessionId: sessionId || '',
             planFile: planFile || '',
             workspaceRoot: effectiveRoot,
             autoEdit: autoEdit === true
@@ -331,9 +339,20 @@ export class KanbanProvider implements vscode.Disposable {
             if (persistedFilter !== null) {
                 this._projectFilter = persistedFilter;
                 this._projectFilterNeedsValidation = true;
-                // The DB `kanban.activeProjectFilter` row that the watcher reads was already
-                // written by setProjectFilter the last time the user picked this project and
-                // persists across reloads, so no write is needed here on restore.
+                // Sync the restored project filter to the DB config so the plan watcher
+                // sees it immediately (before the first _refreshBoardImpl runs). The DB
+                // config can diverge from workspaceState after a workspace switch that
+                // called setProjectFilter(UNASSIGNED) — that writes '' to the DB config
+                // but the debounced workspaceState write may not have fired, or a later
+                // reload restores a non-empty filter from workspaceState while the DB
+                // config stays empty. _refreshBoardImpl also syncs this, but the watcher
+                // can import a plan before the first refresh completes.
+                const activeName = (persistedFilter && persistedFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+                    ? persistedFilter
+                    : '';
+                void this._getKanbanDb(this._currentWorkspaceRoot)
+                    .setConfig('kanban.activeProjectFilter', activeName)
+                    .catch(e => console.warn('[KanbanProvider] constructor: failed to sync restored project filter to DB config:', e));
             }
         }
         this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
@@ -361,6 +380,10 @@ export class KanbanProvider implements vscode.Disposable {
                 if (e.affectsConfiguration('switchboard.theme.name')) {
                     const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                     this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                }
+                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                    this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                 }
             })
         );
@@ -767,12 +790,25 @@ export class KanbanProvider implements vscode.Disposable {
         return this._currentWorkspaceRoot;
     }
 
-    public async copyGeneralChatPrompt(workspaceRootInput?: string): Promise<string | null> {
+    public async copyGeneralChatPrompt(workspaceRootInput?: string, projectName?: string): Promise<string | null> {
         const workspaceRoot = this._resolveWorkspaceRoot(workspaceRootInput);
         if (!workspaceRoot) { return null; }
 
+        let resolvedProject = projectName;
+        if (!resolvedProject) {
+            const db = this._getKanbanDb(workspaceRoot);
+            const activeProject = await db.getConfig('kanban.activeProjectFilter');
+            if (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                resolvedProject = activeProject;
+            }
+        }
+
         const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
-        const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot, chatPlanDestinations });
+        const prompt = buildKanbanBatchPrompt('chat', [], { 
+            workspaceRoot, 
+            chatPlanDestinations,
+            manifestProject: resolvedProject 
+        });
         await vscode.env.clipboard.writeText(prompt);
         return prompt;
     }
@@ -1421,6 +1457,12 @@ export class KanbanProvider implements vscode.Disposable {
             if (!snapshotUnchanged) {
                 this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, epicWorktrees });
             }
+
+            // Hydrate worktree state (indicator + WORKTREES tab) on every board refresh so it
+            // survives a window reload without requiring the user to click into the WORKTREES tab.
+            // _sendWorktreeConfig no-ops when the DB/panel aren't ready, and the webview handler
+            // is idempotent, so this is safe to run unconditionally here.
+            await this._sendWorktreeConfig(resolvedWorkspaceRoot);
 
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
@@ -2527,6 +2569,21 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 }
                 const projectFilter = this._projectFilter;
                 const repoScope = this._repoScopeFilter;
+
+                // Sync the in-memory project filter to the DB config on every refresh so
+                // the plan watcher (GlobalPlanWatcherService._handlePlanFile) reads the
+                // currently-displayed project when stamping newly-imported plans. Without
+                // this, the DB config can diverge from workspaceState after a reload
+                // (the constructor restores _projectFilter from workspaceState but does
+                // NOT write it back to the DB config), leaving the config stale/empty
+                // while the board shows a project selected — every new plan then lands
+                // with project='' and project_id=NULL.
+                const activeProjectName = (projectFilter && projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+                    ? projectFilter
+                    : '';
+                void db.setConfig('kanban.activeProjectFilter', activeProjectName)
+                    .catch(e => console.warn('[KanbanProvider] _refreshBoardImpl: failed to sync active project to DB config:', e));
+
                 const dbRows = (projectFilter !== null || repoScope)
                     ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
                     : await db.getBoard(workspaceId);
@@ -3574,13 +3631,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             remoteControlActive: await this._isRemoteActiveForDispatch(workspaceRoot, plans),
         };
 
-        // Per-project PRD (Decision #1): a SINGLE project-level toggle injects the
-        // active project's PRD into EVERY dispatched prompt via the shared
-        // dispatchPrefixCore (all roles) — it is NOT a per-role add-on. Keyed on the
-        // active project NAME via getDisplayedProjectForRoot, which already returns
-        // null for "No Project"/unfiltered boards and for dispatches targeting a
-        // different workspace than the one on screen (race-tolerant). Resolved here,
-        // before the role branches, so the tester reconciliation below can see it.
+        // Per-project PRD (project-context toggle): resolves PRD links from the
+        // PLANS' OWN project fields (not the board filter) and injects them into
+        // the shared dispatchPrefixCore (all roles) — it is NOT a per-role add-on.
+        // Distinct projects across the batch are collected, each project's PRD
+        // resolved link-only, and the combined prdReferences folded into the prefix.
+        // Resolved here, before the role branches, so the tester reconciliation
+        // below can see it.
         if (await this._resolveProjectContextEnabled(workspaceRoot)) {
             const distinctProjects = [...new Set(
                 plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
@@ -3622,10 +3679,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
         } else if (role === 'tester') {
             // The acceptance tester needs an authoritative requirements baseline. The
-            // active project's PRD (resolved above into resolvedOptions.prdEnabled and
-            // injected via the shared prefix) satisfies this; the legacy global design
-            // doc remains a back-compat fallback. Throw ONLY when neither exists.
-            if (!resolvedOptions.prdEnabled) {
+            // active project's PRD (resolved above into resolvedOptions.prdReferences
+            // and injected via the shared prefix) satisfies this; the legacy global
+            // design doc remains a back-compat fallback. Throw ONLY when neither exists.
+            if (!resolvedOptions.prdReferences || resolvedOptions.prdReferences.length === 0) {
                 throw new Error('Acceptance review requires a product requirements baseline: author a PRD for the active project (Projects tab). The workspace constitution, if present, will be enforced as supplementary invariants.');
             }
 
@@ -5183,7 +5240,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
-    public setProjectFilter(filter: string | null): void {
+    public async setProjectFilter(filter: string | null): Promise<void> {
         this._projectFilter = filter;
         if (this._currentWorkspaceRoot) {
             const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
@@ -5192,12 +5249,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // is called on every project-dropdown switch, via the setProjectFilter /
             // selectWorkspace message handlers). The plan watcher reads this key when it
             // imports a new plan and stamps it — exactly like the manual Assign button.
-            // The row persists in the DB across reloads, so it also covers the case where a
-            // plan is created after a reload without re-touching the dropdown.
+            // _refreshBoardImpl also writes this key on every board refresh, and the
+            // constructor writes it on restore from workspaceState, so the watcher always
+            // sees the current value even after a reload.
             const activeProjectName = (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? filter : '';
-            void this._getKanbanDb(this._currentWorkspaceRoot)
-                .setConfig('kanban.activeProjectFilter', activeProjectName)
-                .catch(e => console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e));
+            try {
+                await this._getKanbanDb(this._currentWorkspaceRoot)
+                    .setConfig('kanban.activeProjectFilter', activeProjectName);
+            } catch (e) {
+                console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e);
+            }
 
             if (this._projectFilterSaveTimeout) {
                 clearTimeout(this._projectFilterSaveTimeout);
@@ -5738,9 +5799,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);
                     // Only reset project filter if not explicitly provided
                     if (msg.project === null || msg.project === undefined) {
-                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
+                        await this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
                     } else {
-                        this.setProjectFilter(msg.project); // Preserve selected project
+                        await this.setProjectFilter(msg.project); // Preserve selected project
                     }
 
                     // Determine if the selected workspace is a child workspace
@@ -5792,7 +5853,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // wrong project. setProjectFilter writes the kanban.activeProjectFilter config
                 // key the watcher reads. The project now exists (newly created, or already
                 // existed on a duplicate), so making it active is correct either way.
-                this.setProjectFilter(projectName);
+                await this.setProjectFilter(projectName);
 
                 await this._refreshBoard(workspaceRoot);
 
@@ -5858,7 +5919,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
                 if (workspaceRoot && typeof msg.projectName === 'string') {
                     if (this._projectFilter === msg.projectName) {
-                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+                        await this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
                     }
                     const workspaceId = await this._readWorkspaceId(workspaceRoot);
                     if (workspaceId) {
@@ -5879,8 +5940,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'setProjectFilter': {
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
-                    this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+                    await this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
                     await this._refreshBoard(workspaceRoot);
+                    this._taskViewerProvider?.refreshUI(workspaceRoot);
                 }
                 break;
             }
@@ -6003,6 +6065,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 const canDispatch = workspaceRoot ? await this._canAssignRole(workspaceRoot, role) : false;
+                // Persist the column move FIRST — decouples the card position from
+                // dispatch success. The card stays where the user dropped it regardless
+                // of whether the agent dispatch succeeds. If dispatch fails, the
+                // prompt-fallback below copies the prompt and glows the copy-prompt button.
+                if (workspaceRoot) {
+                    await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
+                }
                 if (dispatchSpec?.source === 'custom-user' && workspaceRoot && this._taskViewerProvider) {
                     const ppMode = this._autobanState?.pairProgrammingMode ?? 'off';
                     const leadUsesIde = ppMode === 'ide-cli' || ppMode === 'ide-ide';
@@ -6039,6 +6108,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                            }
+                        }
+                        if (!dispatched) {
+                            // Dispatch failed — card is already persisted in target column
+                            // via moveCardToColumn above. Generate the prompt, copy it to the
+                            // clipboard, and signal the webview to glow the copy-prompt button
+                            // orange so the user can paste manually.
+                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                            if (card && workspaceRoot) {
+                                const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                                await vscode.env.clipboard.writeText(prompt);
+                                this._panel?.webview.postMessage({
+                                    type: 'dispatchFailedPromptReady',
+                                    planId: card.planId || sessionId,
+                                    sessionId: card.sessionId,
+                                    targetColumn
+                                });
                             }
                         }
                     }
@@ -6100,6 +6186,38 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 }
                             }
                         }
+                        if (!dispatched && workspaceRoot) {
+                            // Dispatch failed — card is already persisted in target column
+                            // via moveCardToColumn above. Generate the prompt, copy it to the
+                            // clipboard, and signal the webview to glow the copy-prompt button.
+                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                            if (card) {
+                                const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                                await vscode.env.clipboard.writeText(prompt);
+                                this._panel?.webview.postMessage({
+                                    type: 'dispatchFailedPromptReady',
+                                    planId: card.planId || sessionId,
+                                    sessionId: card.sessionId,
+                                    targetColumn
+                                });
+                            }
+                        }
+                    }
+                }
+                if (!canDispatch && workspaceRoot) {
+                    // No agent available to dispatch — card is already persisted in target
+                    // column via moveCardToColumn above. Generate the prompt, copy it to the
+                    // clipboard, and signal the webview to glow the copy-prompt button.
+                    const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                    if (card) {
+                        const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                        await vscode.env.clipboard.writeText(prompt);
+                        this._panel?.webview.postMessage({
+                            type: 'dispatchFailedPromptReady',
+                            planId: card.planId || sessionId,
+                            sessionId: card.sessionId,
+                            targetColumn
+                        });
                     }
                 }
                 // Push authoritative DB state back to the board (~100ms).
@@ -6946,8 +7064,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }));
                 }
 
+                // Resolve board's active project filter at generation time
+                const db = this._getKanbanDb(workspaceRoot);
+                const activeProject = await db.getConfig('kanban.activeProjectFilter');
+                const manifestProject = (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? activeProject : undefined;
+
                 const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
-                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot, chatPlanDestinations });
+                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot, chatPlanDestinations, manifestProject });
                 await vscode.env.clipboard.writeText(prompt);
                 const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
@@ -7905,6 +8028,37 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 await vscode.commands.executeCommand('switchboard.refreshUI');
                 break;
             }
+            case 'exportAgentAsSkill': {
+                const agentId = msg.agentId;
+                const role = msg.role; // for built-in agents
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                try {
+                    if (!workspaceRoot) {
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Workspace root not resolved' });
+                        break;
+                    }
+                    if (agentId) {
+                        const customAgents = await this._getCustomAgents(workspaceRoot);
+                        const agent = customAgents.find(a => a.id === agentId);
+                        if (!agent) {
+                            this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Agent not found' });
+                            break;
+                        }
+                        const result = await AgentSkillExporter.exportCustomAgent(agent, workspaceRoot);
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', ...result });
+                    } else if (role) {
+                        const roleConfig: any = this._getRoleConfig(role);
+                        const label = BUILT_IN_AGENT_LABELS[role as BuiltInAgentRole] || role;
+                        const result = await AgentSkillExporter.exportBuiltinAgent(role as BuiltInAgentRole, label, roleConfig, workspaceRoot);
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', ...result });
+                    } else {
+                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Missing agentId or role' });
+                    }
+                } catch (e: any) {
+                    this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: e.message || String(e) });
+                }
+                break;
+            }
             case 'saveCustomAgent': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.agent || typeof msg.agent !== 'object') {
@@ -8298,6 +8452,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     break;
                 }
 
+                if (this._taskViewerProvider && wtPath) {
+                    try { await this._taskViewerProvider.closeWorktreeTerminals(wtPath); }
+                    catch (e) { console.warn('[KanbanProvider] mergeWorktree: terminal cleanup failed (continuing):', e); }
+                }
+
                 try {
                     const execFileAsync = promisify(cp.execFile);
                     await execFileAsync('git', ['-C', workspaceRoot, 'merge', branch], { timeout: 30000 });
@@ -8316,6 +8475,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !await db.ensureReady()) break;
+                if (this._taskViewerProvider && wtPath) {
+                    try { await this._taskViewerProvider.closeWorktreeTerminals(wtPath); }
+                    catch (e) { console.warn('[KanbanProvider] abandonWorktree: terminal cleanup failed (continuing):', e); }
+                }
                 try {
                     const execFileAsync = promisify(cp.execFile);
                     if (wtPath && fs.existsSync(wtPath)) {
@@ -8465,21 +8628,23 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'suggestEpics': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
+                const projectFilter = (msg.projectFilter === undefined ? null : msg.projectFilter) as string | null;
                 // Pre-coding columns are the only place loose plans worth grouping live.
                 // Exclude existing epics and already-assigned subtasks.
                 const preCodingColumns = ['CREATED', 'PLAN REVIEWED'];
                 const candidateCards = this._lastCards.filter(card =>
                     card.workspaceRoot === workspaceRoot &&
                     preCodingColumns.includes(card.column) &&
-                    !card.isEpic && !card.epicId
+                    !card.isEpic && !card.epicId &&
+                    this._cardMatchesProjectFilter(card, projectFilter)
                 );
                 if (candidateCards.length === 0) {
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into epics.', isError: true });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into epics (in the current project scope).', isError: true });
                     break;
                 }
-                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot);
+                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot, projectFilter);
                 await vscode.env.clipboard.writeText(prompt);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s)). Paste into chat.`, isError: false });
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
                 break;
             }
             case 'removeSubtaskFromEpic': {
@@ -8558,6 +8723,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 break;
             }
         }
+    }
+
+    private _cardMatchesProjectFilter(card: KanbanCard, projectFilter: string | null): boolean {
+        if (projectFilter === null || projectFilter === '') return true; // no filter → all
+        const cardProject = card.project || '';
+        if (projectFilter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+            return cardProject === ''; // unassigned only
+        }
+        return cardProject === projectFilter; // specific project
     }
 
     private _parseVerificationSteps(content: string): string[] {
@@ -8887,6 +9061,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             }
             for (const created of toRemove) {
                 try {
+                    if (this._taskViewerProvider && created.path) {
+                        try { await this._taskViewerProvider.closeWorktreeTerminals(created.path); }
+                        catch (e) { console.warn(`[KanbanProvider] _provisionHighLowTierWorktrees rollback: terminal cleanup failed for ${created.branch} (continuing):`, e); }
+                    }
                     if (fs.existsSync(created.path)) {
                         await execFileAsync('git', ['worktree', 'remove', '--force', created.path], { cwd: workspaceRoot });
                     }
@@ -8960,6 +9138,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
      */
     private async _removeWorktreeRow(workspaceRoot: string, db: KanbanDatabase, wt: WorktreeRow, finalStatus: 'merged' | 'abandoned'): Promise<void> {
         const execFileAsync = promisify(cp.execFile);
+        if (this._taskViewerProvider && wt.path) {
+            try { await this._taskViewerProvider.closeWorktreeTerminals(wt.path); }
+            catch (e) { console.warn(`[KanbanProvider] _removeWorktreeRow: terminal cleanup failed for ${wt.branch} (continuing):`, e); }
+        }
         try {
             if (wt.path && fs.existsSync(wt.path)) {
                 await execFileAsync('git', ['worktree', 'remove', '--force', wt.path], { cwd: workspaceRoot });
@@ -9654,7 +9836,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
      * agent can also load the skill directly by description without clicking the button.
      * Falls back to an embedded copy if the skill file is missing (older install / dev).
      */
-    private _buildSuggestEpicsPrompt(workspaceRoot: string): string {
+    private _buildSuggestEpicsPrompt(workspaceRoot: string, projectFilter: string | null = null): string {
         const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'group-into-epics', 'SKILL.md');
         let skillBody = '';
         try {
@@ -9690,6 +9872,9 @@ Note: epic creation updates the Switchboard board and writes a .switchboard/epic
         // Strip YAML frontmatter (the skill description is for model-invocation discovery,
         // not part of the pasted procedure) and substitute the workspace root placeholder.
         const bodyWithoutFrontmatter = skillBody.replace(/^---\n[\s\S]*?\n---\n/, '');
-        return bodyWithoutFrontmatter.replace(/\{\{WORKSPACE_ROOT\}\}/g, workspaceRoot);
+        const activeProject = projectFilter ?? '';
+        return bodyWithoutFrontmatter
+            .replace(/\{\{WORKSPACE_ROOT\}\}/g, workspaceRoot)
+            .replace(/\{\{ACTIVE_PROJECT_FILTER\}\}/g, activeProject);
     }
 }

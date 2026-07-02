@@ -180,6 +180,14 @@ export class DesignPanelProvider implements vscode.Disposable {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
                     }
+                    if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+                        this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                    }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
                         this._stopExternalFilePoll();
                         if (this._panel?.visible && this._isPolledTab(this._activeTab)) {
@@ -277,6 +285,14 @@ export class DesignPanelProvider implements vscode.Disposable {
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+                        this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
                         this._stopExternalFilePoll();
@@ -1008,7 +1024,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         return { valid: false, apiKey: finalKey };
     }
 
-    // The kanban "Design Doc Reference" planner add-on (roleConfig_planner.addons.designSystemDoc)
+    // The kanban "Project PRD Reference" planner add-on (roleConfig_planner.addons.designSystemDoc)
     // gates whether planner.designSystemDocLink is injected into agent prompts. Setting/unsetting
     // the active design doc here must flip that add-on so the kanban checkbox stays in sync.
     private async _setPlannerDesignSystemAddon(enabled: boolean): Promise<void> {

@@ -507,9 +507,10 @@ export async function activate(context: vscode.ExtensionContext) {
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
 
     // NOTE: the watcher stamps a newly-imported plan with the board's active project by
-    // reading the `kanban.activeProjectFilter` config key the board persists into each
-    // workspace's DB (KanbanProvider._refreshBoardImpl). No resolver wiring is needed —
-    // the DB is the single source of truth, read back from the same DB the plan imports into.
+    // reading the `kanban.activeProjectFilter` config key the board syncs into each
+    // workspace's DB on every refresh (KanbanProvider._refreshBoardImpl) and on
+    // constructor restore from workspaceState. No resolver wiring is needed — the DB is
+    // the single source of truth, read back from the same DB the plan imports into.
 
     // Let the watcher re-derive an epic's kanban_column from its subtasks after
     // every epic-file import, self-healing the clobber where insertFileDerivedPlan
@@ -1044,13 +1045,13 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importPlansDisposable);
 
-    const copyChatPromptDisposable = vscode.commands.registerCommand('switchboard.copyChatPrompt', async (targetWorkspaceRoot?: string) => {
+    const copyChatPromptDisposable = vscode.commands.registerCommand('switchboard.copyChatPrompt', async (targetWorkspaceRoot?: string, projectName?: string) => {
         const workspaceRoot = targetWorkspaceRoot || kanbanProvider?.getCurrentWorkspaceRoot() || undefined;
         if (!kanbanProvider) {
             vscode.window.showErrorMessage('Switchboard extension not fully initialized.');
             return;
         }
-        const prompt = await kanbanProvider.copyGeneralChatPrompt(workspaceRoot);
+        const prompt = await kanbanProvider.copyGeneralChatPrompt(workspaceRoot, projectName);
         if (!prompt) {
             vscode.window.showWarningMessage('No active workspace selected or found.');
             return;
@@ -1229,7 +1230,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Helper commands for Kanban ↔ sidebar delegation
     const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride } as any);
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 

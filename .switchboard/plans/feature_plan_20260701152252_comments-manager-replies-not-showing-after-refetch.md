@@ -1,5 +1,7 @@
 # Comments Manager in Tickets Tab Does Not Show Replies After Refetch
 
+**Plan ID:** a2b7c8d9-1e2f-3a4b-5c6d-7e8f9a0b1c2d
+
 ## Goal
 
 ### Problem
@@ -7,50 +9,74 @@ The comments manager in the Tickets tab of `planning.html` does not show replies
 
 ### Background
 The comments manager supports threaded comments for Linear and ClickUp tickets. When a user posts a reply:
-1. The frontend optimistically inserts the reply into the UI (`optimisticInsertComment`)
+1. The frontend optimistically inserts the reply into the UI (`optimisticInsertComment` at `planning.js:842`)
 2. The frontend sends a `postTicketReply` message to the backend
 3. The backend posts the reply to the provider API (Linear/ClickUp)
-4. The backend **immediately** refetches all comments via `loadTicketComments`
+4. The backend **immediately** refetches all comments via `loadTicketComments` (`TaskViewerProvider.ts:20054`)
 5. The backend sends `ticketCommentsLoaded` back to the frontend
-6. The frontend **replaces all threads** with the refetched data, discarding the optimistic reply
+6. The frontend **replaces all threads** with the refetched data, discarding the optimistic reply (`planning.js:4776`: `_cmThreads = msg.threads || []`)
 
 ### Root Cause
 **API propagation delay + optimistic insert overwrite.** The refetch at step 4 happens immediately after the reply is posted. Linear and ClickUp's backends have eventual consistency — the newly posted reply may not yet be indexed when the fresh query executes. The refetch returns threads without the new reply, and the `ticketCommentsLoaded` handler at `planning.js:4776` replaces `_cmThreads` entirely (`_cmThreads = msg.threads || []`), discarding the optimistic insert.
 
 The same issue affects the manual refresh button: if the user clicks refresh before the API has propagated the reply, the reply vanishes.
 
+### Implementation Note: `_optimistic` Flag
+The `_optimistic: true` flag is set by the **callers** before calling `optimisticInsertComment`, not by `optimisticInsertComment` itself:
+- Reply insertion (`planning.js:827`): sets `_optimistic: true` on the reply object before calling `optimisticInsertComment`
+- Top-level comment insertion (`planning.js:7993`): sets `_optimistic: true` on the thread object before calling `optimisticInsertComment`
+
+The merge logic depends on this flag being present on optimistic entries. Backend data never includes `_optimistic`. This is correct — the flag distinguishes frontend-only entries from API-confirmed entries.
+
 ## Metadata
-- **Tags**: `planning`, `comments`, `tickets`, `linear`, `clickup`, `bug`
-- **Complexity**: 5
+- **Tags**: bugfix, ui, reliability
+- **Complexity**: 5/10
+
+## User Review Required
+None. The fix is a two-pronged approach (propagation delay + optimistic merge) that preserves user-posted replies across refetches. The 1500ms delay is a probabilistic mitigation — the merge logic is the deterministic guarantee.
 
 ## Complexity Audit
-**Routine with a twist.** The fix involves two coordinated changes:
-1. **Frontend**: Preserve optimistic replies across refetch by merging instead of replacing — this is straightforward state-merging logic.
-2. **Backend**: Add a short delay before refetching to allow API propagation — a one-line change but introduces a latency tradeoff.
 
-The twist is that optimistic replies need to be reconciled with real data once the API eventually returns them. We need to match optimistic entries to real entries by content/timestamp and replace them, rather than showing duplicates. This is moderately complex but well-bounded.
+### Routine
+- Adding a 1500ms `setTimeout` delay before refetch in `postTicketReply` (one-line change)
+- The `ticketCommentsLoaded` handler change from replacement to merge (small refactor of existing handler)
+
+### Complex / Risky
+- `mergeOptimisticReplies` helper: collecting optimistic entries, matching by body content, preserving unmatched entries, replacing matched ones — moderately complex state-merging logic
+- Body-matching by exact string comparison is fragile (markdown normalization, mention syntax differences between user input and API response) — acceptable for v1, documented as a known limitation
+- Interaction between the stale-refetch guard (`_pendingRefetchTicketId` / `_refetchStale`) and the new merge logic — must coexist without double-triggering
 
 ## Edge-Case & Dependency Audit
-- **Edge case: User posts multiple replies quickly.** Each optimistic insert must be preserved independently. The merge logic must handle multiple pending optimistic replies.
-- **Edge case: API never propagates the reply.** The optimistic reply stays visible indefinitely. This is acceptable — it's better than the reply vanishing. A subsequent manual refresh will eventually pick it up.
-- **Edge case: Optimistic reply matches a real reply by content.** When the API does return the reply, we should replace the optimistic entry with the real one (which has a proper ID, author info, etc.) rather than showing both.
-- **Edge case: Reply posting fails.** The existing `rollbackOptimisticComment` function handles this — no change needed.
-- **Dependency: `_pendingRefetchTicketId` / `_refetchStale` guard.** The existing stale-refetch guard at `planning.js:4779-4787` must continue to work alongside the new merge logic.
-- **Dependency: Manual refresh button** at `planning.js:8001-8008` also triggers `loadCommentThreads`, which sends `loadTicketComments` and receives `ticketCommentsLoaded`. The merge logic must apply to manual refreshes too — but in this case there are no optimistic inserts to preserve (unless the user refreshes right after posting).
+- **Race Conditions**: If an optimistic insert arrives AFTER the refetch response (not during), the stale-refetch guard doesn't catch it — the optimistic data is lost. The merge logic fixes this by preserving optimistic entries across any refetch. The merge is placed BEFORE the guard check in the handler, which is correct: merge first, then check if re-fetch is needed.
+- **Security**: No new surfaces. Reply posting uses existing auth.
+- **Side Effects**: The 1500ms delay adds latency to the refetch cycle. This is acceptable — the user sees the optimistic reply immediately; the delay only affects when the "confirmed" data arrives.
+- **Dependencies & Conflicts**: The existing stale-refetch guard at `planning.js:4779-4787` must continue to work alongside the new merge logic. The manual refresh button at `planning.js:8001-8008` also triggers `loadCommentThreads` — the merge logic applies to manual refreshes too (no optimistic inserts to preserve unless user refreshes right after posting).
+- **Edge case: User posts multiple replies quickly.** Each optimistic insert must be preserved independently. The merge logic handles multiple pending optimistic replies.
+- **Edge case: API never propagates the reply.** The optimistic reply stays visible indefinitely. This is acceptable — better than the reply vanishing. A subsequent manual refresh will eventually pick it up.
+- **Edge case: Optimistic reply matches a real reply by content.** When the API does return the reply, the optimistic entry is replaced by the real one (which has a proper ID, author info). Body-matching by trimmed lowercase comparison may fail if the API normalizes content differently — documented as a known limitation.
+- **Edge case: Reply posting fails.** The existing `rollbackOptimisticComment` function (`planning.js:864`) handles this — no change needed.
 - **No migration needed.** This is unreleased dev behavior — no shipped state to migrate.
+
+## Dependencies
+- None. This plan is self-contained within `TaskViewerProvider.ts` and `planning.js`. No dependency on other plans in this epic.
+
+## Adversarial Synthesis
+Key risks: (1) the 1500ms delay is a probabilistic mitigation, not a guarantee — Linear/ClickUp propagation windows vary; the merge logic is the real fix. (2) Body-matching by exact string comparison is fragile when the API normalizes content differently from user input. (3) The `_optimistic` flag is set by callers, not by `optimisticInsertComment` — the plan's original description was factually wrong but the merge logic still works because the flag IS present on optimistic entries. Mitigations: merge logic guarantees preservation regardless of delay; body-matching is acceptable for v1 with documented limitations; line numbers corrected to actual locations (20032-20063 for `postTicketReply`, 842 for `optimisticInsertComment`).
 
 ## Proposed Changes
 
 ### 1. `src/services/TaskViewerProvider.ts` — Add delay before refetch in `postTicketReply`
 
-**File**: `src/services/TaskViewerProvider.ts`, lines 19921-19952
+**File**: `src/services/TaskViewerProvider.ts`, lines 20032-20063
 
-Add a 1500ms delay before refetching to allow the provider API to propagate the new reply:
+Add a 1500ms delay before refetching to allow the provider API to propagate the new reply. This is a **probabilistic mitigation** — it reduces the window where optimistic and real entries coexist, making reconciliation simpler. The merge logic (Step 2) is the deterministic guarantee.
 
 ```typescript
 // Refetch threads and update JSON
 // Delay to allow provider API propagation — Linear/ClickUp have eventual consistency
 // and a fresh query immediately after posting may not include the new reply.
+// This is a probabilistic mitigation; the merge logic in the frontend is the
+// deterministic guarantee that preserves optimistic replies.
 await new Promise(resolve => setTimeout(resolve, 1500));
 const loadResult = await this.loadTicketComments(workspaceRoot, { provider, id });
 ```
@@ -90,7 +116,7 @@ case 'ticketCommentsLoaded':
 
 ### 3. `src/webview/planning.js` — Add `mergeOptimisticReplies` helper function
 
-Add a new helper function near `optimisticInsertComment` (around line 862):
+Add a new helper function near `optimisticInsertComment` (around line 842). Note: the `_optimistic` flag is set by the callers of `optimisticInsertComment` (lines 827, 7993), not by `optimisticInsertComment` itself. The merge logic relies on this flag being present on frontend-only entries.
 
 ```javascript
 /**
@@ -100,6 +126,10 @@ Add a new helper function near `optimisticInsertComment` (around line 862):
  *   by the real one (which has a proper ID and author info).
  * - For each optimistic reply with NO match in newThreads, it is preserved
  *   (appended to the corresponding thread's replies).
+ *
+ * Note: The _optimistic flag is set by the callers of optimisticInsertComment
+ * (lines 827, 7993), not by optimisticInsertComment itself. Backend data
+ * never includes _optimistic.
  */
 function mergeOptimisticReplies(oldThreads, newThreads) {
     if (!oldThreads || !oldThreads.length) return newThreads;
@@ -147,6 +177,8 @@ function mergeOptimisticReplies(oldThreads, newThreads) {
 /**
  * Check if a real (non-optimistic) entry matching the optimistic entry exists.
  * Match by body content (trimmed, case-insensitive) within the same thread.
+ * Known limitation: may fail if the API normalizes content differently from
+ * user input (e.g. mention syntax, markdown rendering).
  */
 function findMatchingRealEntry(threads, optimisticEntry, parentId) {
     if (parentId) {
@@ -168,10 +200,18 @@ function findMatchingRealEntry(threads, optimisticEntry, parentId) {
 ```
 
 ## Verification Plan
+
+### Automated Tests
+No automated tests run as part of this plan (session directive: skip tests). The test suite will be run separately by the user. Static check: `node -c src/webview/planning.js` for webview syntax.
+
+### Manual
 1. **Manual test with Linear**: Open a ticket in the Tickets tab, open the comments manager, post a reply to an existing comment. Verify the reply stays visible after the automatic refetch completes.
 2. **Manual test with ClickUp**: Same as above with a ClickUp ticket.
 3. **Manual refresh test**: Post a reply, then immediately click the refresh button. Verify the reply persists.
 4. **Multiple rapid replies**: Post two replies in quick succession. Verify both persist after refetch.
 5. **Reply replacement**: Post a reply, wait for the API to propagate (2-3 seconds), then click refresh. Verify the optimistic reply is replaced by the real reply (with proper author info and non-optimistic ID).
 6. **Failed reply rollback**: Disconnect network, post a reply, verify the optimistic reply is rolled back via the existing `rollbackOptimisticComment` path.
-7. **Compile check**: `npm run compile` — verify no TypeScript errors.
+
+> **Session directives:** No compilation step is run as part of verification (project assumed pre-compiled; `src/` is source of truth, `dist/` irrelevant). No automated tests run here.
+
+**Recommendation**: Complexity 5/10 → Send to Coder. Two-file change with merge logic and a delay, well-bounded scope.

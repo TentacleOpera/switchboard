@@ -483,6 +483,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'runSetup':
                     await vscode.commands.executeCommand('switchboard.setup');
+                    this._panel.webview.postMessage({ type: 'setupComplete' });
                     break;
 
                 case 'openDocs':
@@ -710,6 +711,28 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'colourKanbanIconsChanged',
                         enabled: message.enabled
                     });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'getUltracodeAnimationSetting':
+                    this._panel.webview.postMessage({
+                        type: 'ultracodeAnimationSetting',
+                        enabled: this._taskViewerProvider.handleGetUltracodeAnimationSetting()
+                    });
+                    break;
+                case 'setUltracodeAnimationSetting':
+                    await this._taskViewerProvider.handleSetUltracodeAnimationSetting(message.enabled);
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'getPixelFontSetting':
+                    this._panel.webview.postMessage({
+                        type: 'pixelFontSetting',
+                        enabled: this._taskViewerProvider.handleGetPixelFontSetting()
+                    });
+                    break;
+                case 'setPixelFontSetting':
+                    await this._taskViewerProvider.handleSetPixelFontSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;

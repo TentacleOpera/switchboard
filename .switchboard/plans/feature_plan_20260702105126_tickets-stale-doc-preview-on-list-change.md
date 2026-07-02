@@ -1,5 +1,7 @@
 # Tickets: stale doc preview when switching list/project
 
+**Plan ID:** d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
+
 ## Goal
 
 ### Problem
@@ -8,35 +10,58 @@ In the **Tickets tab** of `planning.html`, when the user switches to a new list 
 ### Background context
 The Tickets tab has two panes:
 - **Sidebar** — the ticket list (`issuesContainer`), rendered by `renderTicketsLinearList()` / `renderTicketsClickUpList()`.
-- **Doc preview area** — the detail pane (`markdown-preview-tickets` / `detailContent`), rendered by `renderTicketsLinearTaskDetail()` / `renderTicketsClickUpTaskDetail()`.
+- **Doc preview area** — the detail pane (`markdown-preview-tickets` / `detailContent`), rendered by `renderTicketsLinearTaskDetail()` (`:9161`) / `renderTicketsClickUpTaskDetail()` (`:9690`).
 
 The detail render functions only clear the preview when the module-level selection variable (`selectedLinearIssue` / `selectedClickUpIssue`) is `null`. If it is still set, they re-render the old ticket's description, status select, subtask nav, comments, and meta bar.
 
 ### Root cause
 The list/project **change handlers** update the list id and re-render the sidebar, but they **never null out the selection**:
 
-- Linear project picker `change` — <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/planning.js" lines="8023-8041" /> sets `linearProjectPickerValue` and calls `renderTicketsLinearList()`, but does not touch `selectedLinearIssue`.
-- ClickUp list-select `change` — <ref_snippet file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/planning.js" lines="9518-9545" /> sets `clickUpSelectedListId`, clears `clickUpProjectIssues = []`, and calls `loadClickUpProject()`, but does not touch `selectedClickUpIssue`.
-- ClickUp space-select and folder-select `change` handlers (lines ~9440–9516) likewise clear `clickUpProjectIssues` but leave `selectedClickUpIssue` set.
+- Linear project picker `change` — `src/webview/planning.js:8023-8041` sets `linearProjectPickerValue`, calls `renderTicketsLinearList()`, sends `refreshTicketsDelta` (lines 8033-8040), but does not touch `selectedLinearIssue`.
+- ClickUp list-select `change` — `src/webview/planning.js:9519-9545` sets `clickUpSelectedListId`, clears `clickUpProjectIssues = []`, and calls `loadClickUpProject()`, but does not touch `selectedClickUpIssue`.
+- ClickUp space-select (`:9426-9468`) and folder-select (`:9471-9516`) `change` handlers likewise clear `clickUpProjectIssues` but leave `selectedClickUpIssue` set.
 
-Because the selection survives the context switch, the subsequent `renderTicketsLinearPanel()` / `renderTicketsClickUpPanel()` call into the detail renderer with a non-null selection, so the old ticket stays on screen while the sidebar shows the new (possibly empty/loading) list.
+Because the selection survives the context switch, the subsequent `renderTicketsLinearPanel()` (`:8659-8660`, calls both list + detail) / `renderTicketsClickUpPanel()` call into the detail renderer with a non-null selection, so the old ticket stays on screen while the sidebar shows the new (possibly empty/loading) list.
 
 Note: the `linearProjectLoaded` / `clickupProjectLoaded` message handlers (lines 5059, 5250) also do not clear the selection — but those fire on **refresh** of the *same* list, where preserving the selection is desirable. The correct fix point is therefore the **user-initiated context-switch handlers**, not the load-complete handlers.
 
+### Correction (verified 2026-07-02)
+The original plan stated the Linear picker "only does `linearProjectPickerValue = e.target.value; renderTicketsLinearList(); saveTicketsState()`" — this was based on outdated code. The picker **already** sends `refreshTicketsDelta` with `projectId` (lines 8033-8040). However, the fix is still correct: the picker sends the import message but does not null `selectedLinearIssue`, so the stale preview persists until the import completes and a full panel render occurs.
+
 ## Metadata
-- **Tags:** `tickets`, `ui`, `planning-webview`, `bug`, `clickup`, `linear`
+- **Tags:** bugfix, ui
 - **Complexity:** 3/10
 
+## User Review Required
+None. The fix is a minimal state reset in existing event handlers — null the selection variable and call `_resetSidebarDrillDown()` on user-initiated context switches. No judgment calls needed.
+
 ## Complexity Audit
-**Routine.** The fix is a small, localized state reset in three existing event handlers. No new abstractions, no data-model changes, no backend involvement. The only risk is over-clearing (resetting selection on a refresh that should preserve it), which is avoided by scoping the change to the user-initiated `change` handlers and not the `*ProjectLoaded` handlers.
+
+### Routine
+- Nulling `selectedLinearIssue` / `selectedClickUpIssue` in change handlers (one line per handler)
+- Calling `_resetSidebarDrillDown()` in change handlers (one line per handler)
+- Calling `renderTicketsLinearTaskDetail()` explicitly in the Linear handler to clear preview immediately
+
+### Complex / Risky
+- None. The fix is small, localized, and reuses existing patterns. The only risk (over-clearing on refresh) is avoided by scoping to user-initiated `change` handlers only.
 
 ## Edge-Case & Dependency Audit
-- **Refresh vs. switch:** The Refresh button (line 8061) and the `*ProjectLoaded` handlers must continue to preserve the current selection (the ticket is still in the same list). The fix must NOT clear selection there.
-- **Drill-down mode:** Switching list while inside a subtask drill-down should also reset drill-down state. `_resetSidebarDrillDown()` already exists (line 9015) and is called by the status-filter handlers; the list/space/folder change handlers should call it too for consistency.
-- **Edit mode:** If `ticketsEditMode` is true when the list changes, the detail renderer early-returns. Clearing the selection variable is still safe and correct — the edit guard is in the render path, not the state path. Exiting edit mode on a context switch is out of scope for this fix (and is a separate concern), but we should clear the selection so the next render shows the empty state.
-- **Detail cache:** `linearIssueDetailCache` / `clickUpTaskDetailCache` are keyed by id and are not list-scoped, so they do not need clearing on list switch (a ticket re-selected from a new list can still hit the cache). No change required.
-- **Cross-provider:** Switching provider (Linear ↔ ClickUp) is handled elsewhere and already nulls both selections (lines 4695–4696). Not in scope.
-- **Empty list-select value:** When the user picks the blank/"none" option in the ClickUp list-select, `listId` is falsy and the handler takes the `else` branch (line 9542). The selection must still be cleared in this branch.
+- **Race Conditions**: None. The change handlers are synchronous user-initiated events.
+- **Security**: No new surfaces.
+- **Side Effects**: The Linear handler will render the detail pane twice — once immediately (to clear stale preview) and once when the `refreshTicketsDelta` import completes and triggers a full panel render. This is intentional and harmless: both renders show the empty state since `selectedLinearIssue` is null.
+- **Dependencies & Conflicts**: None. This plan is self-contained within `planning.js`.
+- **Refresh vs. switch:** The Refresh button (`:8061`) and the `*ProjectLoaded` handlers must continue to preserve the current selection (the ticket is still in the same list). The fix must NOT clear selection there.
+- **Drill-down mode:** Switching list while inside a subtask drill-down should also reset drill-down state. `_resetSidebarDrillDown()` already exists (`:9015`) and is called by the status-filter handlers; the list/space/folder change handlers should call it too for consistency.
+- **Edit mode:** If `ticketsEditMode` is true when the list changes, the detail renderer early-returns. Clearing the selection variable is still safe and correct — the edit guard is in the render path, not the state path. Exiting edit mode on a context switch is out of scope for this fix.
+- **Detail cache:** `linearIssueDetailCache` / `clickUpTaskDetailCache` are keyed by id and are not list-scoped, so they do not need clearing on list switch. No change required.
+- **Cross-provider:** Switching provider (Linear ↔ ClickUp) is handled elsewhere and already nulls both selections via `resetTicketsInMemoryState()` (`:10040-10077`, called at `:7671`). Not in scope.
+- **Empty list-select value:** When the user picks the blank/"none" option in the ClickUp list-select, `listId` is falsy and the handler takes the `else` branch (`:9542`). The selection must still be cleared in this branch.
+
+## Dependencies
+- None. This plan is self-contained within `src/webview/planning.js`. No dependency on other plans in this epic.
+
+## Adversarial Synthesis
+Key risks: (1) the original plan incorrectly stated the Linear picker doesn't send `refreshTicketsDelta` — it does (lines 8033-8040); the fix is still correct because the picker doesn't null the selection. (2) The explicit `renderTicketsLinearTaskDetail()` call causes a double-render (immediate clear + eventual panel render on import complete) — harmless and intentional. Mitigations: fix scoped to user-initiated `change` handlers only; refresh/load-complete paths untouched; `_resetSidebarDrillDown()` reused from existing status-filter handlers.
 
 ## Proposed Changes
 
@@ -67,9 +92,9 @@ projectPicker?.addEventListener('change', (e) => {
 });
 ```
 
-> `renderTicketsLinearTaskDetail()` is called explicitly here because `renderTicketsLinearList()` only re-renders the sidebar; the panel-level `renderTicketsLinearPanel()` (which calls both) is not invoked by this handler. Calling the detail renderer directly ensures the preview pane is cleared immediately rather than waiting for the next full panel render.
+> `renderTicketsLinearTaskDetail()` is called explicitly here because `renderTicketsLinearList()` only re-renders the sidebar; the panel-level `renderTicketsLinearPanel()` (which calls both) is not invoked by this handler. Calling the detail renderer directly ensures the preview pane is cleared immediately rather than waiting for the next full panel render. The `refreshTicketsDelta` message (lines 8033-8040) already exists in the current code — this change only adds the selection null + drill-down reset + explicit detail render.
 
-#### 2. ClickUp list-select `change` handler (line 9518)
+#### 2. ClickUp list-select `change` handler (line 9519)
 Clear the ClickUp selection and drill-down state in **both** branches.
 
 ```js
@@ -109,22 +134,27 @@ listSelect?.addEventListener('change', (e) => {
 
 > When `listId` is truthy, `loadClickUpProject()` calls `renderTicketsClickUpPanel()`, which invokes `renderTicketsClickUpTaskDetail()` — and since `selectedClickUpIssue` is now `null`, the detail pane clears. When `listId` is falsy, the explicit `renderTicketsClickUpPanel()` call does the same.
 
-#### 3. ClickUp space-select and folder-select `change` handlers (~lines 9440–9516)
+#### 3. ClickUp space-select and folder-select `change` handlers (~lines 9426-9516)
 Apply the same two-line reset (`selectedClickUpIssue = null; _resetSidebarDrillDown();`) at the top of each handler body, immediately after the existing `clickUpProjectIssues = []` / `clickUpSelectedListId = ''` assignments. These handlers already call `renderTicketsClickUpPanel()` (directly or via `loadClickUpSpaces`), so the detail pane will clear on the next render.
 
-For the **space-select** handler, add after the existing state resets:
+For the **space-select** handler (`:9426`), add after the existing state resets:
 ```js
 selectedClickUpIssue = null;
 _resetSidebarDrillDown();
 ```
 
-For the **folder-select** handler (line 9471), add after `clickUpProjectIssues = []`:
+For the **folder-select** handler (`:9471`), add after `clickUpProjectIssues = []`:
 ```js
 selectedClickUpIssue = null;
 _resetSidebarDrillDown();
 ```
 
 ## Verification Plan
+
+### Automated Tests
+No automated tests run as part of this plan (session directive: skip tests). The test suite will be run separately by the user. Static check: `node -c src/webview/planning.js` for webview syntax.
+
+### Manual
 1. **ClickUp — switch to a new list with a ticket selected:**
    - Open the Tickets tab, select a ClickUp space/folder/list, click a ticket so its description shows in the preview.
    - Change the list dropdown to a different list.
@@ -140,9 +170,12 @@ _resetSidebarDrillDown();
    - Change the project picker to a different project.
    - **Expected:** sidebar re-renders for the new project, preview resets to empty state.
 5. **Regression — Refresh preserves selection:**
-   - Select a ticket, then click the Refresh button (line 8061).
+   - Select a ticket, then click the Refresh button (`:8061`).
    - **Expected:** the same ticket remains selected and visible in the preview after refresh completes (the fix does not touch the Refresh path or the `*ProjectLoaded` handlers).
 6. **Regression — drill-down reset:**
    - Enter subtask drill-down for a parent ticket, then switch list.
    - **Expected:** drill-down mode exits and the preview resets to empty (no orphaned subtask nav).
-7. **Build:** run `npm run compile` (webpack) and confirm no errors. Note: per project rules, `dist/` is not used during dev/testing — verification is via the installed VSIX, but a clean compile confirms no syntax errors were introduced.
+
+> **Session directives:** No compilation step is run as part of verification (project assumed pre-compiled; `src/` is source of truth, `dist/` irrelevant). No automated tests run here.
+
+**Recommendation**: Complexity 3/10 → Send to Intern. Small, localized state reset in existing event handlers, no new abstractions.

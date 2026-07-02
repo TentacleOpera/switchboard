@@ -1005,6 +1005,16 @@
             pointer-events: none;
         }
 
+        /* Card Copy Button — dispatch failed, prompt ready */
+        @keyframes promptReadyGlow {
+            0%, 100% { box-shadow: 0 0 4px 1px rgba(255, 165, 0, 0.6); border-color: rgba(255, 165, 0, 0.8); }
+            50% { box-shadow: 0 0 8px 2px rgba(255, 165, 0, 0.9); border-color: rgba(255, 165, 0, 1); }
+        }
+        .card-btn.copy.prompt-ready {
+            animation: promptReadyGlow 2s ease-in-out infinite;
+            border: 1px solid rgba(255, 165, 0, 0.8);
+        }
+
         /* Column Icon Button Flash (was missing — flashIconBtn() was a no-op) */
         @keyframes iconFlash {
             0% { transform: scale(1); }
@@ -2751,9 +2761,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <!-- Role Selector -->
         <div class="db-subsection">
           <div class="subsection-header"><span>Role Selector</span></div>
-          <div class="role-selector-section">
+          <div class="role-selector-section" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <label for="roleSelect">Role:</label>
-          <select id="roleSelect">
+          <select id="roleSelect" style="flex: 1; min-width: 150px;">
             <option value="planner" selected>Planner</option>
             <option value="lead">Lead Coder</option>
             <option value="coder">Coder</option>
@@ -2766,6 +2776,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <option value="jules">Jules</option>
             <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
           </select>
+          <button id="prompts-tab-btn-export-skill" class="secondary-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">EXPORT AS SKILL</button>
+          </div>
           <div id="roleDescription" class="agent-description" style="margin-top: 8px; margin-left: 0;"></div>
           </div>
         </div>
@@ -2821,10 +2833,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   <span>Project Constitution Reference</span>
                   <span class="tooltip">Include project constitution as context</span>
                 </label>
-                <label class="checkbox-item" title="Append design system doc as context for planning">
+                <label class="checkbox-item" title="Append project PRD as context for planning">
                   <input type="checkbox" id="plannerAddonDesignSystemDoc">
-                  <span>Design Doc Reference</span>
-                  <span class="tooltip">Include design system doc as context</span>
+                  <span>Project PRD Reference</span>
+                  <span class="tooltip">Include project PRD as context for planning</span>
                 </label>
                 
                 <label class="checkbox-item" title="Aggressive pair programming mode">
@@ -3561,12 +3573,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <span class="agents-tab-custom-agent-item-command">${agent.startupCommand}</span>
               <div class="agents-tab-custom-agent-item-actions">
                 <button class="agents-tab-custom-agent-item-btn edit" data-id="${agent.id}">EDIT</button>
+                <button class="agents-tab-custom-agent-item-btn export-skill" data-id="${agent.id}">EXPORT SKILL</button>
                 <button class="agents-tab-custom-agent-item-btn delete" data-id="${agent.id}">DELETE</button>
               </div>
             `;
 
             item.querySelector('.edit').addEventListener('click', () => {
               agentsTabShowInlineForm(agent);
+            });
+
+            item.querySelector('.export-skill').addEventListener('click', () => {
+              vscode.postMessage({ type: 'exportAgentAsSkill', agentId: agent.id, workspaceRoot: getActiveWorkspaceRoot() });
+              const btn = item.querySelector('.export-skill');
+              const orig = btn.textContent;
+              btn.textContent = 'EXPORTED!';
+              setTimeout(() => { btn.textContent = orig; }, 2000);
             });
 
             item.querySelector('.delete').addEventListener('click', () => {
@@ -3777,7 +3798,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         document.getElementById('btn-suggest-epics')?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'suggestEpics', workspaceRoot: getActiveWorkspaceRoot() });
+            postKanbanMessage({ type: 'suggestEpics', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: activeProjectFilter ?? null });
         });
 
         btnDeleteProject?.addEventListener('click', () => {
@@ -3883,6 +3904,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         if (initialTabBtn) {
             initialTabBtn.click();
         }
+        // Always hydrate worktree state on load so the indicator survives a reload,
+        // independent of which tab is initially active.
+        loadWorktreeConfig();
 
         function getActiveWorkspaceRoot() {
             return currentWorkspaceRoot || (workspaceItems[0] && workspaceItems[0].workspaceRoot) || '';
@@ -4020,6 +4044,34 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     roleConfigs.planner.addons.customSubagentName = sanitized;
                     saveRoleConfig('planner');
                     refreshPreview();
+                });
+            }
+            const promptsExportBtn = document.getElementById('prompts-tab-btn-export-skill');
+            if (promptsExportBtn) {
+                promptsExportBtn.addEventListener('click', () => {
+                    const roleSelect = document.getElementById('roleSelect');
+                    if (roleSelect) {
+                        const selectedValue = roleSelect.value;
+                        const selectedOpt = roleSelect.options[roleSelect.selectedIndex];
+                        const customGroup = document.getElementById('customAgentsGroup');
+                        const isCustomAgent = !!(customGroup && selectedOpt && customGroup.contains(selectedOpt));
+                        if (isCustomAgent) {
+                            // Custom agent: dropdown value is agent.role, not UUID — look up the actual id
+                            const found = lastCustomAgents.find(a => (a.role || ('custom_agent_' + a.id)) === selectedValue);
+                            const agentId = found ? found.id : undefined;
+                            if (!agentId) {
+                                vscode.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Could not resolve custom agent ID' });
+                                return;
+                            }
+                            vscode.postMessage({ type: 'exportAgentAsSkill', agentId, workspaceRoot: getActiveWorkspaceRoot() });
+                        } else {
+                            // Built-in role: send as role, not agentId
+                            vscode.postMessage({ type: 'exportAgentAsSkill', role: selectedValue, workspaceRoot: getActiveWorkspaceRoot() });
+                        }
+                        const orig = promptsExportBtn.textContent;
+                        promptsExportBtn.textContent = 'EXPORTED!';
+                        setTimeout(() => { promptsExportBtn.textContent = orig; }, 2000);
+                    }
                 });
             }
 
@@ -4209,6 +4261,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function fireUltracodeBlast() {
             if (!document.body.classList.contains('cyber-theme-enabled')) { return; }
             if (document.body.classList.contains('cyber-animation-disabled')) { return; }
+            if (!document.body.classList.contains('ultracode-animation-enabled')) { return; }
             document.getElementById('ultracode-blast')?.remove();
             const blast = document.createElement('div');
             blast.id = 'ultracode-blast';
@@ -5772,7 +5825,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             return;
                         }
 
-                        if (!isColumnAgentAvailable(group.targetColumn)) return;
+                        if (!isColumnAgentAvailable(group.targetColumn)) {
+                            // No agent to dispatch — still persist the card move to the DB.
+                            // Without this, the optimistic DOM move is never persisted and
+                            // the card bounces back on reload. The moveCardForward handler
+                            // will also send a moveCards delta to confirm the UI position.
+                            postKanbanMessage({
+                                type: 'moveCardForward',
+                                sessionIds: groupedIds,
+                                targetColumn: group.targetColumn,
+                                workspaceRoot
+                            });
+                            return;
+                        }
                         if (groupedIds.length === 1) {
                             postKanbanMessage({ type: 'triggerAction', sessionId: groupedIds[0], targetColumn: group.targetColumn, workspaceRoot });
                         } else {
@@ -6017,6 +6082,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'colourKanbanIconsChanged': {
                     document.body.classList.toggle('kanban-icons-colour', !!msg.enabled);
+                    break;
+                }
+                case 'cyberAnimationSetting': {
+                    document.body.classList.toggle('cyber-animation-disabled', !!msg.disabled);
+                    break;
+                }
+                case 'cyberScanlinesSetting': {
+                    document.body.classList.toggle('cyber-scanlines-disabled', !!msg.disabled);
+                    break;
+                }
+                case 'pixelFontSetting': {
+                    document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
+                    break;
+                }
+                case 'ultracodeAnimationSetting': {
+                    document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);
                     break;
                 }
                 case 'showStatusMessage': {
@@ -6475,6 +6556,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
+                case 'dispatchFailedPromptReady': {
+                    const planId = msg.planId || msg.sessionId;
+                    const btn = document.querySelector(`.card-btn.copy[data-plan-id="${CSS.escape(planId)}"]`)
+                        || document.querySelector(`.card-btn.copy[data-session="${CSS.escape(msg.sessionId)}"]`);
+                    if (btn) {
+                        btn.classList.add('prompt-ready');
+                        // Remove the glow after 30 seconds or on click
+                        const removeGlow = () => btn.classList.remove('prompt-ready');
+                        btn.addEventListener('click', removeGlow, { once: true });
+                        setTimeout(removeGlow, 30000);
+                    }
+                    // Show a status message
+                    const statusEl = document.getElementById('status-message');
+                    if (statusEl) {
+                        statusEl.textContent = 'Dispatch failed — prompt copied. Paste manually or click the glowing button.';
+                        statusEl.style.color = 'rgba(255, 165, 0, 1)';
+                        statusEl.style.display = 'inline-block';
+                        statusEl.classList.add('flashing');
+                    }
+                    break;
+                }
                 case 'remoteConfig':
                     // Config UI moved to project.html — only the toolbar toggle state matters here.
                     if (typeof msg.active === 'boolean') { remoteControlActive = msg.active; applyRemoteControlButtonState(); }
@@ -6826,8 +6928,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     return !!cardProject;
                 });
                 if (!hasAnyProjectAssignment) {
-                    // True no-op: same workspace, no project target, and no cards have project assignments
-                    vscode?.postMessage?.({ type: 'showInfo', message: 'Plans are already in this workspace with no project assignment.' });
+                    // Same workspace, no project target, and no cards have a project to clear:
+                    // treat ASSIGN-to-here as "deselect" so the user has a way to clear an
+                    // otherwise-invisible selection. No toast — clearing IS the feedback.
+                    selectedCards.clear();
+                    updateReassignButtonVisibility();
+                    updateEpicActionButton();
+                    document.querySelectorAll('.kanban-card.selected').forEach(el => {
+                        el.classList.remove('selected');
+                    });
                     return;
                 }
             }
@@ -9492,12 +9601,34 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                     const abandonBtn = document.createElement('button');
                     abandonBtn.className = 'btn-danger';
-                    abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit;';
+                    abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:8px;';
                     abandonBtn.textContent = 'Abandon';
                     abandonBtn.addEventListener('click', () => {
                         abandonWorktree(w.id, w.branch, w.path);
                     });
                     mainLine.appendChild(abandonBtn);
+
+                    const gridChk = document.createElement('input');
+                    gridChk.type = 'checkbox';
+                    gridChk.checked = !!w.agentsOpenWithGrid;
+                    gridChk.id = `wt-grid-${w.id}`;
+                    gridChk.style.cssText = 'margin-left:6px; cursor:pointer; vertical-align:middle;';
+                    gridChk.title = 'When you click the main AGENTS button, open a dedicated set of agent terminals inside this worktree (Planner/Coder/Reviewer/…), in addition to the main repo terminals — or instead of them when "Suppress main repo agent terminals" is on.';
+                    gridChk.addEventListener('change', () => {
+                        postKanbanMessage({
+                            type: 'toggleWorktreeAgentsOpenWithGrid',
+                            worktreeId: w.id,
+                            enabled: gridChk.checked,
+                            workspaceRoot: currentWorkspaceRoot
+                        });
+                    });
+                    mainLine.appendChild(gridChk);
+                    const gridLabel = document.createElement('label');
+                    gridLabel.htmlFor = `wt-grid-${w.id}`;
+                    gridLabel.textContent = 'Agent terminals';
+                    gridLabel.style.cssText = 'font-size:10px; color:var(--text-muted); cursor:pointer; margin-right:4px; vertical-align:middle;';
+                    gridLabel.title = gridChk.title;
+                    mainLine.appendChild(gridLabel);
 
                     row.appendChild(mainLine);
 
@@ -9514,27 +9645,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         scopeSpan.textContent = 'Scope: No automatic routing — work manually.';
                     }
                     detailsLine.appendChild(scopeSpan);
-
-                    const chkWrapper = document.createElement('div');
-                    chkWrapper.style.cssText = 'display:flex; align-items:center; gap:4px; cursor:pointer;';
-                    const chk = document.createElement('input');
-                    chk.type = 'checkbox';
-                    chk.checked = !!w.agentsOpenWithGrid;
-                    chk.title = 'Open terminals for this worktree automatically when clicking the main Agents button';
-                    chk.addEventListener('change', () => {
-                        postKanbanMessage({
-                            type: 'toggleWorktreeAgentsOpenWithGrid',
-                            worktreeId: w.id,
-                            enabled: chk.checked,
-                            workspaceRoot: currentWorkspaceRoot
-                        });
-                    });
-                    const label = document.createElement('span');
-                    label.textContent = 'Open terminals with grid';
-                    label.style.fontSize = '9px';
-                    chkWrapper.appendChild(chk);
-                    chkWrapper.appendChild(label);
-                    detailsLine.appendChild(chkWrapper);
 
                     row.appendChild(detailsLine);
                     return row;

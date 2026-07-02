@@ -269,6 +269,8 @@ export interface PromptBuilderOptions {
     tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
     /** The epic's subtask plans (planId/topic/complexity), for the planner high-low consolidation directive. Only injected when epicWorktreeMode === 'high-low' and role === 'planner'. */
     subtaskPlansForConsolidation?: Array<{ planId: string; topic: string; complexity?: string }>;
+    /** The active project name to pin into generated plan files. When set, emits a PROJECT PIN directive instructing the agent to write `**Project:** <name>` into each plan's metadata. */
+    manifestProject?: string;
 }
 
 export function resolveBaseInstructions(
@@ -379,7 +381,7 @@ export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote 
  * Build the per-project PRD reference block folded into the shared dispatch
  * prefix (`dispatchPrefixCore`) so it reaches EVERY role — mirroring the §11
  * remote-mode prefix injection, NOT the planner-only constitution block.
- * Gated by `options.prdEnabled` (the project-context toggle + an active PRD).
+ * Gated by `options.prdReferences` presence (the project-context toggle + resolved PRD links).
  */
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
     if (role === 'tester') return '';
@@ -626,9 +628,10 @@ Hard Rules:
 2. **No eager context.** Discard automatically injected active documents from IDE metadata unless the user explicitly or implicitly references a file path (e.g., "look at file X," "in file Y this needs changing"). In that case, read it immediately without requiring a directive verb.
 3. **No eager research.** On the first turn, your only action is to respond with a brief greeting and wait for input — do not plan, research, or run any tool. Do not run codebase searches, file views, or directory listings during general onboarding or until the user specifies a problem.
 4. **Orchestrate, don't develop.** Your task is to clarify the "What" and "Why," identify edge cases, define constraints, and produce a complete, user-approved plan before any code is written.
-5. **Plan artifact & quality gate.** Write the plan to one of the paths listed in the PLAN DESTINATION directive below (configured by the user in Switchboard Setup), using a unique filename — only those locations; do not write or copy the plan anywhere else, including any session/brain directory. Every plan must have a descriptive H1 title (never generic), and a \`## Metadata\` section with \`**Complexity:**\` (1–10) and \`**Tags:**\` (comma-separated, from: frontend, backend, auth, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library).
+5. **Plan artifact & quality gate.** Write the plan to one of the paths listed in the PLAN DESTINATION directive below (configured by the user in Switchboard Setup), using a unique filename — only those locations; do not write or copy the plan anywhere else, including any session/brain directory. Every plan must have a descriptive H1 title (never generic), and a \`## Metadata\` section with \`**Complexity:**\` (1–10), \`**Tags:**\` (comma-separated, from: frontend, backend, auth, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library), and \`**Project:**\` (if the PROJECT PIN directive is present, write the exact project name specified).
 6. **No self-editing of system files.** If workflow configurations or persona files need changes, notify the user and ask for explicit permission.
 7. **Stay in chat.** Do not pivot to execution or delegation unless the user explicitly requests it.
+8. **Project Pinning:** When the dispatch prompt carries a PROJECT PIN directive, write the \`**Project:\` line into each plan file's metadata block.
 
 Process:
 1. **Onboard:** Greet the user. Identify the core problem or opportunity. Focus on ideation.
@@ -638,6 +641,10 @@ Process:
 
 Epic Grouping:
 When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under an epic once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the epic if the user confirms. See existing files in \`.switchboard/epics/\` for format.`;
+
+export function PROJECT_LINE_DIRECTIVE(project: string): string {
+    return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project regardless of what project is active when the file is imported. Omit the line only if no project name is given above.`;
+}
 
 const DEFAULT_PLANNER_WORKFLOW = '.agents/workflows/improve-plan.md';
 
@@ -817,12 +824,12 @@ export function buildKanbanBatchPrompt(
 
         const designSystemDocLink = options?.designSystemDocLink?.trim();
         if (designSystemDocLink) {
-            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE:\nThe following design system document provides the project's visual and interaction design specifications. Use it as context for implementation decisions:\n${designSystemDocLink}`;
+            plannerPrompt += `\n\nPROJECT PRD REFERENCE:\nThe following project PRD provides the product requirements and design specifications. Use it as context for implementation decisions:\n${designSystemDocLink}`;
         }
 
         const designSystemDocContent = options?.designSystemDocContent?.trim();
         if (designSystemDocContent) {
-            plannerPrompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\nThe following is the full content of the project's design system document. Use it as context for implementation decisions:\n\n${designSystemDocContent}`;
+            plannerPrompt += `\n\nPROJECT PRD REFERENCE (pre-fetched):\nThe following is the full content of the project's PRD. Use it as context for implementation decisions:\n\n${designSystemDocContent}`;
         }
 
         return normalizeNewlines(plannerPrompt);
@@ -1273,7 +1280,13 @@ fields above, no speculative implementation detail. Comment only.`;
         const planDestinationBlock = destDirs.length === 1
             ? `PLAN DESTINATION: Write the plan to \`${destDirs[0]}\` (this location only; do not also copy it to a session/brain directory).`
             : `PLAN DESTINATION: Write the plan into one of these directories (this location only; do not also copy it elsewhere):\n${destDirs.map(d => `- ${d}`).join('\n')}`;
-        const suffixBlock = [dispatchContextPrefix, focusBlock, planDestinationBlock, antigravityBlock]
+        
+        let projectPinBlock = '';
+        if (options?.manifestProject) {
+            projectPinBlock = PROJECT_LINE_DIRECTIVE(options.manifestProject);
+        }
+
+        const suffixBlock = [dispatchContextPrefix, focusBlock, planDestinationBlock, projectPinBlock, antigravityBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -1399,9 +1412,9 @@ export function buildCustomAgentPrompt(
     if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
 
     if (addons?.designSystemDocContent) {
-        prompt += `\n\nDESIGN SYSTEM DOC REFERENCE (pre-fetched):\n${addons.designSystemDocContent}`;
+        prompt += `\n\nPROJECT PRD REFERENCE (pre-fetched):\n${addons.designSystemDocContent}`;
     } else if (addons?.designSystemDocLink) {
-        prompt += `\n\nDESIGN SYSTEM DOC REFERENCE:\n${addons.designSystemDocLink}`;
+        prompt += `\n\nPROJECT PRD REFERENCE:\n${addons.designSystemDocLink}`;
     }
 
     if (addons?.constitutionContent) {

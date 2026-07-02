@@ -22,7 +22,8 @@ import { PlanningPanelCacheService } from './PlanningPanelCacheService';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig, parseCustomAgents } from './agentConfig';
 import { ReviewCommentRequest, ReviewCommentResult } from './reviewTypes';
-import { isValidComplexityValue, legacyToScore } from './complexityScale';
+import { isValidComplexityValue, legacyToScore, parseComplexityScore } from './complexityScale';
+import { columnToPromptRole } from './agentPromptBuilder';
 import { applyManualComplexityOverride } from './planMetadataUtils';
 import { formatReviewLogEntries } from './reviewLogUtils';
 import { PanelStateStore } from './PanelStateStore';
@@ -130,6 +131,8 @@ export class PlanningPanelProvider {
     private _activePlanningHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
     private _saveTextDocListener: vscode.Disposable | undefined;
     private _watcherGeneration: number = 0;
+    private _moveTargetsCache = new Map<string, { at: number; targets: Array<{ id: string; name: string; path: string }> }>();
+    private static readonly MOVE_TARGETS_TTL_MS = 60_000;
 
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
     // Type-only reference (avoids a runtime circular import with KanbanProvider).
@@ -406,6 +409,14 @@ export class PlanningPanelProvider {
                     const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
                     this._projectPanel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
                 }
+                if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+                    this._projectPanel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                }
+                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                    this._projectPanel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                }
                 if (e.affectsConfiguration('switchboard.planAutoFetch') && this._planAutoFetchService && this._projectPanel) {
                     const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
                     if (wsRoot) {
@@ -591,6 +602,14 @@ export class PlanningPanelProvider {
                     const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                     this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
                 }
+                if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+                    this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                }
+                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                    this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                }
             })
         );
 
@@ -717,6 +736,14 @@ export class PlanningPanelProvider {
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const themeName = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme: themeName });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+                        this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                 })
             );
@@ -1083,7 +1110,7 @@ export class PlanningPanelProvider {
      * requesting panel receives the response regardless of which is visible.
      */
     private _postToBothPanels(msg: unknown): void {
-        this._projectPanel?.webview?.postMessage(msg);
+        this.postMessageToProjectWebview(msg);
         this._panel?.webview?.postMessage(msg);
     }
 
@@ -1343,11 +1370,32 @@ export class PlanningPanelProvider {
 
     private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<void> {
         const allRoots = Array.from(this._getAllowedRoots());
-        const resolved = path.resolve(filePath);
+        // Resolve relative paths against workspace roots, not just CWD
+        let resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : '';
+        if (!resolved || !fs.existsSync(resolved)) {
+            for (const root of allRoots) {
+                const candidate = path.resolve(root, filePath);
+                if (fs.existsSync(candidate)) {
+                    resolved = candidate;
+                    break;
+                }
+            }
+            if (!resolved) {
+                resolved = path.resolve(filePath); // fall back to CWD resolution (will fail isAllowed below)
+            }
+        }
+        // SECURITY: isAllowed must run on the final resolved path, unconditionally
         const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
-        const targetPanel = this._projectPanel || this._panel;
+        const sendResponse = (message: any) => {
+            if (this._projectPanel) {
+                this.postMessageToProjectWebview(message);
+            } else {
+                this._panel?.webview.postMessage(message);
+            }
+        };
+
         if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
-            targetPanel?.webview.postMessage({
+            sendResponse({
                 type: 'kanbanPlanPreviewReady', requestId, filePath,
                 content: '', error: 'File not found or not in workspace'
             });
@@ -1373,7 +1421,7 @@ export class PlanningPanelProvider {
             // Convert raw markdown to HTML for preview pane
             const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
 
-            targetPanel?.webview.postMessage({
+            sendResponse({
                 type: 'kanbanPlanPreviewReady',
                 requestId,
                 filePath,
@@ -1382,7 +1430,7 @@ export class PlanningPanelProvider {
                 isAutoRefreshed: this._isAutoRefreshing
             });
         } catch (err) {
-            targetPanel?.webview.postMessage({
+            sendResponse({
                 type: 'kanbanPlanPreviewReady', requestId, filePath, content: '', error: String(err)
             });
         }
@@ -3160,7 +3208,7 @@ export class PlanningPanelProvider {
             }
             case 'copyChatPrompt': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined;
-                const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot);
+                const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot, msg.project);
                 if (prompt) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     targetPanel?.webview.postMessage({ type: 'chatPromptCopied' });
@@ -3390,41 +3438,51 @@ export class PlanningPanelProvider {
                 const column = String(msg.column || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId' });
                     break;
                 }
                 try {
                     const success = await vscode.commands.executeCommand<boolean>(
                         'switchboard.copyPlanFromKanban', sessionId, column, wsRoot
                     );
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: !!success, sessionId });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: !!success, sessionId });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
                 }
                 break;
             }
             case 'copyEpicPlannerPrompt': {
                 const sessionId = String(msg.sessionId || '');
+                const column = String(msg.column || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId || !this._kanbanProvider) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId or kanban provider' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId or kanban provider' });
                     break;
                 }
                 try {
-                    // Build the epic + subtask plans array via the shared expansion helper
-                    // and run it through generateUnifiedPrompt (planner role). Replaces the
-                    // deleted buildEpicOrchestrationPrompt orchestrator preview.
                     const kp = this._kanbanProvider;
                     const db = (kp as any)._getKanbanDb(wsRoot);
                     if (!db || !(await db.ensureReady())) {
-                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
+                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
                         break;
                     }
                     const epic = await db.getPlanByPlanId(sessionId);
                     if (!epic || !epic.isEpic) {
-                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
+                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
                         break;
                     }
+
+                    // Resolve effective column: explicit param > epic's DB column > CREATED
+                    const effectiveColumn = column || epic.kanbanColumn || 'CREATED';
+                    // Resolve role from column (mirror _handleCopyPlanLink, TaskViewerProvider.ts:14303-14310)
+                    let role: string;
+                    if (effectiveColumn === 'PLAN REVIEWED') {
+                        const complexity = await kp.getComplexityFromPlan(wsRoot, (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile));
+                        role = kp.resolveRoutedRole(parseComplexityScore(complexity));
+                    } else {
+                        role = columnToPromptRole(effectiveColumn) || 'coder';
+                    }
+
                     const plans: import('./agentPromptBuilder').BatchPromptPlan[] = [{
                         topic: epic.topic,
                         absolutePath: (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile),
@@ -3438,11 +3496,11 @@ export class PlanningPanelProvider {
                         wsRoot, epic.planId, epic.topic, epic.kanbanColumn || '', undefined, undefined, undefined, epic.project || undefined
                     );
                     for (const sp of subtaskPlans) { plans.push(sp); }
-                    const prompt = await kp.generateUnifiedPrompt('planner', plans, wsRoot);
+                    const prompt = await kp.generateUnifiedPrompt(role, plans, wsRoot);
                     await vscode.env.clipboard.writeText(prompt);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
                 }
                 break;
             }
@@ -5600,7 +5658,7 @@ Please format the updated output document strictly as follows:
                             // empty the sidebar. (Linear per-project scoping = follow-up.)
                             const scopeId = provider === 'clickup'
                                 ? String((msg.listId as string) || '').trim()
-                                : '';
+                                : String((msg.projectId as string) || '').trim();
 
                             // Map DB entries to the provider-specific tickets output list
                             for (const dbT of dbTickets) {
@@ -5625,7 +5683,7 @@ Please format the updated output document strictly as follows:
                                                 if (sm) { clickStatus = sm[1].trim(); }
                                                 const pm = fm[1].match(/^parentId:\s*(.+)$/m);
                                                 if (pm) { parentId = pm[1].trim(); }
-                                                const idm = fm[1].match(provider === 'clickup' ? /^listId:\s*(.+)$/m : /^projectId:\s*(.+)$/m);
+                                                const idm = fm[1].match(provider === 'clickup' ? /^listId:\s*(.+)$/m : /^projectName:\s*(.+)$/m);
                                                 if (idm) { fileScopeId = idm[1].trim(); }
                                                 // Ticket creation date (source system), written at import time.
                                                 // Drives the sidebar's newest-first sort.
@@ -5894,6 +5952,79 @@ Please format the updated output document strictly as follows:
                     showTemporaryNotification('Diagram prompt copied to clipboard');
                 } catch (err) {
                     vscode.window.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
+                }
+                break;
+            }
+            case 'fetchMoveTargets': {
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    if (!workspaceRoot) {
+                        throw new Error('Workspace root not resolved');
+                    }
+                    const { provider, ticketId, refresh } = msg;
+                    const cached = this._moveTargetsCache.get(provider);
+                    if (!refresh && cached && Date.now() - cached.at < PlanningPanelProvider.MOVE_TARGETS_TTL_MS) {
+                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets: cached.targets });
+                        break;
+                    }
+                    if (provider === 'clickup') {
+                        const clickUpService = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        const spaces = await clickUpService.getSpaces();
+                        const targets: Array<{ id: string; name: string; path: string }> = [];
+                        for (const space of spaces) {
+                            const lists = await clickUpService.getLists(space.id);
+                            for (const list of lists) {
+                                targets.push({ id: list.id, name: list.name, path: `${space.name} / ${list.name}` });
+                            }
+                            const folders = await clickUpService.getFolders(space.id);
+                            for (const folder of folders) {
+                                const folderLists = await clickUpService.getLists(space.id, folder.id);
+                                for (const list of folderLists) {
+                                    targets.push({ id: list.id, name: list.name, path: `${space.name} / ${folder.name} / ${list.name}` });
+                                }
+                            }
+                        }
+                        this._moveTargetsCache.set('clickup', { at: Date.now(), targets });
+                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets });
+                    } else {
+                        const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        const projects = await linearService.getAvailableProjects();
+                        const targets = projects.map((p: { id: string; name: string }) => ({ id: p.id, name: p.name, path: p.name }));
+                        this._moveTargetsCache.set('linear', { at: Date.now(), targets });
+                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] Failed to fetch move targets:', err);
+                    this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider: msg.provider, ticketId: msg.ticketId, targets: [], error: String(err) });
+                }
+                break;
+            }
+            case 'moveTicket': {
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    if (!workspaceRoot) {
+                        throw new Error('Workspace root not resolved');
+                    }
+                    const { provider, ticketId, targetId } = msg;
+                    if (provider === 'clickup') {
+                        const clickUpService = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        const result = await clickUpService.moveTask(ticketId, targetId);
+                        this._panel?.webview.postMessage({
+                            type: 'moveTicketResult',
+                            success: true,
+                            provider,
+                            ticketId,
+                            warning: result.warning ?? null,
+                            remainsInLists: result.remainsInLists
+                        });
+                    } else {
+                        const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        await linearService.updateIssueProject(ticketId, targetId);
+                        this._panel?.webview.postMessage({ type: 'moveTicketResult', success: true, provider, ticketId, targetId });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] Failed to move ticket:', err);
+                    this._panel?.webview.postMessage({ type: 'moveTicketResult', success: false, provider: msg.provider, ticketId: msg.ticketId, error: String(err) });
                 }
                 break;
             }
@@ -9109,10 +9240,39 @@ Read the current content above. Determine what's missing. Produce a complete epi
         // removed by clearing _disposables above. Re-register it so _projectPanel
         // is cleared when that panel is eventually closed.
         if (this._projectPanel) {
+            // Re-register the onDidDispose listener with FULL cleanup — mirror the
+            // original handler registered in openProject() (line 379-390). The previous
+            // re-registration only nulled _projectPanel, leaving _projectPanelReady
+            // and _pendingProjectMessages stale. If the Project panel reopens later,
+            // stale pending messages could flush into the fresh panel.
             this._disposables.push(
                 this._projectPanel.onDidDispose(() => {
                     this._projectPanel = undefined;
+                    this._projectPanelReady = false;
+                    this._pendingProjectMessages = [];
+                    if (this._projectPanelReadyTimer) {
+                        clearTimeout(this._projectPanelReadyTimer);
+                        this._projectPanelReadyTimer = undefined;
+                    }
                 })
+            );
+            // CRITICAL: Also re-register the message handler. dispose() cleared
+            // _disposables above, which disposed the original onDidReceiveMessage
+            // subscription. Without this, the Project panel becomes a zombie —
+            // still visible but the backend can no longer receive messages from it.
+            // This is the root cause of "copy prompt buttons don't work" and
+            // "all previews stopped working" after the Planning panel is closed.
+            this._disposables.push(
+                this._projectPanel.webview.onDidReceiveMessage(
+                    async (message: any) => {
+                        try {
+                            await this._handleMessage(message, true);
+                        } catch (err) {
+                            console.error('[ProjectPanel] Message handler error (re-registered):', err);
+                            this._projectPanel?.webview.postMessage({ type: 'error', message: String(err) });
+                        }
+                    }
+                )
             );
         }
         // Reset the webview-roots dedup guard so a subsequent open() on a brand-new panel

@@ -6,6 +6,8 @@ description: 'Remote Sync Refactor'
 
 **Plan ID:** b84e88a1-23ee-4512-8b21-338307b68d85
 
+**Coordination contract:** [Remote Control Production Readiness — Cross-Epic Sequencing & Coordination Plan](../plans/feature_plan_20260701_remote-control-production-sequencing.md) — **epic 2 of 7** (the trunk) in the program dispatch order.
+
 > **Program note (2026-07-01):** This is the **trunk** of the remote-control production program (see `feature_plan_20260701_remote-control-production-sequencing.md`). Two additions vs. the original scope: (1) the declared push surface must include **`archive`** (for the auto-archive rule) and a **project-level entity** (for project-context sync) — declared in 1/3, not retrofitted; the full surface is **status · content · archive · project-context docs** (epic *structure* mirroring is handled by the Remote Epic Structure epic; outbound structure by the Tracker-Structure feature). (2) 3/3's Remote-tab UX is built in the tab's new home in **`project.html`** — so the Project Context Hub epic's STEP 0 (IA lock) precedes 3/3's UI phase. **Linear bidirectional description sync** is folded in here as a content-push capability on the unified seam. **Migration (2026-07-01):** the remote-sync surface is experimental and unshipped — clean break, **no migration**; disregard the epic body's ~4,000-install migration and legacy-flag-preservation language. **Config scope:** the audit found config is already ~2 surfaces (remote-control config is one blob), not four — 3/3's consolidation is correspondingly smaller.
 
 ## Goal
@@ -39,10 +41,10 @@ Fix the foundation before shipping the UX. Make push a declared provider capabil
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md) — **PLAN REVIEWED**
-- [ ] [Remote Sync Refactor (1/3): Declared Provider Capabilities + Unified Push Dispatch](../plans/remote-sync-refactor-1-provider-capabilities-and-unified-push.md) — **PLAN REVIEWED**
-- [ ] [Remote Sync Refactor (2/3): Notion Push Pipeline (Status + Content Write-Back)](../plans/remote-sync-refactor-2-notion-push-pipeline.md) — **PLAN REVIEWED**
-- [ ] [Remote Sync Refactor (3/3): Config Consolidation + Remote-Tab Ingest/Full UX](../plans/remote-sync-refactor-3-config-consolidation-and-remote-tab-ux.md) — **PLAN REVIEWED**
+- [ ] [Linear Bidirectional Description Sync](../plans/linear-bidirectional-description-sync.md) — **CODE REVIEWED**
+- [ ] [Remote Sync Refactor (1/3): Declared Provider Capabilities + Unified Push Dispatch](../plans/remote-sync-refactor-1-provider-capabilities-and-unified-push.md) — **CODE REVIEWED**
+- [ ] [Remote Sync Refactor (2/3): Notion Push Pipeline (Status + Content Write-Back)](../plans/remote-sync-refactor-2-notion-push-pipeline.md) — **CODE REVIEWED**
+- [ ] [Remote Sync Refactor (3/3): Config Consolidation + Remote-Tab Ingest/Full UX](../plans/remote-sync-refactor-3-config-consolidation-and-remote-tab-ux.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Metadata

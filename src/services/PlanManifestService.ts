@@ -51,6 +51,7 @@ export interface ManifestFile {
 export interface ManifestApplyResult {
     applied: number;
     deferred: number;
+    rejected: number;
     /** True when the manifest was fully consumed and deleted from disk. */
     consumed: boolean;
 }
@@ -74,7 +75,7 @@ export class PlanManifestService {
         log?: (msg: string) => void
     ): Promise<ManifestApplyResult> {
         const manifestPath = path.join(workspaceRoot, '.switchboard', 'plans', MANIFEST_FILENAME);
-        const result: ManifestApplyResult = { applied: 0, deferred: 0, consumed: false };
+        const result: ManifestApplyResult = { applied: 0, deferred: 0, rejected: 0, consumed: false };
 
         let raw: string;
         try {
@@ -132,9 +133,11 @@ export class PlanManifestService {
                 if (entry.isEpic && entry.planId) {
                     inBatchEpicIds.add(entry.planId);
                 }
-            } else {
+            } else if (r === 'deferred') {
                 result.deferred++;
                 anyDeferred = true;
+            } else if (r === 'rejected') {
+                result.rejected++;
             }
         }
 
@@ -157,6 +160,18 @@ export class PlanManifestService {
             return result;
         }
 
+        // Rejected entries are permanent failures (invalid path / missing planFile
+        // never self-heals). Surface a warning, then consume (delete) the manifest
+        // so it is NOT retained for retry — retaining would cause an infinite
+        // re-toast loop every 10s scan cycle.
+        if (result.rejected > 0) {
+            log?.(`[PlanManifest] ⚠️ ${result.rejected} entr${result.rejected === 1 ? 'y' : 'ies'} REJECTED (invalid path/planFile). Manifest consumed (deleted) — rejected entries are permanent; fix the source planFile path. Valid forms: bare filename, .switchboard/plans/<name>.md, or .switchboard/epics/<name>.md.`);
+            await this._safeDelete(manifestPath, log);
+            this._attempts.delete(workspaceRoot);
+            result.consumed = true;
+            return result;
+        }
+
         // All entries applied — delete the manifest so it never re-applies.
         await this._safeDelete(manifestPath, log);
         this._attempts.delete(workspaceRoot);
@@ -174,40 +189,58 @@ export class PlanManifestService {
         epicsDir: string,
         inBatchEpicIds: Set<string>,
         log?: (msg: string) => void
-    ): Promise<'applied' | 'deferred'> {
+    ): Promise<'applied' | 'deferred' | 'rejected'> {
         if (!entry || !entry.planFile || typeof entry.planFile !== 'string') {
             log?.(`[PlanManifest] Entry missing planFile; skipping.`);
-            return 'applied'; // not deferrable — treat as handled (skip)
+            return 'rejected';
+        }
+
+        // Auto-resolve bare filenames: the manifest lives in .switchboard/plans/, so a
+        // bare planFile like "foo.md" refers to .switchboard/plans/foo.md. Without this,
+        // path.resolve(workspaceRoot, "foo.md") lands in the workspace root and the
+        // insidePlans check silently rejects it.
+        let resolvedPlanFile = entry.planFile;
+        if (!path.isAbsolute(resolvedPlanFile)
+            && !resolvedPlanFile.includes('/')
+            && !resolvedPlanFile.includes('\\')
+            && !resolvedPlanFile.startsWith('.switchboard/')) {
+            resolvedPlanFile = `.switchboard/plans/${resolvedPlanFile}`;
+        }
+
+        // Defensive: warn when a bare epic-looking filename is auto-resolved to plans/,
+        // since epics live under .switchboard/epics/ and will likely defer-then-drop.
+        if (/^epic-/i.test(resolvedPlanFile) && !resolvedPlanFile.startsWith('.switchboard/epics/')) {
+            log?.(`[PlanManifest] ⚠️ Bare epic-looking filename '${entry.planFile}' auto-resolved to plans/ — epics must use the full .switchboard/epics/ prefix. This entry will likely defer-then-drop.`);
         }
 
         // Security: reject path traversal / absolute paths. planFile must resolve
         // strictly inside .switchboard/plans or .switchboard/epics for this workspace.
-        if (path.isAbsolute(entry.planFile) || entry.planFile.includes('..')) {
+        if (path.isAbsolute(resolvedPlanFile) || resolvedPlanFile.includes('..')) {
             log?.(`[PlanManifest] Rejected path-traversal/absolute planFile: ${entry.planFile}`);
-            return 'applied'; // not deferrable — invalid entry, skip
+            return 'rejected';
         }
-        const resolved = path.resolve(workspaceRoot, entry.planFile);
+        const resolved = path.resolve(workspaceRoot, resolvedPlanFile);
         const plansRoot = path.resolve(plansDir);
         const epicsRoot = path.resolve(epicsDir);
         const insidePlans = resolved === plansRoot || resolved.startsWith(plansRoot + path.sep);
         const insideEpics = resolved === epicsRoot || resolved.startsWith(epicsRoot + path.sep);
         if (!insidePlans && !insideEpics) {
             log?.(`[PlanManifest] Rejected planFile outside plans/epics dir: ${entry.planFile}`);
-            return 'applied'; // invalid, skip
+            return 'rejected';
         }
 
         // Ensure the .md row exists. If the file is on disk but not yet imported,
         // defer this cycle — the .md import pass (run before us) should pick it up
         // next cycle, or the watcher event will. If the file is missing entirely,
         // also defer (staleness guard will eventually drop it).
-        let plan = await db.getPlanByPlanFile(entry.planFile, workspaceId);
+        let plan = await db.getPlanByPlanFile(resolvedPlanFile, workspaceId);
         if (!plan) {
             if (!fs.existsSync(resolved)) {
-                log?.(`[PlanManifest] .md not on disk yet, deferring entry: ${entry.planFile}`);
+                log?.(`[PlanManifest] .md not on disk yet, deferring entry: ${resolvedPlanFile}`);
                 return 'deferred';
             }
             // File exists but row missing — defer; the .md pass or watcher will import it.
-            log?.(`[PlanManifest] Row not yet imported for existing .md, deferring entry: ${entry.planFile}`);
+            log?.(`[PlanManifest] Row not yet imported for existing .md, deferring entry: ${resolvedPlanFile}`);
             return 'deferred';
         }
 
@@ -215,35 +248,40 @@ export class PlanManifestService {
         if (entry.kanbanColumn) {
             if (VALID_KANBAN_COLUMNS.has(entry.kanbanColumn)) {
                 if (plan.kanbanColumn === 'CREATED' && entry.kanbanColumn !== plan.kanbanColumn) {
-                    const moved = await db.movePlanByPlanFile(entry.planFile, workspaceId, entry.kanbanColumn);
+                    const moved = await db.movePlanByPlanFile(resolvedPlanFile, workspaceId, entry.kanbanColumn);
                     if (!moved) {
-                        log?.(`[PlanManifest] movePlanByPlanFile failed for ${entry.planFile} → ${entry.kanbanColumn}`);
+                        log?.(`[PlanManifest] movePlanByPlanFile failed for ${resolvedPlanFile} → ${entry.kanbanColumn}`);
                     }
                 } else if (plan.kanbanColumn !== 'CREATED' && plan.kanbanColumn !== entry.kanbanColumn) {
-                    log?.(`[PlanManifest] Stale-manifest guard: ${entry.planFile} already at '${plan.kanbanColumn}', not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
+                    log?.(`[PlanManifest] Stale-manifest guard: ${resolvedPlanFile} already at '${plan.kanbanColumn}', not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
                 }
             } else {
-                log?.(`[PlanManifest] Invalid kanbanColumn '${entry.kanbanColumn}' for ${entry.planFile}; skipping column override.`);
+                log?.(`[PlanManifest] Invalid kanbanColumn '${entry.kanbanColumn}' for ${resolvedPlanFile}; skipping column override.`);
             }
         }
 
         // ── status ──
         if (entry.status && VALID_STATUSES.has(entry.status)) {
             if (plan.status !== entry.status) {
-                const ok = await db.updateStatusByPlanFile(entry.planFile, workspaceId, entry.status as 'active' | 'archived' | 'completed' | 'deleted');
+                let ok: boolean;
+                if (entry.status === 'archived' || entry.status === 'deleted') {
+                    ok = await db.archivePlan(resolvedPlanFile, workspaceId, entry.status as 'archived' | 'deleted');
+                } else {
+                    ok = await db.updateStatusByPlanFile(resolvedPlanFile, workspaceId, entry.status as 'active' | 'completed');
+                }
                 if (!ok) {
-                    log?.(`[PlanManifest] updateStatusByPlanFile failed for ${entry.planFile} → ${entry.status}`);
+                    log?.(`[PlanManifest] status update failed for ${resolvedPlanFile} → ${entry.status}`);
                 }
             }
         } else if (entry.status && !VALID_STATUSES.has(entry.status)) {
-            log?.(`[PlanManifest] Invalid status '${entry.status}' for ${entry.planFile}; skipping status override.`);
+            log?.(`[PlanManifest] Invalid status '${entry.status}' for ${resolvedPlanFile}; skipping status override.`);
         }
 
         // ── project ──
         if (entry.project) {
-            const ok = await db.updatePlanProjectByPlanFile(entry.planFile, workspaceId, entry.project);
+            const ok = await db.updatePlanProjectByPlanFile(resolvedPlanFile, workspaceId, entry.project);
             if (!ok) {
-                log?.(`[PlanManifest] updatePlanProjectByPlanFile failed (0 rows / race) for ${entry.planFile}`);
+                log?.(`[PlanManifest] updatePlanProjectByPlanFile failed (0 rows / race) for ${resolvedPlanFile}`);
             }
         }
 
@@ -258,7 +296,7 @@ export class PlanManifestService {
                 if (epicPlan) {
                     resolvedEpicId = entry.epicId;
                 } else {
-                    log?.(`[PlanManifest] epicId '${entry.epicId}' does not resolve to an in-batch or DB epic; importing ${entry.planFile} without the link.`);
+                    log?.(`[PlanManifest] epicId '${entry.epicId}' does not resolve to an in-batch or DB epic; importing ${resolvedPlanFile} without the link.`);
                 }
             }
         }

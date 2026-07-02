@@ -283,6 +283,22 @@ const MIGRATION_V42_SQL = [
     `ALTER TABLE worktrees ADD COLUMN tier TEXT`,
 ];
 
+// V43: default agents_open_with_grid to ON for existing active worktrees.
+// New rows are set by addWorktree's INSERT; this one-time update brings
+// pre-existing active worktrees in line with the "on by default" behavior.
+const MIGRATION_V43_SQL = [
+    `UPDATE worktrees SET agents_open_with_grid = 1 WHERE status = 'active' AND agents_open_with_grid = 0`,
+];
+
+const MIGRATION_V44_SQL: string[] = [];
+
+const MIGRATION_V45_SQL: string[] = [
+    `ALTER TABLE imported_docs ADD COLUMN needs_file_path_relative INTEGER DEFAULT 0`,
+    `UPDATE imported_docs SET needs_file_path_relative = 1 WHERE file_path LIKE '/%' AND file_path != ''`,
+];
+
+
+
 const MIGRATION_V13_SQL = [
     `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)`,
@@ -1859,6 +1875,27 @@ export class KanbanDatabase {
         );
     }
 
+    /**
+     * Archive or delete a plan in a single atomic update: sets status, moves the
+     * plan to the COMPLETED terminal column, and stamps last_action so the row is
+     * self-documenting for direct DB queries. Use this instead of
+     * updateStatusByPlanFile() when the target status is 'archived' or 'deleted'
+     * so the kanban_column does not go stale (ghost-plan bug).
+     */
+    public async archivePlan(
+        planFile: string,
+        workspaceId: string,
+        status: 'archived' | 'deleted'
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            'UPDATE plans SET status = ?, kanban_column = ?, last_action = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [status, 'COMPLETED', status, new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
+
     /** @deprecated session_id is no longer the unique key; use updateStatusByPlanFile instead. */
     public async updateStatus(sessionId: string, status: KanbanPlanStatus): Promise<boolean> {
         const plan = await this.getPlanBySessionId(sessionId);
@@ -2201,7 +2238,7 @@ export class KanbanDatabase {
                 entry.remoteDocId || null,
                 entry.docName,
                 entry.parentDocName || entry.docName,
-                entry.filePath,
+                this._ensureRelativePlanFile(entry.filePath),
                 entry.importedAt,
                 entry.lastSyncedAt || null,
                 entry.contentHash || null,
@@ -2238,7 +2275,7 @@ export class KanbanDatabase {
                     remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
                     docName: String(row.doc_name),
                     parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
-                    filePath: String(row.file_path),
+                    filePath: this._resolveAbsolutePlanFile(String(row.file_path)),
                     importedAt: String(row.imported_at),
                     lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                     contentHash: row.content_hash ? String(row.content_hash) : undefined,
@@ -2267,7 +2304,7 @@ export class KanbanDatabase {
                 remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
                 docName: String(row.doc_name),
                 parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
-                filePath: String(row.file_path),
+                filePath: this._resolveAbsolutePlanFile(String(row.file_path)),
                 importedAt: String(row.imported_at),
                 lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                 contentHash: row.content_hash ? String(row.content_hash) : undefined,
@@ -2314,7 +2351,7 @@ export class KanbanDatabase {
                 remoteDocId,
                 docName,
                 docName,
-                filePath,
+                this._ensureRelativePlanFile(filePath),
                 now,
                 now,
                 contentHash,
@@ -2342,7 +2379,7 @@ export class KanbanDatabase {
                     remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
                     docName: String(row.doc_name),
                     parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
-                    filePath: String(row.file_path),
+                    filePath: this._resolveAbsolutePlanFile(String(row.file_path)),
                     importedAt: String(row.imported_at),
                     lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                     contentHash: row.content_hash ? String(row.content_hash) : undefined,
@@ -2472,7 +2509,7 @@ export class KanbanDatabase {
                             entry.remoteDocId || null,
                             entry.docName,
                             entry.parentDocName || entry.docName,
-                            entry.filePath,
+                            this._ensureRelativePlanFile(entry.filePath),
                             entry.importedAt,
                             entry.lastSyncedAt || null,
                             entry.contentHash || null,
@@ -2655,7 +2692,7 @@ export class KanbanDatabase {
     public async addWorktree(branch: string, wtPath: string, epicId?: string, project?: string, subtaskPlanId?: string, baseBranch?: string, tier?: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         this._db.run(
-            `INSERT INTO worktrees (branch, path, epic_id, project, subtask_plan_id, base_branch, tier) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO worktrees (branch, path, epic_id, project, subtask_plan_id, base_branch, tier, agents_open_with_grid) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
             [
                 branch,
                 wtPath,
@@ -3505,7 +3542,7 @@ export class KanbanDatabase {
                         item.docId,
                         item.docName,
                         item.parentDocName,
-                        item.filePath,
+                        this._ensureRelativePlanFile(item.filePath),
                         item.importedAt,
                         item.lastSyncedAt,
                         item.hash,
@@ -5457,6 +5494,105 @@ export class KanbanDatabase {
                 console.error('[KanbanDatabase] V42 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
+
+        // V43: default agents_open_with_grid to ON for existing active worktrees.
+        const v43 = await this.getMigrationVersion();
+        if (v43 < 43) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V43_SQL) {
+                    this._db.exec(sql);
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(43);
+                console.log('[KanbanDatabase] V43 migration completed: agents_open_with_grid defaulted to ON for active worktrees');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V43 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V44: repair ghost plans — archived/deleted plans left in non-terminal columns.
+        const v44 = await this.getMigrationVersion();
+        if (v44 < 44) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V44_SQL) {
+                    this._db.exec(sql);
+                }
+                const ghostStmt = this._db.prepare(
+                    "SELECT COUNT(*) as cnt FROM plans WHERE status IN ('archived','deleted') AND kanban_column != 'COMPLETED'"
+                );
+                let ghostCount = 0;
+                try {
+                    if (ghostStmt.step()) {
+                        ghostCount = Number(ghostStmt.getAsObject().cnt || 0);
+                    }
+                } finally {
+                    ghostStmt.free();
+                }
+                if (ghostCount > 0) {
+                    this._db.exec(
+                        "UPDATE plans SET kanban_column = 'COMPLETED', last_action = 'archived-ghost-repaired' " +
+                        "WHERE status IN ('archived','deleted') AND kanban_column != 'COMPLETED'"
+                    );
+                    console.log(`[KanbanDatabase] V44 migration: repaired ${ghostCount} archived/deleted ghost plan(s) left in non-COMPLETED columns`);
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(44);
+                console.log('[KanbanDatabase] V44 migration completed: archived/deleted ghost plans repaired');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V44 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V45: repair imported_docs file_path by converting absolute → relative.
+        const v45 = await this.getMigrationVersion();
+        if (v45 < 45) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V45_SQL) {
+                    this._db.exec(sql);
+                }
+                const flagStmt = this._db.prepare(
+                    "SELECT slug_prefix, workspace_id, file_path FROM imported_docs WHERE needs_file_path_relative = 1"
+                );
+                let converted = 0;
+                let skipped = 0;
+                try {
+                    while (flagStmt.step()) {
+                        const row = flagStmt.getAsObject();
+                        const slugPrefix = String(row.slug_prefix);
+                        const wsId = String(row.workspace_id);
+                        const absPath = String(row.file_path);
+                        const relPath = this._ensureRelativePlanFile(absPath);
+                        if (relPath !== absPath) {
+                            this._db.run(
+                                "UPDATE imported_docs SET file_path = ?, needs_file_path_relative = 0 WHERE slug_prefix = ? AND workspace_id = ?",
+                                [relPath, slugPrefix, wsId]
+                            );
+                            converted++;
+                        } else {
+                            this._db.run(
+                                "UPDATE imported_docs SET needs_file_path_relative = 0 WHERE slug_prefix = ? AND workspace_id = ?",
+                                [slugPrefix, wsId]
+                            );
+                            skipped++;
+                            console.warn(`[KanbanDatabase] V45: imported_docs row ${slugPrefix} has file_path outside workspace root, left absolute: ${absPath}`);
+                        }
+                    }
+                } finally {
+                    flagStmt.free();
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(45);
+                console.log(`[KanbanDatabase] V45 migration completed: ${converted} imported_docs file_path(s) relativized, ${skipped} left absolute (outside workspace root)`);
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V45 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
     }
 
     /**
@@ -5980,6 +6116,12 @@ FROM plans
                         if (plan.epicId) {
                             const epicTopic = epicTopicById.get(plan.epicId);
                             parts.push(epicTopic ? `subtask-of:"${epicTopic}"` : `subtask-of:${plan.epicId}`);
+                        }
+                        // NEW: emit project tag so the Suggest Epics skill can filter by project.
+                        // Empty/missing project → no tag (unassigned by definition).
+                        if (plan.project) {
+                            const safeProject = plan.project.replace(/"/g, '');
+                            parts.push(`project:"${safeProject}"`);
                         }
                         colMd += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
                     }
