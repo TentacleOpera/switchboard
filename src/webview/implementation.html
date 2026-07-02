@@ -2698,6 +2698,19 @@
 
 
 
+        function findTerminalByRole(terminals, role) {
+            if (!terminals) return null;
+            const entries = Object.entries(terminals);
+            // Prefer worktree terminals (worktreePath set) over main workspace terminals
+            const worktreeMatch = entries.find(([, info]) =>
+                info?.role === role && info?.worktreePath
+            );
+            if (worktreeMatch) return worktreeMatch[0];
+            // Fall back to any terminal with matching role
+            const anyMatch = entries.find(([, info]) => info?.role === role);
+            return anyMatch ? anyMatch[0] : null;
+        }
+
         function createAgentRow(label, roleId, actionLabel, findTerminalFn, hideLocate, explicitTermName) {
             const container = document.createElement('div');
             container.className = 'agent-row';
@@ -2706,7 +2719,8 @@
             const dispatchInfo = lastDispatchReadiness && roleId ? lastDispatchReadiness[roleId] : null;
             const dispatchState = dispatchInfo && dispatchInfo.state ? dispatchInfo.state : null;
             const routedTermName = (dispatchInfo && dispatchInfo.terminalName) ? dispatchInfo.terminalName : null;
-            const resolvedTermName = termName || routedTermName;
+            const isWorktreeRoute = dispatchInfo && dispatchInfo.isWorktreeTerminal;
+            const resolvedTermName = (isWorktreeRoute && routedTermName) ? routedTermName : (termName || routedTermName);
             const termData = resolvedTermName ? lastTerminals[resolvedTermName] : null;
 
             // Status Logic
@@ -2761,7 +2775,9 @@
             name.className = 'agent-name';
             if (roleId !== 'jules') {
                 let suffix = '';
-                if (dispatchInfo && dispatchInfo.isWorktreeTerminal) {
+                const isWtTerm = (dispatchInfo && dispatchInfo.isWorktreeTerminal) ||
+                    (resolvedTermName && lastTerminals[resolvedTermName]?.worktreePath);
+                if (isWtTerm) {
                     suffix = ' <span style="font-size:9px; opacity:0.6;">(worktree)</span>';
                 }
 
@@ -2944,7 +2960,7 @@
             if (dispatchState === 'recoverable' || dispatchState === 'not_ready') return false;
             // Fallback: check terminal heartbeat for agents with no dispatch info
             const HEARTBEAT_THRESHOLD_MS = 120_000;
-            const matchedTermName = Object.keys(lastTerminals).find(key => lastTerminals[key]?.role === roleId);
+            const matchedTermName = findTerminalByRole(lastTerminals, roleId);
             if (!matchedTermName) return false;
             const termData = lastTerminals[matchedTermName];
             if (!termData) return false;
@@ -3047,7 +3063,7 @@
             if (va.planner !== false) {
                 agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
                     'IMPROVE PLAN',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner'),
+                    terminals => findTerminalByRole(terminals, 'planner'),
                     false, // hideLocate
                     lastPlannerTarget || undefined
                 ));
@@ -3057,7 +3073,7 @@
             if (va.lead !== false) {
                 agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
                     'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
+                    terminals => findTerminalByRole(terminals, 'lead')
                 ));
             }
 
@@ -3065,7 +3081,7 @@
             if (va.coder !== false) {
                 agentListStandard.appendChild(createAgentRow('CODER', 'coder',
                     'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
+                    terminals => findTerminalByRole(terminals, 'coder')
                 ));
             }
 
@@ -3073,7 +3089,7 @@
             if (va.intern !== false) {
                 agentListStandard.appendChild(createAgentRow('INTERN', 'intern',
                     'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'intern')
+                    terminals => findTerminalByRole(terminals, 'intern')
                 ));
             }
 
@@ -3081,14 +3097,14 @@
             if (va.reviewer !== false) {
                 agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
                     'REVIEW CODE',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'reviewer')
+                    terminals => findTerminalByRole(terminals, 'reviewer')
                 ));
             }
 
             if (va.tester !== false) {
                 agentListStandard.appendChild(createAgentRow('ACCEPTANCE TESTER', 'tester',
                     'TEST REQUIREMENTS',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'tester')
+                    terminals => findTerminalByRole(terminals, 'tester')
                 ));
             }
 
@@ -3115,7 +3131,7 @@
                     customAgent.name.toUpperCase(),
                     customAgent.role,
                     'EXECUTE TASK',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === customAgent.role)
+                    terminals => findTerminalByRole(terminals, customAgent.role)
                 ));
             }
 
@@ -3123,7 +3139,7 @@
             if (va.jules !== false) {
                 agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
                     'START CLOUD CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
+                    terminals => findTerminalByRole(terminals, 'jules'),
                     true
                 ));
             }
@@ -3338,7 +3354,7 @@ Work through all plans in the list, using the marker format above.`;
             const container = document.createElement('div');
             container.className = 'agent-row';
 
-            const termName = Object.keys(lastTerminals).find(key => lastTerminals[key].role === 'analyst');
+            const termName = findTerminalByRole(lastTerminals, 'analyst');
             const termData = termName ? lastTerminals[termName] : null;
 
             let isReady = false;

@@ -25,7 +25,17 @@ Switchboard integrates with both ClickUp and Linear through dedicated sync servi
 ## Metadata
 
 - **Tags:** feature, backend, frontend, clickup, linear, tickets
-- **Complexity:** 5
+- **Complexity:** 6
+
+> **Line-number note:** references below were accurate at authoring time; the current source has drifted ~+1-2 lines (e.g. `_taskListIndex` is now line 171, `loadWorkspaceIdIfNeeded` line 350, `getSpaces` line 1018, `getFolders` line 1038, `getLists` line 1062, `updateTask` body around line 1420, `httpRequestV3` line 2313). Treat line numbers as anchors — grep the symbol name before editing.
+
+## Uncertain Assumptions
+
+The following items are NOT 100% confirmed against authoritative sources and were flagged for the user to run web research before implementation (see the research prompt at the end of the chat summary):
+
+1. **ClickUp v3 move endpoint `status_mappings` payload field names** — the public docs text does not spell out the exact field names inside each `status_mappings` object. The plan assumes `{ oldStatusId, newStatusId }` but this must be confirmed against the interactive schema at developer.clickup.com/reference/movetask or the 400 error body from a probe call.
+2. **ClickUp task `locations` array semantics** — whether the `locations` array returned by `GET /v2/task/{id}` includes the home list, and whether it reflects pre-move or post-move state. The `remainsInLists` count depends on this. Must be verified via a probe call on a task with Tasks-in-Multiple-Lists enabled.
+3. **Linear `issueUpdate` `projectId` nullability** — the plan assumes `projectId` accepts `null` (to unassign from project) and is typed as nullable `String` in the GraphQL schema. If the schema types it as `String!` or does not accept null, the unassign path (Edge Case 3) will error. Verify against the Linear GraphQL schema.
 
 ## User Review Required
 
@@ -86,6 +96,10 @@ Yes — review the UI approach for the move action (Proposed Change #6). The pro
 - `LinearSyncService._issueProjectIndex` — existing reverse map for cache invalidation (line 138).
 - `LocalApiServer._checkAuth` — auth pattern reused for new endpoints.
 - `sb_api_call.sh` — shared shell library for agent skills.
+
+## Adversarial Synthesis
+
+Key risks: (1) the proposed `/task/clickup/{id}/move` route is unreachable if placed after the existing greedy `PUT /task/clickup/` prefix-match route (line 1012) — it MUST be registered before that route or the generic route must be guarded with `!pathname.endsWith('/move')`; (2) the `remainsInLists` filter excludes the target list instead of the source home list, over-reporting stale memberships; (3) the `status_mappings` payload field names and the `locations` array semantics are unverified against the live API. Mitigations: routing order is now an explicit hard requirement in Change #3; the `remainsInLists` filter is corrected to exclude the source home list via `_taskListIndex`; the three API-shape uncertainties are listed in Uncertain Assumptions and gated behind probe calls in the Verification Plan.
 
 ## Proposed Changes
 
@@ -152,12 +166,18 @@ public async moveTask(
   const currentStatusName = String(taskResult.data?.status?.status ?? '');
   const currentStatusId = String(taskResult.data?.status?.id ?? '');
   // `locations` lists the task's list memberships when Tasks in Multiple Lists is on.
-  // Implementation-time check: verify whether it includes the home list; count only
-  // the non-home entries.
+  // ⚠️ Uncertain Assumption #2: verify whether `locations` includes the home list and
+  // whether it reflects pre-move state (it is fetched BEFORE the move call). The filter
+  // below excludes the SOURCE home list (from _taskListIndex), not the target — the move
+  // changes the home list, so the old home entry in `locations` is stale post-move and
+  // must not be counted as a "remaining" membership.
+  const sourceListId = this._taskListIndex.get(normalizedTaskId);
   const locations: Array<{ id: string }> = Array.isArray(taskResult.data?.locations)
     ? taskResult.data.locations
     : [];
-  const remainsInLists = locations.filter(l => String(l.id) !== normalizedTargetListId).length;
+  const remainsInLists = locations.filter(
+    l => String(l.id) !== normalizedTargetListId && String(l.id) !== sourceListId
+  ).length;
 
   let statusMappings = options?.statusMappings;
   let warning: string | undefined;
@@ -358,9 +378,29 @@ private async _handleMoveLinearIssue(issueId: string, req: http.IncomingMessage,
 }
 ```
 
-Add routes in the routing section (after line 1014, near the existing ClickUp/Linear routes):
+Add routes in the routing section. **🚨 CRITICAL ROUTING ORDER:** the existing `PUT /task/clickup/` route at line 1012 uses a greedy `pathname.startsWith('/task/clickup/')` prefix match. If the move route is placed AFTER it, `/task/clickup/{id}/move` is swallowed by the generic update handler and the move endpoint is dead on arrival. The move routes MUST be registered BEFORE the generic `PUT /task/clickup/` route (line 1012), OR the generic route must be guarded with `&& !pathname.endsWith('/move')`. The Linear side has no existing `PUT /task/linear/` route, so ordering is not constrained there — but register both move routes together for clarity.
+
+**Preferred approach — register move routes BEFORE the generic PUT route (insert above line 1012):**
 
 ```typescript
+// MOVE ROUTES — must precede the generic PUT /task/clickup/ prefix match below
+} else if (pathname.startsWith('/task/clickup/') && pathname.endsWith('/move') && req.method === 'PUT') {
+  const taskId = pathname.split('/')[3];
+  await this._handleMoveClickUpTask(taskId, req, res);
+} else if (pathname.startsWith('/task/linear/') && pathname.endsWith('/move') && req.method === 'PUT') {
+  const issueId = pathname.split('/')[3];
+  await this._handleMoveLinearIssue(issueId, req, res);
+} else if (pathname.startsWith('/task/clickup/') && req.method === 'PUT') {   // existing line 1012 — now safely below
+  const taskId = pathname.split('/')[3];
+  await this._handleUpdateClickUpTask(taskId, req, res);
+```
+
+**Alternative — guard the generic route (if inserting above is undesirable):**
+
+```typescript
+} else if (pathname.startsWith('/task/clickup/') && !pathname.endsWith('/move') && req.method === 'PUT') {
+  const taskId = pathname.split('/')[3];
+  await this._handleUpdateClickUpTask(taskId, req, res);
 } else if (pathname.startsWith('/task/clickup/') && pathname.endsWith('/move') && req.method === 'PUT') {
   const taskId = pathname.split('/')[3];
   await this._handleMoveClickUpTask(taskId, req, res);
@@ -368,6 +408,8 @@ Add routes in the routing section (after line 1014, near the existing ClickUp/Li
   const issueId = pathname.split('/')[3];
   await this._handleMoveLinearIssue(issueId, req, res);
 ```
+
+Either approach resolves the conflict. The key invariant: **a `/move` suffix must never fall through to the generic update handler.**
 
 ### 4. `.agents/skills/clickup_move_task.md` — New skill file
 
@@ -606,3 +648,17 @@ Add to the skill table:
 12. **Tasks in Multiple Lists residue**: move a task that is also a member of another list (e.g. a sprint list). Verify only the home list changes, the task still appears in the other list in the ClickUp web app, `remainsInLists` is non-zero in the API response, and the webview toast mentions it.
 
 13. **Move-target cache**: open the Move popover twice within 60 seconds — verify the second open issues no ClickUp API calls (check LocalApiServer/service logs). Verify `refresh: true` bypasses the cache. On a workspace with several spaces and folders, verify the first open completes without tripping rate limits and shows a loading state while fetching.
+
+14. **🚨 Routing conflict regression (Change #3)**: send `PUT /task/clickup/{id}/move` and confirm it reaches `_handleMoveClickUpTask` (not `_handleUpdateClickUpTask`). Inspect the routing chain order in `LocalApiServer.ts` — the move route MUST appear before the generic `PUT /task/clickup/` prefix match, or the generic route MUST be guarded with `!pathname.endsWith('/move')`. A move request that silently no-ops or 400s with an update-task error message indicates the routing order bug is present.
+
+15. **`remainsInLists` filter correctness**: move a task whose home list is A and which is also in sprint list S, to target list B. Verify `remainsInLists` counts S only (not A, not B). If it counts A, the filter is excluding the wrong list — see the corrected filter in Change #1 which excludes both the target and the source home list (from `_taskListIndex`).
+
+16. **Probe: `status_mappings` field names (Uncertain Assumption #1)**: before finalizing the `moveBody.status_mappings` payload, send a deliberate status-mismatch move with no mappings to capture the 400 error body. Confirm the exact field names against the error body or the interactive schema at developer.clickup.com/reference/movetask. If the field names differ from `{ oldStatusId, newStatusId }`, update the `statusMappings` type and the payload builder.
+
+17. **Probe: `locations` array semantics (Uncertain Assumption #2)**: on a task with Tasks-in-Multiple-Lists enabled, `GET /v2/task/{id}` and inspect the `locations` array. Confirm whether it includes the home list and whether it reflects pre-move state. Adjust the `remainsInLists` filter if the semantics differ from the assumed pre-move-includes-home behavior.
+
+18. **Probe: Linear `projectId` nullability (Uncertain Assumption #3)**: introspect the Linear GraphQL schema for the `issueUpdate` input's `projectId` field. Confirm it accepts `null`. If it does not, the unassign-from-project path (Edge Case 3) must be removed or reworked (e.g. via a separate mutation or by omitting the field — though omitting leaves the project unchanged, not unset).
+
+---
+
+**Recommendation:** Complexity 6 → **Send to Coder**. The service methods and routes follow existing patterns closely. The two fixes (routing order, `remainsInLists` filter) are mechanical. The three probe-gated uncertainties (status_mappings fields, locations semantics, Linear projectId nullability) should be resolved before implementation — they affect payload shape and feature scope, not architecture.

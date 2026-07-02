@@ -1,64 +1,92 @@
 # implementation.html plan select dropdown must respect active kanban board project filter
 
+**Plan ID:** a1b2c3d4-0002-4a7b-8c9d-0e1f2a3b4c5d
+
 ## Goal
 
+The plan select dropdown in implementation.html (the sidebar) must show only plans belonging to the active kanban board's project filter. When the user selects a project on the kanban board, the sidebar dropdown must refresh to reflect that filter.
+
 ### Problem
+
 The plan select dropdown in implementation.html (the sidebar) shows plans from ALL projects, ignoring the active kanban board's project filter. When the user selects a project on the kanban board (e.g., "Project Foo"), the sidebar dropdown should only show plans belonging to "Project Foo" — but it currently shows every plan in the workspace.
 
 ### Background
-The sidebar dropdown is populated by the `runSheets` message, which is sent from `TaskViewerProvider._refreshRunSheets()` (TaskViewerProvider.ts:15360-15433). This method reads the project filter via `this._kanbanProvider?.getProjectFilter()` (line 15369) and uses it to query the DB: `getBoardFilteredByProject(workspaceId, projectFilter, repoScope)` (line 15372).
+
+The sidebar dropdown is populated by the `runSheets` message, which is sent from `TaskViewerProvider._refreshRunSheetsImpl` (TaskViewerProvider.ts:15320-15474). This method reads the project filter via `this._kanbanProvider?.getProjectFilter()` (line 15409) and uses it to query the DB: `getBoardFilteredByProject(workspaceId, projectFilter, repoScope)` (line 15412).
 
 So the backend **does** pass the project filter to the DB query. The question is why the dropdown still shows all plans.
 
 ### Root Cause
-The `_projectFilter` field in `KanbanProvider` (KanbanProvider.ts:182) is initialized to `KanbanDatabase.UNASSIGNED_PROJECT_FILTER` (`'__unassigned__'`), which means "show only unassigned plans" — NOT "show all plans". The `getProjectFilter()` method (KanbanProvider.ts:4762-4764) returns this value directly.
 
-In `_refreshRunSheets` (TaskViewerProvider.ts:15371), the condition is:
+The `_projectFilter` field in `KanbanProvider` (KanbanProvider.ts:182) is initialized to `KanbanDatabase.UNASSIGNED_PROJECT_FILTER` (`'__unassigned__'`), which means "show only unassigned plans" — NOT "show all plans". The `getProjectFilter()` method (KanbanProvider.ts:4811-4813) returns this value directly.
+
+In `_refreshRunSheetsImpl` (TaskViewerProvider.ts:15411), the condition is:
 ```ts
 const activeRows = (projectFilter !== null || repoScope)
     ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
     : await db.getBoard(workspaceId);
 ```
 
-When `_projectFilter` is `'__unassigned__'`, `projectFilter` is `'__unassigned__'` (not null), so it takes the filtered path. `getBoardFilteredByProject` with `project === '__unassigned__'` adds `AND plans.project_id IS NULL` (KanbanDatabase.ts:2766-2767) — showing only plans with no project. This is correct for the "base workspace" filter.
+When `_projectFilter` is `'__unassigned__'`, `projectFilter` is `'__unassigned__'` (not null), so it takes the filtered path. `getBoardFilteredByProject` with `project === '__unassigned__'` adds `AND plans.project_id IS NULL` (KanbanDatabase.ts:2767) — showing only plans with no project. This is correct for the "base workspace" filter.
 
 When the user selects a specific project (e.g., "Foo"), `setProjectFilter('Foo')` is called, `_projectFilter` becomes `'Foo'`, and the query correctly filters to Foo's plans.
 
-**The actual bug**: The sidebar dropdown is NOT being refreshed when the project filter changes. `setProjectFilter` (KanbanProvider.ts:4888-4911) updates `_projectFilter` and persists it, but does NOT trigger a sidebar refresh. The kanban board refreshes via `_refreshBoard` (called from the `setProjectFilter` message handler at KanbanProvider.ts:5585), which calls `switchboard.refreshUI` (KanbanProvider.ts:2215), which calls `taskViewerProvider.refreshUI()` (TaskViewerProvider.ts:2759), which calls `_refreshRunSheets()` (TaskViewerProvider.ts:2786). So the sidebar SHOULD refresh.
+**The actual bug**: The sidebar dropdown is NOT being refreshed when the project filter changes. `setProjectFilter` (KanbanProvider.ts:4937-4961) updates `_projectFilter` and persists it, but does NOT trigger a sidebar refresh directly. The kanban board refreshes via `_refreshBoard` (called from the `setProjectFilter` message handler at KanbanProvider.ts:5631-5637), which calls `switchboard.refreshUI` via `executeCommand` (KanbanProvider.ts:2224), which calls `taskViewerProvider.refreshUI()` (TaskViewerProvider.ts:2761-2791), which calls `_refreshRunSheets()` (TaskViewerProvider.ts:2788). So the sidebar SHOULD refresh.
 
-The issue is timing/state: `setProjectFilter` is called from the kanban webview's message handler. The `_refreshBoard` call is `await`ed. But `_refreshRunSheets` reads `this._kanbanProvider?.getProjectFilter()` — if the kanban provider's `_projectFilter` was just set synchronously by `setProjectFilter` before `_refreshBoard` is called, the value should be correct.
+**Verification of the refresh chain:** The chain is complete and functional — `setProjectFilter` (synchronous field update) → `_refreshBoard` (awaited) → `executeCommand('switchboard.refreshUI')` (line 2224) → command registered in extension.ts calls `taskViewerProvider.refreshUI(workspaceRoot)` → `_refreshRunSheets` reads `this._kanbanProvider?.getProjectFilter()` (line 15409). The chain works in principle.
 
-**The real root cause**: The `setProjectFilter` message handler (KanbanProvider.ts:5581-5587) calls `this.setProjectFilter(msg.project)` THEN `await this._refreshBoard(workspaceRoot)`. The `setProjectFilter` method is synchronous and updates `_projectFilter` immediately. So `_refreshRunSheets` should see the new value. However, the `selectWorkspace` handler (KanbanProvider.ts:5437-5464) also calls `setProjectFilter` and then `_refreshBoard` — but it also changes `_currentWorkspaceRoot` and `_repoScopeFilter`. If the workspace changes, the sidebar's `_refreshRunSheets` may use a stale workspace context.
-
-After deeper investigation, the most likely cause is that `_refreshRunSheets` is reading the project filter correctly, but the **kanban.html project dropdown selection** is not actually calling `setProjectFilter` in all cases. Looking at kanban.html (line 7010-7015): the `change` handler only calls `setProjectFilter` when `selectedProject !== (activeProjectFilter ?? '')`. If `activeProjectFilter` is `null` (initial state in the webview) and the user selects `__unassigned__`, the condition is `'__unassigned__' !== (null ?? '')` → `'__unassigned__' !== ''` → true, so it does fire. But if `activeProjectFilter` is already `'__unassigned__'` and the user re-selects it, it won't fire — which is correct (no change).
-
-The remaining possibility: the sidebar (`TaskViewerProvider._view`) may not exist or may not be visible, causing the `if (this._view)` guard (TaskViewerProvider.ts:15392) to skip the `runSheets` post. But the user sees the dropdown, so the view exists.
-
-**Conclusion**: The backend filtering IS correct when `setProjectFilter` is called. The bug is that the sidebar dropdown doesn't visually update because the `runSheets` message is either not sent (view not ready) or sent with stale data. The most robust fix is to ensure the sidebar explicitly refreshes its run sheets whenever the project filter changes, and to add the project filter value to the `runSheets` message so the webview can display it.
+**The most likely cause**: The `executeCommand('switchboard.refreshUI')` call is async — if the command execution fails, is delayed, or the sidebar view isn't ready yet, the sidebar doesn't update. The most robust fix is to (a) add the project filter value to the `runSheets` message so the webview can display it and confirm it received the right filter, and (b) add an explicit direct `_taskViewerProvider?.refreshUI()` call in the `setProjectFilter` handler as a safety net, bypassing the command indirection.
 
 ## Metadata
-- **Tags**: `implementation.html`, `plan-select`, `project-filter`, `runSheets`, `sidebar`, `kanban`, `bug`
-- **Complexity**: 5/10
+
+- **Complexity:** 5
+- **Tags:** ui, bugfix, backend, frontend
+
+## User Review Required
+
+None. Pure refresh-chain and message-payload enhancement; no state migration, no schema change.
 
 ## Complexity Audit
-**Complex/Risky.** The filtering logic itself appears correct in the backend. The issue is in the refresh/delivery path — ensuring the sidebar receives updated run sheets whenever the project filter changes. The fix touches the refresh flow which is already complex (single-flight coalescing, workspace context resolution). Adding the project filter to the `runSheets` message is straightforward, but ensuring the refresh is triggered in all project-filter-change scenarios requires careful tracing of all `setProjectFilter` call sites.
+
+### Routine
+- Adding `projectFilter` field to the `runSheets` postMessage (TaskViewerProvider.ts:15468) and error-path posts (lines 15472, 15521).
+- Storing `currentProjectFilter` in implementation.html's `runSheets` handler and optionally displaying a filter indicator in the dropdown.
+- Adding an explicit `this._taskViewerProvider?.refreshUI(workspaceRoot)` call in the `setProjectFilter` message handler (KanbanProvider.ts:5631-5637).
+
+### Complex / Risky
+- The refresh flow uses single-flight coalescing (`_refreshRunSheets` wrapper at TaskViewerProvider.ts:15298-15318). Adding a direct `refreshUI` call alongside the command-based path could cause a double-refresh if both fire. The single-flight wrapper handles this (coalesces concurrent calls), but the implementer should verify no redundant DB reads.
 
 ## Edge-Case & Dependency Audit
-- **`setProjectFilter` call sites**: KanbanProvider.ts:5443 (workspace switch reset), 5445 (workspace switch preserve), 5497 (project creation), 5563 (project deletion reset), 5584 (setProjectFilter message handler). Each is followed by `_refreshBoard` which triggers `refreshUI` → `_refreshRunSheets`. The refresh chain should propagate the filter.
+
+- **Race Conditions:** The explicit `refreshUI` call and the command-based `executeCommand('switchboard.refreshUI')` may both fire. The single-flight wrapper in `_refreshRunSheets` (TaskViewerProvider.ts:15298-15318) coalesces concurrent calls, so this is safe — at most one DB read + postMessage lands.
+- **Security:** No untrusted input; `projectFilter` is read from `getProjectFilter()` which returns the internal `_projectFilter` field.
+- **Side Effects:** Each `refreshWithData` call will now also push `projectFilter` in the `runSheets` message. The webview handler is additive (reads `message.projectFilter ?? null`), so existing behavior is unchanged if the field is absent.
+- **Dependencies & Conflicts:** This plan touches the `runSheets` message payload, which is also modified by Plan 4 (adding `isEpic`/`epicId` to `toSheet`). The changes are to different parts of the message (`projectFilter` is a top-level field; `isEpic`/`epicId` are per-sheet fields). They compose without conflict.
+- **`setProjectFilter` call sites**: KanbanProvider.ts:5493 (workspace switch reset), 5495 (workspace switch preserve), 5547 (project creation), 5613 (project deletion reset), 5634 (setProjectFilter message handler). Each is followed by `_refreshBoard` which triggers the refresh chain. The explicit `refreshUI` call is only added to the message handler (5631-5637); the other call sites already go through `_refreshBoard` which triggers the chain.
 - **`UNASSIGNED_PROJECT_FILTER` ('__unassigned__')**: Means "base workspace board" — show only plans with no project. This is a valid filter value, not "show all". The sidebar must respect this too.
-- **`null` vs `'__unassigned__'`**: `getProjectFilter()` returns `null` when `_projectFilter` is null (shouldn't happen — initialized to `UNASSIGNED_PROJECT_FILTER`). The `_refreshRunSheets` condition `projectFilter !== null` is true for `'__unassigned__'`, so the filtered path is taken. This is correct.
+- **`null` vs `'__unassigned__'`**: `getProjectFilter()` returns `_projectFilter` which is initialized to `UNASSIGNED_PROJECT_FILTER` and never set to null in practice (the handler at line 5634 coerces null to `UNASSIGNED_PROJECT_FILTER` via `??`). The `_refreshRunSheetsImpl` condition `projectFilter !== null` is always true when a kanban provider exists, so the filtered path is always taken. The `getBoard(workspaceId)` branch (unfiltered) is only taken when `_kanbanProvider` is undefined (degraded state).
 - **Sidebar not visible**: If the sidebar view is disposed/hidden, `this._view` may be falsy and `runSheets` won't be posted. When the sidebar becomes visible again, it needs a refresh. This is handled by the `onDidChangeViewState` handler which calls `refreshUI`.
-- **Workspace switch**: When the workspace changes, `setProjectFilter(UNASSIGNED_PROJECT_FILTER)` is called (KanbanProvider.ts:5443). The sidebar refresh follows. This is correct.
+- **Workspace switch**: When the workspace changes, `setProjectFilter(UNASSIGNED_PROJECT_FILTER)` is called (KanbanProvider.ts:5493). The sidebar refresh follows. This is correct.
 - **Multi-workspace**: The sidebar shows plans from the current workspace only. The project filter is per-workspace (persisted in `workspaceState`). This is correct.
 
+## Dependencies
+
+None. This plan is self-contained and does not depend on any other plan in the epic. It composes with Plan 4 (which adds per-sheet `isEpic`/`epicId` fields to the same `runSheets` message) without conflict.
+
+## Adversarial Synthesis
+
+Key risk: the original plan's root cause analysis was inconclusive — it traced the refresh chain, found it functional, then proposed a safety-net fix without identifying the exact failure point. The refresh chain (`setProjectFilter` → `_refreshBoard` → `executeCommand` → `refreshUI` → `_refreshRunSheets`) IS complete and should work. The explicit `refreshUI` call is a belt-and-suspenders safety net for cases where the command-based path fails or races. The `projectFilter` field in the `runSheets` message is the more valuable addition — it enables debugging and a webview filter indicator. Mitigation: the single-flight wrapper coalesces any double-refresh from both paths. Line numbers refreshed (off by 10-50 in the original).
+
 ## Proposed Changes
+
+> **Implementer note:** Line numbers verified against current source. If shifted, grep for `_refreshRunSheetsImpl`, `case 'setProjectFilter'`, and `type: 'runSheets'` to locate insertion points.
 
 ### 1. `src/services/TaskViewerProvider.ts` — include project filter in `runSheets` message
 
 Add the current project filter to the `runSheets` message so the webview knows which filter was applied. This helps with debugging and enables the webview to show a filter indicator.
 
 ```ts
-// BEFORE (line 15428)
+// BEFORE (line 15468)
 this._view.webview.postMessage({ type: 'runSheets', activeSheets, completedSheets, kanbanColumns });
 
 // AFTER
@@ -72,30 +100,39 @@ this._view.webview.postMessage({
 });
 ```
 
-Also update the error-path posts (lines 15432, 15481) to include `projectFilter: null`.
+Also update the error-path posts (lines 15472, 15521) to include `projectFilter: null`.
 
-### 2. `src/services/TaskViewerProvider.ts` — ensure `_refreshRunSheets` is called after every `setProjectFilter`
+### 2. `src/services/KanbanProvider.ts` — explicit sidebar refresh in `setProjectFilter` handler
 
-The current flow (`setProjectFilter` → `_refreshBoard` → `refreshUI` → `_refreshRunSheets`) should work, but let's add an explicit guarantee. In the `refreshUI` method (TaskViewerProvider.ts:2759-2789), `_refreshRunSheets` is already called unconditionally. The issue may be that `_refreshBoard` (KanbanProvider.ts:2204-2220) calls `switchboard.refreshUI` via `executeCommand`, which is async — if the command execution fails or is delayed, the sidebar doesn't update.
-
-Add a direct call to `_refreshRunSheets` in addition to the command-based path, as a safety net:
+The current flow (`setProjectFilter` → `_refreshBoard` → `executeCommand('switchboard.refreshUI')` → `refreshUI` → `_refreshRunSheets`) should work, but the command-based path has an indirection that can fail silently. Add a direct call as a safety net:
 
 ```ts
-// In KanbanProvider.ts setProjectFilter message handler (line 5581-5587)
+// BEFORE (line 5631-5637)
+case 'setProjectFilter': {
+    const workspaceRoot = this._currentWorkspaceRoot;
+    if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
+        this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+        await this._refreshBoard(workspaceRoot);
+    }
+    break;
+}
+
+// AFTER
 case 'setProjectFilter': {
     const workspaceRoot = this._currentWorkspaceRoot;
     if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
         this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
         await this._refreshBoard(workspaceRoot);
         // Explicit: ensure the sidebar picks up the new filter even if the
-        // command-based refresh chain has a gap.
+        // command-based refresh chain has a gap. The single-flight wrapper
+        // in _refreshRunSheets coalesces any concurrent refresh from both paths.
         this._taskViewerProvider?.refreshUI(workspaceRoot);
     }
     break;
 }
 ```
 
-Note: `refreshUI` is async but we don't need to await it here — the `_refreshRunSheets` inside it will fire and post the updated `runSheets` message.
+Note: `refreshUI` is async but we don't need to await it here — the `_refreshRunSheets` inside it will fire and post the updated `runSheets` message. The single-flight wrapper (TaskViewerProvider.ts:15298-15318) coalesces concurrent calls from both the command path and this direct call.
 
 ### 3. `src/webview/implementation.html` — store and optionally display the active project filter
 
@@ -137,10 +174,21 @@ if (currentProjectFilter && currentProjectFilter !== '__unassigned__') {
 For `'__unassigned__'`, show `— Base Workspace —` as the indicator.
 
 ## Verification Plan
+
+> **Session directives:** SKIP compilation (no `npm run compile` / `tsc`) and SKIP automated tests in this session — the project is pre-compiled and tests run separately. The steps below are for the implementer/user to run after the session.
+
+### Automated Tests
+- (Run separately by user) Any existing `_refreshRunSheets` / `setProjectFilter` tests. The fix adds a field to the message payload and a direct call — existing assertions on the `runSheets` message should still pass (additive change).
+
+### Manual Verification
 1. **Select a project on kanban board**: Open the kanban board, select a specific project from the workspace/project dropdown. Verify the sidebar plan-select dropdown updates to show only plans from that project. Verify the project filter indicator is shown.
 2. **Select base workspace (unassigned)**: On the kanban board, select the base workspace option (no project). Verify the sidebar dropdown shows only unassigned plans (no project). Verify the "Base Workspace" indicator.
 3. **No project filter / all projects**: If there's a state where no filter is applied, verify the sidebar shows all plans.
-4. **Create plan while filtered**: With a project filter active, create a new plan from the sidebar. Verify the new plan appears in the dropdown (it should inherit the active project filter — see Issue 5's plan for the creation-side fix).
+4. **Create plan while filtered**: With a project filter active, create a new plan from the sidebar. Verify the new plan appears in the dropdown (it should inherit the active project filter).
 5. **Switch workspace**: Switch to a different workspace on the kanban board. Verify the sidebar dropdown resets to the new workspace's plans with the default (unassigned) filter.
 6. **Sidebar not visible during filter change**: Close the sidebar, change the project filter on the kanban board, then reopen the sidebar. Verify the dropdown shows the correctly filtered plans.
 7. **Console log verification**: Check that `[refreshRunSheets]` logs show the correct `projectFilter` value being passed to the DB query.
+
+## Recommendation
+
+Complexity 5 → **Send to Coder** (multi-file change: backend message payload + handler safety-net call + frontend state + optional UI indicator; the single-flight coalescing needs verification but the changes are additive).

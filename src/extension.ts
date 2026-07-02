@@ -507,9 +507,10 @@ export async function activate(context: vscode.ExtensionContext) {
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
 
     // NOTE: the watcher stamps a newly-imported plan with the board's active project by
-    // reading the `kanban.activeProjectFilter` config key the board persists into each
-    // workspace's DB (KanbanProvider._refreshBoardImpl). No resolver wiring is needed —
-    // the DB is the single source of truth, read back from the same DB the plan imports into.
+    // reading the `kanban.activeProjectFilter` config key the board syncs into each
+    // workspace's DB on every refresh (KanbanProvider._refreshBoardImpl) and on
+    // constructor restore from workspaceState. No resolver wiring is needed — the DB is
+    // the single source of truth, read back from the same DB the plan imports into.
 
     // Let the watcher re-derive an epic's kanban_column from its subtasks after
     // every epic-file import, self-healing the clobber where insertFileDerivedPlan

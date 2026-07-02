@@ -329,9 +329,20 @@ export class KanbanProvider implements vscode.Disposable {
             if (persistedFilter !== null) {
                 this._projectFilter = persistedFilter;
                 this._projectFilterNeedsValidation = true;
-                // The DB `kanban.activeProjectFilter` row that the watcher reads was already
-                // written by setProjectFilter the last time the user picked this project and
-                // persists across reloads, so no write is needed here on restore.
+                // Sync the restored project filter to the DB config so the plan watcher
+                // sees it immediately (before the first _refreshBoardImpl runs). The DB
+                // config can diverge from workspaceState after a workspace switch that
+                // called setProjectFilter(UNASSIGNED) — that writes '' to the DB config
+                // but the debounced workspaceState write may not have fired, or a later
+                // reload restores a non-empty filter from workspaceState while the DB
+                // config stays empty. _refreshBoardImpl also syncs this, but the watcher
+                // can import a plan before the first refresh completes.
+                const activeName = (persistedFilter && persistedFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+                    ? persistedFilter
+                    : '';
+                void this._getKanbanDb(this._currentWorkspaceRoot)
+                    .setConfig('kanban.activeProjectFilter', activeName)
+                    .catch(e => console.warn('[KanbanProvider] constructor: failed to sync restored project filter to DB config:', e));
             }
         }
         this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
@@ -1420,6 +1431,12 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, epicWorktrees });
             }
 
+            // Hydrate worktree state (indicator + WORKTREES tab) on every board refresh so it
+            // survives a window reload without requiring the user to click into the WORKTREES tab.
+            // _sendWorktreeConfig no-ops when the DB/panel aren't ready, and the webview handler
+            // is idempotent, so this is safe to run unconditionally here.
+            await this._sendWorktreeConfig(resolvedWorkspaceRoot);
+
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
 
@@ -2252,6 +2269,21 @@ export class KanbanProvider implements vscode.Disposable {
                 }
                 const projectFilter = this._projectFilter;
                 const repoScope = this._repoScopeFilter;
+
+                // Sync the in-memory project filter to the DB config on every refresh so
+                // the plan watcher (GlobalPlanWatcherService._handlePlanFile) reads the
+                // currently-displayed project when stamping newly-imported plans. Without
+                // this, the DB config can diverge from workspaceState after a reload
+                // (the constructor restores _projectFilter from workspaceState but does
+                // NOT write it back to the DB config), leaving the config stale/empty
+                // while the board shows a project selected — every new plan then lands
+                // with project='' and project_id=NULL.
+                const activeProjectName = (projectFilter && projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+                    ? projectFilter
+                    : '';
+                void db.setConfig('kanban.activeProjectFilter', activeProjectName)
+                    .catch(e => console.warn('[KanbanProvider] _refreshBoardImpl: failed to sync active project to DB config:', e));
+
                 const dbRows = (projectFilter !== null || repoScope)
                     ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
                     : await db.getBoard(workspaceId);
@@ -4917,8 +4949,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // is called on every project-dropdown switch, via the setProjectFilter /
             // selectWorkspace message handlers). The plan watcher reads this key when it
             // imports a new plan and stamps it — exactly like the manual Assign button.
-            // The row persists in the DB across reloads, so it also covers the case where a
-            // plan is created after a reload without re-touching the dropdown.
+            // _refreshBoardImpl also writes this key on every board refresh, and the
+            // constructor writes it on restore from workspaceState, so the watcher always
+            // sees the current value even after a reload.
             const activeProjectName = (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? filter : '';
             void this._getKanbanDb(this._currentWorkspaceRoot)
                 .setConfig('kanban.activeProjectFilter', activeProjectName)
@@ -8080,6 +8113,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     break;
                 }
 
+                if (this._taskViewerProvider && wtPath) {
+                    try { await this._taskViewerProvider.closeWorktreeTerminals(wtPath); }
+                    catch (e) { console.warn('[KanbanProvider] mergeWorktree: terminal cleanup failed (continuing):', e); }
+                }
+
                 try {
                     const execFileAsync = promisify(cp.execFile);
                     await execFileAsync('git', ['-C', workspaceRoot, 'merge', branch], { timeout: 30000 });
@@ -8098,6 +8136,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !await db.ensureReady()) break;
+                if (this._taskViewerProvider && wtPath) {
+                    try { await this._taskViewerProvider.closeWorktreeTerminals(wtPath); }
+                    catch (e) { console.warn('[KanbanProvider] abandonWorktree: terminal cleanup failed (continuing):', e); }
+                }
                 try {
                     const execFileAsync = promisify(cp.execFile);
                     if (wtPath && fs.existsSync(wtPath)) {
@@ -8680,6 +8722,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             }
             for (const created of toRemove) {
                 try {
+                    if (this._taskViewerProvider && created.path) {
+                        try { await this._taskViewerProvider.closeWorktreeTerminals(created.path); }
+                        catch (e) { console.warn(`[KanbanProvider] _provisionHighLowTierWorktrees rollback: terminal cleanup failed for ${created.branch} (continuing):`, e); }
+                    }
                     if (fs.existsSync(created.path)) {
                         await execFileAsync('git', ['worktree', 'remove', '--force', created.path], { cwd: workspaceRoot });
                     }
@@ -8753,6 +8799,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
      */
     private async _removeWorktreeRow(workspaceRoot: string, db: KanbanDatabase, wt: WorktreeRow, finalStatus: 'merged' | 'abandoned'): Promise<void> {
         const execFileAsync = promisify(cp.execFile);
+        if (this._taskViewerProvider && wt.path) {
+            try { await this._taskViewerProvider.closeWorktreeTerminals(wt.path); }
+            catch (e) { console.warn(`[KanbanProvider] _removeWorktreeRow: terminal cleanup failed for ${wt.branch} (continuing):`, e); }
+        }
         try {
             if (wt.path && fs.existsSync(wt.path)) {
                 await execFileAsync('git', ['worktree', 'remove', '--force', wt.path], { cwd: workspaceRoot });

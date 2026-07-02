@@ -3976,6 +3976,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         if (initialTabBtn) {
             initialTabBtn.click();
         }
+        // Always hydrate worktree state on load so the indicator survives a reload,
+        // independent of which tab is initially active.
+        loadWorktreeConfig();
 
         function getActiveWorkspaceRoot() {
             return currentWorkspaceRoot || (workspaceItems[0] && workspaceItems[0].workspaceRoot) || '';
@@ -9698,12 +9701,34 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                     const abandonBtn = document.createElement('button');
                     abandonBtn.className = 'btn-danger';
-                    abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit;';
+                    abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:8px;';
                     abandonBtn.textContent = 'Abandon';
                     abandonBtn.addEventListener('click', () => {
                         abandonWorktree(w.id, w.branch, w.path);
                     });
                     mainLine.appendChild(abandonBtn);
+
+                    const gridChk = document.createElement('input');
+                    gridChk.type = 'checkbox';
+                    gridChk.checked = !!w.agentsOpenWithGrid;
+                    gridChk.id = `wt-grid-${w.id}`;
+                    gridChk.style.cssText = 'margin-left:6px; cursor:pointer; vertical-align:middle;';
+                    gridChk.title = 'When you click the main AGENTS button, open a dedicated set of agent terminals inside this worktree (Planner/Coder/Reviewer/…), in addition to the main repo terminals — or instead of them when "Suppress main repo agent terminals" is on.';
+                    gridChk.addEventListener('change', () => {
+                        postKanbanMessage({
+                            type: 'toggleWorktreeAgentsOpenWithGrid',
+                            worktreeId: w.id,
+                            enabled: gridChk.checked,
+                            workspaceRoot: currentWorkspaceRoot
+                        });
+                    });
+                    mainLine.appendChild(gridChk);
+                    const gridLabel = document.createElement('label');
+                    gridLabel.htmlFor = `wt-grid-${w.id}`;
+                    gridLabel.textContent = 'Agent terminals';
+                    gridLabel.style.cssText = 'font-size:10px; color:var(--text-muted); cursor:pointer; margin-right:4px; vertical-align:middle;';
+                    gridLabel.title = gridChk.title;
+                    mainLine.appendChild(gridLabel);
 
                     row.appendChild(mainLine);
 
@@ -9720,27 +9745,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         scopeSpan.textContent = 'Scope: No automatic routing — work manually.';
                     }
                     detailsLine.appendChild(scopeSpan);
-
-                    const chkWrapper = document.createElement('div');
-                    chkWrapper.style.cssText = 'display:flex; align-items:center; gap:4px; cursor:pointer;';
-                    const chk = document.createElement('input');
-                    chk.type = 'checkbox';
-                    chk.checked = !!w.agentsOpenWithGrid;
-                    chk.title = 'Open terminals for this worktree automatically when clicking the main Agents button';
-                    chk.addEventListener('change', () => {
-                        postKanbanMessage({
-                            type: 'toggleWorktreeAgentsOpenWithGrid',
-                            worktreeId: w.id,
-                            enabled: chk.checked,
-                            workspaceRoot: currentWorkspaceRoot
-                        });
-                    });
-                    const label = document.createElement('span');
-                    label.textContent = 'Open terminals with grid';
-                    label.style.fontSize = '9px';
-                    chkWrapper.appendChild(chk);
-                    chkWrapper.appendChild(label);
-                    detailsLine.appendChild(chkWrapper);
 
                     row.appendChild(detailsLine);
                     return row;

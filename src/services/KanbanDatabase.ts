@@ -283,6 +283,13 @@ const MIGRATION_V42_SQL = [
     `ALTER TABLE worktrees ADD COLUMN tier TEXT`,
 ];
 
+// V43: default agents_open_with_grid to ON for existing active worktrees.
+// New rows are set by addWorktree's INSERT; this one-time update brings
+// pre-existing active worktrees in line with the "on by default" behavior.
+const MIGRATION_V43_SQL = [
+    `UPDATE worktrees SET agents_open_with_grid = 1 WHERE status = 'active' AND agents_open_with_grid = 0`,
+];
+
 const MIGRATION_V13_SQL = [
     `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)`,
@@ -2655,7 +2662,7 @@ export class KanbanDatabase {
     public async addWorktree(branch: string, wtPath: string, epicId?: string, project?: string, subtaskPlanId?: string, baseBranch?: string, tier?: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         this._db.run(
-            `INSERT INTO worktrees (branch, path, epic_id, project, subtask_plan_id, base_branch, tier) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO worktrees (branch, path, epic_id, project, subtask_plan_id, base_branch, tier, agents_open_with_grid) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
             [
                 branch,
                 wtPath,
@@ -5455,6 +5462,23 @@ export class KanbanDatabase {
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V42 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V43: default agents_open_with_grid to ON for existing active worktrees.
+        const v43 = await this.getMigrationVersion();
+        if (v43 < 43) {
+            try {
+                this._db.exec('BEGIN');
+                for (const sql of MIGRATION_V43_SQL) {
+                    this._db.exec(sql);
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(43);
+                console.log('[KanbanDatabase] V43 migration completed: agents_open_with_grid defaulted to ON for active worktrees');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V43 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
     }

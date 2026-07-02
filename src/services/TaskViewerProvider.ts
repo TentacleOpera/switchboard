@@ -7393,6 +7393,35 @@ Each plan file must include:
         });
     }
 
+    /**
+     * Close (dispose + drop from state + remove from autoban pool) EVERY terminal
+     * whose stored worktreePath matches the given path, regardless of role. Used when
+     * a worktree is deleted/merged/abandoned so its spawned terminals don't outlive it.
+     * Best-effort: each terminal is closed independently so one failure doesn't abort the rest.
+     */
+    public async closeWorktreeTerminals(worktreePath: string): Promise<void> {
+        const resolvedTarget = path.resolve(worktreePath);
+        // Collect names inside an updateState transaction so we read a consistent snapshot.
+        const names: string[] = [];
+        await this.updateState(async (state) => {
+            if (state.terminals) {
+                for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                    if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
+                        names.push(name);
+                    }
+                }
+            }
+        });
+
+        for (const name of names) {
+            try {
+                await this.killTerminal(name); // disposes VS Code terminal, drops state + pool refs, refreshes UI
+            } catch (e) {
+                console.warn(`[TaskViewerProvider] closeWorktreeTerminals: failed to close ${name} (continuing):`, e);
+            }
+        }
+    }
+
     /** Resolve the worktree path for a plan based on precedence: subtask worktree -> epic worktree -> project worktree -> undefined. */
     public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { epicId?: string | null; project?: string | null; planId?: string | null }): Promise<string | undefined> {
         const worktrees = await db.getWorktrees();
@@ -16485,7 +16514,7 @@ What would you like to find?`;
                         const nextCursor = this.getPlannerRotationCursor(locationKey);
                         const picked = terminals[nextCursor % terminals.length];
                         if (picked && this._isValidAgentName(picked)) {
-                            nextPlannerTarget = picked;
+                            nextPlannerTarget = this._stripIdeSuffix(picked);
                         }
                     }
                 }
@@ -18579,7 +18608,7 @@ What would you like to find?`;
                     const cursor = this.getPlannerRotationCursor(plannerSet.locationKey);
                     const picked = plannerSet.terminals[cursor % plannerSet.terminals.length];
                     if (picked && this._isValidAgentName(picked)) {
-                        currentPlannerTarget = picked;
+                        currentPlannerTarget = this._stripIdeSuffix(picked);
                     }
                 }
 

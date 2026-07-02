@@ -6,6 +6,12 @@
 
 When a user drags a Kanban card to a dispatch column (e.g. CODE REVIEWED) in CLI trigger mode, the card is **optimistically moved in the DOM** before the backend processes the drop. If the dispatch fails or is skipped (agent unavailable, dispatch error, CLI triggers disabled), the card's kanban_column is **never updated in the DB** — but a 2-second **render guard** (`optimisticMoveUntil`) in the webview absorbs the corrective board refresh, hiding the discrepancy. The card appears to stay in the target column until a **window reload**, at which point the board reads from the DB and the card "bounces back" to its actual (unchanged) column.
 
+### Desired Behavior
+
+The card **always stays where the user dropped it** — the column move is persisted to the DB immediately, before the dispatch attempt. If the dispatch fails, the card's **copy-prompt button glows orange** and the target column's prompt is already copied to the clipboard. The user can paste it manually — the same fallback they use today when they move the card back and hit copy-prompt.
+
+No snap-back. No bounce. The board stays snappy.
+
 ### Background Context
 
 The drag-to-dispatch flow has three paths in `kanban.html`:
@@ -44,108 +50,208 @@ The render guard (`optimisticMoveUntil`, 2000ms) is designed to prevent stale `u
 
 ## Root Cause
 
-The `triggerAction` path (CLI-mode drag-to-dispatch) does not guarantee a DB column update. When the dispatch fails or is skipped, the only corrective signal is a `_scheduleBoardRefresh` call, which produces an `updateBoard` message that the webview's render guard silently absorbs. There is no `moveCards` delta (which bypasses the guard) sent to revert the card.
+The `triggerAction` path (CLI-mode drag-to-dispatch) couples the column move to the dispatch outcome. When dispatch fails, the column is rolled back, but the render guard hides the rollback from the user. The fix is to **decouple** the column move from the dispatch — persist the move immediately, and treat dispatch failure as a separate concern (prompt fallback).
 
 ## Proposed Fix
 
-### Fix 1: Webview — Revert optimistic move when agent unavailable (Scenario A)
+### Design Principle
 
-In `kanban.html`, when `isColumnAgentAvailable(group.targetColumn)` returns false at line 5868, instead of silently returning, send a `moveCardForward` message (which updates the DB directly) OR revert the optimistic DOM move.
+The card goes where the user dropped it. Dispatch success/failure is a separate concern. If dispatch fails, the user gets the prompt via the orange-glowing copy-prompt button.
 
-**Preferred approach:** Send `moveCardForward` so the card still advances in the DB even without a dispatch. This matches user intent — they dragged the card to a new column.
+### Fix 1: Persist the column move BEFORE dispatch (Scenarios B & C)
+
+In `KanbanProvider.ts`, the `triggerAction` handler (line 5773) currently relies on `_handleTriggerAgentActionInternal` to update the column. Instead, call `moveCardToColumn` **first**, then dispatch. If dispatch fails, the card stays in the target column (no rollback).
+
+```typescript
+// KanbanProvider.ts, triggerAction handler, after resolving role (line 5786):
+
+// Persist the column move FIRST — decouples the card position from
+// dispatch success. The card stays where the user dropped it regardless
+// of whether the agent dispatch succeeds.
+await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
+
+// ... existing dispatch logic ...
+
+// When dispatch fails (dispatched === false at line 5866):
+// Instead of relying on _scheduleBoardRefresh (absorbed by render guard),
+// generate the target column's prompt, copy to clipboard, and signal
+// the webview to glow the copy-prompt button orange.
+if (!dispatched) {
+    const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId);
+    if (card) {
+        const sourceColumn = this._columnToRole(targetColumn) === 'reviewer' ? 'LEAD CODED' : card.column;
+        const prompt = await this._generatePromptForColumn([card], sourceColumn, workspaceRoot, targetColumn);
+        await vscode.env.clipboard.writeText(prompt);
+        this._panel?.webview.postMessage({
+            type: 'dispatchFailedPromptReady',
+            planId: card.planId || sessionId,
+            sessionId: card.sessionId,
+            targetColumn
+        });
+    }
+}
+```
+
+For the `canDispatch === false` path (Scenario B), the same prompt-fallback applies — the card is already persisted, so just generate the prompt and signal the button.
+
+### Fix 2: Remove the column rollback in TaskViewerProvider (Scenario C)
+
+In `TaskViewerProvider.ts`, `_handleTriggerAgentActionInternal` (line 16173) currently rolls back the column on dispatch failure (line 16502-16503). Since the `triggerAction` handler now persists the move independently, the rollback should be **skipped** when the call comes from the kanban drag-dispatch path.
+
+Add a `persistColumnOnError` flag to `ConfiguredKanbanDispatchOptions`:
+
+```typescript
+// TaskViewerProvider.ts, _handleTriggerAgentActionInternal, dispatch-failure rollback (line 16500):
+} else {
+    // Dispatch failed
+    if (!options?.persistColumnOnError && previousColumn) {
+        // Only roll back when the caller hasn't taken responsibility for
+        // the column move (e.g. sidebar dispatch). The kanban triggerAction
+        // handler persists the move independently and handles the fallback.
+        await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
+        this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
+    }
+    // ... rest of failure handling ...
+}
+```
+
+The `triggerAgentFromKanban` command (extension.ts:1231) needs to pass this flag. Since the command doesn't currently pass options, the handler can infer it: when called via `triggerAgentFromKanban`, set `persistColumnOnError = true`.
+
+Alternatively, the simpler approach: since `triggerAction` in KanbanProvider now calls `moveCardToColumn` before dispatch, and `_handleTriggerAgentActionInternal` also calls `_updateKanbanColumnForSession` at line 16466 (which is now redundant but harmless — same column), the rollback at line 16503 would revert to `previousColumn`. But since `triggerAction` already persisted the move, we need to either:
+- Pass `persistColumnOnError: true` through the command, OR
+- Have `triggerAction` skip the dispatch via `triggerAgentFromKanban` and instead call the dispatch directly with the flag
+
+The cleanest path: add `persistColumnOnError` to the options passed through `dispatchConfiguredKanbanColumnAction` and `handleKanbanTrigger`, defaulting to `true` for kanban-triggered dispatches.
+
+### Fix 3: Webview — Agent unavailable sends `moveCardForward` + prompt fallback (Scenario A)
+
+In `kanban.html`, when `isColumnAgentAvailable(group.targetColumn)` returns false at line 5868, instead of silently returning, send `moveCardForward` to persist the move. The backend `moveCardForward` handler already calls `moveCardToColumn` and sends a `moveCards` delta.
 
 ```javascript
-// Before (line 5868):
-if (!isColumnAgentAvailable(group.targetColumn)) return;
-
-// After:
+// kanban.html, line 5868:
 if (!isColumnAgentAvailable(group.targetColumn)) {
-    // No agent to dispatch — still advance the card in the DB via the
-    // non-dispatch move path. Without this, the optimistic DOM move
-    // is never persisted and the card bounces back on reload.
-    if (groupedIds.length === 1) {
-        postKanbanMessage({ type: 'moveCardForward', sessionIds: groupedIds, targetColumn: group.targetColumn, workspaceRoot });
-    } else {
-        postKanbanMessage({ type: 'moveCardForward', sessionIds: groupedIds, targetColumn: group.targetColumn, workspaceRoot });
-    }
+    // No agent to dispatch — still persist the card move to the DB.
+    // Without this, the optimistic DOM move is never persisted and
+    // the card bounces back on reload. The moveCardForward handler
+    // will also send a moveCards delta to confirm the UI position.
+    postKanbanMessage({
+        type: 'moveCardForward',
+        sessionIds: groupedIds,
+        targetColumn: group.targetColumn,
+        workspaceRoot
+    });
     return;
 }
 ```
 
-### Fix 2: Backend — Send `moveCards` delta instead of `_scheduleBoardRefresh` when dispatch fails (Scenarios B & C)
+The prompt fallback for Scenario A is handled by a separate message: since no backend dispatch was attempted, the backend doesn't know the prompt was needed. Two options:
+1. Have the webview also send a `promptSelected` message to get the prompt copied
+2. Send a new `dispatchFailedPromptReady` request from the webview
 
-In `KanbanProvider.ts`, the `triggerAction` handler (line 5773) currently calls `_scheduleBoardRefresh` at line 5890 as a catch-all corrective. This produces an `updateBoard` message absorbed by the render guard. Instead, when the dispatch did not happen or failed, send a targeted `moveCards` delta with the **actual** DB column — this bypasses the render guard.
-
-```typescript
-// In the triggerAction handler, after the dispatch attempt:
-// Replace the unconditional _scheduleBoardRefresh with a targeted moveCards
-// that reflects the actual DB state. This bypasses the render guard.
-
-// After the canDispatch block (line 5886):
-if (!canDispatch) {
-    // Agent not assigned — revert the card to its actual DB column via
-    // a moveCards delta (bypasses render guard, unlike _scheduleBoardRefresh).
-    const db = this._getKanbanDb(workspaceRoot);
-    if (db && await db.ensureReady()) {
-        const plan = await db.getPlanBySessionId(sessionId);
-        const actualColumn = plan ? (this._normalizeLegacyKanbanColumn(plan.kanbanColumn) || 'CREATED') : null;
-        if (actualColumn) {
-            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: [sessionId], targetColumn: actualColumn });
-        }
-    }
-}
-this._scheduleBoardRefresh(workspaceRoot ?? undefined);
-```
-
-For Scenario C (dispatch rolled back), the rollback in `TaskViewerProvider.ts:16502-16503` already calls `_scheduleSidebarKanbanRefresh`, which calls `_scheduleBoardRefresh`. But this is also absorbed. The fix is to have `_handleTriggerAgentActionInternal` send a `moveCards` delta via the KanbanProvider when rolling back:
-
-```typescript
-// TaskViewerProvider.ts, in the dispatch-failure rollback (line 16500-16508):
-if (previousColumn) {
-    await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
-    // Send a targeted moveCards delta that bypasses the webview render guard.
-    // _scheduleBoardRefresh alone is absorbed by the optimistic-move guard
-    // and the card appears stuck in the target column until a reload.
-    this._kanbanProvider?._panel?.webview.postMessage({
-        type: 'moveCards', sessionIds: [sessionId], targetColumn: previousColumn
-    });
-    this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
-}
-```
-
-### Fix 3: Webview — Trigger a board refresh after the render guard expires (safety net)
-
-As a defense-in-depth measure, after the render guard window expires, trigger a board refresh to reconcile any stale optimistic moves:
+Option 1 is simpler — piggyback on the existing `promptSelected` flow:
 
 ```javascript
-// In kanban.html, after setting optimisticMoveUntil:
-optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;
-// Schedule a reconciling refresh after the guard expires to catch
-// any optimistic moves that were never persisted to the DB.
-setTimeout(() => {
-    if (Date.now() >= optimisticMoveUntil) {
-        postKanbanMessage({ type: 'requestBoardRefresh' });
-    }
-}, OPTIMISTIC_MOVE_WINDOW_MS + 100);
+if (!isColumnAgentAvailable(group.targetColumn)) {
+    postKanbanMessage({ type: 'moveCardForward', sessionIds: groupedIds, targetColumn: group.targetColumn, workspaceRoot });
+    // Also copy the prompt for manual paste
+    postKanbanMessage({ type: 'promptSelected', column: group.sourceColumn, sessionIds: groupedIds, workspaceRoot });
+    return;
+}
 ```
 
-This requires adding a `requestBoardRefresh` handler in KanbanProvider:
-```typescript
-case 'requestBoardRefresh':
-    this._scheduleBoardRefresh(msg.workspaceRoot ?? undefined);
+But this would also advance the card via `promptSelected`'s logic, causing a double-advance. Better to use a dedicated message or have `moveCardForward` also trigger the prompt copy when the dispatch was the original intent.
+
+**Simplest approach:** Send only `moveCardForward`. The user can click the copy-prompt button manually if they want the prompt. The card stays in the right column — that's the critical fix. The orange glow is only for Scenarios B & C where the backend attempted a dispatch and failed.
+
+### Fix 4: Webview — Orange glow on copy-prompt button + message handler
+
+Add CSS for the orange glow state on the copy-prompt button:
+
+```css
+/* Card Copy Button — dispatch failed, prompt ready */
+@keyframes promptReadyGlow {
+    0%, 100% { box-shadow: 0 0 4px 1px rgba(255, 165, 0, 0.6); border-color: rgba(255, 165, 0, 0.8); }
+    50% { box-shadow: 0 0 8px 2px rgba(255, 165, 0, 0.9); border-color: rgba(255, 165, 0, 1); }
+}
+.card-btn.copy.prompt-ready {
+    animation: promptReadyGlow 2s ease-in-out infinite;
+    border: 1px solid rgba(255, 165, 0, 0.8);
+}
+```
+
+Add a message handler in the webview:
+
+```javascript
+case 'dispatchFailedPromptReady': {
+    const planId = msg.planId || msg.sessionId;
+    const btn = document.querySelector(`.card-btn.copy[data-plan-id="${CSS.escape(planId)}"]`)
+        || document.querySelector(`.card-btn.copy[data-session="${CSS.escape(msg.sessionId)}"]`);
+    if (btn) {
+        btn.classList.add('prompt-ready');
+        // Remove the glow after 30 seconds or on click
+        const removeGlow = () => btn.classList.remove('prompt-ready');
+        btn.addEventListener('click', removeGlow, { once: true });
+        setTimeout(removeGlow, 30000);
+    }
+    // Show a status message
+    const statusEl = document.getElementById('status-message');
+    if (statusEl) {
+        statusEl.textContent = 'Dispatch failed — prompt copied. Paste manually or click the glowing button.';
+        statusEl.style.color = 'rgba(255, 165, 0, 1)';
+        statusEl.style.display = 'inline-block';
+        statusEl.classList.add('flashing');
+    }
     break;
+}
 ```
 
 ## Files to Modify
 
-1. **`src/webview/kanban.html`** — Fix 1 (revert/advance when agent unavailable) + Fix 3 (post-guard refresh)
-2. **`src/services/KanbanProvider.ts`** — Fix 2 (send `moveCards` instead of `_scheduleBoardRefresh` when dispatch skipped) + Fix 3 (`requestBoardRefresh` handler)
-3. **`src/services/TaskViewerProvider.ts`** — Fix 2 (send `moveCards` delta on dispatch rollback)
+1. **`src/services/KanbanProvider.ts`**
+   - `triggerAction` handler (line 5773): call `moveCardToColumn` before dispatch; on `!dispatched`, generate prompt + copy to clipboard + send `dispatchFailedPromptReady` message
+   - `triggerBatchAction` handler (line 5893): same pattern for batch dispatches
+
+2. **`src/services/TaskViewerProvider.ts`**
+   - `_handleTriggerAgentActionInternal` (line 16173): add `persistColumnOnError` option; skip column rollback when set
+   - `ConfiguredKanbanDispatchOptions` type: add `persistColumnOnError?: boolean`
+   - `handleKanbanTrigger` (line 2855): pass `persistColumnOnError: true` for kanban-triggered dispatches
+
+3. **`src/webview/kanban.html`**
+   - CSS: add `.card-btn.copy.prompt-ready` glow animation
+   - Message handler: add `dispatchFailedPromptReady` case
+   - `isColumnAgentAvailable` guard (line 5868): send `moveCardForward` instead of silent return
+
+4. **`src/extension.ts`**
+   - `triggerAgentFromKanban` command (line 1231): pass `persistColumnOnError: true` in options
 
 ## Testing
 
-1. **Scenario A test:** Disable the reviewer agent (unassign it). Drag a card from LEAD CODED to CODE REVIEWED. Verify the card advances in the DB (via `moveCardForward`) and stays in CODE REVIEWED after reload.
-2. **Scenario B test:** Unassign all agents for a column. Drag a card to that column. Verify the card reverts to its previous column immediately (via `moveCards` delta), not after reload.
-3. **Scenario C test:** Force a dispatch failure (e.g. close the agent terminal mid-dispatch). Verify the card reverts to its previous column immediately.
-4. **Reload test:** After each scenario, reload the VS Code window. Verify no bounce-back occurs.
-5. **Normal dispatch test:** Drag a card to a column with a valid agent. Verify the card moves correctly and stays after reload.
+1. **Scenario A test:** Unassign the reviewer agent. Drag a card from LEAD CODED to CODE REVIEWED. Verify:
+   - Card stays in CODE REVIEWED (no bounce)
+   - DB shows CODE REVIEWED (via sqlite3 query)
+   - Reload window — card still in CODE REVIEWED
+
+2. **Scenario B test:** Unassign all agents. Drag a card to a dispatch column. Verify:
+   - Card stays in target column
+   - Copy-prompt button glows orange
+   - Prompt is in clipboard (paste to verify)
+   - Reload — card still in target column
+
+3. **Scenario C test:** Force a dispatch failure (close agent terminal mid-dispatch, or use an invalid terminal name). Verify:
+   - Card stays in target column (no rollback)
+   - Copy-prompt button glows orange
+   - Prompt is in clipboard
+   - Reload — card still in target column
+
+4. **Normal dispatch test:** Drag a card to a column with a valid, running agent. Verify:
+   - Card moves to target column
+   - Agent receives the dispatch
+   - No orange glow (dispatch succeeded)
+   - Reload — card still in target column
+
+5. **Copy-prompt button click after failed dispatch:** Click the orange-glowing button. Verify:
+   - Glow disappears
+   - Prompt is re-copied to clipboard (via the existing `copyPlanLinkResult` flow)
+   - Button returns to normal state
+
+6. **Batch dispatch test:** Drag multiple cards to a dispatch column. Verify all cards persist their move regardless of dispatch outcome.

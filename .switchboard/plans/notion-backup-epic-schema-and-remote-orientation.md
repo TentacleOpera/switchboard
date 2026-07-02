@@ -282,3 +282,9 @@ As described in §4: after the restore loop builds `toRestore`, do a second pass
 ## Recommendation
 
 Complexity is **5** (extending existing patterns — property addition, property read/write, two-pass sync, skill prose). The self-relation PATCH is the only novel piece, and it mirrors the proven `_ensureColumnSelectOptions` pattern. **Send to Coder** alongside or before Plan 4 (Plan 4's Notion provider is a no-op without these properties).
+
+---
+
+## Review Findings
+
+**Reviewed:** commit `6d40d30` on `remote-sync-2` branch. `NotionBackupService.ts` changes match plan: `autoCreateDatabase` adds `Is Epic` checkbox (Epic self-relation deferred to PATCH); `_ensureEpicProperties` is idempotent; `_planToNotionProperties` writes `Is Epic` + `Epic` via `epicIdToNotionPageId` map; `_notionPageToPlanRecord` reads both and returns transient `epicNotionPageId`; `setupRemoteControl` has correct two-pass sync; `restoreFromNotion` has second-pass epic resolution with self-relation guard. **CRITICAL fix applied:** the "Epics (grouping related work)" orientation section was written only to `.migrated.bak` (a dead backup file) — the active `sw-remote` skill (`.agents/workflows/sw-remote.md` + `.claude/skills/sw-remote/SKILL.md`) lacked it entirely, making the orientation half of this plan non-functional. Added the Epics section (covering both Notion `Is Epic`/`Epic` and Linear parent/child) to both active skill files. NITs: (1) `restoreFromNotion` cannot clear `isEpic=1` when `Is Epic` unchecked in Notion (upsert SQL makes `is_epic` sticky) — implementation behavior is safer than plan's stated behavior, no fix needed; (2) `backupToNotion` doesn't update `epicIdToNotionPageId` during loop (acceptable — setup sync handles first-time). Files changed: `.agents/workflows/sw-remote.md`, `.claude/skills/sw-remote/SKILL.md`. Verification: compilation and tests skipped per session directive.

@@ -43,7 +43,17 @@ Meanwhile ClickUp is progressively rolling out v3 and has started marking v2 end
 ## Metadata
 
 - **Tags:** refactor, backend, clickup, api, skills
-- **Complexity:** 4
+- **Complexity:** 5
+
+> **Line-number note:** references below were accurate at authoring time; the current source has drifted ~+2 lines (e.g. `httpRequest` is now line 2239, `httpRequestV3` line 2313, `makeApiRequest` line 2189, `attachFile` line 2051, `createDocPage` line 2132). Treat line numbers as anchors, not exact addresses — grep the symbol name before editing.
+
+## Uncertain Assumptions
+
+The following items are NOT 100% confirmed against authoritative sources and were flagged for the user to run web research before implementation (see the research prompt at the end of the chat summary):
+
+1. **v3 Attachments API shape** — exact path, multipart field name (v2 uses `attachment`), whether task attachments need a `parent` discriminator, and the response field names for `url`/`filename`. The plan's Change #4 fallback (keep v2 if the v3 response lacks a usable `url`) depends on this.
+2. **v3 docs path canonical form** — singular `/workspace/{id}/doc/{docId}/page` (current `createDocPage` call) vs plural `/workspaces/{id}/docs/...` (ClickUpDocsAdapter + published v3 reference). Whether the singular form is a tolerated alias or a latent bug determines whether Change #5 is a cosmetic normalization or a bug fix.
+3. **v3 error body shape** — the plan assumes v3 error shapes differ from v2's `{ err, ECODE }` and that stringifying `result.data` into thrown messages remains version-agnostic. Not verified against a v3 error response.
 
 ## User Review Required
 
@@ -91,6 +101,10 @@ Yes — three scope decisions:
 - `ClickUpDocsAdapter` — heaviest `httpRequestV3` consumer; regression surface for the transport unification.
 - `.agents/skills/clickup_api.md` + `.claude/skills/clickup-api/SKILL.md` — proxy contract documentation.
 - Ticket-move plan `feature_plan_20260702112125` — concurrent consumer of `httpRequestV3` (see Edge Case 5).
+
+## Adversarial Synthesis
+
+Key risks: (1) the `attachFile` v3 migration and the docs-path normalization both depend on unverified v3 API shapes — shipping them without probes risks breaking attachment upload and doc-page creation for a cosmetic version bump; (2) the transport contract (resolve-on-any-status, never-log-auth-header) must be preserved exactly or dozens of call sites break silently. Mitigations: Changes #4 and #5 are now probe-gated with first-class v2-fallback branches; the transport unification (Changes #1–#3) is a pure delegate refactor with zero call-site churn and is safe to land independently.
 
 ## Proposed Changes
 
@@ -201,21 +215,44 @@ sb_api_call POST /api/clickup \
   }'
 ```
 
-### 4. `src/services/ClickUpSyncService.ts` — Migrate `attachFile` to the v3 Attachments API
+### 4. `src/services/ClickUpSyncService.ts` — Migrate `attachFile` to the v3 Attachments API (PROBE-GATED)
 
 The v2 endpoint `POST /api/v2/task/{taskId}/attachment` (line 2065) is marked legacy by ClickUp with a pointer to the v3 Attachments API. Migrate the bespoke multipart request to the v3 path while preserving the method's public contract (`{ url, fileName }` return, optional follow-up comment with swallowed failures).
 
-⚠️ Implementation-time check (do this FIRST): confirm against the interactive reference at developer.clickup.com ("Create an Attachment", v3 Attachments API) — the exact v3 path, the multipart field name (v2 uses `attachment`), whether task attachments need a `parent` discriminator (v3 attachments also support File-type Custom Fields), and the response field names for URL and filename. If the v3 response does not expose a usable `url`, keep v2 and record why in the inventory ledger — the return contract outranks the version bump.
+**This change is PROBE-GATED. Do not implement until the probe succeeds.**
 
-The multipart builder stays bespoke (the JSON-body `httpRequestVersioned` signature doesn't fit multipart), but hoist the shared constants (`hostname`, `Authorization` via `getApiToken()`, the `/api/${version}` prefix) so `attachFile` is no longer invisible to versioning.
+**Step 4a — Probe (do this FIRST, before any code change):**
+Confirm against the interactive reference at developer.clickup.com ("Create an Attachment", v3 Attachments API) AND a live probe call against a scratch task:
+- the exact v3 path,
+- the multipart field name (v2 uses `attachment`),
+- whether task attachments need a `parent` discriminator (v3 attachments also support File-type Custom Fields),
+- the response field names for URL and filename,
+- that the returned `url` is non-empty and resolves.
 
-### 5. `src/services/ClickUpSyncService.ts` — Normalize the doc-page path (line 2130)
+**Step 4b — Decision branch (first-class, not a comment):**
+- **If the probe succeeds** and the v3 response exposes a usable `url` + `filename`: implement the migration below.
+- **If the probe fails** OR the v3 response does not expose a usable `url`: **KEEP v2**, record the reason in the migration ledger (Change #6), and skip the rest of this change. The `{ url, fileName }` return contract outranks the version bump — a broken attachment upload is worse than a legacy endpoint that still works.
 
-`createDocPage` calls `httpRequestV3('POST', '/workspace/${workspaceId}/doc/${docId}/page', ...)` — singular segments — while every ClickUpDocsAdapter call uses plural (`/workspaces/{id}/docs/...`), matching the published v3 reference. Verify which form ClickUp canonically accepts (probe both in a scratch workspace). If the singular form is a tolerated alias, switch to the plural canonical form; if it has been silently failing, this is a latent bug fix. Either way, add a regression check to the Verification Plan (step 6) because doc-page creation is a user-facing feature (`clickup_create_subpage` skill).
+**Step 4c — Implementation (only if 4b chose migrate):**
+The multipart builder stays bespoke (the JSON-body `httpRequestVersioned` signature doesn't fit multipart), but hoist the shared constants (`hostname`, `Authorization` via `getApiToken()`, the `/api/${version}` prefix) so `attachFile` is no longer invisible to versioning. Preserve the optional follow-up comment sequencing and the swallowed-comment-failure behavior (lines 2087–2092) exactly.
 
-### 6. Migration ledger — keep the inventory table maintained
+### 5. `src/services/ClickUpSyncService.ts` — Normalize the doc-page path (line 2130) (PROBE-GATED, DO LAST)
 
-Add the "Current v2 call-site inventory" table from this plan's Background Context as a comment block at the top of `ClickUpSyncService.ts` (or a `docs/clickup-api-versions.md` if preferred), with the rule: when ClickUp ships a v3 equivalent for a family, flip that family's call sites through `httpRequestVersioned('v3', ...)` and update the ledger row. This is what makes future migration mechanical instead of archaeological.
+`createDocPage` calls `httpRequestV3('POST', '/workspace/${workspaceId}/doc/${docId}/page', ...)` — singular segments — while every ClickUpDocsAdapter call uses plural (`/workspaces/{id}/docs/...`), matching the published v3 reference.
+
+**This change is PROBE-GATED and should be the LAST change in this plan.** Do not bundle a "maybe-bug, maybe-alias" investigation into the plumbing refactor — it muddies the regression surface.
+
+**Step 5a — Probe:** in a scratch workspace, create a doc page via the singular path and via the plural path. Confirm which form ClickUp canonically accepts (the published v3 reference uses plural).
+**Step 5b — Decision:**
+- If singular works today → it is a tolerated alias. Switch to plural canonical form (cosmetic normalization), but treat as reversible.
+- If singular has been silently failing → this is a latent bug fix; switch to plural and verify `clickup_create_subpage` now works.
+**Step 5c — Regression gate:** add the Verification Plan step 6 check (create a doc page before and after) as a hard gate — doc-page creation is a user-facing feature. If the plural form breaks something the singular form tolerated, revert this change and record the singular-alias finding in the ledger.
+
+### 6. Migration ledger — `docs/clickup-api-versions.md` (committed home)
+
+Add the "Current v2 call-site inventory" table from this plan's Background Context to a new file `docs/clickup-api-versions.md` (NOT a comment block at the top of the 3000-line service file — that pollutes the source). Add a one-line reference comment at the top of `ClickUpSyncService.ts`: `// API version inventory: see docs/clickup-api-versions.md — update when flipping a family to v3.`
+
+Rule recorded in the ledger file: when ClickUp ships a v3 equivalent for a family, flip that family's call sites through `httpRequestVersioned('v3', ...)` and update the ledger row. This is what makes future migration mechanical instead of archaeological.
 
 ### Non-Goals (explicit)
 
@@ -234,12 +271,16 @@ Add the "Current v2 call-site inventory" table from this plan's Background Conte
 
 4. **Skill docs run verbatim**: execute the updated `clickup_api.md` examples (both the v2 task fetch and the v3 example) exactly as written from a shell; both succeed.
 
-5. **Attachment upload on v3**: after the implementation-time schema check in Change #4, attach a file to a test task via the `clickup_attach` skill path and via the diagram-upload path (`LocalApiServer` line 826). Verify the file appears on the task in the ClickUp web app, the returned `url` is non-empty and resolves, and the optional comment still posts after upload.
+5. **Attachment upload on v3 (only if Change #4 probe chose migrate)**: after the Step 4a probe succeeds and Step 4b chose migrate, attach a file to a test task via the `clickup_attach` skill path and via the diagram-upload path (`LocalApiServer` line 826). Verify the file appears on the task in the ClickUp web app, the returned `url` is non-empty and resolves, and the optional comment still posts after upload. **If Step 4b chose keep-v2, skip this step and confirm attachments still work on v2 unchanged.**
 
-6. **Docs regression (Change #5)**: create a doc page via the `clickup_create_subpage` skill before and after the path normalization; verify the page lands in the correct doc both times. Browse the doc tree via the docs adapter (heaviest `httpRequestV3` consumer) and verify listings are unchanged.
+6. **Docs regression (Change #5, probe-gated)**: create a doc page via the `clickup_create_subpage` skill before and after the path normalization; verify the page lands in the correct doc both times. Browse the doc tree via the docs adapter (heaviest `httpRequestV3` consumer) and verify listings are unchanged. **If the plural form breaks what the singular form tolerated, revert Change #5 and record the singular-alias finding in the ledger.**
 
 7. **Health check unchanged**: verify the `GET /team` health check (line 2389) still reports connected within its 2s timeout.
 
 8. **No stray transports**: grep the repo for `https.request` combined with `api.clickup.com` — the only hits are the unified transport and (if kept bespoke) the multipart path inside `attachFile`, which must consume the shared host/auth/version constants.
 
 9. **Coordination check (Edge Case 5)**: if the ticket-move plan has landed, run its move flow once after this refactor and verify `moveTask` still works through the delegated `httpRequestV3`.
+
+---
+
+**Recommendation:** Complexity 5 → **Send to Coder**. The transport unification (Changes #1–#3) is a clean, low-risk refactor. Changes #4 and #5 are probe-gated and can be deferred to a follow-up if the probes are inconclusive — they do not block the plumbing win.

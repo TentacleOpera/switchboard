@@ -515,12 +515,13 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             if (!plan) {
-                // The board writes the currently-displayed project name into this DB's
-                // config table whenever it refreshes (KanbanProvider._refreshBoardImpl).
-                // Read it straight back from the SAME db handle we're importing into —
-                // no resolver, no in-memory mirror, no workspace-root comparison to drift
-                // out of sync. insertFileDerivedPlan resolves project_id from this name
-                // using the exact same lookup the manual "Assign to project" button uses.
+                // The board syncs the currently-displayed project name into this DB's
+                // config table on every refresh (KanbanProvider._refreshBoardImpl) and
+                // on constructor restore from workspaceState. Read it straight back from
+                // the SAME db handle we're importing into — no resolver, no in-memory
+                // mirror, no workspace-root comparison to drift out of sync.
+                // insertFileDerivedPlan resolves project_id from this name using the
+                // exact same lookup the manual "Assign to project" button uses.
                 const activeProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
                 const project = metadata.project || activeProject;
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)

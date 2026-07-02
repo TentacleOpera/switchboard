@@ -67,6 +67,7 @@ Yes — confirm the detection approach: should the agent check for `.switchboard
 - `.agents/skills/_lib/sb_api_call.sh` — existing API server discovery mechanism (reads `.switchboard/api-server-port.txt`), referenced as the detection signal.
 - `src/services/PlanManifestService.ts` — unchanged; still processes manifests when present.
 - `.agents/workflows/switchboard-chat.md` — already correctly scopes Trigger B; no change needed.
+- **Scope boundary**: This plan owns the `improve-plan.md` Trigger A manifest conditional. The sibling plan "Pin Plan Project via .md Metadata" (`feature_plan_20260702130028_creator-manifest-project-pinning.md`) handles only creator-side project pinning via .md metadata (chat/memo prompts) and does NOT edit `improve-plan.md`. The two plans have zero file overlap.
 
 ## Proposed Changes
 
