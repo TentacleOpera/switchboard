@@ -1,8 +1,4 @@
 ## CODER CODED
 
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/note-codebase-docs-da9ba512-dead-4632-a58c-220f1c489581.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/note-codebase-docs-da9ba512-dead-4632-a58c-220f1c489581.md) — Project Context & Remote UI Hub <!-- planId:da9ba512-dead-4632-a58c-220f1c489581 epic -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-remote-agent-skill-copy-button.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/linear-remote-agent-skill-copy-button.md) — Linear Remote Tab: Dynamic Agent Skill Copy Button <!-- planId:6fe656a9-838b-4a99-81e6-9db715f7d306 subtask-of:"Project Context & Remote UI Hub" -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/phase2-remote-plan-from-notion-docs.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/phase2-remote-plan-from-notion-docs.md) — Remote Agent Orientation — Plan From Project-Context Docs (No Repo) <!-- planId:0f7e723e-9327-4073-a18a-0fde08c3e99f subtask-of:"Project Context & Remote UI Hub" -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/project-html-dev-docs-tab-and-ia.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/project-html-dev-docs-tab-and-ia.md) — Project Context Hub — Dev Docs Tab + project.html Information Architecture <!-- planId:4318c53b-9134-42fd-a0c1-d3389d1c9dd4 subtask-of:"Project Context & Remote UI Hub" -->
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/project-context-sync-to-notion-and-linear.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/project-context-sync-to-notion-and-linear.md) — Project-Context Sync — project.html Content → Notion + Linear <!-- planId:de725715-414f-42f1-9e9a-ff0512ac1b0b subtask-of:"Project Context & Remote UI Hub" -->
+_No plans_
 

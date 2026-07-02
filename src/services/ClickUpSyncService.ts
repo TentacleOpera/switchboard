@@ -41,6 +41,7 @@ export interface ClickUpConfig {
   deleteSyncEnabled?: boolean;   // default: false — delete ClickUp task when plan is deleted
   completeSyncEnabled?: boolean; // default: false — sync completed status to ClickUp
   excludeBacklog?: boolean;      // default: false — exclude tasks with 'backlog' status from sync
+  ticketSaveLocation?: string;   // base dir for local ticket .md files (set via Setup / migration)
 }
 
 export interface KanbanPlanRecord {
@@ -318,6 +319,7 @@ export class ClickUpSyncService {
       excludeBacklog: raw.excludeBacklog === undefined
         ? false   // Default false — include all tasks by default
         : raw.excludeBacklog === true,
+      ticketSaveLocation: raw.ticketSaveLocation || '',
     };
   }
 

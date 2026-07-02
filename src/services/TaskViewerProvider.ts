@@ -19125,7 +19125,13 @@ What would you like to find?`;
         if (config && config.ticketSaveLocation) {
             return path.join(config.ticketSaveLocation, provider, ...segments.map(s => this._slugify(s).slice(0, 60)));
         }
-        return null;
+        // Fallback: default to the workspace's .switchboard/tickets/ directory.
+        // Matches the read-path fallback in _findTicketDocument and the bulk-import
+        // fallback below. Without this, single-ticket creation (New Ticket button)
+        // fails with "Ticket save location not configured" when ticketSaveLocation
+        // has been stripped from config by _normalizeConfig (which historically did
+        // not include the field).
+        return path.join(resolvedRoot, '.switchboard', 'tickets', provider, ...segments.map(s => this._slugify(s).slice(0, 60)));
     }
 
 
