@@ -34,7 +34,7 @@ Make epic parent/child relationships round-trip between Switchboard and external
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Outbound Epic Sync to Linear + ClickUp](../plans/epic-sync-outbound.md) — **LEAD CODED**
-- [ ] [Plan: ClickUp Import — Parent-with-Subtasks Always Becomes Epic](../plans/clickup-import-epic-linking.md) — **LEAD CODED**
-- [ ] [Plan: Linear Import — Parent-with-Subtasks Always Becomes Epic](../plans/linear-import-epic-linking.md) — **LEAD CODED**
+- [ ] [Plan: Outbound Epic Sync to Linear + ClickUp](../plans/epic-sync-outbound.md) — **CODE REVIEWED**
+- [ ] [Plan: ClickUp Import — Parent-with-Subtasks Always Becomes Epic](../plans/clickup-import-epic-linking.md) — **CODE REVIEWED**
+- [ ] [Plan: Linear Import — Parent-with-Subtasks Always Becomes Epic](../plans/linear-import-epic-linking.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->

@@ -38,7 +38,7 @@ export interface RemoteCommentDelta {
 }
 
 export interface RemoteProvider {
-    readonly kind: 'linear' | 'notion';
+    readonly kind: 'linear' | 'notion' | 'control-plane' | 'wiki';
 
     /**
      * State deltas since `sinceCursor` (an opaque cursor string the provider serializes

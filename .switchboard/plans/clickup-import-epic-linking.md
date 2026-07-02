@@ -206,3 +206,7 @@ The current `> **Parent Task:** ${parentName}` text label (line 2933) becomes re
 ## Recommendation
 
 Complexity is **6** (restructuring an existing import path, direct DB inserts alongside file writes, hierarchy flattening, but no schema changes and all DB methods exist). **Send to Coder** after user confirms the two review questions (1-child threshold + deep nesting flattening).
+
+## Review Findings
+
+**Reviewed:** 2026-07-03. Two-pass import (filter → write+insert → link) correctly implemented at `ClickUpSyncService.ts:2845-3174`. Insert-before-write ordering verified (DB insert at lines 3034/3083, file write at lines 3064/3110). Cycle-safe flattening walk with visited-set at lines 3131-3155. All filters run before grouping. `crypto.randomUUID()` used for deterministic planIds. ON CONFLICT in `insertFileDerivedPlan` preserves `plan_id`, `is_epic`, `epic_id`, `clickup_task_id` — verified at `KanbanDatabase.ts:1442-1449`. **NIT:** `> **Epic Plan ID:**` label (line 3077) is conditional on parent UUID being in the `uuidByTaskId` map at child processing time; if a child appears before its parent in `filteredTasks`, the label is omitted — debugging-only, Pass 2 linking uses the fully-populated map so no functional impact. No `registerPendingCreation()` call before file writes, but ON CONFLICT makes this safe. No code changes applied. No compilation/tests run per session directives. **Remaining risk:** None material — the conditional label is cosmetic.

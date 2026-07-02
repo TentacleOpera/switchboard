@@ -230,3 +230,7 @@ Remove the "epic creation does NOT sync to Linear/ClickUp" note. Replace with: "
 ## Recommendation
 
 Complexity is **7** (new calling convention for sync, multi-service fan-out, failure isolation, but all primitives exist and the trigger point is already wired). **Send to Coder** after user confirms the two review questions (failure semantics + `promoteToEpic` scope).
+
+## Review Findings
+
+**Reviewed:** 2026-07-03. All 4 wiring points (`createEpicFromPlanIds`, `assignPlansToEpic`, `removeSubtaskFromEpic`, `promoteToEpic`) correctly call `_syncEpicOutbound` or `unlinkSubtasksFromEpic` after `_refreshBoard`. Both `syncEpicWithSubtasks` methods implement the create-then-link pattern with proper config guards, `creating_*` retry, per-subtask error isolation, and best-effort `Promise.allSettled` fan-out. SKILL.md updated. **MAJOR finding:** ClickUp's `unlinkSubtasksFromEpic` uses `parent: ''` but the ClickUp v2 API explicitly does not support parent removal via Update Task ("You cannot convert a subtask to a task by setting parent to null") — the unlink will fail or no-op; added a documenting comment at `ClickUpSyncService.ts:3290`. Linear's `unlinkSubtasksFromEpic` uses GraphQL `issueUpdate` with `parentId: null` which is supported. Reparenting via `assignPlansToEpic` is not implemented (skips cross-epic subtasks) — explicitly acceptable per plan. No compilation/tests run per session directives. **Remaining risk:** ClickUp external unlink is non-functional (API limitation); local DB unlink still works correctly.

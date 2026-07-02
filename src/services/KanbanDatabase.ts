@@ -6063,6 +6063,11 @@ FROM plans
             const workspaceId = await this.getWorkspaceId();
             if (!workspaceId) return;
 
+            // Resolve the export target root. When boardStateExport is 'control-plane',
+            // write to the control-plane root instead of the workspace root so the
+            // mirror lands in the control-plane's git repo for push.
+            const exportRoot = this._resolveExportRoot();
+
             const allPlans = await this.getBoard(workspaceId);
             // Build epic-id -> topic lookup so subtask lines can name their parent epic.
             const epicTopicById = new Map<string, string>();
@@ -6099,7 +6104,7 @@ FROM plans
             ];
 
             for (const [col, plans] of allColumns) {
-                const perColPath = path.join(this._workspaceRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
+                const perColPath = path.join(exportRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
                 let colMd = `## ${col}\n\n`;
                 if (plans.length === 0) {
                     colMd += `_No plans_\n\n`;
@@ -6107,7 +6112,7 @@ FROM plans
                     for (const plan of plans) {
                         const filePath = path.isAbsolute(plan.planFile)
                             ? plan.planFile
-                            : path.join(this._workspaceRoot, plan.planFile);
+                            : path.join(exportRoot, plan.planFile);
                         // Append planId + epic assignment in an HTML comment so the visible
                         // board is unchanged but the "Suggest Epics" agent can parse them
                         // without falling back to the 1.3 MB get-state.js JSON blob.
@@ -6123,11 +6128,16 @@ FROM plans
                             const safeProject = plan.project.replace(/"/g, '');
                             parts.push(`project:"${safeProject}"`);
                         }
+                        // Net-new: emit **Column:** line per plan so the inbound git signal
+                        // (GitStateProvider) has something to diff against. This is the
+                        // state signal channel for control-plane/wiki providers.
+                        colMd += `**Column:** ${plan.kanbanColumn}\n`;
                         colMd += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
                     }
                     colMd += `\n`;
                 }
                 const tmpPath = `${perColPath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+                await fs.promises.mkdir(path.dirname(perColPath), { recursive: true });
                 await fs.promises.writeFile(tmpPath, colMd, 'utf8');
                 await fs.promises.rename(tmpPath, perColPath);
             }
@@ -6141,14 +6151,15 @@ FROM plans
             }
 
             // One-time cleanup of old JSON file
-            const oldJsonPath = path.join(this._workspaceRoot, '.switchboard', 'kanban-state.json');
+            const oldJsonPath = path.join(exportRoot, '.switchboard', 'kanban-state.json');
             if (fs.existsSync(oldJsonPath)) {
                 await fs.promises.unlink(oldJsonPath);
             }
 
-            const tmpPath = `${this._stateFilePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+            const stateFilePath = path.join(exportRoot, '.switchboard', 'kanban-board.md');
+            const tmpPath = `${stateFilePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
             await fs.promises.writeFile(tmpPath, md, 'utf8');
-            await fs.promises.rename(tmpPath, this._stateFilePath);
+            await fs.promises.rename(tmpPath, stateFilePath);
         } catch (error) {
             console.error('[KanbanDatabase] Failed to export state to file:', error);
         } finally {
@@ -6158,6 +6169,32 @@ FROM plans
                 void this.exportStateToFile();
             }
         }
+    }
+
+    /**
+     * Resolve the export target root directory. When boardStateExport is 'control-plane',
+     * the control-plane root is used instead of the workspace root, so the mirror files
+     * land in the control-plane's git repo for push. For 'none' or 'wiki', the workspace
+     * root is used (wiki pushes from the project repo's working tree).
+     */
+    private _resolveExportRoot(): string {
+        try {
+            const vscode = require('vscode');
+            const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+            const exportTarget: string = config.get('boardStateExport', 'none');
+
+            if (exportTarget === 'control-plane') {
+                // Resolve the control-plane root the same way PlanAutoFetchService does:
+                // via getControlPlaneSelectionStatus (KanbanProvider) or
+                // resolveEffectiveWorkspaceRootFromMappings (WorkspaceIdentityService).
+                const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
+                const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(this._workspaceRoot);
+                if (effectiveRoot && effectiveRoot !== this._workspaceRoot) {
+                    return effectiveRoot;
+                }
+            }
+        } catch { /* outside extension host or config unavailable */ }
+        return this._workspaceRoot;
     }
 
     private async _persist(): Promise<boolean> {

@@ -30,6 +30,8 @@
                 applySidebarState('tuning', state.tuningListCollapsed);
             } else if (targetTab === 'projects') {
                 applySidebarState('projects', state.projectsListCollapsed);
+            } else if (targetTab === 'architect') {
+                applySidebarState('architect', state.architectListCollapsed);
             }
 
             if (activeTab === 'kanban') {
@@ -47,6 +49,8 @@
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'tuning') {
                 vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
+            } else if (activeTab === 'architect') {
+                vscode.postMessage({ type: 'loadArchitectDocStatus', workspaceRoot: architectWorkspaceFilter ? architectWorkspaceFilter.value : '' });
             }
         });
     });
@@ -64,6 +68,7 @@
         systemListCollapsed: false,
         tuningListCollapsed: false,
         projectsListCollapsed: false,
+        architectListCollapsed: false,
         switchboardTheme: 'afterburner'
     };
 
@@ -75,6 +80,7 @@
     state.systemListCollapsed = persistedState.systemListCollapsed || false;
     state.tuningListCollapsed = persistedState.tuningListCollapsed || false;
     state.projectsListCollapsed = persistedState.projectsListCollapsed || false;
+    state.architectListCollapsed = persistedState.architectListCollapsed || false;
 
     // Toast notification — replaces alert() which is a silent no-op in VS Code webviews.
     // type: 'error' | 'success' | 'info'
@@ -122,6 +128,9 @@
         } else if (activeTab === 'projects') {
             state.projectsListCollapsed = !state.projectsListCollapsed;
             applySidebarState('projects', state.projectsListCollapsed);
+        } else if (activeTab === 'architect') {
+            state.architectListCollapsed = !state.architectListCollapsed;
+            applySidebarState('architect', state.architectListCollapsed);
         }
  
         // Persist state
@@ -133,7 +142,8 @@
             constitutionListCollapsed: state.constitutionListCollapsed,
             systemListCollapsed: state.systemListCollapsed,
             tuningListCollapsed: state.tuningListCollapsed,
-            projectsListCollapsed: state.projectsListCollapsed
+            projectsListCollapsed: state.projectsListCollapsed,
+            architectListCollapsed: state.architectListCollapsed
         });
     }
 
@@ -215,7 +225,7 @@
     const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
     const btnCreateKanbanPlan = document.getElementById('btn-create-kanban-plan');
     const btnChatCopyPrompt = document.getElementById('btn-chat-copy-prompt');
-    const btnEditKanban = null;
+    const btnEditKanban = document.getElementById('btn-edit-kanban');
     const btnSaveKanban = null;
     const btnCancelKanban = null;
     const kanbanListPane = document.getElementById('kanban-list-pane');
@@ -225,6 +235,7 @@
  
     const epicsWorkspaceFilter = document.getElementById('epics-workspace-filter');
     const epicsColumnFilter = document.getElementById('epics-column-filter');
+    const epicsProjectFilter = document.getElementById('epics-project-filter');
 
     const btnNewEpic = document.getElementById('btn-new-epic');
     const newEpicModal = document.getElementById('new-epic-modal');
@@ -356,6 +367,13 @@
     const tuningPreviewContent = document.getElementById('tuning-preview-content');
     const tuningEditor = document.getElementById('tuning-editor');
 
+    // Architect tab elements
+    const architectWorkspaceFilter = document.getElementById('architect-workspace-filter');
+    const btnOpenArchitect = document.getElementById('btn-open-architect');
+    const btnCopyArchitectPrompt = document.getElementById('btn-copy-architect-prompt');
+    const architectDocList = document.getElementById('architect-doc-list');
+    const architectPreviewContent = document.getElementById('architect-preview-content');
+
     // Projects tab elements (per-project PRDs)
     const projectsWorkspaceFilter = document.getElementById('projects-workspace-filter');
     const btnBuildPrd = document.getElementById('btn-build-prd-via-planner');
@@ -372,7 +390,7 @@
     let _prdDirty = false;          // user has typed since the last load → don't clobber
 
     const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '', complexity: '' };
-    const epicsFilters = { workspaceRoot: '', column: '' };
+    const epicsFilters = { workspaceRoot: '', column: '', project: '' };
     const projectsFilters = { workspaceRoot: '' };
 
     // Initialize Webview Content
@@ -626,8 +644,10 @@
                     // handler will narrow them if the intent workspace is in the dropdown.
                     epicsFilters.workspaceRoot = '';
                     epicsFilters.column = '';
+                    epicsFilters.project = '';
                     if (epicsWorkspaceFilter) epicsWorkspaceFilter.value = '';
                     if (epicsColumnFilter) epicsColumnFilter.value = '';
+                    if (epicsProjectFilter) epicsProjectFilter.value = '';
                     // Stash intent for epics (reuse the same mechanism)
                     _pendingKanbanFilterIntent = _pendingKanbanFilterIntent || {};
                     _pendingKanbanFilterIntent.epicWorkspaceRoot = msg.workspaceRoot || '';
@@ -1113,6 +1133,19 @@
                 }
                 break;
             }
+            case 'architectDocStatus':
+                renderArchitectDocList(msg.docs);
+                break;
+
+            case 'architectDocContent':
+                if (architectPreviewContent) {
+                    architectPreviewContent.innerHTML = msg.renderedHtml || '';
+                }
+                break;
+
+            case 'architectPromptCopied':
+                showToast('Architect prompt copied to clipboard', 'success');
+                break;
         }
     });
 
@@ -1130,6 +1163,7 @@
         kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         epicsWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         if (tuningWorkspaceFilter) tuningWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
+        if (architectWorkspaceFilter) architectWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         // The Projects tab is workspace-specific (a PRD/toggle belongs to one workspace),
         // so its filter lists concrete workspaces only — no "All Workspaces" option.
         if (projectsWorkspaceFilter) projectsWorkspaceFilter.innerHTML = '';
@@ -1141,12 +1175,16 @@
             kanbanWorkspaceFilter.appendChild(opt.cloneNode(true));
             epicsWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (tuningWorkspaceFilter) tuningWorkspaceFilter.appendChild(opt.cloneNode(true));
+            if (architectWorkspaceFilter) architectWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (projectsWorkspaceFilter) projectsWorkspaceFilter.appendChild(opt.cloneNode(true));
         });
         kanbanWorkspaceFilter.value = currentWS;
         epicsWorkspaceFilter.value = epicsFilters.workspaceRoot;
         if (tuningWorkspaceFilter && currentWS) {
             tuningWorkspaceFilter.value = currentWS;
+        }
+        if (architectWorkspaceFilter && currentWS) {
+            architectWorkspaceFilter.value = currentWS;
         }
         if (projectsWorkspaceFilter) {
             // Default the Projects tab to its prior selection, else the active kanban workspace,
@@ -1181,6 +1219,9 @@
                 if (c.id === currentCol) opt.selected = true;
                 epicsColumnFilter.appendChild(opt);
             });
+        }
+        if (epicsProjectFilter) {
+            updateEpicsProjectFilter();
         }
     }
 
@@ -1217,6 +1258,36 @@
             kanbanProjectFilter.appendChild(opt);
         });
         kanbanProjectFilter.value = kanbanFilters.project;
+    }
+
+    function updateEpicsProjectFilter() {
+        if (!epicsProjectFilter) return;
+        const selectedRoot = epicsFilters.workspaceRoot;
+        const epicPlans = _kanbanPlansCache.filter(p =>
+            p.isEpic && (!selectedRoot || normalizeRoot(p.workspaceRoot) === normalizeRoot(selectedRoot))
+        );
+        const projectSet = new Set();
+        epicPlans.forEach(p => { if (p.project) projectSet.add(p.project); });
+        const hasNoProject = epicPlans.some(p => !p.project);
+
+        epicsProjectFilter.innerHTML = '<option value="">All Projects</option>';
+        if (hasNoProject) {
+            const optNone = document.createElement('option');
+            optNone.value = '__none__';
+            optNone.textContent = '(No Project)';
+            epicsProjectFilter.appendChild(optNone);
+        }
+        Array.from(projectSet).sort().forEach(proj => {
+            const opt = document.createElement('option');
+            opt.value = proj;
+            opt.textContent = proj;
+            epicsProjectFilter.appendChild(opt);
+        });
+        // If the current selection is no longer valid for the new option set, reset.
+        if (epicsFilters.project && epicsFilters.project !== '__none__' && !projectSet.has(epicsFilters.project)) {
+            epicsFilters.project = '';
+        }
+        epicsProjectFilter.value = epicsFilters.project;
     }
 
     // =========================================================================
@@ -1718,7 +1789,6 @@
                 </select>
             </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
-                <button class="strip-btn" id="btn-edit-kanban" style="${state.editMode.kanban ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Cancel</button>
                 ${plan.clickupTaskId || plan.linearIssueId ? `
@@ -1726,17 +1796,17 @@
                         ${uploadingPlanAttachment ? 'Uploading...' : 'Upload'}
                     </button>
                 ` : ''}
+                <button class="strip-btn" id="kanban-meta-autofetch-btn" title="Configure auto-fetch of plans from the default branch">⚙ AutoFetch</button>
                 <button class="strip-btn" id="kanban-meta-log-btn">Log</button>
                 <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
             </div>
         `;
 
         // Dynamic buttons listeners
-        const dynamicEditBtn = document.getElementById('btn-edit-kanban');
         const dynamicCancelBtn = document.getElementById('btn-cancel-kanban');
         const dynamicSaveBtn = document.getElementById('btn-save-kanban');
 
-        if (dynamicEditBtn) dynamicEditBtn.addEventListener('click', () => enterEditMode('kanban'));
+        // Edit button listener removed — btn-edit-kanban is now a static element in the controls strip
         if (dynamicCancelBtn) dynamicCancelBtn.addEventListener('click', () => exitEditMode('kanban'));
         if (dynamicSaveBtn) {
             dynamicSaveBtn.addEventListener('click', () => {
@@ -1813,6 +1883,10 @@
                 });
             });
         }
+        const dynamicAutofetchBtn = document.getElementById('kanban-meta-autofetch-btn');
+        if (dynamicAutofetchBtn) {
+            dynamicAutofetchBtn.addEventListener('click', openAutofetchModal);
+        }
     }
 
     if (btnImportKanbanPlans) {
@@ -1834,6 +1908,12 @@
             }, 3000);
         });
     }
+    if (btnEditKanban) {
+        btnEditKanban.addEventListener('click', () => {
+            if (!_kanbanSelectedPlan) return;
+            enterEditMode('kanban');
+        });
+    }
     if (btnChatCopyPrompt) {
         btnChatCopyPrompt.addEventListener('click', () => {
             vscode.postMessage({
@@ -1843,7 +1923,6 @@
             });
         });
     }
-    const btnKanbanAutofetch = document.getElementById('btn-kanban-autofetch');
     const autofetchModal = document.getElementById('autofetch-modal');
     const btnCloseAutofetchModal = document.getElementById('btn-close-autofetch-modal');
 
@@ -1854,9 +1933,7 @@
         if (autofetchModal) autofetchModal.style.display = 'none';
     }
 
-    if (btnKanbanAutofetch) {
-        btnKanbanAutofetch.addEventListener('click', openAutofetchModal);
-    }
+    // AutoFetch button is now dynamic in the meta bar — listener attached after render
     if (btnCloseAutofetchModal) {
         btnCloseAutofetchModal.addEventListener('click', closeAutofetchModal);
     }
@@ -1878,6 +1955,22 @@
             });
         });
     }
+
+    // Architect tab buttons
+    if (btnOpenArchitect) {
+        btnOpenArchitect.addEventListener('click', () => {
+            const wsRoot = architectWorkspaceFilter ? architectWorkspaceFilter.value : '';
+            vscode.postMessage({ type: 'openArchitectTerminal', workspaceRoot: wsRoot });
+        });
+    }
+
+    if (btnCopyArchitectPrompt) {
+        btnCopyArchitectPrompt.addEventListener('click', () => {
+            const wsRoot = architectWorkspaceFilter ? architectWorkspaceFilter.value : '';
+            vscode.postMessage({ type: 'copyArchitectPrompt', workspaceRoot: wsRoot });
+        });
+    }
+
     if (kanbanColumnFilter) {
         kanbanColumnFilter.addEventListener('change', () => {
             kanbanFilters.column = kanbanColumnFilter.value;
@@ -1926,10 +2019,17 @@
         // and appear here as normal DB-backed epics.
         let filtered = _kanbanPlansCache.filter(plan => plan.isEpic);
         if (epicsFilters.workspaceRoot) {
-            filtered = filtered.filter(plan => plan.workspaceRoot === epicsFilters.workspaceRoot);
+            filtered = filtered.filter(plan => normalizeRoot(plan.workspaceRoot) === normalizeRoot(epicsFilters.workspaceRoot));
         }
         if (epicsFilters.column) {
             filtered = filtered.filter(plan => plan.column === epicsFilters.column);
+        }
+        if (epicsFilters.project) {
+            if (epicsFilters.project === '__none__') {
+                filtered = filtered.filter(plan => !plan.project);
+            } else {
+                filtered = filtered.filter(plan => plan.project === epicsFilters.project);
+            }
         }
 
         epicsListPane.innerHTML = '';
@@ -2409,6 +2509,8 @@
     if (epicsWorkspaceFilter) {
         epicsWorkspaceFilter.addEventListener('change', () => {
             epicsFilters.workspaceRoot = epicsWorkspaceFilter.value;
+            epicsFilters.project = '';
+            updateEpicsProjectFilter();
             renderEpicsList();
         });
     }
@@ -2416,6 +2518,13 @@
     if (epicsColumnFilter) {
         epicsColumnFilter.addEventListener('change', () => {
             epicsFilters.column = epicsColumnFilter.value;
+            renderEpicsList();
+        });
+    }
+
+    if (epicsProjectFilter) {
+        epicsProjectFilter.addEventListener('change', () => {
+            epicsFilters.project = epicsProjectFilter.value;
             renderEpicsList();
         });
     }
@@ -3100,6 +3209,29 @@
 
     function selectInsight(filename, workspaceRoot) {
         vscode.postMessage({ type: 'readInsight', filename, workspaceRoot: workspaceRoot || '' });
+    }
+
+    function renderArchitectDocList(docs) {
+        // docs: [{ type: 'prd', name: 'PRD', exists: true, path: '...' }, ...]
+        if (!architectDocList) return;
+        architectDocList.innerHTML = '';
+        docs.forEach(doc => {
+            const item = document.createElement('div');
+            item.className = 'doc-list-item' + (doc.exists ? '' : ' missing');
+            item.dataset.docType = doc.type;
+            item.dataset.docPath = doc.path;
+            item.innerHTML = `
+                <span class="doc-status">${doc.exists ? '✓' : '○'}</span>
+                <span class="doc-name">${doc.name}</span>
+                <span class="doc-hint">${doc.exists ? 'Click to preview' : 'Not created'}</span>
+            `;
+            item.addEventListener('click', () => {
+                if (doc.exists) {
+                    vscode.postMessage({ type: 'readArchitectDoc', docType: doc.type, path: doc.path, workspaceRoot: architectWorkspaceFilter ? architectWorkspaceFilter.value : '' });
+                }
+            });
+            architectDocList.appendChild(item);
+        });
     }
 
     if (tuningWorkspaceFilter) {

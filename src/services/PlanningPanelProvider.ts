@@ -1099,6 +1099,97 @@ export class PlanningPanelProvider {
         return getGovernanceFilePath(this._context, workspaceRoot, key);
     }
 
+    private buildArchitectPrompt(wsRoot: string): string {
+        return `You are the **Switchboard Architect** — a guided tour for project governance setup.
+
+Your job is to help the user write and refine the following governance documents for this project at ${wsRoot}:
+
+1. **PRD** (Product Requirements Document) — located at \`.switchboard/projects/<slug>/prd.md\`
+   Format:
+   # [Project Name] — PRD
+   > **Vision:** [one sentence]
+   ## Target Users
+   [Who they are and their main pain point]
+   ## Key Features
+   - **[Name]:** [one sentence]
+   ## Success Criteria
+   - [measurable outcome]
+   ## Non-Goals
+   - [explicit exclusion]
+   ## Open Questions
+   - [unresolved decision or risk]
+
+2. **Constitution** (coding standards) — located at \`CONSTITUTION.md\`
+   Follow instructions in \`.agents/skills/constitution_builder.md\`.
+
+3. **System Files** — \`CLAUDE.md\` and \`AGENTS.md\`
+   These are agent governance files. Help the user write rules that agents should follow when working in this repo.
+
+4. **Tuning Insights** — \`.switchboard/insights/*.md\`
+   Follow instructions in \`.agents/skills/tuning.md\`.
+
+## Workflow
+
+1. First, check which documents already exist by reading the files.
+2. Present a menu to the user: which document would they like to create or refine?
+3. For each document, follow the corresponding skill or format above.
+4. After completing one document, offer to move to the next.
+5. Ensure consistency across all documents (e.g. constitution rules should align with CLAUDE.md).
+
+## Rules
+- Do NOT make git commits. Focus on writing/refining file content.
+- Always show the user what you're about to write before writing it.
+- Ask clarifying questions when requirements are ambiguous.
+- Keep documents concise and actionable.
+
+Start by checking which documents exist, then present the menu.`;
+    }
+
+    private async gatherArchitectDocStatus(wsRoot: string): Promise<Array<{type: string, name: string, exists: boolean, path: string}>> {
+        const docs: Array<{type: string, name: string, exists: boolean, path: string}> = [];
+        const constitutionPath = path.join(wsRoot, 'CONSTITUTION.md');
+        const claudePath = path.join(wsRoot, 'CLAUDE.md');
+        const agentsPath = path.join(wsRoot, 'AGENTS.md');
+        const insightsDir = path.join(wsRoot, '.switchboard', 'insights');
+
+        // PRD — enumerate all project PRDs in .switchboard/projects/
+        const projectsDir = path.join(wsRoot, '.switchboard', 'projects');
+        let prdExists = false;
+        let prdPath = '';
+        try {
+            if (fs.existsSync(projectsDir)) {
+                const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isDirectory()) {
+                        const candidatePrd = path.join(projectsDir, entry.name, 'prd.md');
+                        if (fs.existsSync(candidatePrd)) {
+                            prdExists = true;
+                            prdPath = candidatePrd;
+                            break; // show first found; architect will enumerate all in-terminal
+                        }
+                    }
+                }
+            }
+        } catch { /* directory read failed — treat as no PRD */ }
+        docs.push({ type: 'prd', name: 'PRD', exists: prdExists, path: prdPath });
+
+        docs.push({ type: 'constitution', name: 'Constitution', exists: fs.existsSync(constitutionPath), path: constitutionPath });
+        docs.push({ type: 'system', name: 'System (CLAUDE.md)', exists: fs.existsSync(claudePath), path: claudePath });
+        docs.push({ type: 'agents', name: 'System (AGENTS.md)', exists: fs.existsSync(agentsPath), path: agentsPath });
+
+        // Tuning insights — check if directory exists and has any .md files
+        let insightsExist = false;
+        try {
+            if (fs.existsSync(insightsDir)) {
+                const insightFiles = fs.readdirSync(insightsDir);
+                insightsExist = insightFiles.some((f: string) => f.endsWith('.md'));
+            }
+        } catch { /* directory read failed */ }
+        docs.push({ type: 'tuning', name: 'Tuning Insights', exists: insightsExist, path: insightsDir });
+
+        return docs;
+    }
+
     /**
      * Post a message to BOTH the project panel and the planning panel webviews.
      * The Docs-tab "Save as PRD / Save as Constitution" actions run in the
@@ -4110,6 +4201,68 @@ Please format the updated output document strictly as follows:
                 this._projectPanel?.webview.postMessage({ type: 'systemPromptCopied' });
                 break;
             }
+            case 'openArchitectTerminal': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) {
+                    break;
+                }
+                const promptText = this.buildArchitectPrompt(wsRoot);
+
+                // Try dispatching via the planner role (gets rotation for free).
+                // Fall back to ad-hoc terminal creation if no planner agent is registered.
+                if (this._taskViewerProvider) {
+                    const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
+                    if (dispatched) { break; }
+                }
+
+                // Fall back to ad-hoc terminal creation
+                const terminal = vscode.window.terminals.find(t =>
+                        t.name.toLowerCase().includes('architect') || t.name.toLowerCase().includes('planner'))
+                    || vscode.window.createTerminal({ name: 'Switchboard Architect', cwd: wsRoot });
+                terminal.show();
+                const { sendRobustText } = require('./terminalUtils');
+                await sendRobustText(terminal, promptText);
+                break;
+            }
+
+            case 'copyArchitectPrompt': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) {
+                    break;
+                }
+                const promptText = this.buildArchitectPrompt(wsRoot);
+                await vscode.env.clipboard.writeText(promptText);
+                this._projectPanel?.webview.postMessage({ type: 'architectPromptCopied' });
+                break;
+            }
+
+            case 'loadArchitectDocStatus': {
+                const wsRoot = msg.workspaceRoot;
+                if (!allRoots.includes(wsRoot)) {
+                    break;
+                }
+                const docs = await this.gatherArchitectDocStatus(wsRoot);
+                this._projectPanel?.webview.postMessage({ type: 'architectDocStatus', docs });
+                break;
+            }
+
+            case 'readArchitectDoc': {
+                const wsRoot = msg.workspaceRoot;
+                const docPath = msg.path;
+                const docType = msg.docType;
+                if (!allRoots.includes(wsRoot)) {
+                    break;
+                }
+                try {
+                    const content = fs.readFileSync(docPath, 'utf8');
+                    const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+                    this._projectPanel?.webview.postMessage({ type: 'architectDocContent', renderedHtml, docType });
+                } catch (e) {
+                    this._projectPanel?.webview.postMessage({ type: 'architectDocContent', renderedHtml: '<p>Unable to read file.</p>', docType });
+                }
+                break;
+            }
+
             case 'deleteConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
                 const key = msg.governanceFile ?? 'constitution';

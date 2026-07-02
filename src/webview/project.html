@@ -209,7 +209,7 @@
             overflow-y: auto;
             background: var(--panel-bg);
         }
-        #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane {
+        #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane, #architect-list-pane {
             width: 240px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -422,6 +422,42 @@
             font-size: 11px;
             color: var(--text-secondary);
             margin-top: 4px;
+        }
+        .doc-list-item {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.15s;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            margin: 3px 0;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .doc-list-item:hover {
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+        .doc-list-item.missing {
+            opacity: 0.5;
+            cursor: default;
+        }
+        .doc-list-item .doc-status {
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .doc-list-item .doc-name {
+            font-weight: 500;
+            flex: 1;
+        }
+        .doc-list-item .doc-hint {
+            font-size: 10px;
+            color: var(--text-secondary);
         }
         .kanban-plan-actions {
             display: flex;
@@ -1482,6 +1518,7 @@
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
         <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
+        <button class="shared-tab-btn" data-tab="architect">ARCHITECT</button>
     </div>
     <div class="container">
         <!-- Kanban tab -->
@@ -1505,8 +1542,8 @@
                 </select>
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add">Import</button>
                 <button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>
-                <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">CHAT PROMPT</button>
-                <button id="btn-kanban-autofetch" class="strip-btn" title="Configure auto-fetch of plans from the default branch">⚙ AutoFetch</button>
+                <button id="btn-edit-kanban" class="strip-btn" disabled title="Edit the selected plan">Edit</button>
+                <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">Chat Prompt</button>
                 <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
             </div>
             <div class="content-row">
@@ -1568,6 +1605,9 @@
             <div class="controls-strip">
                 <select id="epics-workspace-filter">
                     <option value="">All Workspaces</option>
+                </select>
+                <select id="epics-project-filter">
+                    <option value="">All Projects</option>
                 </select>
                 <select id="epics-column-filter">
                     <option value="">All Columns</option>
@@ -1704,9 +1744,44 @@
                 </div>
             </div>
         </div>
+        <div id="architect-content" class="shared-tab-content">
+            <div class="controls-strip">
+                <select id="architect-workspace-filter">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-open-architect" class="strip-btn">Open Architect Terminal</button>
+                <button id="btn-copy-architect-prompt" class="strip-btn">Copy Architect Prompt</button>
+            </div>
+            <div class="content-row">
+                <div id="architect-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div id="architect-doc-list">
+                        <div class="empty-state">Loading governance documents...</div>
+                    </div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
+                    <div id="architect-preview-pane" class="constitution-preview-pane">
+                        <div id="architect-preview-content">
+                            <div class="empty-state">
+                                <h2>Architect Mode</h2>
+                                <p>The Architect agent guides you through writing and refining your project's governance documents:</p>
+                                <ul>
+                                    <li><strong>PRD</strong> — Product Requirements Document</li>
+                                    <li><strong>Constitution</strong> — Coding standards and conventions</li>
+                                    <li><strong>System Files</strong> — CLAUDE.md and AGENTS.md</li>
+                                    <li><strong>Tuning</strong> — Extracted insights and governance updates</li>
+                                </ul>
+                                <p>Click "Open Architect Terminal" to start a guided session, or select a document from the sidebar to preview it.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-
-    <!-- New Epic Modal -->
     <div id="new-epic-modal" class="kanban-log-overlay" style="display: none;">
         <div class="kanban-log-modal" style="width: 400px;">
             <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">

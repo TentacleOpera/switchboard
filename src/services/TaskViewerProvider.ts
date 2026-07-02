@@ -4594,6 +4594,19 @@ Each plan file must include:
             enabled: this.handleGetCyberAnimationDisabledSetting()
         });
 
+        // Board state export setting
+        try {
+            const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+            if (resolvedRoot) {
+                const exportConfig = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(resolvedRoot));
+                this._setupPanelProvider.postMessage({
+                    type: 'boardStateExportSetting',
+                    value: exportConfig.get<string>('boardStateExport', 'none'),
+                    remoteUrl: exportConfig.get<string>('boardStateExport.remoteUrl', '')
+                });
+            }
+        } catch { /* outside extension host */ }
+
         this._setupPanelProvider.postMessage({
             type: 'cyberScanlinesDisabledSetting',
             enabled: this.handleGetCyberScanlinesDisabledSetting()

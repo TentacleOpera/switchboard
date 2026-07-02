@@ -238,3 +238,7 @@ for (const sessionId of this._getRegistrySessionIdCandidates(planId, entry.sourc
 ## Recommendation
 
 Complexity 3 → **Send to Intern** (single-file core change in `KanbanDatabase.ts` + two small caller updates; reuses existing `_persistedUpdate` and migration-chain patterns; no new architectural patterns).
+
+## Review Findings
+
+Reviewed commits `13b93d4` (ghost-kanban) + `510daaf` (relative-paths, for migration sequencing) against plan requirements. Implementation matches the plan: `archivePlan()` added with atomic status+column+last_action UPDATE, V44 data-only migration repairs archived/deleted ghosts, `PlanManifestService` and `TaskViewerProvider` call sites routed correctly, `updateStatusByPlanFile` left unchanged. **One CRITICAL fix applied:** `KanbanProvider.ts:5488` (`reassignPlansWorkspace`) called `updateStatusByPlanFile(..., 'deleted')` — a third call site the plan's dependency audit missed, recreating the exact ghost bug on every workspace reassignment; rerouted to `sourceDb.archivePlan(..., 'deleted')`. Post-fix grep confirms zero un-routed `'archived'`/`'deleted'` setters remain. No compilation/tests run per session directives. Remaining risk: the V44 migration stamps `last_action = 'archived-ghost-repaired'` for both archived and deleted ghosts (cosmetic, intentional per plan).
