@@ -497,7 +497,7 @@ Manual verification steps:
             sandbox.stub(provider as any, '_refreshBoard').resolves();
 
             // Set a project filter in workspace A
-            provider.setProjectFilter('Project A');
+            await provider.setProjectFilter('Project A');
             assert.strictEqual(provider.getProjectFilter(), 'Project A');
 
             // Simulate workspace switch message
@@ -533,7 +533,7 @@ Manual verification steps:
             sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
             sandbox.stub(provider as any, '_refreshBoard').resolves();
 
-            provider.setProjectFilter('DeletedProject');
+            await provider.setProjectFilter('DeletedProject');
             assert.strictEqual(provider.getProjectFilter(), 'DeletedProject');
 
             await (provider as any)._handleMessage({

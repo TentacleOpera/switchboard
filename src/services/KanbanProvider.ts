@@ -205,7 +205,12 @@ export class KanbanProvider implements vscode.Disposable {
         return !!this._planningPanelProvider;
     }
 
-    public async activatePlanInProjectPanel(planFile: string, workspaceRoot: string, autoEdit?: boolean): Promise<void> {
+    public async activatePlanInProjectPanel(
+        planFile: string,
+        workspaceRoot: string,
+        autoEdit?: boolean,
+        sessionId?: string
+    ): Promise<void> {
         if (!this._planningPanelProvider) { return; }
         if (!this._planningPanelProvider.hasProjectPanel()) {
             await this._planningPanelProvider.openProject();
@@ -221,7 +226,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._planningPanelProvider.postMessageToProjectWebview({
             type: 'activateKanbanTabAndSelectPlan',
             planId: '',
-            sessionId: '',
+            sessionId: sessionId || '',
             planFile: planFile || '',
             workspaceRoot: effectiveRoot,
             autoEdit: autoEdit === true
@@ -4940,7 +4945,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
-    public setProjectFilter(filter: string | null): void {
+    public async setProjectFilter(filter: string | null): Promise<void> {
         this._projectFilter = filter;
         if (this._currentWorkspaceRoot) {
             const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
@@ -4953,9 +4958,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // constructor writes it on restore from workspaceState, so the watcher always
             // sees the current value even after a reload.
             const activeProjectName = (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? filter : '';
-            void this._getKanbanDb(this._currentWorkspaceRoot)
-                .setConfig('kanban.activeProjectFilter', activeProjectName)
-                .catch(e => console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e));
+            try {
+                await this._getKanbanDb(this._currentWorkspaceRoot)
+                    .setConfig('kanban.activeProjectFilter', activeProjectName);
+            } catch (e) {
+                console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e);
+            }
 
             if (this._projectFilterSaveTimeout) {
                 clearTimeout(this._projectFilterSaveTimeout);
@@ -5496,9 +5504,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);
                     // Only reset project filter if not explicitly provided
                     if (msg.project === null || msg.project === undefined) {
-                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
+                        await this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
                     } else {
-                        this.setProjectFilter(msg.project); // Preserve selected project
+                        await this.setProjectFilter(msg.project); // Preserve selected project
                     }
 
                     // Determine if the selected workspace is a child workspace
@@ -5550,7 +5558,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // wrong project. setProjectFilter writes the kanban.activeProjectFilter config
                 // key the watcher reads. The project now exists (newly created, or already
                 // existed on a duplicate), so making it active is correct either way.
-                this.setProjectFilter(projectName);
+                await this.setProjectFilter(projectName);
 
                 await this._refreshBoard(workspaceRoot);
 
@@ -5616,7 +5624,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
                 if (workspaceRoot && typeof msg.projectName === 'string') {
                     if (this._projectFilter === msg.projectName) {
-                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+                        await this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
                     }
                     const workspaceId = await this._readWorkspaceId(workspaceRoot);
                     if (workspaceId) {
@@ -5637,8 +5645,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'setProjectFilter': {
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
-                    this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+                    await this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
                     await this._refreshBoard(workspaceRoot);
+                    this._taskViewerProvider?.refreshUI(workspaceRoot);
                 }
                 break;
             }
