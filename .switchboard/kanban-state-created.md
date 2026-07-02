@@ -1,6 +1,8 @@
 ## CREATED
 
 **Column:** CREATED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703094207_accuracy-stop-writing-artifacts.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703094207_accuracy-stop-writing-artifacts.md) — Accuracy Workflow — Stop Writing Out Artifacts <!-- planId:dadc1229-0686-41a0-ada8-5429b107f4b2 -->
+**Column:** CREATED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md) — Kanban bottom-bar worktree indicator must reflect the active worktree (project/epic aware) <!-- planId:fba9999b-6521-4c45-85e7-9b91855f9075 -->
 **Column:** CREATED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703064911_kanban_topbar_copy_link_copy_prompt.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703064911_kanban_topbar_copy_link_copy_prompt.md) — Add Copy Link & Copy Prompt buttons to the Kanban document top bar <!-- planId:a1cb17bc-4f2a-4605-b0df-88f75ec482c3 -->

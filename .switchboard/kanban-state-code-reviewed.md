@@ -1,6 +1,12 @@
 ## CODE REVIEWED
 
 **Column:** CODE REVIEWED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/git-native-remote-control-channel-c5124398-0dd2-48d0-937a-32ba33d44b65.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/git-native-remote-control-channel-c5124398-0dd2-48d0-937a-32ba33d44b65.md) — Git-Native Remote Control Channel <!-- planId:c5124398-0dd2-48d0-937a-32ba33d44b65 epic project:"Remote sync" -->
+**Column:** CODE REVIEWED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/board-state-remote-mirror-channels.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/board-state-remote-mirror-channels.md) — Board State Remote Mirror: Configurable Export Destinations + Git-Native Remote Control <!-- planId:f89dabb4-14c9-4a85-aafe-89b6a4a71889 subtask-of:"Git-Native Remote Control Channel" project:"Remote sync" -->
+**Column:** CODE REVIEWED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-manifest-silent-failure.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/fix-manifest-silent-failure.md) — Fix Manifest Silent-Failure: Bare Filenames Rejected + Rejections Invisible <!-- planId:aa0413d7-3840-4790-b19a-4128a469f158 subtask-of:"Git-Native Remote Control Channel" project:"Remote sync" -->
+**Column:** CODE REVIEWED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/worktree-terminal-creation-237c6a35-9a22-4e69-8975-05afbb14d75e.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/worktree-terminal-creation-237c6a35-9a22-4e69-8975-05afbb14d75e.md) — Worktree terminal creation <!-- planId:237c6a35-9a22-4e69-8975-05afbb14d75e epic project:"Remote sync" -->
 **Column:** CODE REVIEWED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703071500_worktree-terminal-cross-contamination.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703071500_worktree-terminal-cross-contamination.md) — Fix: Worktree terminal cross-contamination with main repo terminals <!-- planId:443c579a-8766-4ec1-b619-27a816acda70 subtask-of:"Worktree terminal creation" -->

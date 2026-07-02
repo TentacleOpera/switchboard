@@ -271,3 +271,7 @@ Also update the field rules (line 119) to be explicit:
 
 Complexity 5 → **Send to Coder.** Isolated to one service file + one watcher file + four doc
 files. The auto-resolve logic is the only non-trivial part; the rest is mechanical.
+
+## Review Findings
+
+**Files changed:** `src/services/GlobalPlanWatcherService.ts` (review fix only — toast gating). The original implementation in `PlanManifestService.ts` and 4 workflow/skill doc files was verified correct against the plan. **Fix applied:** the rejection toast in `_processManifest` now fires only when `result.consumed` is true, preventing an infinite re-toast loop every 10s scan cycle when a manifest has mixed rejected+deferred entries (the manifest is retained for the deferred entries, but rejected entries are permanent and would re-toast on every cycle until the staleness guard drops the manifest ~3 min later). **Validation:** static verification — no confirm dialogs introduced, auto-resolve logic verified against path-traversal guard ordering, all 4 doc files confirmed showing full `.switchboard/plans/` paths. TypeScript compilation skipped per session directive (typescript not installed in worktree). **Remaining risk:** the mixed rejected+deferred case now silently suppresses the rejection toast until the manifest is consumed — the rejection is still logged to the Output channel on every cycle, but the user-facing toast is deferred. This is the correct trade-off (silent log vs. toast spam).

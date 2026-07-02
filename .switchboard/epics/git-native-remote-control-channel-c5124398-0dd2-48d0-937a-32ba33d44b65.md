@@ -21,6 +21,10 @@ Manifest import is the working git-native remote-control path today: a repo-conn
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix Manifest Silent-Failure: Bare Filenames Rejected + Rejections Invisible](../plans/fix-manifest-silent-failure.md) — **LEAD CODED**
-- [ ] [Board State Remote Mirror: Configurable Export Destinations + Git-Native Remote Control](../plans/board-state-remote-mirror-channels.md) — **LEAD CODED**
+- [ ] [Fix Manifest Silent-Failure: Bare Filenames Rejected + Rejections Invisible](../plans/fix-manifest-silent-failure.md) — **CODE REVIEWED**
+- [ ] [Board State Remote Mirror: Configurable Export Destinations + Git-Native Remote Control](../plans/board-state-remote-mirror-channels.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+**Epic-level review:** Both subtasks implemented and reviewed in-place. The manifest fix (cx 5) was verified correct against its plan — auto-resolve, rejected state, consume-not-retain, and 4 doc files all match. One MAJOR fix applied: mixed rejected+deferred manifests no longer cause infinite re-toast loops (toast gated on `consumed`). The mirror plan (cx 8) had three fixes applied: cumulative diff dedup in `GitStateProvider` (MAJOR — was causing spurious agent dispatches and duplicate comments), `.gitignore` catch-all excluding `.switchboard/` (CRITICAL — mirror files would be gitignored), and `.gitignore` overwrite destroying user content (MAJOR). Interface compliance (`capabilities`, `pushProjectContext`, `archiveCard`) was already present in the implementation. **Remaining epic-level risk:** the startup reconciler dependency is satisfied via `reconcileOnce()` in `RemoteControlService` + `TaskViewerProvider` startup call, but has not been end-to-end tested with an actual offline period.
