@@ -46,13 +46,22 @@ export interface RemoteConfig {
     silentSync: boolean;
     /** Poll cadence, 30–120s. */
     pingFrequencySeconds: number;
+    /** Remote mode: 'ingest' = pull only (no state mirror, no agent dispatch); 'full' = pull + mirror + dispatch. */
+    mode: 'ingest' | 'full';
+    /** Whether push (status + content) is active. Gates push at trigger sites. */
+    push: boolean;
+    /** Whether comment polling is active. */
+    comments: boolean;
 }
 
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     provider: 'linear',
     boards: [],
     silentSync: false,
-    pingFrequencySeconds: 60
+    pingFrequencySeconds: 60,
+    mode: 'ingest',
+    push: false,
+    comments: true
 };
 
 const REMOTE_CONFIG_KEY = 'remote.config';
@@ -111,7 +120,10 @@ export class RemoteControlService {
                 provider: (parsed.provider === 'notion' || parsed.provider === 'clickup') ? parsed.provider : 'linear',
                 boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
-                pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds)
+                pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds),
+                mode: parsed.mode === 'full' ? 'full' : 'ingest',
+                push: parsed.push === true,
+                comments: parsed.comments !== false, // default true
             };
         } catch {
             return { ...DEFAULT_REMOTE_CONFIG };
@@ -125,7 +137,10 @@ export class RemoteControlService {
             provider: (config.provider === 'notion' || config.provider === 'clickup') ? config.provider : 'linear',
             boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
-            pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds)
+            pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds),
+            mode: config.mode === 'full' ? 'full' : 'ingest',
+            push: config.push === true,
+            comments: config.comments !== false,
         };
         await db.setConfig(REMOTE_CONFIG_KEY, JSON.stringify(normalized));
         if (this._active) {
@@ -272,12 +287,14 @@ export class RemoteControlService {
             return;
         }
 
+        const config = await this.getConfig();
         const { deltas, nextCursor } = await provider.fetchStateDeltas(cursor);
         for (const d of deltas) {
             let plan: KanbanPlanRecord | null | undefined = byRemoteId.get(d.remoteId);
             if (!plan) {
                 // New remote item (a plan authored in Linear/Notion) with no local file →
                 // import it as a new markdown plan, then treat it like any tracked card.
+                // State import runs in BOTH ingest and full mode.
                 plan = await provider.importRemotePlan(d.remoteId);
                 if (!plan) { continue; }
                 byRemoteId.set(d.remoteId, plan);
@@ -285,6 +302,9 @@ export class RemoteControlService {
             }
             const column = provider.stateKeyToColumn(d.stateKey);
             if (!column) { continue; }
+            // In ingest mode, skip state mirror (column move + agent dispatch).
+            // State import (above) still runs — the remote is a plan source.
+            if (config.mode === 'ingest') { continue; }
             await this._applyStateMirror(provider, plan, column, refreshedThisCycle);
         }
         // Advance AFTER processing. State idempotency comes from the echo guard, so a
@@ -330,6 +350,9 @@ export class RemoteControlService {
         provider: RemoteProvider,
         byRemoteId: Map<string, KanbanPlanRecord>
     ): Promise<void> {
+        const config = await this.getConfig();
+        if (!config.comments) { return; } // comment polling gated by config
+
         const key = commentCursorKey(provider.kind);
         const cursor = await db.getConfig(key);
         if (!cursor) {

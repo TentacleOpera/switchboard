@@ -2622,6 +2622,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <select id="remote-provider" class="workspace-project-select">
                         <option value="linear">Linear</option>
                         <option value="notion">Notion</option>
+                        <option value="clickup">ClickUp (push-only)</option>
                     </select>
                 </label>
 
@@ -2640,6 +2641,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
                     <input type="checkbox" id="remote-silent-sync">
                     <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
+                </label>
+
+                <!-- Remote mode: Ingest (pull only) vs Full (pull + mirror + dispatch) -->
+                <div style="margin-bottom:10px;">
+                    <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Remote mode</span>
+                    <label style="display:inline-flex; align-items:center; gap:4px; margin-right:16px; cursor:pointer;">
+                        <input type="radio" name="remote-mode" value="ingest" id="remote-mode-ingest">
+                        <span>Ingest (pull only)</span>
+                    </label>
+                    <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+                        <input type="radio" name="remote-mode" value="full" id="remote-mode-full">
+                        <span>Full (pull + mirror + dispatch)</span>
+                    </label>
+                </div>
+
+                <!-- Comment polling toggle -->
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                    <input type="checkbox" id="remote-comments">
+                    <span>Poll comments from remote</span>
+                </label>
+
+                <!-- Push toggle — grayed out if provider lacks push capability -->
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;" id="remote-push-label">
+                    <input type="checkbox" id="remote-push">
+                    <span>Push status &amp; content to remote</span>
                 </label>
 
                 <label style="display:block; margin-bottom:12px;">
@@ -7036,6 +7062,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let _remoteWorkspaces = [];
         function renderRemoteConfig(config, payload) {
             payload = payload || {};
+            // Store capabilities for honest UI gating
+            if (payload.capabilities) {
+                _remoteCapabilities = payload.capabilities;
+            }
             // Workspace dropdown
             const wsSel = document.getElementById('remote-workspace');
             if (wsSel && Array.isArray(payload.workspaces)) {
@@ -7076,11 +7106,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             if (config) {
                 const providerEl = document.getElementById('remote-provider');
-                if (providerEl) providerEl.value = config.provider === 'notion' ? 'notion' : 'linear';
+                if (providerEl) providerEl.value = (config.provider === 'notion' || config.provider === 'clickup') ? config.provider : 'linear';
                 const silent = document.getElementById('remote-silent-sync');
                 if (silent) silent.checked = config.silentSync === true;
                 const freq = document.getElementById('remote-ping-frequency');
                 if (freq) freq.value = config.pingFrequencySeconds || 60;
+                // Mode radio
+                const modeIngest = document.getElementById('remote-mode-ingest');
+                const modeFull = document.getElementById('remote-mode-full');
+                if (modeIngest && modeFull) {
+                    modeIngest.checked = config.mode !== 'full';
+                    modeFull.checked = config.mode === 'full';
+                }
+                // Comments toggle
+                const comments = document.getElementById('remote-comments');
+                if (comments) comments.checked = config.comments !== false;
+                // Push toggle
+                const push = document.getElementById('remote-push');
+                if (push) push.checked = config.push === true;
             }
             applyRemoteProviderUi();
         }
@@ -7090,23 +7133,51 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
             ).map(cb => cb.value);   // keeps '' — do NOT filter by truthiness
             const providerEl = document.getElementById('remote-provider');
+            const providerVal = providerEl ? providerEl.value : 'linear';
+            const modeFull = document.getElementById('remote-mode-full');
             return {
-                provider: providerEl && providerEl.value === 'notion' ? 'notion' : 'linear',
+                provider: (providerVal === 'notion' || providerVal === 'clickup') ? providerVal : 'linear',
                 boards,
                 silentSync: document.getElementById('remote-silent-sync')?.checked === true,
                 pingFrequencySeconds: Math.min(120, Math.max(30,
                     parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
+                mode: modeFull && modeFull.checked ? 'full' : 'ingest',
+                push: document.getElementById('remote-push')?.checked === true,
+                comments: document.getElementById('remote-comments')?.checked !== false,
             };
         }
 
         // Show/hide the Notion-only setup block and keep the header in sync with the provider.
+        // Also apply capability-based disabling for the mode/push controls.
+        let _remoteCapabilities = { pull: true, push: true };
         function applyRemoteProviderUi() {
             const providerEl = document.getElementById('remote-provider');
             const provider = providerEl ? providerEl.value : 'linear';
             const setup = document.getElementById('remote-notion-setup');
             if (setup) setup.style.display = provider === 'notion' ? 'block' : 'none';
             const title = document.getElementById('remote-subsection-title');
-            if (title) title.textContent = provider === 'notion' ? 'Remote Control (Notion)' : 'Remote Control (Linear)';
+            if (title) {
+                title.textContent = provider === 'notion' ? 'Remote Control (Notion)'
+                    : provider === 'clickup' ? 'Remote Control (ClickUp — push only)'
+                    : 'Remote Control (Linear)';
+            }
+
+            // Capability-based gating: gray out controls the provider can't support.
+            const caps = _remoteCapabilities || { pull: true, push: true };
+            const pushLabel = document.getElementById('remote-push-label');
+            const pushInput = document.getElementById('remote-push');
+            const modeFull = document.getElementById('remote-mode-full');
+            const modeFullLabel = modeFull ? modeFull.closest('label') : null;
+            if (pushInput && pushLabel) {
+                pushInput.disabled = !caps.push;
+                pushLabel.style.opacity = caps.push ? '1' : '0.5';
+                pushLabel.style.pointerEvents = caps.push ? 'auto' : 'none';
+            }
+            if (modeFull && modeFullLabel) {
+                modeFull.disabled = !caps.pull;
+                modeFullLabel.style.opacity = caps.pull ? '1' : '0.5';
+                modeFullLabel.style.pointerEvents = caps.pull ? 'auto' : 'none';
+            }
         }
 
         function remoteAutosave() {

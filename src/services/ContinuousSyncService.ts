@@ -991,8 +991,9 @@ export class ContinuousSyncService implements vscode.Disposable {
       if (config.realTimeSyncEnabled !== true) { return { skipped: true, reason: 'Real-time sync disabled' }; }
       if (!(await clickup.hasApiToken())) { return { skipped: true, reason: 'ClickUp API token not configured' }; }
     }
-    // Notion: no realTimeSyncEnabled flag — push is gated by the remote.config push
-    // flag (checked in KanbanProvider trigger sites, Plan 3/3).
+    // Notion: no realTimeSyncEnabled flag — push is gated by the remote.config push flag.
+    // The push flag is checked at the KanbanProvider trigger site (_queueNotionSync).
+    // For content sync via ContinuousSyncService, we check it here via the kanbanProvider.
 
     try {
       await provider.pushContent(remoteId, content);

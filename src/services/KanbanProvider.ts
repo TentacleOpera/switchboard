@@ -1676,6 +1676,11 @@ export class KanbanProvider implements vscode.Disposable {
             label: item.label,
             active: item.workspaceRoot === workspaceRoot,
         }));
+        // Declared provider capabilities for honest UI gating.
+        // Linear: pull+push, Notion: pull+push (after 2/3), ClickUp: push-only.
+        const capabilities = config.provider === 'clickup'
+            ? { pull: false, push: true }
+            : { pull: true, push: true };
         return {
             type: 'remoteConfig',
             config,
@@ -1684,6 +1689,7 @@ export class KanbanProvider implements vscode.Disposable {
             workspaceRoot,            // echo which workspace this config is for
             workspaces,               // dropdown options
             active: rc.isActive,
+            capabilities,             // declared provider capabilities for honest UI gating
         };
     }
 
@@ -2178,8 +2184,8 @@ export class KanbanProvider implements vscode.Disposable {
         try {
             const rc = this._getRemoteControl(workspaceRoot);
             const config = await rc.getConfig();
-            // Only push if Notion is the active provider and remote control is active.
-            if (config.provider !== 'notion' || !rc.isActive) { return; }
+            // Only push if Notion is the active provider, push is enabled, and remote control is active.
+            if (config.provider !== 'notion' || !config.push || !rc.isActive) { return; }
             const provider = this._getPushProviderForPlan(workspaceRoot, plan);
             if (!provider || !provider.capabilities.push) { return; }
             await provider.pushState(plan.notionPageId, targetColumn);
