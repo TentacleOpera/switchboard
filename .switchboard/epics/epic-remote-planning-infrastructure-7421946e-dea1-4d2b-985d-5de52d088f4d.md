@@ -203,9 +203,9 @@ No outstanding uncertainties remain.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add `/create-epic` Skill for Remote Agent Epic Creation](../plans/create-epic-skill.md) — **CODER CODED**
-- [ ] [Add Epic-Grouping Awareness to Chat and Memo-Planning Skills](../plans/epic-grouping-awareness-in-chat-and-memo-skills.md) — **CODER CODED**
-- [ ] [Add /improve-remote-plan Skill for Linear/Notion-Native Plan Improvement](../plans/improve-remote-plan-skill.md) — **CODER CODED**
-- [ ] [Kanban Startup Reconciler for Remote Plan Status Changes](../plans/kanban-startup-reconciler.md) — **CODER CODED**
-- [ ] [Add /sw-remote Entry Skill for Remote Switchboard Sessions](../plans/sw-remote-entry-skill.md) — **CODER CODED**
+- [ ] [Add `/create-epic` Skill for Remote Agent Epic Creation](../plans/create-epic-skill.md) — **CODE REVIEWED**
+- [ ] [Add Epic-Grouping Awareness to Chat and Memo-Planning Skills](../plans/epic-grouping-awareness-in-chat-and-memo-skills.md) — **CODE REVIEWED**
+- [ ] [Add /improve-remote-plan Skill for Linear/Notion-Native Plan Improvement](../plans/improve-remote-plan-skill.md) — **CODE REVIEWED**
+- [ ] [Kanban Startup Reconciler for Remote Plan Status Changes](../plans/kanban-startup-reconciler.md) — **CODE REVIEWED**
+- [ ] [Add /sw-remote Entry Skill for Remote Switchboard Sessions](../plans/sw-remote-entry-skill.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
