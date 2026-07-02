@@ -18,9 +18,47 @@ author the plan, trigger execution on their machine, and read results back, all 
 
 ## Pre-flight
 - Remote Control must be **enabled with provider = Notion** and the board mapped in the
-  Switchboard **Remote tab**, and the one-time **"Run Notion setup sync"** must have been run
-  (it creates the plans DB, the Comments DB, and matches the `Kanban Column` options to the
-  real board columns). If a column you set doesn't dispatch, that setup likely hasn't run.
+  Switchboard **Remote tab** (in the Project panel), and the one-time **"Run Notion setup
+  sync"** must have been run (it creates the plans DB, the Comments DB, and matches the
+  `Kanban Column` options to the real board columns). If a column you set doesn't dispatch,
+  that setup likely hasn't run.
+
+## Ground every plan in the synced project context (read this FIRST)
+
+You have **no repo access** — no GitHub, no git, no file system. What you DO have is the
+**project-context mirror**: Switchboard syncs the workspace's curated planning context —
+**Dev Docs + project PRDs + the workspace constitution** — outward to the tracker. Read it
+**before authoring any plan**, so your plan names real modules, files, and conventions
+instead of being a "post-it note" that sends the local execution agent in the wrong direction.
+
+**Where to find it:**
+- **Notion:** a page titled **"Switchboard Project Context — \<workspace\>"**, created beside
+  the plans database ("Switchboard Kanban Backup"). Find it with Notion MCP search.
+- **Linear (Linear-native sessions):** a document titled **"Switchboard Project Context"**
+  on the project itself (project documents, not an issue body).
+
+**How to use it:**
+1. Read the constitution first (project principles and hard rules — plans must respect them).
+2. Read the PRD of the project the card belongs to (WHAT the product requires).
+3. Read the Dev Docs (HOW the codebase is put together — modules, seams, conventions).
+4. Author the plan **citing concrete paths, symbols, and conventions from the Dev Docs**, so
+   the local agent — which DOES have the repo — can navigate straight to the work.
+
+**Rules and edge cases:**
+- **Never edit the synced context on the tracker.** It is regenerated from Switchboard
+  (project.html) on every sync — your edits will be silently overwritten. Author **plans**
+  (cards), not doc edits. If the context is wrong, say so in a plan or comment so the human
+  fixes it at the source.
+- **Check staleness.** The context header carries its `Synced at` timestamp. If it looks
+  stale, note that in your plan and tell the user they can push a fresh copy via
+  **Remote tab → Sync Context Now** in Switchboard's Project panel.
+- **No context found?** Context sync isn't enabled or has never run. Fall back to planning
+  from the card text alone (the original behavior), state that limitation in the plan, and
+  tell the user to enable **Project Context Sync** in the Remote tab.
+- **Notion tier differences:** precise database property queries are tier-gated on some
+  plans. If structured queries fail, fall back to `notion-search` / `notion-fetch` by title
+  ("Switchboard Project Context"). Only navigation efficiency changes — the flow above stays
+  the same.
 
 ## Steps
 
@@ -32,11 +70,13 @@ author the plan, trigger execution on their machine, and read results back, all 
    a new page as a new local markdown plan automatically.
 
 3. **Write the implementation plan into the page BODY.** Author it fully *before* moving the
-   card. The local poll reads the page body and writes it to the local plan file — so the body
-   is the source of truth the local agent runs against. Convention: **write the body completely,
-   THEN flip the column** (a half-written body can be picked up if you flip too early). Note: an
-   empty body is skipped (the poll won't overwrite a local plan with nothing), so always author
-   the body when you intend to revise it.
+   card, **grounded in the synced project context** (see the section above) — cite the
+   concrete paths, modules, and conventions the Dev Docs name. The local poll reads the page
+   body and writes it to the local plan file — so the body is the source of truth the local
+   agent runs against. Convention: **write the body completely, THEN flip the column** (a
+   half-written body can be picked up if you flip too early). Note: an empty body is skipped
+   (the poll won't overwrite a local plan with nothing), so always author the body when you
+   intend to revise it.
 
 4. **Trigger the local agent: set `Kanban Column`.** Read the board's real column names first
    (they are the select options). Set `Kanban Column` to the **trigger** column for the work
