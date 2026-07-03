@@ -19,9 +19,11 @@ Read the per-epic sections with that lens.
 
 ---
 
-## ⚠️ Correction (2026-07-03): Epic 2 IS implemented — on an unmerged branch
+## ⚠️ Correction (2026-07-03): Epic 2 IS implemented — now merged into `remote-sync-2`
 
-The original version of this audit concluded "Epic 2 (the trunk) largely not implemented as scoped." **That was wrong** and is corrected here. A second reviewer flagged it; the correction was then independently verified.
+> **UPDATE (2026-07-03, later the same day): the trunk is no longer unmerged.** `remote-sync-refactor-implementation` was **merged into `remote-sync-2`** (merge commit `3a3dd7b`). The `RemoteProvider` interface was unioned (capabilities `{pull, push, projectContextPush, archive}`; verbs `pushState`/`pushContent` + `pushProjectContext`/`archiveCard`), the poll loop reconciled (description-pull + epic-mirror + health), and `ClickUpRemoteProvider`/`GitStateProvider` were brought onto the merged interface. `tsc` returned to the 6 pre-existing baseline errors (zero merge-introduced). The refactor's Remote-tab controls (Ingest/Full mode, push, comments, capability-gating) were then ported from `kanban.html` into `project.html`/`project.js` (commit `7d5e485`), since Epic 1 had moved that tab. **Sections below that describe Epic 2 as "unmerged" / "absent from remote-sync-2" now describe the pre-merge state and are retained as history.** Residual work still standing: the 2 pre-existing `tsc` errors (`epicIssueId`/`epicTaskId`), the unproven 3/3 config consolidation (`realTimeSyncEnabled` still present), and no runtime/UI exercise of the merged sync.
+
+The original version of this audit concluded "Epic 2 (the trunk) largely not implemented as scoped." **That was wrong** and is corrected here. A second reviewer flagged it; the correction was then independently verified. (It was subsequently merged — see the UPDATE above.)
 
 **The Epic 2 refactor was implemented — once — on branch `remote-sync-refactor-implementation`** (commits `6092e67` "Remote Sync Refactor 1/3 + Linear bidirectional description sync", `b0c6dc4` "2/3 — Notion Push Pipeline", `2d24100` "3/3 — Config Consolidation + Remote-Tab UX"). That branch is an ancestor of **neither `main` nor `remote-sync-2`** (`git merge-base --is-ancestor` returns false for both), so the work is real but **unmerged**.
 
@@ -38,7 +40,7 @@ Verified contents on `remote-sync-refactor-implementation`:
 |---|---|---|---|---|
 | `main` | ❌ | ❌ | ❌ (own partial/parallel snapshots only) | Behind both feature branches |
 | `remote-sync-refactor-implementation` | partial (branched at `c49e1ea`, mid-Epic-1) | ✅ **full** | ❌ | 4 ahead of base, 24 behind `main` |
-| `remote-sync-2` | ✅ full | ❌ | ✅ (built against a seam this branch never received) | The audited worktree |
+| `remote-sync-2` | ✅ full | ✅ (merged in — `3a3dd7b`) | ✅ | The audited worktree — now carries Epics 1–7 **and** the trunk |
 
 So Epics 3–7 (on `remote-sync-2`) were built on top of a branch that lacks Epic 2's unified seam — which is exactly why, *on this worktree*, Epic 5's outbound rides a bespoke path and Epic 7's guard has only two of its "three" write paths. Those downstream observations remain accurate **for `remote-sync-2`**; they are consequences of the branch fragmentation, not of the trunk never being built.
 
