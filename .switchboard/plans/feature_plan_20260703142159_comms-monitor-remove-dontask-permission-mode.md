@@ -1,0 +1,84 @@
+# Comms Monitor: Remove dontAsk Permission Mode from Startup Command
+
+## Goal
+
+Remove `--permission-mode dontAsk` from the Comms Monitor's fallback startup command. Some MCP servers (notably Google Calendar) require interactive permission prompts — the user needs to approve access the first time, or re-authorize when OAuth tokens expire. With `dontAsk`, Claude silently skips or fails these permission-gated tool calls, so Calendar checks never work even when the MCP server is correctly configured.
+
+### Problem Analysis & Root Cause
+
+**Symptom:** The user configures the Google Calendar MCP server, enables the gcal source, and starts polling. Calendar events are never reported — Claude silently fails the calendar tool calls because `dontAsk` prevents it from asking the user to grant access.
+
+**Root cause (confirmed by code reading):** The fallback startup command at `TaskViewerProvider.ts:3892` is:
+
+```
+claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"
+```
+
+`--permission-mode dontAsk` tells Claude to never prompt the user for permission. This is appropriate for headless automation where no human is watching, but the Comms Monitor runs in a **visible terminal that the user is actively managing**. When an MCP server needs permission (first-time OAuth, token refresh, scope escalation), Claude needs to ask — and the user is right there to answer.
+
+With `dontAsk`, Claude either:
+- Silently skips the tool call (Calendar check returns nothing, user thinks nothing is happening)
+- Or fails with a permission error that the polling loop ignores (it just sends the next prompt)
+
+Either way, the user never gets Calendar data and has no clear path to fix it.
+
+## Metadata
+
+- **Tags:** comms-monitor, mcp-monitor, startup-command, permissions, calendar, bugfix
+- **Complexity:** 2
+- **Project:** switchboard
+- **Files touched:** `src/services/TaskViewerProvider.ts`
+
+## Complexity Audit
+
+**Routine.** This is a one-line change to the fallback command string. No schema changes, no UI changes, no migrations. The only consideration is the behavioral implication: without `dontAsk`, the terminal may show permission prompts that the user must respond to. This is the intended behavior — the user is managing the terminal and can respond.
+
+## Edge-Case & Dependency Audit
+
+- **Permission prompt blocks the terminal:** When Claude asks for permission, the terminal shows a prompt (y/n) and waits. The polling loop's in-flight guard (`_mcpMonitorInFlight`, line 20438) prevents the next tick from sending a new prompt while one is in-flight. So the polling loop naturally pauses while the user responds to the permission prompt. Once the user answers, Claude proceeds, the in-flight tick completes, and the next tick can fire. No race condition.
+- **User doesn't notice the prompt:** If the user isn't watching the terminal, a permission prompt will block indefinitely. This is inherent to interactive permission — there's no way around it without `dontAsk` (which is the broken behavior we're fixing). The companion plan's "Check Authentication" button helps here — the user can run the auth check, see the permission prompt, respond to it, and then start polling with permissions already granted.
+- **First-run vs. subsequent runs:** The first time Claude accesses an MCP server, it may ask for permission. On subsequent runs (same session), the permission is already granted. So the permission prompt is primarily a first-run experience — after the user approves once, polling runs unattended.
+- **OAuth token expiry:** If an OAuth token expires mid-polling, the next tool call may trigger a re-auth prompt. The user sees it in the terminal, re-authorizes, and polling resumes. This is the correct behavior — the alternative (`dontAsk`) silently fails.
+- **`--allowedTools "mcp__*"` unchanged:** The allowed tools restriction stays. Claude can only use MCP tools (not bash, edit, etc.). Removing `dontAsk` doesn't expand what tools Claude can use — it just means Claude will ask before using a tool that requires permission, rather than silently skipping it.
+- **Custom startup command override:** If the user has configured a custom startup command (overriding the fallback), this change doesn't affect them — their custom command is used as-is. The change only affects the fallback when no custom command is configured.
+- **Companion plan — comms log file:** The companion plan to have Claude write findings to a comms log file would add `write` to `--allowedTools`. Without `dontAsk`, Claude may ask permission before writing the file. This is fine — the user approves once and subsequent writes are silent.
+- **Companion plan — three-step flow:** The "Check Authentication" button becomes more valuable with this change. The user runs the auth check, responds to any permission prompts, and then starts polling with everything pre-authorized. This is the recommended flow.
+- **No `confirm()` dialogs.** No UI changes.
+
+## Proposed Changes
+
+### 1. `src/services/TaskViewerProvider.ts` — remove `--permission-mode dontAsk` from the fallback command
+
+Line 3892:
+
+```ts
+        // Fallback: mcp_monitor defaults to claude command with haiku model and MCP-only tools.
+        // dontAsk is intentionally omitted — some MCP servers (e.g. Google Calendar) require
+        // interactive permission prompts for first-time access or OAuth token refresh. The
+        // monitor runs in a visible terminal the user is managing, so Claude can ask.
+        if (role === 'mcp_monitor' && (!cmd || cmd.trim() === '')) {
+            cmd = 'claude --model claude-haiku-4-5 --allowedTools "mcp__*"';
+            console.log(`[TaskViewerProvider] Applied mcp_monitor fallback command: ${cmd}`);
+        }
+```
+
+The only change is removing `--permission-mode dontAsk` from the command string. The comment is updated to explain why `dontAsk` is intentionally omitted.
+
+## Verification Plan
+
+1. **Build:** `npm run compile` succeeds with no type errors.
+2. **Manual — Calendar permission prompt appears:**
+   - Configure the Google Calendar MCP server in Claude's MCP config (if not already done).
+   - Clear any custom startup command for `mcp_monitor` (so the fallback is used).
+   - Launch the monitor terminal. Confirm the startup command is `claude --model claude-haiku-4-5 --allowedTools "mcp__*"` (no `dontAsk`).
+   - Send a check prompt that includes Calendar. Confirm Claude asks for permission to access the Calendar MCP server (the prompt appears in the terminal).
+   - Approve the permission. Confirm Claude proceeds to check Calendar and reports events.
+3. **Manual — subsequent ticks don't re-prompt:**
+   - After approving Calendar access once, let the polling loop run. Confirm subsequent Calendar checks do NOT re-prompt for permission (the grant persists within the session).
+4. **Manual — Slack/Gmail unaffected:**
+   - If Slack and Gmail MCP servers don't require interactive permission (they use pre-configured OAuth tokens), confirm their checks proceed without prompts. The removal of `dontAsk` doesn't add prompts where none are needed — it only allows prompts where the MCP server requires them.
+5. **Manual — polling pauses during permission prompt:**
+   - While a permission prompt is shown in the terminal, confirm the polling loop doesn't send a new prompt (the in-flight guard blocks it). After the user responds, confirm the next tick fires normally.
+6. **Manual — custom command override unaffected:**
+   - Configure a custom startup command for `mcp_monitor` (e.g. `claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"`). Confirm the custom command is used, not the fallback. The user can still opt into `dontAsk` if they want it.
+7. **Regression:** Other agent roles (`jules_monitor`, `claude_artifacts`) are unaffected — their fallback commands are separate.

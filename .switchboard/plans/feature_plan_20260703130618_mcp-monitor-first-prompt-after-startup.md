@@ -1,0 +1,292 @@
+# MCP Monitor: First Prompt 30s After Startup + Persistent Diff Baseline
+
+## Goal
+
+The MCP Monitor automation in the kanban.html **AUTOMATION** tab should send its first check prompt to the monitor terminal ~30 seconds after the `claude` startup command is sent, so the user has visible evidence that the automation is working. Currently the user launches the monitor terminal, the status flips to "🟢 Monitor terminal: running", but no prompt is sent for the full polling interval (default 5 minutes) — making the feature appear broken.
+
+A second, related gap: the "since your previous check" diff baseline currently lives only in Claude's session memory. If the user clears the terminal, Claude restarts, the session context is evicted, or the IDE/extension reloads, that baseline is lost and the next check silently reverts to a "past 24 hours" first-check behavior — over-reporting and breaking the incremental-diff contract. This plan closes that gap by persisting the diff baseline on disk and injecting it explicitly into every prompt.
+
+### Problem Analysis & Root Cause
+
+**Symptom 1 (no first prompt):** User clicks *Launch Monitor Terminal* in the AUTOMATION tab. A terminal opens, `claude` is started, the kanban status reads "🟢 running", but no monitor prompt ever appears in the terminal pane. The user concludes the automation does nothing.
+
+**Symptom 2 (silent baseline reset):** After a terminal clear / Claude restart / IDE reload, the next monitor prompt re-scans the past 24 hours instead of just the delta since the last check, producing duplicate reports the user has already seen.
+
+**Root cause (confirmed by code reading):**
+
+1. `launchMcpMonitorTerminal()` (`src/services/TaskViewerProvider.ts:20512`) creates the terminal, waits for shell readiness (up to 5s), sends the startup command via `terminal.sendText(cmd.trim(), true)` at line 20579, then calls `_postMcpMonitorConfig()`. **It never schedules an early/first monitor tick and never calls `_startMcpMonitorLoop()`.**
+
+2. `_startMcpMonitorLoop()` (line 20390) sets up the polling via `setInterval(..., intervalMs)` where `intervalMs = intervalMinutes * 60 * 1000` (default 5 minutes). `setInterval` does **not** fire immediately — the first tick is a full interval after the loop starts. So even when the loop is already running (started at construction, line 487, or via `setMcpMonitorConfigFromKanban`, line 20483), the freshly-launched terminal waits up to 5 minutes for its first prompt.
+
+3. There is no "first prompt" path at all. The only prompt sender is `_mcpMonitorTick()` (line 20420), invoked exclusively by the interval timer.
+
+4. `_buildMcpMonitorPrompt` (line 20460) emits a **fixed** string: `"Check the following for anything new that needs my attention since your previous check..."`. There is no server-side timestamp, no `lastCheckAt` for the monitor, and no "past 24 hours" string in the prompt. The "since previous check" reference is interpreted entirely by Claude reading its own prior turn in the session. The only MCP-monitor timing state in the extension is `_mcpMonitorLastSendAt` (line 360), used purely for debounce (line 20444) — not for prompt content. So the diff baseline is Claude-owned, not extension-owned, and is lost on any session reset.
+
+**Why 30 seconds:** The startup command is `claude` (or a configured agent binary), which takes several seconds to initialize its REPL. Sending the prompt immediately would land before Claude is ready to accept input and the text would be eaten by the shell. A 30-second delay gives Claude time to boot before the first check prompt is typed into the pane.
+
+**Why persist `lastCheckAt` on disk:** The extension already persists MCP monitor config to `~/.switchboard/integration-config.json` (`GlobalIntegrationConfigService.ts:245`). Adding a `lastCheckAt` field there survives IDE restarts, extension reloads, and Claude session resets — because it's a file on disk, not Claude's context. Injecting that timestamp into the prompt text means Claude no longer needs to remember its prior turn; the prompt *tells* it the window.
+
+## Metadata
+
+- **Tags:** mcp-monitor, automation, kanban, terminal, bugfix, ux, persistence
+- **Complexity:** 4
+- **Project:** switchboard
+- **Files touched:** `src/services/TaskViewerProvider.ts`, `src/services/GlobalIntegrationConfigService.ts`, `src/webview/kanban.html`
+
+## Complexity Audit
+
+**Routine-to-moderate.** The change is localized to three files and follows existing patterns already in the codebase (`setTimeout`/`setInterval`, `_enqueueMcpMonitorTick`, terminal lifecycle guards, and the `getMcpMonitorConfig`/`setMcpMonitorConfig` persistence pair). No data migrations, no schema changes, no new dependencies.
+
+The two mildly risky aspects:
+1. **Timer lifecycle** (cancelling the one-shot if the terminal dies or the user disables the monitor) — handled with the same `clearTimeout`/`clearInterval` discipline already used for `_mcpMonitorTimer`.
+2. **Config-file write amplification** — `_mcpMonitorTick` now writes `lastCheckAt` to `~/.switchboard/integration-config.json` on every successful send (every interval). This is a small JSON file written via `fs.promises.writeFile` (already used by `setMcpMonitorConfig`). At the default 5-minute interval this is 12 writes/hour — negligible. No batching or throttling needed.
+
+**Migration note:** `lastCheckAt` is a new optional field on the persisted `mcpMonitor` object. Existing installs have no `lastCheckAt` and the read path defaults to `undefined`, which the prompt builder treats as "first ever check" → "past 24 hours". This is a clean additive change — no migration required, no compat shim, and existing installs behave exactly as they do today until the first successful send writes the new field.
+
+## Edge-Case & Dependency Audit
+
+- **Terminal exits during the 30s window:** The one-shot tick calls `_enqueueMcpMonitorTick()`, which calls `_mcpMonitorTick()`, which already guards `if (!terminal || terminal.exitStatus !== undefined) return;` (line 20432). Safe — a dead terminal simply skips the send.
+- **User disables MCP monitor during the 30s window:** `setMcpMonitorConfigFromKanban` → `_stopMcpMonitorLoop()` clears the interval. The one-shot must also be cleared here to avoid a stray prompt after disable.
+- **User launches a second monitor terminal:** `launchMcpMonitorTerminal` reuses an existing live terminal (line 20526-20533) and only creates a new one if none is live. The one-shot should only be scheduled on the create path (or re-scheduled harmlessly — the in-flight guard at line 20438 prevents duplicate sends).
+- **Loop already running when terminal launches:** Calling `_startMcpMonitorLoop()` again is safe — it clears the existing interval before setting a new one (line 20396-20400).
+- **Startup command is empty / not configured:** `launchMcpMonitorTerminal` only sends a command if `cmd && cmd.trim()` (line 20568). The 30s one-shot should still fire in this case (the terminal is a plain shell and can still receive the prompt). Place the one-shot scheduling outside the `if (cmd)` block.
+- **Secondary debounce (line 20444):** `Date.now() - this._mcpMonitorLastSendAt < intervalMs * 0.5`. On a fresh launch `_mcpMonitorLastSendAt` is `0`, so this never blocks the first tick. No change needed.
+- **VS Code webview `confirm()` ban:** No confirm dialogs are introduced. The launch button already disables itself during launch (kanban.html:7892).
+- **`lastCheckAt` write only on success:** The timestamp is persisted *after* `sendRobustText` succeeds. If the send throws or the terminal is dead, the baseline does not advance, so the next tick re-covers the same window (correct — Claude never saw the prompt). The `try/finally` keeps `_mcpMonitorInFlight` reset on failure; the `await setMcpMonitorConfig` call sits inside the `try` after the successful send.
+- **First-ever check (no `lastCheckAt`):** `getMcpMonitorConfig` returns `lastCheckAt: undefined`. The prompt builder falls back to "in the past 24 hours". On the first successful send, `lastCheckAt` is written. Subsequent ticks use the explicit timestamp.
+- **Claude session reset / terminal cleared mid-stream:** The persisted `lastCheckAt` is unaffected — it's on disk. The next tick injects "since <timestamp>" into the prompt, so the restarted Claude gets the correct boundary without relying on its own (now-empty) context. This is the core fix for symptom 2.
+- **IDE / extension restart:** `_mcpMonitorLastSendAt` (in-memory debounce clock) is lost on restart, but `lastCheckAt` on disk survives. The first tick after restart reads `lastCheckAt` from config and injects the correct boundary. The debounce guard (line 20444) uses `_mcpMonitorLastSendAt = 0` after restart, so it never blocks — correct.
+- **Newly-enabled source mid-stream:** A single global `lastCheckAt` is shared across all sources. If the user enables Gmail after Slack was running, the first Gmail check says "since <when Slack was last checked>" and may over-report Gmail items from that window. This is acceptable (one-time over-report on newly-enabled sources) and far better than the current silent reset. Per-source timestamps would be over-engineering for this feature.
+- **Clock skew / manual config edit:** If a user manually edits `lastCheckAt` to a future time, the prompt would ask Claude for "since <future>" which Claude handles gracefully (reports nothing new → "All clear"). Not a crash risk.
+
+## Proposed Changes
+
+### 1. `src/services/TaskViewerProvider.ts` — add a one-shot "first prompt" timer field
+
+Add a new private field next to the existing MCP monitor timer fields (around line 358-361):
+
+```ts
+private _mcpMonitorFirstPromptTimer?: NodeJS.Timeout;
+```
+
+### 2. `src/services/TaskViewerProvider.ts` — schedule the 30s first prompt after launch
+
+In `launchMcpMonitorTerminal()` (line 20512), after the startup command is sent and before `_postMcpMonitorConfig()`, ensure the loop is running and schedule a one-shot 30-second tick. Replace the tail of the method (lines 20566-20583):
+
+```ts
+        // Wait for shell readiness, then send startup command
+        const cmd = await this.getAgentStartupCommand('mcp_monitor');
+        if (cmd && cmd.trim()) {
+            const shellReady = new Promise<void>((resolve) => {
+                const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+                    if (e.terminal === terminal) {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+                setTimeout(() => { disposable.dispose(); resolve(); }, 5000);
+            });
+            await shellReady;
+            terminal.sendText(cmd.trim(), true);
+        }
+
+        // Ensure the polling loop is running for this freshly launched terminal.
+        await this._startMcpMonitorLoop();
+
+        // Send the first monitor prompt ~30s after the startup command so the
+        // user sees immediate evidence the automation is working. Claude needs
+        // time to boot before it can accept typed input.
+        this._scheduleMcpMonitorFirstPrompt();
+
+        // Push updated status to kanban
+        await this._postMcpMonitorConfig();
+```
+
+### 3. `src/services/TaskViewerProvider.ts` — add the scheduler/cancel helper methods
+
+Add alongside `_startMcpMonitorLoop` / `_stopMcpMonitorLoop` (after line 20408):
+
+```ts
+    private _scheduleMcpMonitorFirstPrompt() {
+        if (this._mcpMonitorFirstPromptTimer) {
+            clearTimeout(this._mcpMonitorFirstPromptTimer);
+        }
+        this._mcpMonitorFirstPromptTimer = setTimeout(() => {
+            this._mcpMonitorFirstPromptTimer = undefined;
+            this._enqueueMcpMonitorTick();
+        }, 30_000);
+    }
+
+    private _cancelMcpMonitorFirstPrompt() {
+        if (this._mcpMonitorFirstPromptTimer) {
+            clearTimeout(this._mcpMonitorFirstPromptTimer);
+            this._mcpMonitorFirstPromptTimer = undefined;
+        }
+    }
+```
+
+### 4. `src/services/TaskViewerProvider.ts` — cancel the one-shot when the monitor stops
+
+Extend `_stopMcpMonitorLoop()` (line 20403) to also cancel the first-prompt timer:
+
+```ts
+    private _stopMcpMonitorLoop() {
+        if (this._mcpMonitorTimer) {
+            clearInterval(this._mcpMonitorTimer);
+            this._mcpMonitorTimer = undefined;
+        }
+        this._cancelMcpMonitorFirstPrompt();
+    }
+```
+
+This covers the "user disables MCP monitor" path (which calls `_stopMcpMonitorLoop()` via `setMcpMonitorConfigFromKanban` → `_startMcpMonitorLoop`'s `if (!cfg.enabled) { this._stopMcpMonitorLoop(); return; }` branch at line 20392-20394).
+
+### 5. `src/webview/kanban.html` — update help text to mention the 30s first prompt
+
+Update the help text at line 7903 so the user knows a first prompt is coming shortly after launch, and that the diff baseline survives restarts:
+
+```js
+            mcpHelp.textContent = 'How it works: when you launch the monitor terminal, Switchboard sends the first check prompt about 30 seconds after Claude starts up (so you can see it working right away). The first check covers the past 24 hours; every check after that reports only what is new since the previous check. The baseline is saved to disk, so it survives terminal clears, Claude restarts, and IDE reloads. The monitor re-checks every selected interval, asking your terminal to check the selected sources (Slack, Gmail, Google Calendar, or a custom instruction) via your claude.ai MCP servers. The terminal reports what\'s new in its pane.';
+```
+
+---
+
+## Phase 2: Persistent `lastCheckAt` diff baseline
+
+The one-shot (Phase 1) makes the first prompt reliable. This phase makes the *diff chain* reliable by moving the "since previous check" baseline out of Claude's session memory and onto disk, then injecting it explicitly into every prompt.
+
+### 6. `src/services/GlobalIntegrationConfigService.ts` — add `lastCheckAt` to the config schema
+
+Add the optional field to both the persisted shape and the typed config. In `GlobalConfig.mcpMonitor` (line 15) and `McpMonitorConfig` (line 39):
+
+```ts
+    mcpMonitor?: {
+        enabled?: boolean;
+        intervalMinutes?: number;
+        targetRole?: string;
+        sources?: string[];
+        customInstruction?: string;
+        lastCheckAt?: string;   // ISO UTC timestamp of the last successful monitor prompt send
+    };
+```
+
+```ts
+export interface McpMonitorConfig {
+    enabled: boolean;
+    intervalMinutes: number;
+    targetRole: string;
+    sources: string[];
+    customInstruction: string;
+    lastCheckAt?: string;   // ISO UTC, undefined until the first successful send
+}
+```
+
+### 7. `src/services/GlobalIntegrationConfigService.ts` — read/write `lastCheckAt` through the config accessors
+
+In `getMcpMonitorConfigSync` (line 221) and `getMcpMonitorConfig` (line 233), add the field to the returned object:
+
+```ts
+            lastCheckAt: cfg.lastCheckAt,
+```
+
+In `setMcpMonitorConfig` (line 245), add it to the merged write so partial updates preserve it:
+
+```ts
+        globalConfig.mcpMonitor = {
+            enabled: config.enabled ?? current.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
+            intervalMinutes: Math.max(config.intervalMinutes ?? current.intervalMinutes ?? DEFAULT_MCP_MONITOR_CONFIG.intervalMinutes, 1),
+            targetRole: config.targetRole ?? current.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
+            sources: config.sources ?? current.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
+            customInstruction: config.customInstruction ?? current.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+            lastCheckAt: config.lastCheckAt ?? current.lastCheckAt,
+        };
+```
+
+Note: `lastCheckAt` is intentionally **not** in `DEFAULT_MCP_MONITOR_CONFIG` — it should be `undefined` (not a stale default) until the first successful send.
+
+### 8. `src/services/TaskViewerProvider.ts` — inject the timestamp into the prompt text
+
+Replace the fixed preamble in `_buildMcpMonitorPrompt` (line 20461) with a boundary-aware one. The method already receives `cfg`; it now reads `cfg.lastCheckAt`:
+
+```ts
+    private _buildMcpMonitorPrompt(cfg: McpMonitorConfig): string {
+        const boundary = cfg.lastCheckAt
+            ? `since ${new Date(cfg.lastCheckAt).toUTCString()}`
+            : 'in the past 24 hours';
+        const preamble = `Check the following for anything new that needs my attention ${boundary}. Report only what is new and noteworthy as a short bullet list. If nothing needs attention, reply 'All clear'. This is read-only — do NOT take any actions, send any messages, or modify anything.`;
+        const lines: string[] = [];
+        const sources = cfg.sources || [];
+        for (const src of sources) {
+            if (src === 'custom') {
+                if (cfg.customInstruction && cfg.customInstruction.trim()) {
+                    lines.push(cfg.customInstruction.trim());
+                }
+            } else {
+                const text = TaskViewerProvider.SOURCE_PRESETS[src];
+                if (text) {
+                    lines.push(text);
+                }
+            }
+        }
+        if (lines.length === 0) return '';
+        const body = preamble + "\n\n" + lines.map(line => `- ${line}`).join('\n');
+        return normalizeNewlines(body);
+    }
+```
+
+### 9. `src/services/TaskViewerProvider.ts` — persist `lastCheckAt` on successful send
+
+In `_mcpMonitorTick` (line 20448-20457), write the timestamp *after* `sendRobustText` succeeds. The write sits inside the `try` (so a failed send does not advance the baseline), and the `finally` still resets `_mcpMonitorInFlight`:
+
+```ts
+        this._mcpMonitorInFlight = true;
+        try {
+            const prompt = this._buildMcpMonitorPrompt(cfg);
+            if (prompt) {
+                await sendRobustText(terminal, prompt, true);
+                this._mcpMonitorLastSendAt = Date.now();
+                await GlobalIntegrationConfigService.setMcpMonitorConfig({
+                    lastCheckAt: new Date().toISOString()
+                });
+            }
+        } finally {
+            this._mcpMonitorInFlight = false;
+        }
+```
+
+## Verification Plan
+
+1. **Build:** `npm run compile` (webpack) succeeds with no type errors. Note: `dist/` is not used during dev/testing per project rules — verification is via installed VSIX.
+2. **Manual — first prompt appears:**
+   - Open the Switchboard kanban panel → AUTOMATION tab.
+   - Enable MCP Monitor (select "on"), pick at least one source (e.g. Slack), set interval to 1 minute for faster iteration.
+   - Click *Launch Monitor Terminal*.
+   - Observe: terminal opens, `claude` startup command is sent.
+   - **Within ~30 seconds**, the first check prompt is typed into the monitor terminal pane (visible text). This is the fix — previously nothing appeared for 5 minutes.
+3. **Manual — disable cancels first prompt:**
+   - Launch the monitor terminal, then within the 30s window switch MCP Monitor to "off".
+   - Confirm no prompt is sent after the 30s mark (the one-shot was cancelled by `_stopMcpMonitorLoop`).
+4. **Manual — terminal dies during window:**
+   - Launch the monitor terminal, then close/kill the terminal within the 30s window.
+   - Confirm no error is thrown (the `_mcpMonitorTick` dead-terminal guard returns early) and no crash occurs.
+5. **Manual — subsequent interval still works:**
+   - After the first 30s prompt, confirm the regular interval (e.g. 1 min) continues to send subsequent prompts on schedule.
+6. **Manual — first prompt says "past 24 hours":**
+   - Delete `~/.switchboard/integration-config.json` (or remove the `mcpMonitor.lastCheckAt` key) to simulate a first-ever run.
+   - Launch the monitor terminal and wait for the 30s prompt.
+   - Confirm the prompt text in the terminal contains "in the past 24 hours" (not "since <timestamp>").
+7. **Manual — subsequent prompt says "since <timestamp>":**
+   - After the first successful send, inspect `~/.switchboard/integration-config.json` and confirm `mcpMonitor.lastCheckAt` is now an ISO string.
+   - Wait for the next interval tick. Confirm the prompt text contains "since <UTC timestamp>" matching the persisted value.
+8. **Manual — baseline survives Claude restart (the core Phase 2 fix):**
+   - Let the monitor run at least one successful tick so `lastCheckAt` is persisted.
+   - Clear the terminal / restart Claude in the monitor pane (simulating a session reset).
+   - Wait for the next interval tick. Confirm the prompt still says "since <timestamp>" (read from disk), NOT "past 24 hours". Claude reports only the delta since the persisted timestamp, not a full 24h re-scan.
+9. **Manual — baseline survives IDE reload:**
+   - Let the monitor run one tick, then reload the VS Code window (Developer → Reload Window).
+   - Re-enable the monitor if needed, wait for the next tick. Confirm the prompt uses the persisted `lastCheckAt` boundary.
+10. **Manual — failed send does not advance baseline:**
+    - With the monitor running, kill the terminal mid-interval so the next tick's `sendRobustText` targets a dead terminal (the dead-terminal guard at line 20432 returns early before the send).
+    - Inspect `~/.switchboard/integration-config.json` — `lastCheckAt` should be unchanged (the write only happens after a successful send).
+    - Relaunch the terminal; the next prompt should cover the window since the *last successful* send, not since the failed tick.
+11. **Regression:** Existing automation-engine (autoban) behavior and other agent-grid terminal launches are unaffected — changes are scoped to the MCP monitor path. The `setMcpMonitorConfig` signature change is additive (`lastCheckAt` optional), so existing callers in `kanban.html` and `KanbanProvider.ts` that pass partial config are unaffected.
