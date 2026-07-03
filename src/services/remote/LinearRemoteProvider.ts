@@ -28,7 +28,7 @@ interface LinearRemoteProviderDeps {
 
 export class LinearRemoteProvider implements RemoteProvider {
     public readonly kind = 'linear' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: true, archive: true };
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, projectContextPush: true, archive: true };
     private _linear: LinearSyncService;
     private _deps: LinearRemoteProviderDeps;
     private _stateIdToColumn: Record<string, string> = {};
@@ -52,7 +52,7 @@ export class LinearRemoteProvider implements RemoteProvider {
         const QUERY = `
           query {
             issues(filter: { updatedAt: { gt: ${since} } }, first: 100) {
-              nodes { id updatedAt state { id } parent { id } children { nodes { id } } }
+              nodes { id updatedAt description state { id } parent { id } children { nodes { id } } }
             }
           }
         `;
@@ -64,6 +64,8 @@ export class LinearRemoteProvider implements RemoteProvider {
             for (const node of nodes) {
                 const remoteId = String(node.id || '');
                 const stateKey = String(node.state?.id || '');
+                const updatedAt = String(node.updatedAt || '');
+                const description = String(node.description || '');
                 if (remoteId && stateKey) {
                     deltas.push({
                         remoteId,
@@ -73,10 +75,11 @@ export class LinearRemoteProvider implements RemoteProvider {
                         // parent/child link change IS detected by this delta query.
                         parentRemoteId: String(node.parent?.id || ''),
                         isEpicCandidate: (node.children?.nodes?.length || 0) > 0,
+                        updatedAt: updatedAt || undefined,
+                        description: description || undefined,
                     });
                 }
-                const ts = String(node.updatedAt || '');
-                if (ts && ts > nextCursor) { nextCursor = ts; }
+                if (updatedAt && updatedAt > nextCursor) { nextCursor = updatedAt; }
             }
         } catch (e) {
             console.warn('[LinearRemoteProvider] fetchStateDeltas failed:', e);
@@ -264,6 +267,42 @@ export class LinearRemoteProvider implements RemoteProvider {
         `, { input: { title: LinearRemoteProvider.CONTEXT_DOC_TITLE, content: markdown, projectId } });
         if (created?.data?.documentCreate?.success !== true) {
             throw new Error('documentCreate returned success=false');
+        }
+    }
+
+    public async pushState(remoteId: string, column: string): Promise<void> {
+        // Delegate to LinearSyncService.syncPlan — it maps column→stateId, handles
+        // completeSyncEnabled gate, and creates/updates the issue. The remoteId IS
+        // the Linear issue id; syncPlan looks up the plan by planFile via getIssueIdForPlan,
+        // but we already have the issue id, so we use issueUpdate directly.
+        try {
+            const config = await this._linear.loadConfig();
+            if (!config?.setupComplete) { return; }
+            if (!(await this._linear.hasApiToken())) { return; }
+            const stateId = config.columnToStateId[column];
+            if (!stateId) {
+                this._deps.log?.(`[LinearRemoteProvider] pushState: no Linear state mapped for column "${column}" — skipping.`);
+                return;
+            }
+            const result = await this._linear.graphqlRequest(`
+                mutation($id: String!, $stateId: String!) {
+                    issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+                }
+            `, { id: remoteId, stateId });
+            if (!result?.data?.issueUpdate?.success) {
+                this._deps.log?.(`[LinearRemoteProvider] pushState: issueUpdate failed for ${remoteId}.`);
+            }
+        } catch (e) {
+            this._deps.log?.(`[LinearRemoteProvider] pushState failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    public async pushContent(remoteId: string, markdown: string): Promise<void> {
+        // Delegate to LinearSyncService.syncPlanContent — it strips H1, truncates, and
+        // calls issueUpdate with the description.
+        const result = await this._linear.syncPlanContent(remoteId, markdown);
+        if (!result.success) {
+            throw new Error(`Linear pushContent failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
     }
 

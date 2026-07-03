@@ -39,6 +39,7 @@ import { AutoArchiveService, type AutoArchiveConfig } from './AutoArchiveService
 import type { RemoteProvider } from './remote/RemoteProvider';
 import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
+import { ClickUpRemoteProvider } from './remote/ClickUpRemoteProvider';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBackupService } from './NotionBackupService';
@@ -513,13 +514,17 @@ export class KanbanProvider implements vscode.Disposable {
     public async setGlobalPlanWatcher(watcher: import('./GlobalPlanWatcherService').GlobalPlanWatcherService): Promise<void> {
         this._globalPlanWatcher = watcher;
 
-        // Create ContinuousSyncService
+        // Create ContinuousSyncService with unified push dispatch + description sync deps.
         this._continuousSync = new ContinuousSyncService(
             this,
             this._globalPlanWatcher,
             (root) => this._getClickUpService(root),
             (root) => this._getLinearService(root),
-            (root) => this._getKanbanDb(root)
+            (root) => this._getKanbanDb(root),
+            // Unified push provider resolver — resolves the provider from the plan's remote IDs.
+            (root, plan) => this._getPushProviderForPlan(root, plan),
+            // On successful Linear push, persist the description cursor for bidirectional sync.
+            (issueId, ts) => { void this._setDescriptionCursor('linear', issueId, ts); }
         );
         this._disposables.push(this._continuousSync);
 
@@ -1597,6 +1602,58 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Resolve the push-capable RemoteProvider for a plan, based on its remote IDs.
+     * Priority: ClickUp > Linear > Notion (matches ContinuousSyncService's existing logic).
+     * Returns null if the plan has no remote link or the provider can't be constructed.
+     */
+    private _getPushProviderForPlan(
+        workspaceRoot: string,
+        plan: import('./KanbanDatabase').KanbanPlanRecord
+    ): RemoteProvider | null {
+        const resolved = this.resolveEffectiveWorkspaceRoot(workspaceRoot);
+        const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
+        const getPlansDir = () => this._getIntegrationImportDir(resolved);
+        const log = (m: string) => this._outputChannel?.appendLine(m);
+        if (plan.clickupTaskId) {
+            return new ClickUpRemoteProvider(this._getClickUpService(resolved), {
+                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
+            });
+        }
+        if (plan.linearIssueId) {
+            return new LinearRemoteProvider(this._getLinearService(resolved), {
+                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
+            });
+        }
+        if (plan.notionPageId) {
+            return new NotionRemoteProvider({
+                notion: this._getNotionService(resolved),
+                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
+            });
+        }
+        return null;
+    }
+
+    /** Persisted description-sync cursors per issue (issueId → ISO timestamp). */
+    private async _getDescriptionCursors(kind: RemoteProviderKind): Promise<Record<string, string>> {
+        const root = this._resolveWorkspaceRoot();
+        if (!root) { return {}; }
+        const db = this._getKanbanDb(root);
+        if (!db || !(await db.ensureReady())) { return {}; }
+        return db.getConfigJson<Record<string, string>>(`remote.descriptionCursor.${kind}`, {});
+    }
+
+    /** Persist a description-sync cursor for an issue. */
+    private async _setDescriptionCursor(kind: RemoteProviderKind, issueId: string, timestamp: string): Promise<void> {
+        const root = this._resolveWorkspaceRoot();
+        if (!root) { return; }
+        const db = this._getKanbanDb(root);
+        if (!db || !(await db.ensureReady())) { return; }
+        const cursors = await this._getDescriptionCursors(kind);
+        cursors[issueId] = timestamp;
+        await db.setConfigJson(`remote.descriptionCursor.${kind}`, cursors);
+    }
+
+    /**
      * §10 — lazily build the Remote Control service for a workspace root. The poll
      * callbacks reuse the existing column-move + agent-dispatch paths so a Linear-driven
      * move behaves identically to a manual board drag.
@@ -1615,6 +1672,13 @@ export class KanbanProvider implements vscode.Disposable {
             onComment: async (plan, body) => {
                 await this._remoteDispatchComment(resolved, plan, body);
             },
+            // Description sync deps (Linear bidirectional description sync)
+            getDescriptionCursors: (kind) => this._getDescriptionCursors(kind),
+            setDescriptionCursor: (kind, issueId, ts) => this._setDescriptionCursor(kind, issueId, ts),
+            onDescriptionPulled: (issueId, hash) => {
+                this._continuousSync?.markExternallyWritten(issueId, hash);
+            },
+            getWorkspaceRoot: () => resolved,
             log: (m) => this._outputChannel?.appendLine(m)
         });
 
@@ -1675,6 +1739,12 @@ export class KanbanProvider implements vscode.Disposable {
                 db: this._getKanbanDb(resolved),
                 getWorkspaceId, getPlansDir, log,
                 getExportRoot: () => resolved,
+            });
+        }
+        if (kind === 'clickup') {
+            return new ClickUpRemoteProvider(this._getClickUpService(resolved), {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
             });
         }
         return new LinearRemoteProvider(this._getLinearService(resolved), {
@@ -1812,6 +1882,11 @@ export class KanbanProvider implements vscode.Disposable {
             label: item.label,
             active: item.workspaceRoot === workspaceRoot,
         }));
+        // Declared provider capabilities for honest UI gating.
+        // Linear: pull+push, Notion: pull+push (after 2/3), ClickUp: push-only.
+        const capabilities = config.provider === 'clickup'
+            ? { pull: false, push: true }
+            : { pull: true, push: true };
         return {
             type: 'remoteConfig',
             config,
@@ -1820,6 +1895,7 @@ export class KanbanProvider implements vscode.Disposable {
             workspaceRoot,            // echo which workspace this config is for
             workspaces,               // dropdown options
             active: rc.isActive,
+            capabilities,             // declared provider capabilities for honest UI gating
         };
     }
 
@@ -2591,6 +2667,31 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             topic: plan.topic,
             complexity: plan.complexity
         }, targetColumn);
+    }
+
+    /**
+     * Push a column move to Notion via the provider's pushState.
+     * Only fires if the plan has a notionPageId and Notion remote control is set up.
+     * No realTimeSyncEnabled flag for Notion — push is gated by the remote.config push
+     * flag (formalized in Plan 3/3). For now, push fires if Notion is the active provider.
+     */
+    private async _queueNotionSync(
+        workspaceRoot: string,
+        plan: import('./KanbanDatabase').KanbanPlanRecord,
+        targetColumn: string
+    ): Promise<void> {
+        if (!plan.notionPageId) { return; }
+        try {
+            const rc = this._getRemoteControl(workspaceRoot);
+            const config = await rc.getConfig();
+            // Only push if Notion is the active provider, push is enabled, and remote control is active.
+            if (config.provider !== 'notion' || !config.push || !rc.isActive) { return; }
+            const provider = this._getPushProviderForPlan(workspaceRoot, plan);
+            if (!provider || !provider.capabilities.push) { return; }
+            await provider.pushState(plan.notionPageId, targetColumn);
+        } catch (e) {
+            this._outputChannel?.appendLine(`[KanbanProvider] _queueNotionSync failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
     }
 
     public async initializeIntegrationAutoPull(): Promise<void> {
@@ -5463,7 +5564,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             await Promise.allSettled([
                 this._queueClickUpSync(workspaceRoot, plan, targetColumn),
-                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+                this._queueLinearSync(workspaceRoot, plan, targetColumn),
+                this._queueNotionSync(workspaceRoot, plan, targetColumn)
             ]);
         } catch (err) {
             console.error('[KanbanProvider] queueIntegrationSyncForSession failed:', err);
@@ -5487,7 +5589,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             await Promise.allSettled([
                 this._queueClickUpSync(workspaceRoot, plan, targetColumn),
-                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+                this._queueLinearSync(workspaceRoot, plan, targetColumn),
+                this._queueNotionSync(workspaceRoot, plan, targetColumn)
             ]);
         } catch (err) {
             console.error('[KanbanProvider] queueIntegrationSyncForPlanFile failed:', err);

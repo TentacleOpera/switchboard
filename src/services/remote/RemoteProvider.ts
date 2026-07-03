@@ -27,15 +27,38 @@ export interface RemoteStateDelta {
     /** If the remote card is itself a parent (has children), mark it as an epic candidate.
      *  Undefined = provider didn't query it. */
     isEpicCandidate?: boolean;
+    /** ISO timestamp of the remote item's last update. Linear: issue.updatedAt. Notion: page.last_edited_time. */
+    updatedAt?: string;
+    /** Remote item body/description. Linear: issue.description. Notion: undefined (deferred). */
+    description?: string;
+}
+
+/** A single inbound comment from the remote agent. */
+export interface RemoteCommentDelta {
+    /** Provider id of the card the comment targets. */
+    remoteId: string;
+    /** Stable provider id of the comment — used to de-dup under inclusive/minute-rounded cursors. */
+    commentId: string;
+    /** Comment body (verbatim; routed to the column agent). */
+    body: string;
+    /** ISO timestamp — the comment high-watermark. */
+    createdAt: string;
+    /** true → Switchboard/local authored this comment → skip on ingest (no feedback loop). */
+    authoredBySelf: boolean;
 }
 
 /**
- * Declared provider capabilities. The Remote Sync Refactor (1/3) formalizes the
- * full declared-capability surface (pull/push/archive, card + project entity
- * levels) on this same object — project-context push is declared here first so
- * epic 1's context sync rides the provider seam rather than a parallel pipeline.
+ * Declared provider capabilities — gates UI honestly (no toggle offers a capability
+ * a provider lacks). The Remote Sync Refactor (1/3) formalized pull/push; the
+ * project-context + archive capabilities ride the same object so epic 1's context
+ * sync and the auto-archive rule dispatch through the provider seam, not a parallel
+ * pipeline.
  */
 export interface RemoteProviderCapabilities {
+    /** Provider can pull/ingest state + comments (Linear, Notion). ClickUp = false. */
+    pull: boolean;
+    /** Provider can push state + content (Linear, ClickUp, Notion-after-2/3). */
+    push: boolean;
     /** Provider can receive the project-level context bundle (Dev Docs + PRDs + constitution). */
     projectContextPush: boolean;
     /** Provider can archive a card (Linear issueArchive / Notion page archive). */
@@ -81,22 +104,8 @@ export interface ArchiveResult {
     error?: string;
 }
 
-/** A single inbound comment from the remote agent. */
-export interface RemoteCommentDelta {
-    /** Provider id of the card the comment targets. */
-    remoteId: string;
-    /** Stable provider id of the comment — used to de-dup under inclusive/minute-rounded cursors. */
-    commentId: string;
-    /** Comment body (verbatim; routed to the column agent). */
-    body: string;
-    /** ISO timestamp — the comment high-watermark. */
-    createdAt: string;
-    /** true → Switchboard/local authored this comment → skip on ingest (no feedback loop). */
-    authoredBySelf: boolean;
-}
-
 export interface RemoteProvider {
-    readonly kind: 'linear' | 'notion' | 'control-plane' | 'wiki';
+    readonly kind: 'linear' | 'notion' | 'clickup' | 'control-plane' | 'wiki';
 
     /** Declared capabilities — gate callers on these, never on `kind`. */
     readonly capabilities: RemoteProviderCapabilities;
@@ -138,6 +147,20 @@ export interface RemoteProvider {
      * (no feedback loop).
      */
     postComment(remoteId: string, body: string): Promise<void>;
+
+    /**
+     * Push a column/state change to the remote (outbound status sync).
+     * Implementations delegate to the concrete sync service's syncPlan.
+     * Pull-only providers log and return (no-op stub).
+     */
+    pushState(remoteId: string, column: string): Promise<void>;
+
+    /**
+     * Push plan body/content to the remote description/body (outbound content sync).
+     * Implementations delegate to the concrete sync service's syncPlanContent.
+     * Pull-only providers log and return (no-op stub).
+     */
+    pushContent(remoteId: string, markdown: string): Promise<void>;
 
     /**
      * Push the project-level context bundle (Dev Docs + PRDs + constitution) to the

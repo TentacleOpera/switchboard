@@ -40,7 +40,7 @@ const LIMITER_MS = 350;       // Notion ~3 req/sec
 
 export class NotionRemoteProvider implements RemoteProvider {
     public readonly kind = 'notion' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: true, archive: true };
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, projectContextPush: true, archive: true };
     private _deps: NotionRemoteProviderDeps;
     private _setup: NotionRemoteSetup | null = null;
     private _botId = '';
@@ -371,6 +371,39 @@ export class NotionRemoteProvider implements RemoteProvider {
         }
         flushParagraph();
         return blocks;
+    }
+
+    public async pushState(remoteId: string, column: string): Promise<void> {
+        // Write the `Kanban Column` select property on the Notion page.
+        // Same pattern as NotionBackupService._upsertPlanToNotion (PATCH /pages/{id}).
+        try {
+            const result = await this._deps.notion.httpRequest(
+                'PATCH', `/pages/${remoteId}`,
+                { properties: { 'Kanban Column': { select: { name: column } } } },
+                10000
+            );
+            if (result.status >= 400) {
+                // Missing select option — log and skip, don't crash the sync loop.
+                if (result.status === 400 || result.status === 422) {
+                    this._log(`pushState: column "${column}" is not a valid Kanban Column select option for page ${remoteId} — skipping. Re-run Notion remote setup to sync column options.`);
+                } else if (result.status === 404) {
+                    this._log(`pushState: page ${remoteId} not found (deleted?) — skipping.`);
+                } else {
+                    this._log(`pushState: PATCH /pages/${remoteId} failed (HTTP ${result.status}).`);
+                }
+            }
+        } catch (e) {
+            this._log(`pushState failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    public async pushContent(remoteId: string, markdown: string): Promise<void> {
+        // Delegate to NotionFetchService.updatePageContent — it handles size guarding
+        // (1MB limit), block deletion, and chunked re-append as paragraph blocks.
+        const result = await this._deps.notion.updatePageContent(remoteId, markdown);
+        if (!result.success) {
+            throw new Error(`Notion pushContent failed for ${remoteId}: ${result.error || 'unknown error'}`);
+        }
     }
 
     public async importRemotePlan(remoteId: string): Promise<KanbanPlanRecord | null> {

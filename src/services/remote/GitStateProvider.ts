@@ -24,7 +24,7 @@ const COLUMN_LINE_RE = /^\*\*Column:\*\*\s*(.+)$/m;
 export class GitStateProvider implements RemoteProvider {
     public readonly kind: 'control-plane' | 'wiki';
     public readonly gitKind: GitProviderKind;
-    public readonly capabilities: RemoteProviderCapabilities = { projectContextPush: false, archive: false };
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: false, projectContextPush: false, archive: false };
     private _deps: GitStateProviderDeps;
     private _pushInFlight = false;
     private _pushPending = false;
@@ -280,6 +280,14 @@ export class GitStateProvider implements RemoteProvider {
         } catch (e) {
             this._log(`postComment commit/push failed: ${e instanceof Error ? e.message : String(e)}`);
         }
+    }
+
+    public async pushState(_remoteId: string, _column: string): Promise<void> {
+        // No-op — git providers mirror the whole board via pushExportedState(), not per-card.
+    }
+
+    public async pushContent(_remoteId: string, _markdown: string): Promise<void> {
+        // No-op — git providers mirror the whole board via pushExportedState(), not per-card.
     }
 
     public async pushProjectContext(_bundle: ProjectContextBundle): Promise<ProjectContextPushResult> {

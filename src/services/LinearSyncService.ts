@@ -34,6 +34,7 @@ export interface LinearConfig {
   completeSyncEnabled?: boolean;  // default: true — sync completed status to Linear
   excludeBacklog?: boolean;  // default: true — exclude backlog issues from sync
   selectedProjectName: string;  // Persisted project picker value for sidebar filter
+  ticketSaveLocation?: string;  // base dir for local ticket .md files (set via Setup / migration)
 }
 
 export interface LinearApplyOptions {
@@ -247,7 +248,8 @@ export class LinearSyncService {
         : raw.deleteSyncEnabled === true,
       completeSyncEnabled: raw.completeSyncEnabled !== false,  // default true
       excludeBacklog: raw.excludeBacklog !== false,  // default true — exclude backlog issues
-      selectedProjectName: raw.selectedProjectName || ''  // normalize missing/undefined to empty string
+      selectedProjectName: raw.selectedProjectName || '',  // normalize missing/undefined to empty string
+      ticketSaveLocation: raw.ticketSaveLocation || '',
     };
   }
 
@@ -501,7 +503,7 @@ export class LinearSyncService {
    * Also skips blank lines immediately after the H1 to avoid a leading blank line.
    * Does NOT handle Setext-style H1s (underlined with ===).
    */
-  private _stripH1Header(markdownContent: string): string {
+  public _stripH1Header(markdownContent: string): string {
     const lines = markdownContent.split(/\r?\n/);
 
     // Find the first non-blank line
