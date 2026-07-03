@@ -13,6 +13,31 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 - **SESSION vs PRODUCT SCOPE**: Session directives (e.g. "single-repo", "skip compilation", "skip tests") constrain HOW you verify and organize the plan, not WHAT the plan covers. Do not conflate repo structure constraints with product feature requirements. If the plan targets multi-root workspaces, you must preserve and improve that scope regardless of the current session's repo configuration.
 - **SINGLE PASS**: Complete enhancement, dependency checks, adversarial critique, balanced synthesis, and plan update in one continuous response.
 
+## Epic Mode (when the target is an epic)
+
+**Detect epic mode** when the target file is under `.switchboard/epics/`, or its contents include an auto-generated `<!-- BEGIN SUBTASKS ... -->` / `<!-- END SUBTASKS -->` block. When detected, the work below is REQUIRED and takes priority over the single-plan schema — an epic is not just a bigger plan, and reviewing it in isolation from its subtasks is a protocol violation.
+
+### 1. Read every subtask, not just the epic
+Read each subtask plan linked in the subtasks block **in full** (and the actual code they touch). You cannot reconcile subtasks you have not read. If a subtask link is broken or the file is missing, say so explicitly rather than guessing.
+
+### 2. Cross-subtask reconciliation audit (the core of epic review)
+Subtasks authored separately are frequently **contradictory, overlapping, or superseded**. For every file/symbol touched by more than one subtask, classify each finding:
+- **Overlap** — two+ subtasks doing the same or duplicate work.
+- **Contradiction** — incompatible designs on the same surface (e.g. two subtasks rewriting one function with different signatures; two subtasks defining the same field differently).
+- **Supersession** — one subtask's approach/fields obsoleted by another (e.g. a global field replaced by a per-item variant later in the set).
+- **Ordering** — subtask A must land before B (shared-file merge order, a rename/extraction others depend on, a structural move others target).
+Produce a **shared-surface map** (which subtasks touch which file/symbol) and, for each contended symbol, a **merge map** describing the single reconciled end-state and which subtask contributes what. Add an **execution order** (waves) that resolves the ordering constraints.
+
+### 3. Decide per finding: consolidate / rewrite / reorder / leave
+For each overlap/contradiction/supersession, state the recommended resolution and rationale: **consolidate** overlapping subtasks into one, **rewrite** a subtask to remove a contradiction, **reorder** to satisfy a dependency, or **leave** as-is. Note the complexity of the reconciled program (which may differ from any single subtask's complexity).
+
+### 4. Two-phase gate — RECOMMEND, then act only on approval
+This is an analyze-then-act workflow, NOT a single destructive pass:
+- **Phase 1 (this pass):** Write the reconciliation audit, shared-surface map, merge map, and execution order into the **epic file** (append below the subtasks block — never edit inside the auto-generated `<!-- BEGIN/END SUBTASKS -->` block). Do **NOT** edit, merge, or rewrite any subtask `.md` file yet. End by presenting the specific consolidation/rewrite proposal to the user and asking for approval.
+- **Phase 2 (only after the user approves the specific plan):** Apply the approved edits. Rewriting a subtask's *body* edits that subtask file (preserving original content per CONTENT PRESERVATION). Changing the subtask *set* (merging two subtasks into one, adding a consolidated plan) must route through `assign-to-epic.js` / the epic's create path — never by hand-editing the auto-generated subtasks block, which Switchboard regenerates.
+
+Everything in Steps below still applies to the epic file itself (Goal, Metadata, adversarial critique, recommendation). The reconciliation audit is additive to — not a replacement for — those sections.
+
 ## Steps
 
 1. **Load the plan**
