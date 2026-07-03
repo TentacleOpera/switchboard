@@ -17,10 +17,11 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
+| `/switchboard` | **`switchboard-index.md`** | Front door — detects local vs remote and routes the request to the right Switchboard skill. Start here when unsure which skill to use. |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. |
-| `/switchboard-chat`, `/sw` | **`switchboard-chat.md`** | Activate chat consultation workflow. `/sw` is the short alias for claude.ai. (Avoid `/chat` — clashes with the native CLI reset command.) |
-| `/sw-remote` | **`sw-remote.md`** | Remote session entry point — Linear/Notion MCP planning mode |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for an epic use `/improve-epic`. |
+| `/improve-epic` | **`improve-epic.md`** | Reconcile & restructure an epic's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. |
+| `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
 
 
@@ -95,8 +96,9 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
-| `switchboard-chat` | Enter consultative planning mode on claude.ai — type `/sw` to activate. Reads kanban state so you can reference columns and chain workflows. |
-| `sw-remote` | Entry point for remote Switchboard sessions — orients Claude to Linear/Notion MCP workflow. Use instead of /sw when local machine is off. |
+| `switchboard` | User types `/switchboard` or doesn't know which skill they need — front door that detects local vs remote and routes the request to the right skill. |
+| `switchboard-chat` | Local consultative planning mode. Reached via `/switchboard` in local mode (the `/sw` alias was retired). Reads kanban state so you can reference columns and chain workflows. |
+| `improve-epic` | User runs `/improve-epic` on an epic. Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
 | `refine_epic` | User clicks "Refine" on a selected epic in the Epics tab to copy a prompt that fleshes out the epic description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_epic"`) |
 | `group-into-epics` | User asks to "group plans into an epic", "organise loose plans into epics", or "suggest epic groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates epics via create-epic.js (model-invocable; also sourced by the Suggest Epics board button) |

@@ -53,9 +53,10 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // /improve-epic — epic reconciliation; authorised to restructure the subtask set.
     { source: 'workflows/improve-epic.md', name: 'improve-epic', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
-    { source: 'workflows/sw-remote.md', name: 'sw-remote', invocation: 'default' },
-    // /sw — short alias generated from the same source as switchboard-chat.
-    { source: 'workflows/switchboard-chat.md', name: 'sw', invocation: 'default' },
+    // NOTE: `/sw` and `/sw-remote` were retired 2026-07-03 — superseded by the
+    // `/switchboard` front door, which detects local vs remote and routes planning
+    // (local → switchboard-chat; remote → the sw-remote.md playbook, still shipped
+    // under .agents/workflows/ and loaded by the router, just no longer a command).
     // Remote-session skills — operate on Linear/epic files directly, used when the
     // VS Code extension is off (claude.ai / Claude Code web). Both were previously
     // authored only under .claude/ and so never shipped to user workspaces.
@@ -121,6 +122,22 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     {
         source: 'skills/tuning.md', name: 'tuning', invocation: 'no-user',
         descriptionFallback: 'Tune Switchboard agent behavior and workflow settings.'
+    },
+
+    // Discoverable `/switchboard-*` aliases — same sources as the canonical skills
+    // above, added so typing `/switchboard-` surfaces the whole family (the `/switchboard`
+    // router points at these). Additive: the canonical names keep working.
+    { source: 'workflows/improve-plan.md', name: 'switchboard-plan', invocation: 'default' },
+    { source: 'workflows/improve-epic.md', name: 'switchboard-epic', invocation: 'default' },
+    { source: 'skills/improve_remote_plan.md', name: 'switchboard-remote-plan', invocation: 'default', allowedTools: 'Bash' },
+    { source: 'skills/notion_api.md', name: 'switchboard-notion', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/linear_api.md', name: 'switchboard-linear', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup_api.md', name: 'switchboard-clickup', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/kanban_operations', name: 'switchboard-kanban', invocation: 'no-model', allowedTools: 'Bash' },
+    {
+        source: 'skills/web_research.md', name: 'switchboard-research', invocation: 'no-user',
+        allowedTools: 'Read, Glob, Grep, WebSearch, WebFetch',
+        descriptionFallback: 'Run comprehensive multi-source web research and synthesize a cited summary.'
     },
 ];
 

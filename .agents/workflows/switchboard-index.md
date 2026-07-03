@@ -19,7 +19,7 @@ State which mode you detected in one line, then route.
 
 | The user wants to… | Use | Remote-safe? |
 | :--- | :--- | :--- |
-| Plan / consult on what to build | **`switchboard-chat`** (`/sw`) locally, **`sw-remote`** when remote | ✅ (sw-remote) |
+| Plan / consult on what to build | LOCAL → **`switchboard-chat`**. REMOTE → read `.agents/workflows/sw-remote.md` and follow it (the Linear/Notion planning playbook). | ✅ |
 | Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) | ✅ |
 | Deepen / adversarially review **one** plan | **`improve-plan`** | ✅ (edits the plan file) |
 | Reconcile & restructure an **epic's** subtasks (merge/delete/rewrite/split) | **`improve-epic`** | ✅ (`git rm` + manifest) |
@@ -37,6 +37,7 @@ If a request maps to a ⚠️ skill but you are REMOTE, say the direct route nee
 ## 3. How to respond
 
 - **You do the routing.** Match the user's plain-language request to the table, name the skill you're using in one line, then invoke it (its slash command, or read `.claude/skills/<name>/SKILL.md`) — don't reimplement it.
-- **Chain when natural**, e.g. `sw-remote` → `create-epic` → `improve-epic`.
+- **Chain when natural**, e.g. remote planning (`sw-remote.md` playbook) → `create-epic` → `improve-epic`.
+- **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them.
 - **Only ask a question if genuinely ambiguous**, and then just one; otherwise pick the best fit and proceed.
 - **Remote gaps are honest gaps.** A few local-only capabilities (the splitter agent, `high-low` epic consolidation) have no remote skill yet — if the user asks for one remotely, say so rather than pretending.

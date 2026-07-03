@@ -52,8 +52,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
 | `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for an epic use `/improve-epic`. |
 | `/improve-epic` | **`improve-epic.md`** | Reconcile & restructure an epic's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. |
-| `/switchboard-chat`, `/sw` | **`switchboard-chat.md`** | Activate chat consultation workflow. `/sw` is the short alias for claude.ai. (Avoid `/chat` — clashes with the native CLI reset command.) |
-| `/sw-remote` | **`sw-remote.md`** | Remote session entry point — Linear/Notion MCP planning mode |
+| `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
 
 
@@ -129,8 +128,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
-| `switchboard-chat` | Enter consultative planning mode on claude.ai — type `/sw` to activate. Reads kanban state so you can reference columns and chain workflows. |
-| `sw-remote` | Entry point for remote Switchboard sessions — orients Claude to Linear/Notion MCP workflow. Use instead of /sw when local machine is off. |
+| `switchboard-chat` | Local consultative planning mode. Reached via `/switchboard` in local mode (the `/sw` alias was retired). Reads kanban state so you can reference columns and chain workflows. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
 | `create-epic` | Create a Switchboard epic from a remote session by writing the epic file directly to `.switchboard/epics/` — use when the VS Code extension is not running and `create-epic.js` is unreachable |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
