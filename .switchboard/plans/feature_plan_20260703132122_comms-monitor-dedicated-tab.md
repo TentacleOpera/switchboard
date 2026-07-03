@@ -190,8 +190,9 @@ Extract the MCP Monitor rendering code from `createAutobanPanel()` into a new fu
 
 ### 4. `src/webview/kanban.html` — remove the Comms Monitor code from `createAutobanPanel()`
 
-Delete lines 7773-7954 from `createAutobanPanel()`. The autoban panel now contains only:
-- The "CONFIGURE AUTOMATION" header
+**Do NOT delete a line range** — the monitor code is interleaved with autoban code (see Step 3). Remove only the three monitor pieces you moved: the construction block **7599-7754** (`mcpRow`/`mcpSelect`/`mcpConfigPanel` and children, `saveMonitorConfig`, and the monitor listeners), the `mcpDesc` block **7772-7775**, and the three monitor `container.appendChild(...)` calls at **7778-7780**. Leave the autoban `safetyNote`/`modeHelpText` (7756-7770), the `modeSelect` change handler (7782+), and all automation-rule code (7803+) exactly in place. After removal, grep `createAutobanPanel` for any lingering `mcp`/`Monitor`/`saveMonitorConfig` reference to confirm nothing dangling remains.
+
+The autoban panel now contains only:
 - Mode selector
 - Per-mode automation rules
 - Safety notes and mode descriptions
@@ -200,7 +201,7 @@ No Comms Monitor UI remains in the AUTOMATION tab.
 
 ### 5. `src/webview/kanban.html` — add `renderCommsPanel()` and wire it to the tab-switch logic
 
-Add a render function (parallel to `renderAutobanPanel`, line 9039):
+Add a render function (parallel to `renderAutobanPanel`, **line 8865**, which targets `#automation-panel-root`):
 
 ```js
         let isCommsPanelInteracting = false;
@@ -222,9 +223,10 @@ Add a render function (parallel to `renderAutobanPanel`, line 9039):
         }
 ```
 
-Wire the tab-switch logic (extend the existing `kanbanTabButtons.forEach` at line 9070):
+Wire the render into the existing **automation-render** `kanbanTabButtons.forEach` at **lines 8896-8906** (this is a *second* forEach dedicated to render calls — distinct from the generic show/hide forEach at 3879 which already toggles `active`). Add an `else if` branch:
 
 ```js
+        // (existing forEach at 8896)
         kanbanTabButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 if (btn.dataset.tab === 'automation') {
@@ -233,15 +235,16 @@ Wire the tab-switch logic (extend the existing `kanbanTabButtons.forEach` at lin
                     }
                     renderAutobanPanel();
                 } else if (btn.dataset.tab === 'comms') {
-                    // Request MCP monitor config if not already loaded
-                    if (!mcpMonitorConfig || !mcpMonitorConfig.enabled) {
-                        postKanbanMessage({ type: 'requestMcpMonitorConfig' });
-                    }
+                    // Config already arrives on webview 'ready' (KanbanProvider.ts:5902),
+                    // so render from current state. Optionally (Step 7) send a lazy
+                    // 'requestMcpMonitorConfig' pull if you want belt-and-braces.
                     renderCommsPanel();
                 }
             });
         });
 ```
+
+Do **not** gate the request on `!mcpMonitorConfig.enabled` (the earlier draft did): a disabled-but-persisted config is still valid state and would trigger a redundant request on every COMMS click. If Step 7 is adopted, gate on a "have we loaded once" flag instead, or just rely on the `ready`-time push and drop the request entirely.
 
 ### 6. `src/webview/kanban.html` — re-render comms panel on config updates
 

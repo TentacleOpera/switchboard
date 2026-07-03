@@ -220,7 +220,7 @@ Ensure `launchMcpMonitorTerminal` does NOT start polling:
 
 ### 4. `src/services/TaskViewerProvider.ts` — add `checkMcpMonitorAuth` method
 
-Sends a real MCP diagnostic prompt to the terminal so the user can see whether Claude is authenticated and MCP servers are connected:
+Sends a real MCP diagnostic prompt to the terminal so the user can see whether Claude is authenticated and MCP servers are connected. **Verified:** the helper methods this relies on (`_normalizeAgentKey`, `_stripIdeSuffix`, `sendRobustText`) all exist and are used by the current `_mcpMonitorTick`/`launchMcpMonitorTerminal`. **Clarification:** unlike `_buildMcpMonitorPrompt` (line 20552), the auth-prompt below omits the "do NOT take any actions / read-only" preamble — consider prepending it so the diagnostic can never trigger a side-effecting tool call:
 
 ```ts
     /**
@@ -448,7 +448,7 @@ No wizard gating — the buttons are shown conditionally based on terminal and p
 
 ### 10. `src/webview/kanban.html` — update the on/off dropdown semantics
 
-The existing on/off dropdown (line 7778) sets `enabled`, which now controls only panel visibility (not the loop). The `saveMonitorConfig` function (line 7906) should not change `pollingEnabled` — that's controlled by the Start/Stop Polling buttons:
+**Verified anchor:** the on/off dropdown (`mcpSelect`) is built at **lines 7604-7619** (selection driven by `mcpMonitorConfig.enabled` at 7615; panel `display` gated by `enabled` at 7623 and toggled in the `mcpSelect` change handler at 7749-7752). The `saveMonitorConfig` function is at **line 7732** (it currently posts `{ enabled, intervalMinutes, sources, customInstruction }` at 7738-7746 and does NOT send `pollingEnabled` — which is exactly the desired behavior). `saveMonitorConfig` should continue to leave `pollingEnabled` untouched (the backend `setMcpMonitorConfig` preserves it via `?? current.pollingEnabled`); the Start/Stop Polling buttons are the only writers of `pollingEnabled`:
 
 ```js
             const saveMonitorConfig = () => {
