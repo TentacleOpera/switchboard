@@ -79,6 +79,7 @@ Configure roles:
 - **Ticket Updater** — Reads imported tickets and posts short triage verdicts (severity, area, recommended action) back to ClickUp/Linear as comments.
 - **Orchestrator** — Runs an entire Epic end-to-end with native subagents (off by default; enable in the Kanban Agents tab).
 - **Claude Designer** — Imports a design from claude.ai/design into the target folder using the repo's existing components and styles (off by default).
+- **MCP Monitor** — Read-only monitor role; on an interval it pings a dedicated Claude terminal to check connected MCP sources (Slack, Gmail, Google Calendar, custom) and report what needs attention (off by default).
 
 You can add custom roles in the Setup panel.
 
@@ -141,6 +142,9 @@ Configure per column:
 - Timing interval
 - Batch size
 
+### MCP Monitor
+Also in the Automation panel: turn on the **MCP Monitor** to have Switchboard periodically ping a dedicated Claude terminal that checks your connected MCP sources (Slack, Gmail, Google Calendar, or a custom instruction) and reports anything needing attention. Pick a single global interval (1–30 min) and the sources to watch; a status line shows whether the monitor terminal is running. Off by default.
+
 ---
 
 ## Project Management & Sync
@@ -165,13 +169,17 @@ On the Kanban board, epic cards show a purple left border and an `EPIC · N subt
 **Worktree isolation** — An epic can be bound to a dedicated git worktree/branch so its agents work in isolation. Manage worktrees from the Kanban WORKTREES panel; dispatched agents `cd` into the worktree and switch to its branch automatically, and the worktree can later be merged or abandoned.
 
 ### ClickUp & Linear Sync
-Configure tokens and mappings in Setup.
+Configure tokens in Setup.
 Commands:
 - `Set ClickUp API Token`
 - `Set Linear API Token`
 - `Import Tasks from ClickUp`
 - `Import Issues from Linear`
 Settings: `switchboard.kanban.completedLimit`, `switchboard.kanban.dbPath`
+
+Beyond token + import, both integrations now do more:
+- **ClickUp** (push-only mirror — pushes out, doesn't poll back): outbound content push, move a task between lists (with status auto-mapping), epic round-trip (import parent+subtasks as an epic; push local epics out as native parent/child tasks), plus agent-driven task/comment/attachment/doc creation.
+- **Linear** (full two-way): bidirectional description sync (Linear edits flow back into the plan file), status/column sync via Remote Control, move an issue between projects, epic round-trip, comments + attachments captured on import, and archive/unarchive used by the Auto-Archive rule.
 
 ### Notion Design Doc Integration
 Fetch, cache, and append design documents to prompts.
@@ -182,8 +190,10 @@ Commands: `Set Notion API Token`, `Fetch Notion Design Doc`
 - **Board Management Mode** — Pulls tasks automatically, processes cards independently, and writes back only when `COMPLETED`.
 Configure via: `switchboard.defaultMode` (`action` | `plan`)
 
-### Automated Triage Pipeline (ClickUp & Linear)
-One-click setup in the Setup panel creates a "Bug Triage" board that auto-pulls bugs from ClickUp or Linear, routes them to the Ticket Updater agent for triage verdicts (severity, area, recommended action, routing), and syncs the verdicts back as comments on the source ticket. The agent never overwrites the ticket description — it posts a short structured comment only (target ≤120 words).
+### Automated Triage Pipeline (ClickUp & Linear) — *pre-release, not currently exposed*
+> The one-click triage setup and the ClickUp/Linear **Kanban Board Mapping** and **Kanban Automation** setup sections are hidden in the current build while they're hardened. The Ticket Updater agent and triage flow still exist under the hood, but there's no UI to enable them yet.
+
+When exposed: one-click setup creates a "Bug Triage" board that auto-pulls bugs from ClickUp or Linear, routes them to the Ticket Updater agent for triage verdicts (severity, area, recommended action, routing), and syncs the verdicts back as comments on the source ticket. The agent never overwrites the ticket description — it posts a short structured comment only (target ≤120 words).
 
 ### Remote Control (provider-agnostic)
 Drive your Kanban board from a remote surface — the **Linear** or **Notion** mobile/web app, or a **ClickUp** mirror. Switchboard polls the active provider on a timer (no webhooks): moving a card between remote states mirrors it onto the board and dispatches that column's agent, and comments posted remotely are routed to the card's current column agent.
@@ -209,6 +219,9 @@ Automatically syncs edits back to ClickUp/Linear every 30 seconds.
 
 ### Auto-Pull Timers
 Optionally enable automatic updates on a 5/15/30/60-minute timer.
+
+### Auto-Archive Rule
+Automatically complete + archive a plan once it has sat in a designated board column past a dwell threshold — useful for keeping a board (and a free-tier Linear workspace) from filling up. Configure on the Kanban Setup tab: enable checkbox, trigger column, and dwell hours (default 2). Off by default. Note the dwell timer keys off the plan's `updatedAt`, so editing or commenting on a plan resets its clock.
 
 ---
 
@@ -270,7 +283,7 @@ Settings:
 - **Kanban** (`switchboard.openKanban`) — Visual board plus tabs for Agents, Prompts, Automation, Remote, Worktrees, UAT, and Setup. Projects are created here (board toolbar) and the PROJECT CONTEXT toggle lives here.
 - **Setup** (`switchboard.openSetupPanel`) — Central configuration.
 - **Planning** (`switchboard.openPlanningPanel`) — Authoring interface.
-- **Project Panel** (`switchboard.openProjectPanel`) — Projects (per-project PRDs), Epics, Constitution, and System docs.
+- **Project Panel** (`switchboard.openProjectPanel`) — Projects (per-project PRDs), Epics, Constitution, System docs, Tuning insights, the **Architect** tab (guided governance setup), and the **Remote** tab (Remote Control config).
   ![Project panel — Constitution](docs/TODO_project_panel.png)
 - **Design Panel** (`switchboard.openDesignPanel`) — Six tabs: STITCH (Google Stitch), CLAUDE (claude.ai/design import), BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM.
   ![Design panel — Stitch](docs/TODO_design_panel.png)
