@@ -48,6 +48,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
+| `/switchboard` | **`switchboard-index.md`** | Front door — detects local vs remote and routes the request to the right Switchboard skill. Start here when unsure which skill to use. |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
 | `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for an epic use `/improve-epic`. |
 | `/improve-epic` | **`improve-epic.md`** | Reconcile & restructure an epic's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. |
@@ -107,6 +108,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 | Skill | When to Use |
 |-------|-------------|
+| `switchboard` | User types `/switchboard` or doesn't know which skill they need — front door that detects local vs remote and routes the request to the right skill. |
 | `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
 | `clickup_api` | Direct ClickUp API access via LocalApiServer proxy (replaces call_clickup_api) |
 | `clickup_attach` | Attach files to ClickUp tasks via LocalApiServer (replaces clickup_attach) |
