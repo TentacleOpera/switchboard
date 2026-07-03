@@ -1,45 +1,53 @@
 ---
-description: Front door for Switchboard — detects the environment and routes the user's request to the right Switchboard skill so they never have to know skill names
+description: Front door for Switchboard — routes the user's request to the right Switchboard skill so they never have to know skill names
 ---
 
 # Switchboard
 
-The single entry point. When the user types `/switchboard` (or asks "what can Switchboard do here" / doesn't know which skill they need), use this index: **detect the environment, then route their request to the right skill yourself.** The user describes what they want in plain language — you pick the skill. Do not make them memorize skill names.
+The single entry point. The user describes what they want in plain language and **you** pick the skill — they never have to memorize skill names.
 
-## 1. Detect the environment (do this first)
+## The opener
 
-Check whether `.switchboard/api-server-port.txt` exists (walk up from the working directory).
+When the user types a bare `/switchboard` (no request attached), reply with a **short, welcoming prompt** — not a status read-out. Do NOT announce which environment you detected, do NOT list capabilities that are unavailable, do NOT show tables or workflow internals. Just invite them in with a few plain-language examples, e.g.:
 
-- **Present → LOCAL.** The VS Code extension and its LocalApiServer are running. Every skill below works, including the LocalApiServer-proxy ones.
-- **Absent → REMOTE** (headless / cloud session, like Claude Code on the web). Only git / file / MCP skills work. The LocalApiServer-proxy skills are **not reachable** — do not invoke them; offer the git/file alternative instead.
+> **Switchboard** — tell me what you want to do and I'll take it from there. For example:
+> - **Plan something** — talk it through and I'll write up a plan you can merge
+> - **Capture ideas fast** — dump thoughts now, sort them later
+> - **Sharpen an existing plan** — deepen or pressure-test one you've already got
+> - **Group related plans into an epic**
+>
+> What are you working on?
 
-State which mode you detected in one line, then route.
+Keep it to that scale. All the routing below happens **behind the scenes** once they tell you what they want — it never appears in the opener.
 
-## 2. Route by intent
+If the user types `/switchboard <request>` (a request is already attached), skip the opener and route straight to the right skill.
 
-| The user wants to… | Use | Remote-safe? |
-| :--- | :--- | :--- |
-| Plan / consult on what to build | LOCAL → **`switchboard-chat`**. REMOTE → read `.agents/workflows/sw-remote.md` and follow it (the Linear/Notion planning playbook). | ✅ |
-| Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) | ✅ |
-| Deepen / adversarially review **one** plan | **`improve-plan`** | ✅ (edits the plan file) |
-| Reconcile & restructure an **epic's** subtasks (merge/delete/rewrite/split) | **`improve-epic`** | ✅ (`git rm` + manifest) |
-| Split **one plan** into Complex/Risky + Routine tiers | **`switchboard-split`** | ✅ (file writes) |
-| Tier a whole **epic** by complexity (high/low) | **`improve-epic`** high/low mode | ✅ |
-| Create a new epic | **`create-epic`** | ✅ (writes the epic file) |
-| Improve a plan stored in **Linear** | **`improve-remote-plan`** | ⚠️ needs LocalApiServer |
-| Reply to a Notion/Linear **remote-control** card | **`notion-api`** / **`linear-api`** | ⚠️ needs LocalApiServer |
-| Move a kanban card / query board state | **`kanban-operations`** / **`query-switchboard-kanban`** | ⚠️ local (kanban.db) |
-| ClickUp tasks/docs | **`clickup-*`** family | ⚠️ needs LocalApiServer |
-| Score a change's complexity | **`complexity-scoring`** | ✅ |
-| Research a topic with sources | **`web-research`** / **`deep-research`** | ✅ |
-| Search old plans / conversations | **`archive`** / **`query-archive`** | ⚠️ local (DuckDB) |
+## Route by intent (behind the scenes)
 
-If a request maps to a ⚠️ skill but you are REMOTE, say the direct route needs the running extension and offer the remote equivalent (e.g. plan work → `improve-remote-plan` or plain plan-file edits; board moves → a `manifest.json` column change; epic changes → `improve-epic`'s `git rm` + manifest path).
+Match the request to a skill and invoke it. Environment detection is silent: check whether `.switchboard/api-server-port.txt` exists (walk up from the working directory). Present → **local** (extension running; every skill works). Absent → **remote** (headless/cloud; git, file, and MCP skills work). Use this only to pick the right route — never narrate it.
 
-## 3. How to respond
+| The user wants to… | Use |
+| :--- | :--- |
+| Plan / consult on what to build | **`switchboard-chat`** (writes plan files you merge on the branch). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
+| Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) |
+| Deepen / adversarially review **one** plan | **`improve-plan`** |
+| Reconcile & restructure an **epic's** subtasks | **`improve-epic`** |
+| Split **one plan** into Complex/Risky + Routine tiers | **`switchboard-split`** |
+| Tier a whole **epic** by complexity (high/low) | **`improve-epic`** high/low mode |
+| Create a new epic | **`create-epic`** |
+| Improve a plan stored in **Linear** | **`improve-remote-plan`** |
+| Reply to a Notion/Linear **remote-control** card | **`notion-api`** / **`linear-api`** |
+| Move a kanban card | **`kanban-operations`** locally; remotely via a `manifest.json` column change or Notion/Linear MCP |
+| Query board state | **`query-switchboard-kanban`** locally; remotely read the git-exported `kanban-board.md` |
+| ClickUp tasks/docs | **`clickup-*`** family |
+| Score a change's complexity | **`complexity-scoring`** |
+| Research a topic with sources | **`web-research`** / **`deep-research`** |
+| Search old plans / conversations | **`archive`** / **`query-archive`** |
 
-- **You do the routing.** Match the user's plain-language request to the table, name the skill you're using in one line, then invoke it (its slash command, or read `.claude/skills/<name>/SKILL.md`) — don't reimplement it.
-- **Chain when natural**, e.g. remote planning (`sw-remote.md` playbook) → `create-epic` → `improve-epic`.
-- **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them.
+## How to respond
+
+- **You do the routing.** Match the request, then invoke the skill (its slash command, or read `.claude/skills/<name>/SKILL.md`) — don't reimplement it. Name the skill in a line at most; keep the focus on doing the work, not describing the machinery.
+- **Chain when natural**, e.g. planning → `create-epic` → `improve-epic`.
+- **Surface a gap only when a request actually hits one.** A few skills need the running extension (`clickup-*`, `improve-remote-plan`, live `kanban.db`/DuckDB reads). In a remote session, don't preemptively warn about them — only if the user asks for one, say the direct route needs the extension and offer the remote equivalent (plan work → plain plan-file edits; board moves → `manifest.json` or MCP).
 - **Only ask a question if genuinely ambiguous**, and then just one; otherwise pick the best fit and proceed.
-- **Remote gaps are honest gaps.** If a request has no remote-capable skill, say so rather than pretending. (The former gaps — splitting a plan and high/low epic tiering — are now covered by `switchboard-split` and `improve-epic` high/low mode.)
+- **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them.
