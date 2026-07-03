@@ -1922,6 +1922,7 @@
                         <select id="remote-provider" class="workspace-project-select">
                             <option value="linear">Linear</option>
                             <option value="notion">Notion</option>
+                            <option value="clickup">ClickUp (push-only)</option>
                         </select>
                     </label>
 
@@ -1940,6 +1941,31 @@
                     <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
                         <input type="checkbox" id="remote-silent-sync">
                         <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
+                    </label>
+
+                    <!-- Remote mode: Ingest (pull only) vs Full (pull + mirror + dispatch) -->
+                    <div style="margin-bottom:10px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Remote mode</span>
+                        <label style="display:inline-flex; align-items:center; gap:4px; margin-right:16px; cursor:pointer;">
+                            <input type="radio" name="remote-mode" value="ingest" id="remote-mode-ingest">
+                            <span>Ingest (pull only)</span>
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+                            <input type="radio" name="remote-mode" value="full" id="remote-mode-full">
+                            <span>Full (pull + mirror + dispatch)</span>
+                        </label>
+                    </div>
+
+                    <!-- Comment polling toggle -->
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                        <input type="checkbox" id="remote-comments">
+                        <span>Poll comments from remote</span>
+                    </label>
+
+                    <!-- Push toggle — grayed out if provider lacks push capability -->
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;" id="remote-push-label">
+                        <input type="checkbox" id="remote-push">
+                        <span>Push status &amp; content to remote</span>
                     </label>
 
                     <label style="display:block; margin-bottom:12px;">

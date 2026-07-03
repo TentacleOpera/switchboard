@@ -3530,6 +3530,10 @@
 
     function renderRemoteConfig(config, payload) {
         payload = payload || {};
+        // Store capabilities for honest UI gating
+        if (payload.capabilities) {
+            _remoteCapabilities = payload.capabilities;
+        }
         // Workspace dropdown
         const wsSel = document.getElementById('remote-workspace');
         if (wsSel && Array.isArray(payload.workspaces)) {
@@ -3569,11 +3573,24 @@
 
         if (config) {
             const providerEl = document.getElementById('remote-provider');
-            if (providerEl) providerEl.value = config.provider === 'notion' ? 'notion' : 'linear';
+            if (providerEl) providerEl.value = (config.provider === 'notion' || config.provider === 'clickup') ? config.provider : 'linear';
             const silent = document.getElementById('remote-silent-sync');
             if (silent) silent.checked = config.silentSync === true;
             const freq = document.getElementById('remote-ping-frequency');
             if (freq) freq.value = config.pingFrequencySeconds || 60;
+            // Mode radio
+            const modeIngest = document.getElementById('remote-mode-ingest');
+            const modeFull = document.getElementById('remote-mode-full');
+            if (modeIngest && modeFull) {
+                modeIngest.checked = config.mode !== 'full';
+                modeFull.checked = config.mode === 'full';
+            }
+            // Comments toggle
+            const comments = document.getElementById('remote-comments');
+            if (comments) comments.checked = config.comments !== false;
+            // Push toggle
+            const push = document.getElementById('remote-push');
+            if (push) push.checked = config.push === true;
         }
         applyRemoteProviderUi();
     }
@@ -3583,28 +3600,56 @@
             document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
         ).map(cb => cb.value);   // keeps '' — do NOT filter by truthiness
         const providerEl = document.getElementById('remote-provider');
+        const providerVal = providerEl ? providerEl.value : 'linear';
+        const modeFull = document.getElementById('remote-mode-full');
         return {
-            provider: providerEl && providerEl.value === 'notion' ? 'notion' : 'linear',
+            provider: (providerVal === 'notion' || providerVal === 'clickup') ? providerVal : 'linear',
             boards,
             silentSync: document.getElementById('remote-silent-sync')?.checked === true,
             pingFrequencySeconds: Math.min(120, Math.max(30,
                 parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
+            mode: modeFull && modeFull.checked ? 'full' : 'ingest',
+            push: document.getElementById('remote-push')?.checked === true,
+            comments: document.getElementById('remote-comments')?.checked !== false,
         };
     }
 
     // Show/hide the Notion-only setup block and keep the header in sync with the provider.
+    // Also apply capability-based disabling for the mode/push controls.
+    let _remoteCapabilities = { pull: true, push: true };
     function applyRemoteProviderUi() {
         const providerEl = document.getElementById('remote-provider');
         const provider = providerEl ? providerEl.value : 'linear';
         const setup = document.getElementById('remote-notion-setup');
         if (setup) setup.style.display = provider === 'notion' ? 'block' : 'none';
         const title = document.getElementById('remote-subsection-title');
-        if (title) title.textContent = provider === 'notion' ? 'Remote Control (Notion)' : 'Remote Control (Linear)';
+        if (title) {
+            title.textContent = provider === 'notion' ? 'Remote Control (Notion)'
+                : provider === 'clickup' ? 'Remote Control (ClickUp — push only)'
+                : 'Remote Control (Linear)';
+        }
         // Linear-only: agent-skill copy button. Visible whenever the provider is
         // Linear — the backend answers with an error when mappings are missing,
         // which avoids a config-fetch round-trip just for visibility.
         const skillBlock = document.getElementById('remote-linear-agent-skill');
         if (skillBlock) skillBlock.style.display = provider === 'linear' ? 'block' : 'none';
+
+        // Capability-based gating: gray out controls the provider can't support.
+        const caps = _remoteCapabilities || { pull: true, push: true };
+        const pushLabel = document.getElementById('remote-push-label');
+        const pushInput = document.getElementById('remote-push');
+        const modeFull = document.getElementById('remote-mode-full');
+        const modeFullLabel = modeFull ? modeFull.closest('label') : null;
+        if (pushInput && pushLabel) {
+            pushInput.disabled = !caps.push;
+            pushLabel.style.opacity = caps.push ? '1' : '0.5';
+            pushLabel.style.pointerEvents = caps.push ? 'auto' : 'none';
+        }
+        if (modeFull && modeFullLabel) {
+            modeFull.disabled = !caps.pull;
+            modeFullLabel.style.opacity = caps.pull ? '1' : '0.5';
+            modeFullLabel.style.pointerEvents = caps.pull ? 'auto' : 'none';
+        }
     }
 
     function remoteAutosave() {
