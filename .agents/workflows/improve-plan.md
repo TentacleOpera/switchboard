@@ -12,25 +12,9 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 - **SESSION vs PRODUCT SCOPE**: Session directives (e.g. "single-repo", "skip compilation", "skip tests") constrain HOW you verify and organize the plan, not WHAT the plan covers. Do not conflate repo structure constraints with product feature requirements. If the plan targets multi-root workspaces, you must preserve and improve that scope regardless of the current session's repo configuration.
 - **SINGLE PASS**: Complete enhancement, dependency checks, adversarial critique, balanced synthesis, and plan update in one continuous response.
 
-## Epic Mode (when the target is an epic)
+## Target is an epic? Use improve-epic instead
 
-**Detect epic mode** when the target file is under `.switchboard/epics/`, or its contents include an auto-generated `<!-- BEGIN SUBTASKS ... -->` / `<!-- END SUBTASKS -->` block. An epic is a **container for subtask plans, not a plan itself** — so the primary work is to improve its subtasks, not to treat the epic file as one big plan.
-
-This mirrors what the Switchboard extension does on a **local** dispatch: the planner prompt builder expands the epic into its subtask plans (`expandEpicSubtaskPlans`) and runs this workflow against each one, injecting an epic-orchestration directive on top of this file. A **remote** session reads this file directly with no such expansion — so you MUST perform the expansion yourself. This section closes that remote gap.
-
-### 1. Expand the epic into its subtasks
-Read the epic file and collect every subtask plan linked in the subtasks block — these are the units of work. If a link is broken or a file is missing, say so explicitly rather than guessing.
-
-### 2. Run the full improve-plan workflow on EACH subtask (the core behavior)
-For **every** subtask plan file, execute Steps 1–4 below in full — load it, improve it (all Required Sections), run the adversarial critique, and write the improvements back into **that subtask file**, ending with its complexity-based recommendation. Improve each subtask as if it were the target plan. Treat all subtasks as one delivery unit: read sibling subtasks and the code they share for context, but the deliverable is each improved subtask `.md`. Report a per-subtask summary (what changed, its complexity, its routing recommendation).
-
-### 3. Backfill the epic file's own description (only if empty)
-If the epic file is missing a `## Goal`, `## How the Subtasks Achieve This`, or `## Dependencies & sequencing` section, backfill it from the subtasks. Do NOT overwrite sections that already have content, and NEVER edit inside the auto-generated `<!-- BEGIN/END SUBTASKS -->` block.
-
-### 4. Cross-subtask reconciliation — RECOMMEND, act only on approval
-Subtasks authored separately are often overlapping, contradictory, or superseded (e.g. two subtasks rewriting one function with different signatures; one subtask's field replaced by another's later in the set). While improving the subtasks in Step 2, note any such conflicts and, for shared files/symbols, the reconciled end-state and an execution order. Surface these as a **recommendation** (consolidate / rewrite / reorder) — do NOT merge or delete subtask files in this pass. Only after the user approves the specific consolidation plan may you rewrite subtask bodies (preserving content per CONTENT PRESERVATION) or change the subtask *set* via `assign-to-epic.js` (never by hand-editing the regenerated subtasks block).
-
-The Steps below define the per-subtask workflow that Step 2 runs against each subtask.
+If the target file is under `.switchboard/epics/` or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` block, this is an **epic**, not a single plan. Stop and use the **`improve-epic`** workflow — it improves every subtask and is authorised to restructure the set (merge/delete/rewrite/split). This `improve-plan` workflow is for a single plan and is deliberately non-destructive, which is the wrong contract for an epic.
 
 ## Steps
 
