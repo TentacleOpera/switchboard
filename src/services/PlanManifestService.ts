@@ -24,6 +24,11 @@ import { KanbanDatabase, VALID_KANBAN_COLUMNS } from './KanbanDatabase';
  *    manifest uses the targeted methods: `movePlanByPlanFile` (column),
  *    `updateEpicStatus` (epic links), `updateStatusByPlanFile` (status),
  *    `updatePlanProjectByPlanFile` (project).
+ *  - The column move applies only when the plan is currently in the entry's
+ *    `fromColumn` (default 'CREATED'). This supports fresh forward transitions
+ *    (e.g. a remote agent advancing 'PLAN REVIEWED' → 'CODED') while a stale
+ *    manifest — one whose expected column no longer matches — is skipped so it
+ *    never overrides a card a human/host already moved.
  *  - The existing scan cycle only reads `.md` files, so the manifest needs an
  *    explicit dedicated check in the periodic timer — not a ride-along.
  */
@@ -37,6 +42,15 @@ export interface ManifestEntry {
     planFile: string;
     planId?: string;
     kanbanColumn?: string;
+    /**
+     * Column the manifest expects the plan to currently be in for the
+     * `kanbanColumn` move to apply. Defaults to `'CREATED'` (the classic
+     * import-upgrade case). Set this to make a legitimate forward transition
+     * from a later stage — e.g. a remote coding agent moving a plan from
+     * `'PLAN REVIEWED'` → `'CODED'` — while still deferring to a human/host
+     * that has already moved the card somewhere else.
+     */
+    fromColumn?: string;
     status?: string;
     isEpic?: boolean;
     epicId?: string;
@@ -247,19 +261,25 @@ export class PlanManifestService {
             return 'deferred';
         }
 
-        // ── kanbanColumn (stale-manifest guard: only override if still CREATED) ──
+        // ── kanbanColumn (stale-manifest guard: only override from the expected column) ──
+        // The move applies only when the plan is currently in `fromColumn` (default
+        // 'CREATED'). This unblocks fresh forward transitions (e.g. a remote agent
+        // advancing 'PLAN REVIEWED' → 'CODED') while still refusing to override a card
+        // a human/host has already moved elsewhere — a stale manifest whose expected
+        // column no longer matches is skipped.
         if (entry.kanbanColumn) {
-            if (VALID_KANBAN_COLUMNS.has(entry.kanbanColumn)) {
-                if (plan.kanbanColumn === 'CREATED' && entry.kanbanColumn !== plan.kanbanColumn) {
-                    const moved = await db.movePlanByPlanFile(resolvedPlanFile, workspaceId, entry.kanbanColumn);
-                    if (!moved) {
-                        log?.(`[PlanManifest] movePlanByPlanFile failed for ${resolvedPlanFile} → ${entry.kanbanColumn}`);
-                    }
-                } else if (plan.kanbanColumn !== 'CREATED' && plan.kanbanColumn !== entry.kanbanColumn) {
-                    log?.(`[PlanManifest] Stale-manifest guard: ${resolvedPlanFile} already at '${plan.kanbanColumn}', not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
-                }
-            } else {
+            const expectedFrom = entry.fromColumn ?? 'CREATED';
+            if (!VALID_KANBAN_COLUMNS.has(entry.kanbanColumn)) {
                 log?.(`[PlanManifest] Invalid kanbanColumn '${entry.kanbanColumn}' for ${resolvedPlanFile}; skipping column override.`);
+            } else if (entry.fromColumn && !VALID_KANBAN_COLUMNS.has(entry.fromColumn)) {
+                log?.(`[PlanManifest] Invalid fromColumn '${entry.fromColumn}' for ${resolvedPlanFile}; skipping column override.`);
+            } else if (plan.kanbanColumn === expectedFrom && entry.kanbanColumn !== plan.kanbanColumn) {
+                const moved = await db.movePlanByPlanFile(resolvedPlanFile, workspaceId, entry.kanbanColumn);
+                if (!moved) {
+                    log?.(`[PlanManifest] movePlanByPlanFile failed for ${resolvedPlanFile} → ${entry.kanbanColumn}`);
+                }
+            } else if (plan.kanbanColumn !== expectedFrom && plan.kanbanColumn !== entry.kanbanColumn) {
+                log?.(`[PlanManifest] Stale-manifest guard: ${resolvedPlanFile} already at '${plan.kanbanColumn}' (expected '${expectedFrom}'), not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
             }
         }
 

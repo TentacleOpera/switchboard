@@ -10,14 +10,18 @@ This plan creates a dedicated **COMMS** tab in the kanban panel's tab bar and mo
 
 **Symptom:** The user opens the AUTOMATION tab expecting to configure kanban column automation. Instead, they find the Comms Monitor config (sources, interval, launch button) mixed in with the autoban engine config. The two features are unrelated but visually interleaved, making both harder to understand.
 
-**Root cause (confirmed by code reading):** The Comms Monitor UI was added to `createAutobanPanel()` (`kanban.html:7690+`), the same JS function that renders the entire AUTOMATION tab content. The function builds:
-1. The "CONFIGURE AUTOMATION" header (line 7742)
-2. Mode selector (single-column / multi-column / antigravity-batch) (line 7749)
-3. Per-mode automation rules (batch size, complexity routing, watch mode) (lines 8226-8762)
-4. The MCP Monitor row + config panel (lines 7773-7954) — **this is the misplaced feature**
-5. Safety notes and mode descriptions
+**Root cause (confirmed by fresh code reading on 2026-07-03 — see "Verified Anchors" below; earlier draft line numbers were stale and have been corrected):** The Comms Monitor UI was added to `createAutobanPanel()` (`kanban.html:7511`), the same JS function that renders the entire AUTOMATION tab content. The function builds:
+1. Mode selector (single-column / multi-column / antigravity-batch) near the top of the function (`modeSelect`, guarded at line 7582)
+2. The MCP Monitor row + config panel — the **misplaced feature** — built at lines **7599-7754** (`mcpRow` at 7600, `mcpSelect` at ~7606, `mcpConfigPanel` at 7622, interval/sources/custom-instruction/launch/status/help children through ~7730, `saveMonitorConfig` at 7732, and its change/input listeners at 7749-7754)
+3. Mode descriptions + safety note (lines 7756-7770) — autoban content, interleaved **between** the monitor config panel and its description/appends
+4. The `mcpDesc` description text (lines 7772-7775) and the three monitor `container.appendChild()` calls (lines 7778-7780)
+5. The `modeSelect` change handler and all per-mode automation rules (batch size, complexity routing, watch mode, per-column trigger toggles) from ~7782 onward (e.g. `guardInteraction(columnSelect)` at 7924, batch/complexity/routing selects at 8075-8153, 8421-8547)
 
-The Comms Monitor is rendered as a subsection inside the autoban panel's `container` div, appended after the automation rules. It shares the same `guardInteraction` mechanism, the same re-render cycle (`renderAutobanPanel`), and the same "interaction guard" that blocks re-renders during user input. This coupling means a Comms Monitor config change can trigger an autoban panel re-render (and vice versa), and the interaction guard that's meant for automation rules also affects the monitor config.
+**Critical anchor correction:** the monitor code is **NOT a single contiguous 7773-7954 block** (the earlier draft's claim). It is split into three pieces (construction 7599-7754, `mcpDesc` 7772-7775, appends 7778-7780) and is **interleaved** with autoban code (the `safetyNote`/`modeHelpText` at 7756-7770 sit between them). The range 7773-7954 in the current file is mostly autoban automation-rules code — deleting it wholesale would destroy the AUTOMATION engine and orphan `mcpRow`/`mcpConfigPanel`. Extraction must pull the three monitor pieces out surgically, not by deleting a line range.
+
+The Comms Monitor is rendered as a subsection inside the autoban panel's `container` div. It shares the same `guardInteraction` mechanism (defined at line 7545, sets `isAutobanPanelInteracting`), the same re-render cycle (`renderAutobanPanel` at line 8865, which targets `#automation-panel-root`), and the same "interaction guard" that blocks re-renders during user input. This coupling means a Comms Monitor config change can trigger an autoban panel re-render (and vice versa), and the interaction guard that's meant for automation rules also affects the monitor config.
+
+**Note on current labels:** the code still says `MCP MONITOR:` (line 7603) and "The MCP Monitor periodically pings…" (line 7775). Renaming these to "COMMS MONITOR" is owned by the sibling **rename-display-labels** subtask — this move must PRESERVE the existing `MCP MONITOR:` text verbatim and not pre-apply the rename (see Dependencies).
 
 **Why a new tab (not a move to an existing tab):**
 - **AGENTS tab:** Wrong fit. The AGENTS tab is a simple list of agent visibility checkboxes + CLI commands. The Comms Monitor has a rich config UI (sources, interval, prompt preview, dependency notice, model indicator) that doesn't match the AGENTS tab's pattern.
@@ -26,39 +30,105 @@ The Comms Monitor is rendered as a subsection inside the autoban panel's `contai
 
 ## Metadata
 
-- **Tags:** comms-monitor, mcp-monitor, ux, ia, refactor, tab-bar, kanban
+- **Tags:** frontend, ui, ux, refactor
 - **Complexity:** 6
+- **Repo:** (root workspace — Switchboard extension)
 - **Project:** switchboard
-- **Files touched:** `src/webview/kanban.html`
+- **Files touched:** `src/webview/kanban.html` (required). `src/services/KanbanProvider.ts` is **optional** — only if the lazy `requestMcpMonitorConfig` message in Step 7 is adopted. Note the config is *already* pushed to the webview on the `ready` message (`KanbanProvider.ts:5902` → `postMcpMonitorConfig()`), so Step 7 is not strictly required (see Step 7).
+
+### Verified Anchors (kanban.html, read 2026-07-03)
+
+| Element | Real line | Earlier-draft claim |
+| :--- | :--- | :--- |
+| Tab bar `<div class="shared-tab-bar">` | 2494-2503 | 2523-2533 |
+| Tabs present | KANBAN, AGENTS, PROMPTS, AUTOMATION, WORKTREES, UAT, SETUP (**7 tabs, no REMOTE**) | 8 incl. REMOTE |
+| `automation-tab-content` div | 2581-2583 (root `#automation-panel-root`) | 2613 |
+| `createAutobanPanel()` | 7511 | 7690 |
+| `guardInteraction` (sets `isAutobanPanelInteracting`) | 7545 | 7719 |
+| Monitor construction (`mcpRow`…listeners) | 7599-7754 | (part of 7773-7954) |
+| `mcpDesc` text | 7772-7775 | (7775 matches) |
+| Monitor `appendChild` calls | 7778-7780 | — |
+| `saveMonitorConfig` | 7732 | 7906 |
+| `renderAutobanPanel()` (targets `#automation-panel-root`) | 8865 | 9039 |
+| Automation-render tab-switch `forEach` | 8896-8906 (`getAutobanConfig` at 8901) | 9070/9074 |
+| Generic tab show/hide `forEach` | 3879-3935 (auto-switches any `data-tab`) | — |
+| `updateMcpMonitorConfig` msg handler | 6732-6735 | 6803 |
+| `isAutobanPanelInteracting` declared | 6068 | — |
+| `mcpMonitorConfig` / `mcpMonitorPresets` declared | 6078 / 6080 | — |
+| `mcpMonitorResolvedCmd` / `resolvedStartupCommand` | **does not exist** | referenced in Step 6 |
+
+**REMOTE tab reality:** the REMOTE tab no longer lives in kanban.html — it moved to `project.html` (see the comment at kanban.html:2585-2586). Any plan text that treats REMOTE as a kanban tab is stale; corrected below.
+
+## User Review Required
+
+- **Tab placement / count:** Confirm COMMS should sit between UAT and SETUP, making 8 kanban tabs total (KANBAN, AGENTS, PROMPTS, AUTOMATION, WORKTREES, UAT, COMMS, SETUP). There is no REMOTE tab to place it near.
+- **Sequencing decision (epic-owned):** This move relocates the exact UI block that ~7 sibling subtasks edit. Reviewer must confirm this subtask runs **first** so siblings target the new `createCommsPanel()`, OR accept the fallback plan (siblings ship first → their additions must be carried across during extraction). This plan does not unilaterally set epic order.
+- **Step 7 backend change:** Confirm whether to add the optional `requestMcpMonitorConfig` handler (touches `KanbanProvider.ts`) or rely on the existing `ready`-time push (kanban.html-only).
+- **Label preservation:** Confirm the move keeps `MCP MONITOR:` text as-is (rename is a separate subtask).
 
 ## Complexity Audit
 
-**Moderate-complex refactor.** This is a single-file change (`kanban.html`) but it involves:
-1. Adding a new tab button + tab content container to the HTML structure.
-2. Extracting the Comms Monitor rendering code out of `createAutobanPanel()` into a new `createCommsPanel()` function.
-3. Adding a new render function (`renderCommsPanel`) and wiring it to the tab-switch logic.
-4. Decoupling the Comms Monitor's interaction guard from the autoban panel's interaction guard (they currently share `isAutobanPanelInteracting`).
-5. Ensuring the Comms Monitor config messages (`updateMcpMonitorConfig`, `setMcpMonitorConfig`, `launchMcpMonitorTerminal`) still work when rendered in a different tab.
+**Moderate-complex refactor (6/10).** Single primary file (`kanban.html`); the risk is concentration, not file count.
 
-**No backend changes needed.** All the message handling (`KanbanProvider.ts:5746-5754`) and backend logic (`TaskViewerProvider.ts`) remain unchanged — the webview still sends/receives the same messages; only the rendering location changes.
+### Routine
+- Adding a new tab button (`data-tab="comms"`) + `#comms-tab-content` container — the generic tab-switch handler (3879-3935) picks up any `data-tab`/`${tab}-tab-content` pair automatically, so show/hide needs no new code.
+- Adding a `renderCommsPanel()` mirroring `renderAutobanPanel()` (8865) against a new `#comms-panel-root`.
+- Wiring one extra `else if` branch in the automation-render `forEach` (8896).
+- No new backend logic (config already flows via existing `setMcpMonitorConfig`/`launchMcpMonitorTerminal` messages and the `ready`-time push).
 
-**Risk:** The Comms Monitor rendering code is deeply interleaved with the autoban panel code (shared `container` div, shared `guardInteraction`, shared style variables like `autobanSelectStyle`). Extraction must carefully separate the shared styles (which both panels can use) from the shared state (which must be split). The `isAutobanPanelInteracting` guard must not block Comms Monitor re-renders when the AUTOMATION tab isn't even visible.
+### Complex / Risky
+- **Non-contiguous, interleaved extraction.** The monitor code is three separate pieces (7599-7754, 7772-7775, 7778-7780) interleaved with autoban's `safetyNote`/`modeHelpText` (7756-7770). There is no clean line range to cut. Missing a piece orphans DOM or leaves dead references.
+- **Interaction-guard split.** Both panels share `isAutobanPanelInteracting` (declared 6068) and `guardInteraction` (7545). A new `isCommsPanelInteracting` + `guardCommsInteraction` must be introduced, and every monitor field's `guardInteraction(...)` call must be re-pointed to the comms guard — miss one and typing in a monitor field silently blocks the autoban panel (or vice versa).
+- **Shared closures.** `saveMonitorConfig` (7732), `mcpMonitorConfig`/`mcpMonitorPresets` (6078/6080) and the monitor's event listeners are defined in `createAutobanPanel`'s scope; they must move into `createCommsPanel`'s scope intact (module-level vars stay module-level; the fn + listeners move together).
+- **Re-render trigger relocation.** `updateMcpMonitorConfig` (6732) currently re-renders nothing monitor-specific because the monitor rode the autoban re-render; after extraction it must call `renderCommsPanel()` (see Step 6).
+- **Six/seven siblings edit this same block** (see Dependencies) — the biggest risk is coordination, not code.
+
+**Backend:** effectively unchanged. The webview still sends/receives the same messages; only rendering location changes. (The earlier note cited `KanbanProvider.ts:5746-5754`; the real monitor handlers are `setMcpMonitorConfig` at 6263 and `launchMcpMonitorTerminal` at 6269, and `postMcpMonitorConfig` lives in `TaskViewerProvider.ts:20579/20600`.)
 
 ## Edge-Case & Dependency Audit
 
-- **Tab bar crowding:** The tab bar currently has 8 tabs (KANBAN, AGENTS, PROMPTS, AUTOMATION, REMOTE, WORKTREES, UAT, SETUP). Adding COMMS makes 9. This is acceptable — the tab bar already scrolls/wraps. Place COMMS between UAT and SETUP (it's a utility/config feature, not a core workflow tab, so it belongs in the tail group with UAT and SETUP rather than in the main workflow group with KANBAN/AGENTS/PROMPTS/AUTOMATION/REMOTE/WORKTREES).
-- **Interaction guard decoupling:** The Comms Monitor currently uses `guardInteraction` (line 7719) which sets `isAutobanPanelInteracting = true`. If we extract the monitor into its own panel, it needs its own interaction guard (`isCommsPanelInteracting`) so that typing in the monitor's config fields doesn't block autoban panel re-renders (and vice versa). Both guards should use the same 2-second timeout pattern.
-- **Re-render triggers:** `renderAutobanPanel()` is called on `terminalStatuses` and `customAgents` messages (lines 9059-9065). The Comms Panel needs its own re-render on `updateMcpMonitorConfig` messages. Currently, the monitor config is rendered as part of `createAutobanPanel`, so it re-renders whenever the autoban panel re-renders. After extraction, `updateMcpMonitorConfig` should call `renderCommsPanel()` directly.
-- **Initial config load:** The AUTOMATION tab requests autoban config on first open (line 9074: `postKanbanMessage({ type: 'getAutobanConfig' })`). The COMMS tab should request the MCP monitor config on first open via `postMcpMonitorConfig()` (already exists as a backend method, `TaskViewerProvider.ts:20508`). The webview should send a message to request it — check if there's an existing request type, or add one.
-- **Tab persistence:** If the user is on the COMMS tab and reloads, the tab bar defaults to KANBAN (the `active` class is on the KANBAN button, line 2524). This is existing behavior — no tab persists across reloads. No change needed.
-- **Companion plans:** The editable prompt preview plan, the rename plan, and the dependency/haiku plan all modify the Comms Monitor UI. This plan should be executed **first** (or in coordination) so those plans target the new COMMS tab rather than the AUTOMATION tab. If those plans ship first, their changes will be in `createAutobanPanel` and will need to be moved during this extraction.
-- **No `confirm()` dialogs.** No new dialogs introduced.
+### Race Conditions
+- **Interaction-guard cross-blocking:** Today the monitor's fields call `guardInteraction` (defn at line 7545) which sets `isAutobanPanelInteracting = true`. After extraction, a new `isCommsPanelInteracting` + `guardCommsInteraction` (same 2-second timeout pattern) must guard the comms fields so typing in the monitor doesn't suppress an autoban re-render, and vice versa. Every monitor field's guard call must be re-pointed; a stray `guardInteraction` left on a comms field re-introduces the coupling.
+- **Config-push vs first-render:** `postMcpMonitorConfig()` fires on webview `ready` (KanbanProvider.ts:5902), possibly before the user opens COMMS. `renderCommsPanel()` must read whatever `mcpMonitorConfig` currently holds and be safe to call repeatedly.
+
+### Security
+- None. No new IPC surface if Step 7 is skipped; if adopted, `requestMcpMonitorConfig` is a parameterless pull of already-persisted config.
+
+### Side Effects
+- **Re-render triggers:** `renderAutobanPanel()` runs on `terminalStatuses` and `customAgents` messages (8885-8892). The monitor used to ride that re-render; after extraction it no longer updates on those messages (correct — it doesn't depend on terminal/agent state), so `updateMcpMonitorConfig` (6732) must now explicitly call `renderCommsPanel()` (Step 6).
+- **Tab persistence:** On reload the tab bar defaults to KANBAN (`active` on the KANBAN button, line 2495). No tab persists across reloads — existing behavior, no change needed.
+
+### Dependencies & Conflicts
+- **Tab bar reality:** The tab bar (2494-2503) has **7 tabs**: KANBAN, AGENTS, PROMPTS, AUTOMATION, WORKTREES, UAT, SETUP. **There is no REMOTE tab** (it moved to `project.html`; see comment at 2585-2586). Adding COMMS makes **8**. Place COMMS between UAT and SETUP — a tail/utility slot. The bar already scrolls/wraps, so 8 is fine.
+- **Initial config load:** No extra request is strictly required — `postMcpMonitorConfig()` already runs on webview `ready` (KanbanProvider.ts:5902), so `mcpMonitorConfig` is populated before COMMS is ever opened. `renderCommsPanel()` can render from state on first tab click. (`postMcpMonitorConfig`/`_postMcpMonitorConfig` live at `TaskViewerProvider.ts:20600`/`20579` — not 20508.) A lazy `requestMcpMonitorConfig` (Step 7) is an optional belt-and-braces enhancement, not a prerequisite.
+- **Shared surfaces this plan touches:** `createAutobanPanel()` (7511), the tab bar (2494-2503), the automation tab-content region (2581-2583), the automation-render `forEach` (8896), and the `updateMcpMonitorConfig` handler (6732) — all also read/edited by siblings.
+- **This move relocates the block ~7 siblings edit** — see `## Dependencies`. Single most important ordering dependency in the epic.
+- **Label preservation:** keep `MCP MONITOR:` (7603) and the `mcpDesc` "MCP Monitor…" text (7775) verbatim; the rename is `rename-display-labels`'s job. Do not pre-apply it here.
+- **No `confirm()` dialogs.** No new dialogs introduced (consistent with the project's no-confirm rule).
+
+## Dependencies
+
+This subtask is part of a 10-subtask epic. It is the **structural prerequisite** for the six sibling subtasks that add to the Comms/MCP Monitor UI. Recommended execution order: **this move first**, then the siblings target `createCommsPanel()` in the new COMMS tab. If epic-level ordering ships a sibling first, its additions live in `createAutobanPanel` and must be carried across during this extraction (call this out to the reviewer; do not silently drop them).
+
+- `sess_XXXXXXXXXXXXX — first-prompt-after-startup` (adds first-run help text to the monitor UI — target moves to COMMS tab)
+- `sess_XXXXXXXXXXXXX — editable-prompt-preview` (adds an editable prompt preview to the monitor UI)
+- `sess_XXXXXXXXXXXXX — rename-display-labels` (renames `MCP MONITOR:` → `COMMS MONITOR`; **owns the label text this plan deliberately preserves**)
+- `sess_XXXXXXXXXXXXX — claude-dependency-haiku-highlight` (adds Claude-dependency notice / Haiku model highlight to the monitor UI)
+- `sess_XXXXXXXXXXXXX — stuck-running-status-and-stop-control` (adds a stop button + status handling to the monitor status line)
+- `sess_XXXXXXXXXXXXX — separate-terminal-auth-polling` (three-button auth/launch flow in the monitor UI)
+- `sess_XXXXXXXXXXXXX — per-source-intervals` (per-source interval dropdowns in the monitor config panel)
+
+(Session IDs are placeholders — the epic owns the real IDs and the final ordering. This plan asserts the ordering *rationale*, not the decision.)
+
+## Adversarial Synthesis
+
+**Risk summary:** The dominant risk is the **non-contiguous, interleaved extraction** — the monitor is three separate pieces (7599-7754, 7772-7775, 7778-7780) tangled with autoban code, so the earlier draft's "delete lines 7773-7954" would have destroyed the automation engine and orphaned the monitor DOM; extraction must be surgical and grep-verified. Secondary risks: incompletely re-pointing the interaction guard (leaving a `guardInteraction` on a comms field silently cross-blocks the two panels), and the coordination hazard that six/seven siblings edit this exact block — mitigated by sequencing this subtask first (epic-owned) and preserving existing labels so the rename subtask doesn't collide. Backend is effectively untouched (config already pushed on `ready`), so Step 7 is optional.
 
 ## Proposed Changes
 
 ### 1. `src/webview/kanban.html` — add the COMMS tab button
 
-In the tab bar (line 2523-2533), add the COMMS button after AUTOMATION:
+In the tab bar (lines **2494-2503** — note: **there is no REMOTE tab**; it moved to `project.html`), add the COMMS button between UAT and SETUP. Insert one line at line 2502 (`<button class="shared-tab-btn" data-tab="comms">COMMS</button>`). Result:
 
 ```html
     <div class="shared-tab-bar">
@@ -66,7 +136,6 @@ In the tab bar (line 2523-2533), add the COMMS button after AUTOMATION:
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
-        <button class="shared-tab-btn" data-tab="remote">REMOTE</button>
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
         <button class="shared-tab-btn" data-tab="uat">UAT</button>
@@ -75,9 +144,11 @@ In the tab bar (line 2523-2533), add the COMMS button after AUTOMATION:
     </div>
 ```
 
+The generic tab-switch handler (`kanbanTabButtons.forEach` at **3879-3935**) matches on `data-tab` → `${tab}-tab-content` automatically, so this button will show/hide the new content div with no extra wiring for visibility. The only extra wiring needed is the render call (Step 5).
+
 ### 2. `src/webview/kanban.html` — add the COMMS tab content container
 
-After the automation tab content (line 2613), add:
+The automation tab content is `#automation-tab-content` at **2581-2583** (its root is `<div id="automation-panel-root" class="automation-panel"></div>`). Add a sibling COMMS content div nearby (e.g. after the UAT/SETUP content blocks; exact position doesn't matter since the generic handler toggles `active`). Mirror the automation pattern:
 
 ```html
     <!-- Comms Tab Content -->
@@ -88,31 +159,37 @@ After the automation tab content (line 2613), add:
 
 ### 3. `src/webview/kanban.html` — extract the Comms Monitor rendering into `createCommsPanel()`
 
-Extract the MCP Monitor rendering code from `createAutobanPanel()` (lines 7773-7954 — the `mcpRow`, `mcpConfigPanel`, `mcpDesc`, and all their children) into a new function `createCommsPanel()`. This function builds and returns a container div with all the Comms Monitor UI:
+Extract the MCP Monitor rendering code from `createAutobanPanel()` into a new function `createCommsPanel()`. **The code to move is NON-CONTIGUOUS** (see "Verified Anchors"): (a) construction `mcpRow`/`mcpSelect` → `saveMonitorConfig` → listeners at **7599-7754**, (b) `mcpDesc` at **7772-7775**, (c) the three `container.appendChild(mcpRow/mcpDesc/mcpConfigPanel)` calls at **7778-7780**. Do **not** cut a line range — the autoban `safetyNote`/`modeHelpText` (7756-7770) is interleaved between (a) and (b) and must stay in `createAutobanPanel`. This function builds and returns a container div with all the Comms Monitor UI:
 
 ```js
         function createCommsPanel() {
             const container = document.createElement('div');
             container.style.cssText = 'padding:12px; overflow-y:auto; height:100%;';
 
-            // Comms header
+            // Comms header — KEEP the existing label text. The current code says
+            // 'MCP MONITOR:' (kanban.html:7603); renaming to 'COMMS MONITOR' is the
+            // rename-display-labels sibling subtask's job. Preserve 'MCP MONITOR:'
+            // here so the two subtasks don't collide / double-rename.
             const commsHeader = document.createElement('div');
             commsHeader.className = 'subsection-header';
             const commsHeaderSpan = document.createElement('span');
-            commsHeaderSpan.textContent = 'COMMS MONITOR';
+            commsHeaderSpan.textContent = 'MCP MONITOR';  // rename subtask changes this later
             commsHeader.appendChild(commsHeaderSpan);
             container.appendChild(commsHeader);
 
-            // Intro text
+            // Intro text — reuse the existing mcpDesc copy verbatim (it currently
+            // starts "The MCP Monitor periodically pings…", line 7775). Do NOT
+            // reword to "Comms Monitor" — that is the rename subtask.
             const introText = document.createElement('div');
             introText.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); line-height:1.5;';
-            introText.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
+            introText.textContent = 'The MCP Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
             container.appendChild(introText);
 
             // ─── Move all MCP Monitor UI here (mcpRow, mcpConfigPanel, etc.) ───
-            // (Lines 7773-7954 from createAutobanPanel, adapted to use container
-            //  instead of the autoban container, and isCommsPanelInteracting
-            //  instead of isAutobanPanelInteracting)
+            // (Pieces at 7599-7754 + mcpDesc 7772-7775 + appends 7778-7780,
+            //  adapted to use this container instead of the autoban container,
+            //  and guardCommsInteraction/isCommsPanelInteracting instead of
+            //  guardInteraction/isAutobanPanelInteracting)
 
             // ... [all the mcpRow, mcpSelect, mcpConfigPanel, intervalRow,
             //      sourcesList, customInstructionRow, statusLine, mcpHelp code] ...
@@ -124,14 +201,16 @@ Extract the MCP Monitor rendering code from `createAutobanPanel()` (lines 7773-7
 ```
 
 **Key extraction details:**
-- The shared style variables (`autobanSelectStyle`, `autobanNumberInputStyle`, etc., lines 7715-7718) are defined inside `createAutobanPanel`. Either move them to a shared scope (module-level) or duplicate them inside `createCommsPanel`. Recommended: move to a shared scope since both panels use them.
-- The `guardInteraction` function (line 7719) sets `isAutobanPanelInteracting`. Create a parallel `isCommsPanelInteracting` flag and a `guardCommsInteraction` function (same 2-second timeout pattern) for the Comms panel.
-- The `saveMonitorConfig` function (line 7906) and all event listeners stay with the Comms Monitor code — they move together.
+- **Shared style variables:** if the monitor fields reference any autoban-scoped style constants (e.g. an `autobanSelectStyle`-style helper) defined inside `createAutobanPanel`, hoist them to module scope so both panels use them; otherwise inline the styles the monitor already uses. Verify by grepping the moved snippet for any identifier defined only in `createAutobanPanel`'s body before the move — the earlier draft's "lines 7715-7718" is not a reliable anchor.
+- **Interaction guard:** `guardInteraction` (defn at **line 7545**) sets `isAutobanPanelInteracting` (declared **6068**). Create a parallel `isCommsPanelInteracting` flag + `guardCommsInteraction` function (same 2-second timeout pattern) and re-point every monitor field's guard call to it. Missing one silently couples the panels.
+- **`saveMonitorConfig`** (defn at **line 7732**, not 7906) and all monitor event listeners (7749-7754) move together with the monitor code into `createCommsPanel`.
+- **Module-level state** (`mcpMonitorConfig` 6078, `mcpMonitorPresets` 6080) stays module-level — only the rendering closure moves.
 
 ### 4. `src/webview/kanban.html` — remove the Comms Monitor code from `createAutobanPanel()`
 
-Delete lines 7773-7954 from `createAutobanPanel()`. The autoban panel now contains only:
-- The "CONFIGURE AUTOMATION" header
+**Do NOT delete a line range** — the monitor code is interleaved with autoban code (see Step 3). Remove only the three monitor pieces you moved: the construction block **7599-7754** (`mcpRow`/`mcpSelect`/`mcpConfigPanel` and children, `saveMonitorConfig`, and the monitor listeners), the `mcpDesc` block **7772-7775**, and the three monitor `container.appendChild(...)` calls at **7778-7780**. Leave the autoban `safetyNote`/`modeHelpText` (7756-7770), the `modeSelect` change handler (7782+), and all automation-rule code (7803+) exactly in place. After removal, grep `createAutobanPanel` for any lingering `mcp`/`Monitor`/`saveMonitorConfig` reference to confirm nothing dangling remains.
+
+The autoban panel now contains only:
 - Mode selector
 - Per-mode automation rules
 - Safety notes and mode descriptions
@@ -140,7 +219,7 @@ No Comms Monitor UI remains in the AUTOMATION tab.
 
 ### 5. `src/webview/kanban.html` — add `renderCommsPanel()` and wire it to the tab-switch logic
 
-Add a render function (parallel to `renderAutobanPanel`, line 9039):
+Add a render function (parallel to `renderAutobanPanel`, **line 8865**, which targets `#automation-panel-root`):
 
 ```js
         let isCommsPanelInteracting = false;
@@ -162,9 +241,10 @@ Add a render function (parallel to `renderAutobanPanel`, line 9039):
         }
 ```
 
-Wire the tab-switch logic (extend the existing `kanbanTabButtons.forEach` at line 9070):
+Wire the render into the existing **automation-render** `kanbanTabButtons.forEach` at **lines 8896-8906** (this is a *second* forEach dedicated to render calls — distinct from the generic show/hide forEach at 3879 which already toggles `active`). Add an `else if` branch:
 
 ```js
+        // (existing forEach at 8896)
         kanbanTabButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 if (btn.dataset.tab === 'automation') {
@@ -173,30 +253,36 @@ Wire the tab-switch logic (extend the existing `kanbanTabButtons.forEach` at lin
                     }
                     renderAutobanPanel();
                 } else if (btn.dataset.tab === 'comms') {
-                    // Request MCP monitor config if not already loaded
-                    if (!mcpMonitorConfig || !mcpMonitorConfig.enabled) {
-                        postKanbanMessage({ type: 'requestMcpMonitorConfig' });
-                    }
+                    // Config already arrives on webview 'ready' (KanbanProvider.ts:5902),
+                    // so render from current state. Optionally (Step 7) send a lazy
+                    // 'requestMcpMonitorConfig' pull if you want belt-and-braces.
                     renderCommsPanel();
                 }
             });
         });
 ```
 
+Do **not** gate the request on `!mcpMonitorConfig.enabled` (the earlier draft did): a disabled-but-persisted config is still valid state and would trigger a redundant request on every COMMS click. If Step 7 is adopted, gate on a "have we loaded once" flag instead, or just rely on the `ready`-time push and drop the request entirely.
+
 ### 6. `src/webview/kanban.html` — re-render comms panel on config updates
 
-In the `updateMcpMonitorConfig` message handler (line 6803), add a call to `renderCommsPanel()`:
+In the `updateMcpMonitorConfig` message handler (**lines 6732-6735**, not 6803), add a call to `renderCommsPanel()`. The real handler sets `mcpMonitorConfig` (6733) and `mcpMonitorPresets` (6735) — there is **no `mcpMonitorResolvedCmd` / `resolvedStartupCommand`** variable in kanban.html, so do not add that line (the earlier draft invented it). Confirm the exact assignments in-file before editing:
 
 ```js
+                case 'updateMcpMonitorConfig': {
                   mcpMonitorConfig = msg.config || mcpMonitorConfig;
                   mcpMonitorPresets = msg.presets || mcpMonitorPresets;
-                  mcpMonitorResolvedCmd = msg.resolvedStartupCommand || '';
                   renderCommsPanel();  // NEW — re-render the comms tab with updated config
+                  // ...existing body (any autoban re-render that lived here can stay)...
+                  break;
+                }
 ```
 
-### 7. `src/services/KanbanProvider.ts` — add a `requestMcpMonitorConfig` message handler
+### 7. (OPTIONAL) `src/services/KanbanProvider.ts` — add a `requestMcpMonitorConfig` message handler
 
-Add a case in the message handler (near line 5746) so the webview can request the config when the COMMS tab is first opened:
+**This step is optional.** The config is already pushed to the webview on the `ready` message (`KanbanProvider.ts:5902` calls `postMcpMonitorConfig()`), so `mcpMonitorConfig` is populated before COMMS is opened and `renderCommsPanel()` can render from state. Adopt this step only if you want a defensive lazy-pull; if you do, it is a small backend touch (adjust the Metadata "Files touched" note accordingly).
+
+Add a case alongside the existing monitor cases (`setMcpMonitorConfig` at **6263**, `launchMcpMonitorTerminal` at **6269** — the earlier draft's "near 5746" was wrong):
 
 ```ts
             case 'requestMcpMonitorConfig': {
@@ -207,13 +293,18 @@ Add a case in the message handler (near line 5746) so the webview can request th
             }
 ```
 
-`postMcpMonitorConfig` already exists (`TaskViewerProvider.ts:20508`) and sends the config + presets + running status to the kanban webview.
+`postMcpMonitorConfig()` already exists (`TaskViewerProvider.ts:20600`, wrapping `_postMcpMonitorConfig` at 20579 — not 20508) and sends config + presets + running status to the kanban webview.
 
 ## Verification Plan
 
+### Automated Tests
+- **Build/type-check:** `npm run compile` (webpack) succeeds with no type errors. This is the only automated gate — kanban.html is a webview template with no unit-test harness, so the substantive verification is the manual matrix below. (Per project rules, `dist/` staleness is irrelevant; `src/` is source of truth.)
+- **Static self-check (grep):** after the edit, grep `createAutobanPanel`'s body for `mcp`/`Monitor`/`saveMonitorConfig` → expect zero matches; grep `createCommsPanel` → expect all monitor identifiers present; grep for `guardInteraction(` inside the moved comms code → expect zero (all re-pointed to `guardCommsInteraction`).
+
+### Manual Verification
 1. **Build:** `npm run compile` succeeds with no type errors.
 2. **Manual — COMMS tab appears:**
-   - Open the kanban panel. Confirm the tab bar now shows: KANBAN, AGENTS, PROMPTS, AUTOMATION, REMOTE, WORKTREES, UAT, **COMMS**, SETUP.
+   - Open the kanban panel. Confirm the tab bar now shows (8 tabs, **no REMOTE**): KANBAN, AGENTS, PROMPTS, AUTOMATION, WORKTREES, UAT, **COMMS**, SETUP.
 3. **Manual — AUTOMATION tab no longer has the monitor:**
    - Click the AUTOMATION tab. Confirm it shows only kanban automation config (mode selector, column rules, batch sizes, watch-mode warnings). No Comms Monitor UI (no "MCP MONITOR:" / "COMMS MONITOR:" dropdown, no source checkboxes, no launch button).
 4. **Manual — COMMS tab has the monitor:**
@@ -227,6 +318,10 @@ Add a case in the message handler (near line 5746) so the webview can request th
    - Reverse: type in the COMMS tab's custom instruction field (triggers `isCommsPanelInteracting`). Switch to AUTOMATION, confirm autoban panel re-renders correctly.
 8. **Manual — config updates re-render COMMS tab:**
    - With the COMMS tab open, change the monitor config from another source (e.g. edit `~/.switchboard/integration-config.json` directly and trigger a config push, or launch the terminal from the command palette which calls `_postMcpMonitorConfig`). Confirm the COMMS tab re-renders with the updated state.
-9. **Manual — first-open config request:**
-   - Reload the window. Click the COMMS tab for the first time. Confirm the config loads (the `requestMcpMonitorConfig` message fires and the panel populates with persisted config).
-10. **Regression:** The AUTOMATION tab's autoban engine functionality (start/stop, mode switching, column rules) is unaffected. All autoban config changes still save and apply correctly. The 8 existing tabs all still render and switch correctly.
+9. **Manual — first-open config load:**
+   - Reload the window. Click the COMMS tab for the first time. Confirm the config loads (from the `ready`-time push; or, if Step 7 adopted, from the `requestMcpMonitorConfig` message) and the panel populates with persisted config.
+10. **Regression:** The AUTOMATION tab's autoban engine functionality (start/stop, mode switching, column rules) is unaffected. All autoban config changes still save and apply correctly. The **7 existing tabs** (KANBAN, AGENTS, PROMPTS, AUTOMATION, WORKTREES, UAT, SETUP) all still render and switch correctly, and COMMS makes 8.
+
+---
+
+**Recommendation (complexity 6):** Send to Coder.
