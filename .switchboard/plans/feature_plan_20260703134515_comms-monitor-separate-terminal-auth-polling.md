@@ -180,7 +180,9 @@ In `setMcpMonitorConfig` (line 245), write the new field through:
 
 ### 2. `src/services/TaskViewerProvider.ts` — gate the loop on `pollingEnabled` instead of `enabled`
 
-In `_startMcpMonitorLoop` (line 20390), check `pollingEnabled`:
+**Verified anchor:** `_startMcpMonitorLoop` is at **line 20482** (the current guard `if (!cfg.enabled)` is at line 20484; single `intervalMinutes` computed at line 20491). `_mcpMonitorTick`'s guard `if (!cfg.enabled) return;` is at **line 20514** and must ALSO be flipped to `pollingEnabled` (the plan below only shows `_startMcpMonitorLoop`; the tick guard is the second half of the gate flip). **Conflict:** the sibling "per-source-intervals" rewrites this same method — merge, do not clobber.
+
+In `_startMcpMonitorLoop` (line 20482), check `pollingEnabled`:
 
 ```ts
     private async _startMcpMonitorLoop() {
@@ -199,15 +201,19 @@ In `_startMcpMonitorLoop` (line 20390), check `pollingEnabled`:
 
 ### 3. `src/services/TaskViewerProvider.ts` — remove polling start from `launchMcpMonitorTerminal`
 
-The existing `launchMcpMonitorTerminal` (line 20512) creates the terminal and sends the startup command. Remove any `_startMcpMonitorLoop()` and `_scheduleMcpMonitorFirstPrompt()` calls from this method (added by companion plans). Terminal creation should NOT start polling:
+**Verified anchor:** `launchMcpMonitorTerminal` is at **line 20604** (spans ~20604-20676). It creates the terminal (`createTerminal` at 20631), sends the startup command (`terminal.sendText(cmd.trim(), true)` at 20671), and already ends by calling `await this._postMcpMonitorConfig();` at 20675.
+
+> **Accuracy note:** In the *current* code this method does **NOT** call `_startMcpMonitorLoop()` and there is **no** `_scheduleMcpMonitorFirstPrompt` symbol anywhere in the file. So this step is a **guard against companion plans re-introducing loop-start here** rather than a removal of existing code. If "first-prompt-after-startup" or "apply-source-changes-immediately" land first and add those calls, remove them from this method. If this plan lands first, the step is a no-op plus a comment marking the boundary.
+
+Ensure `launchMcpMonitorTerminal` does NOT start polling:
 
 ```ts
     public async launchMcpMonitorTerminal(): Promise<void> {
-        // ... existing terminal creation + startup command code (lines 20513-20580) ...
+        // ... existing terminal creation + startup command code (lines 20605-20672) ...
         // DO NOT call _startMcpMonitorLoop() here.
-        // DO NOT call _scheduleMcpMonitorFirstPrompt() here.
+        // DO NOT call _scheduleMcpMonitorFirstPrompt() here (companion-plan symbol).
 
-        // Push updated status to kanban
+        // Push updated status to kanban (already present at line 20675)
         await this._postMcpMonitorConfig();
     }
 ```

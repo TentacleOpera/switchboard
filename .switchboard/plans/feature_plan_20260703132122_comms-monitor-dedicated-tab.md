@@ -87,19 +87,30 @@ The Comms Monitor is rendered as a subsection inside the autoban panel's `contai
 
 ## Edge-Case & Dependency Audit
 
-- **Tab bar crowding:** The tab bar currently has 8 tabs (KANBAN, AGENTS, PROMPTS, AUTOMATION, REMOTE, WORKTREES, UAT, SETUP). Adding COMMS makes 9. This is acceptable — the tab bar already scrolls/wraps. Place COMMS between UAT and SETUP (it's a utility/config feature, not a core workflow tab, so it belongs in the tail group with UAT and SETUP rather than in the main workflow group with KANBAN/AGENTS/PROMPTS/AUTOMATION/REMOTE/WORKTREES).
-- **Interaction guard decoupling:** The Comms Monitor currently uses `guardInteraction` (line 7719) which sets `isAutobanPanelInteracting = true`. If we extract the monitor into its own panel, it needs its own interaction guard (`isCommsPanelInteracting`) so that typing in the monitor's config fields doesn't block autoban panel re-renders (and vice versa). Both guards should use the same 2-second timeout pattern.
-- **Re-render triggers:** `renderAutobanPanel()` is called on `terminalStatuses` and `customAgents` messages (lines 9059-9065). The Comms Panel needs its own re-render on `updateMcpMonitorConfig` messages. Currently, the monitor config is rendered as part of `createAutobanPanel`, so it re-renders whenever the autoban panel re-renders. After extraction, `updateMcpMonitorConfig` should call `renderCommsPanel()` directly.
-- **Initial config load:** The AUTOMATION tab requests autoban config on first open (line 9074: `postKanbanMessage({ type: 'getAutobanConfig' })`). The COMMS tab should request the MCP monitor config on first open via `postMcpMonitorConfig()` (already exists as a backend method, `TaskViewerProvider.ts:20508`). The webview should send a message to request it — check if there's an existing request type, or add one.
-- **Tab persistence:** If the user is on the COMMS tab and reloads, the tab bar defaults to KANBAN (the `active` class is on the KANBAN button, line 2524). This is existing behavior — no tab persists across reloads. No change needed.
-- **Companion plans:** The editable prompt preview plan, the rename plan, and the dependency/haiku plan all modify the Comms Monitor UI. This plan should be executed **first** (or in coordination) so those plans target the new COMMS tab rather than the AUTOMATION tab. If those plans ship first, their changes will be in `createAutobanPanel` and will need to be moved during this extraction.
-- **No `confirm()` dialogs.** No new dialogs introduced.
+### Race Conditions
+- **Interaction-guard cross-blocking:** Today the monitor's fields call `guardInteraction` (defn at line 7545) which sets `isAutobanPanelInteracting = true`. After extraction, a new `isCommsPanelInteracting` + `guardCommsInteraction` (same 2-second timeout pattern) must guard the comms fields so typing in the monitor doesn't suppress an autoban re-render, and vice versa. Every monitor field's guard call must be re-pointed; a stray `guardInteraction` left on a comms field re-introduces the coupling.
+- **Config-push vs first-render:** `postMcpMonitorConfig()` fires on webview `ready` (KanbanProvider.ts:5902), possibly before the user opens COMMS. `renderCommsPanel()` must read whatever `mcpMonitorConfig` currently holds and be safe to call repeatedly.
+
+### Security
+- None. No new IPC surface if Step 7 is skipped; if adopted, `requestMcpMonitorConfig` is a parameterless pull of already-persisted config.
+
+### Side Effects
+- **Re-render triggers:** `renderAutobanPanel()` runs on `terminalStatuses` and `customAgents` messages (8885-8892). The monitor used to ride that re-render; after extraction it no longer updates on those messages (correct — it doesn't depend on terminal/agent state), so `updateMcpMonitorConfig` (6732) must now explicitly call `renderCommsPanel()` (Step 6).
+- **Tab persistence:** On reload the tab bar defaults to KANBAN (`active` on the KANBAN button, line 2495). No tab persists across reloads — existing behavior, no change needed.
+
+### Dependencies & Conflicts
+- **Tab bar reality:** The tab bar (2494-2503) has **7 tabs**: KANBAN, AGENTS, PROMPTS, AUTOMATION, WORKTREES, UAT, SETUP. **There is no REMOTE tab** (it moved to `project.html`; see comment at 2585-2586). Adding COMMS makes **8**. Place COMMS between UAT and SETUP — a tail/utility slot. The bar already scrolls/wraps, so 8 is fine.
+- **Initial config load:** No extra request is strictly required — `postMcpMonitorConfig()` already runs on webview `ready` (KanbanProvider.ts:5902), so `mcpMonitorConfig` is populated before COMMS is ever opened. `renderCommsPanel()` can render from state on first tab click. (`postMcpMonitorConfig`/`_postMcpMonitorConfig` live at `TaskViewerProvider.ts:20600`/`20579` — not 20508.) A lazy `requestMcpMonitorConfig` (Step 7) is an optional belt-and-braces enhancement, not a prerequisite.
+- **Shared surfaces this plan touches:** `createAutobanPanel()` (7511), the tab bar (2494-2503), the automation tab-content region (2581-2583), the automation-render `forEach` (8896), and the `updateMcpMonitorConfig` handler (6732) — all also read/edited by siblings.
+- **This move relocates the block ~7 siblings edit** — see `## Dependencies`. Single most important ordering dependency in the epic.
+- **Label preservation:** keep `MCP MONITOR:` (7603) and the `mcpDesc` "MCP Monitor…" text (7775) verbatim; the rename is `rename-display-labels`'s job. Do not pre-apply it here.
+- **No `confirm()` dialogs.** No new dialogs introduced (consistent with the project's no-confirm rule).
 
 ## Proposed Changes
 
 ### 1. `src/webview/kanban.html` — add the COMMS tab button
 
-In the tab bar (line 2523-2533), add the COMMS button after AUTOMATION:
+In the tab bar (lines **2494-2503** — note: **there is no REMOTE tab**; it moved to `project.html`), add the COMMS button between UAT and SETUP. Insert one line at line 2502 (`<button class="shared-tab-btn" data-tab="comms">COMMS</button>`). Result:
 
 ```html
     <div class="shared-tab-bar">
@@ -107,7 +118,6 @@ In the tab bar (line 2523-2533), add the COMMS button after AUTOMATION:
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
-        <button class="shared-tab-btn" data-tab="remote">REMOTE</button>
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
         <button class="shared-tab-btn" data-tab="uat">UAT</button>
@@ -115,6 +125,8 @@ In the tab bar (line 2523-2533), add the COMMS button after AUTOMATION:
         <button class="shared-tab-btn" data-tab="setup">SETUP</button>
     </div>
 ```
+
+The generic tab-switch handler (`kanbanTabButtons.forEach` at **3879-3935**) matches on `data-tab` → `${tab}-tab-content` automatically, so this button will show/hide the new content div with no extra wiring for visibility. The only extra wiring needed is the render call (Step 5).
 
 ### 2. `src/webview/kanban.html` — add the COMMS tab content container
 

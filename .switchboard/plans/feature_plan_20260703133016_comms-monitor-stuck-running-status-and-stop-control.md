@@ -227,6 +227,11 @@ Update the status line (line 7706-7724) to show a Stop button when the monitor i
 
 ## Verification Plan
 
+### Automated Tests
+- **Build/type check:** `npm run compile` (webpack) succeeds with no type errors — this is the primary automated gate. (`dist/` is not exercised in dev/test; `src/` is the source of truth.)
+- There is no unit-test harness for the terminal-lifecycle/webview messaging path in this repo, so behavioral coverage is manual (below). If a lightweight test is added, assert that `handleTerminalClosed` calls `_stopMcpMonitorLoop` + `_postMcpMonitorConfig` exactly once when passed a terminal whose normalized name equals the monitor literal, and not at all otherwise.
+
+### Manual Verification
 1. **Build:** `npm run compile` succeeds with no type errors.
 2. **Manual — status updates on manual kill (the core bug fix):**
    - Launch the monitor terminal. Confirm status shows "🟢 running".
