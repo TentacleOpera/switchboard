@@ -1,11 +1,11 @@
 ## CODE REVIEWED
 
 **Column:** CODE REVIEWED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md) — Tracker-Structure Round-Trip (Tickets-Tab Import + Outbound Epic Sync) <!-- planId:6fbbc3b6-9404-41f1-8314-eb5140b6db2f epic project:"Remote sync" -->
+**Column:** CODE REVIEWED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/epic-remote-planning-infrastructure-7421946e-dea1-4d2b-985d-5de52d088f4d.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/epic-remote-planning-infrastructure-7421946e-dea1-4d2b-985d-5de52d088f4d.md) — Epic: Remote Planning Infrastructure <!-- planId:7421946e-dea1-4d2b-985d-5de52d088f4d epic project:"Remote sync" -->
 **Column:** CODE REVIEWED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/note-codebase-docs-da9ba512-dead-4632-a58c-220f1c489581.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/note-codebase-docs-da9ba512-dead-4632-a58c-220f1c489581.md) — Project Context & Remote UI Hub <!-- planId:da9ba512-dead-4632-a58c-220f1c489581 epic project:"Remote sync" -->
-**Column:** CODE REVIEWED
-- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/epics/cross-provider-epic-structure-import-sync-mirroring-6fbbc3b6-9404-41f1-8314-eb5140b6db2f.md) — Tracker-Structure Round-Trip (Tickets-Tab Import + Outbound Epic Sync) <!-- planId:6fbbc3b6-9404-41f1-8314-eb5140b6db2f epic project:"Remote sync" -->
 **Column:** CODE REVIEWED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/sw-remote-entry-skill.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/sw-remote-entry-skill.md) — Add /sw-remote Entry Skill for Remote Switchboard Sessions <!-- planId:4d90f251-9f7e-4c5a-9530-aa1888ccf216 subtask-of:"Epic: Remote Planning Infrastructure" project:"Switchboard" -->
 **Column:** CODE REVIEWED

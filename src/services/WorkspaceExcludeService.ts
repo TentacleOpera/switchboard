@@ -175,14 +175,20 @@ export class WorkspaceExcludeService {
     }
 
     private _effectiveTargetedRules(): string[] {
-        if (this._boardStateExportEnabled()) {
-            return [...WorkspaceExcludeService.TARGETED_RULES];
-        }
-        const mirror = new Set(WorkspaceExcludeService.MIRROR_EXPORT_RULES);
-        return WorkspaceExcludeService.TARGETED_RULES.filter(r => !mirror.has(r));
+        return WorkspaceExcludeService.getTargetedRules(this._boardStateExportEnabled());
     }
 
-    static getTargetedRules(): string[] {
-        return [...WorkspaceExcludeService.TARGETED_RULES];
+    /**
+     * The managed targeted-gitignore rules. When `includeMirrorExport` is false
+     * (boardStateExport === 'none', the default), the board-state mirror files
+     * (kanban-board.md / kanban-state-*.md) stay ignored — so the setup-UI preview
+     * matches what apply() actually writes. Pass the workspace's boardStateExport
+     * state; defaults to true for backward compatibility.
+     */
+    static getTargetedRules(includeMirrorExport: boolean = true): string[] {
+        const rules = [...WorkspaceExcludeService.TARGETED_RULES];
+        if (includeMirrorExport) { return rules; }
+        const mirror = new Set(WorkspaceExcludeService.MIRROR_EXPORT_RULES);
+        return rules.filter(r => !mirror.has(r));
     }
 }

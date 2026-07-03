@@ -4408,10 +4408,12 @@ Each plan file must include:
             config.get<string>('ignoreStrategy', 'targetedGitignore'),
             config.get<string[]>('ignoreRules', [])
         );
+        const boardStateExport = vscode.workspace.getConfiguration('switchboard').get<string>('boardStateExport', 'none');
+        const includeMirror = !!boardStateExport && boardStateExport !== 'none';
         return {
             strategy,
             rules,
-            targetedRulesDisplay: WorkspaceExcludeService.getTargetedRules()
+            targetedRulesDisplay: WorkspaceExcludeService.getTargetedRules(includeMirror)
         };
     }
 
@@ -4435,11 +4437,13 @@ Each plan file must include:
         const config = vscode.workspace.getConfiguration('switchboard.workspace');
         await config.update('ignoreStrategy', strategy, vscode.ConfigurationTarget.Workspace);
         await config.update('ignoreRules', rules, vscode.ConfigurationTarget.Workspace);
+        const boardStateExport = vscode.workspace.getConfiguration('switchboard').get<string>('boardStateExport', 'none');
+        const includeMirror = !!boardStateExport && boardStateExport !== 'none';
         this._postSharedWebviewMessage({
             type: 'gitIgnoreConfig',
             strategy,
             rules,
-            targetedRulesDisplay: WorkspaceExcludeService.getTargetedRules()
+            targetedRulesDisplay: WorkspaceExcludeService.getTargetedRules(includeMirror)
         });
         if (options.emitApplyResult) {
             this._postSharedWebviewMessage({ type: 'saveGitIgnoreConfigResult', success: true });
