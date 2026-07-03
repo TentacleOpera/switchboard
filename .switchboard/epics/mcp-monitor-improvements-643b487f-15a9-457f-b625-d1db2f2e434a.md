@@ -54,7 +54,9 @@ A detailed cross-plan inconsistency report and a proposed consolidation (which s
 
 ## Epic reconciliation — merged end-state
 
-Produced by running improve-plan across all 10 subtasks and reconciling their overlaps. This section is the **authoritative merged design** for the surfaces multiple subtasks contend; a coder must implement to this, not to any single subtask's isolated version. (Subtask card set unchanged — this is a spec, not a restructure.)
+Produced by running improve-plan across all 10 subtasks and reconciling their overlaps. This section is the **authoritative merged design** for the surfaces multiple subtasks contend; a coder must implement to this, not to any single subtask's isolated version.
+
+**Consolidation applied.** The four backend-lifecycle subtasks (first-prompt-after-startup, apply-source-changes-immediately, separate-terminal-auth-polling, per-source-intervals) that all rewrote the same three methods + config have been **merged into one clean-break plan** (`feature_plan_20260703160000_comms-monitor-lifecycle-polling-consolidated.md`) and the four originals removed. Six subtasks remain: that consolidated plan plus rename-display-labels, dedicated-tab, claude-dependency-haiku-highlight, remove-dontask-permission-mode, stuck-running-status-and-stop-control, and editable-prompt-preview.
 
 ### Genuine bugs caught during reconciliation (fix regardless of ordering)
 1. **per-source-intervals kills the loop on current `main`.** Its guard `if (!cfg.pollingEnabled)` reads a field that doesn't exist yet → `undefined` → the monitor stops on startup. Must use `cfg.pollingEnabled ?? cfg.enabled` until `pollingEnabled` lands.
@@ -69,8 +71,8 @@ Single signature: `_buildMcpMonitorPrompt(cfg, opts?: { dueSources?: string[]; }
 3. Iterate `opts?.dueSources ?? cfg.sources`; render Slack/Gmail via the parameterized helpers (editable-preview), others via presets.
 4. Persist `sourceLastCheckAt` for the included sources on successful send only — this **supersedes** first-prompt's global `lastCheckAt` (kept only as a read-compat fallback).
 
-### Single `McpMonitorConfig` schema (land once, additive)
-Union of all four subtasks' fields in one pass: `pollingEnabled`, `promptOverride`, `slackChannels`, `slackDmOnly`, `slackChannelOnly`, `gmailLabel`, `sourceIntervals`, `sourceLastCheckAt`. Deprecate `intervalMinutes`/`lastCheckAt` via read-time mapping (`sourceIntervals[k] ?? intervalMinutes`, `sourceLastCheckAt[k] ?? lastCheckAt`). Keep the `?? current.X` merge so partial writes preserve unspecified fields.
+### Single `McpMonitorConfig` schema (land once, clean break)
+The consolidated plan owns the lifecycle fields (`pollingEnabled`, `sourceIntervals`, `sourceLastCheckAt`); `editable-prompt-preview` adds `promptOverride`, `slackChannels`, `slackDmOnly`, `slackChannelOnly`, `gmailLabel`. **No** legacy `intervalMinutes`/`lastCheckAt`/`enabled`-fallback shims (unreleased). Update every accessor together — `getMcpMonitorConfig`, `getMcpMonitorConfigSync`, `setMcpMonitorConfig`, and `DEFAULT_MCP_MONITOR_CONFIG` — keeping the `?? current.X` merge so partial writes preserve fields.
 
 ### Terminal-name constant
 Extract `MCP_MONITOR_TERMINAL_NAME` (one definition) and route all creation + lookup sites through it — `_mcpMonitorTick`, `_isMcpMonitorTerminalRunning`, the new `handleTerminalClosed`/stop/auth lookups (stuck-running, separate-terminal), plus the `matchesGridAgentName` path in `extension.ts`. rename-display-labels changes the value in that one place. A missed site = monitor silently unfindable.
@@ -78,8 +80,8 @@ Extract `MCP_MONITOR_TERMINAL_NAME` (one definition) and route all creation + lo
 ### One-shot ownership + timer lifecycle
 The 30s first-prompt one-shot lives in `startMcpMonitorPolling` (separate-terminal owns the split), **not** in `launchMcpMonitorTerminal` (resolves the first-prompt contradiction). All immediate-tick paths funnel through `_enqueueMcpMonitorTick`. `_stopMcpMonitorLoop` gets one consolidated cleanup block cancelling every timer (first-prompt one-shot, apply-source coalesce timer, interval) — not three colliding edits.
 
-### ⚠️ Open decision — upgrade behavior for ~4,000 installs
-separate-terminal's compat shim maps `enabled:true → pollingEnabled:true`, which would **auto-resume unattended polling on upgrade** — contrary to this epic's intent (no polling before auth is verified). **Recommended: default `pollingEnabled:false` on upgrade** so users explicitly click Start Polling. Flagged for sign-off; not yet baked into the separate-terminal plan.
+### Upgrade behavior — RESOLVED (no migration)
+The Comms Monitor is unreleased dev work, so the consolidated plan takes a **clean break**: no `enabled → pollingEnabled` compat shim, no legacy `intervalMinutes`/`lastCheckAt` mapping. `pollingEnabled` defaults to `false`; there is no install base to auto-resume, so the earlier auto-resume concern is moot.
 
 ### Sequence
 Wave 0 (parallel): remove-dontask; rename + terminal-name constant. Wave 1: dedicated-tab (relocates the UI block 7 siblings edit — must precede UI polish); land the unified config schema. Wave 2 (one coordinated backend change): separate-terminal → per-source → first-prompt → apply-source → stuck-running. Wave 3: editable-preview (owns final prompt-builder shape) → haiku-highlight.
