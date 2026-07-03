@@ -36,8 +36,12 @@ Ship the operational safeguards that make remote control safe to run on the prim
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Switchboard Auto-Archive Rule (Time-in-Column → Completed + Archive)](../plans/linear-free-tier-auto-archive-on-completion.md) — **PLAN REVIEWED**
-- [ ] [Notion Overwrite Data-Loss Guard (Code-Level)](../plans/notion-overwrite-guard.md) — **PLAN REVIEWED**
-- [ ] [Remote-Sync Health & Error Surfacing](../plans/remote-sync-health-surfacing.md) — **PLAN REVIEWED**
-- [ ] [Hide Triage Pipeline + Kanban Mapping/Automation Setup Sections (Pre-Release UI Gate)](../plans/hide-triage-and-automation-setup-sections.md) — **PLAN REVIEWED**
+- [x] [Switchboard Auto-Archive Rule (Time-in-Column → Completed + Archive)](../plans/linear-free-tier-auto-archive-on-completion.md) — **CODE REVIEWED**
+- [x] [Notion Overwrite Data-Loss Guard (Code-Level)](../plans/notion-overwrite-guard.md) — **CODE REVIEWED**
+- [x] [Remote-Sync Health & Error Surfacing](../plans/remote-sync-health-surfacing.md) — **CODE REVIEWED**
+- [x] [Hide Triage Pipeline + Kanban Mapping/Automation Setup Sections (Pre-Release UI Gate)](../plans/hide-triage-and-automation-setup-sections.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+All 4 subtasks reviewed in-place against their plan requirements. No CRITICAL findings. One MAJOR finding (auto-archive dwell timer uses `updatedAt` instead of a dedicated `columnEnteredAt` field — schema limitation, not a code bug). All NITs are documented in the respective subtask plan files. No code fixes were required — all implementations are sound against their plan criteria. The epic's cross-cutting contracts are honored: the overwrite guard is consumed by `pushProjectContext` and `updatePageContent`; the auto-archive rule rides the `archiveCard` provider capability; health surfacing integrates with both the poll loop and the push paths (auto-archive + project-context sync).

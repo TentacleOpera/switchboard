@@ -7145,25 +7145,40 @@ Each plan file must include:
         const startupCommand = startupCommands[normalizedRole];
         if (startupCommand && startupCommand.trim()) {
             await new Promise<void>((resolve) => {
+                let sent = false;
                 let disposed = false;
-                const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
-                    if (e.terminal === terminal && !disposed) {
-                        disposable.dispose();
-                        disposed = true;
-                        if (terminal.exitStatus === undefined) {
-                            terminal.sendText(startupCommand.trim(), true);
-                        }
+                const cleanup = () => {
+                    if (disposed) return;
+                    disposed = true;
+                    shellExecDisposable.dispose();
+                    closeDisposable.dispose();
+                    clearTimeout(safetyTimer);
+                };
+                const sendOnce = () => {
+                    if (sent) return;
+                    sent = true;
+                    if (terminal.exitStatus === undefined) {
+                        terminal.sendText(startupCommand.trim(), true);
+                    }
+                };
+                const shellExecDisposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+                    if (e.terminal === terminal) {
+                        sendOnce();
+                        cleanup();
                         resolve();
                     }
                 });
-                setTimeout(() => {
+                const closeDisposable = vscode.window.onDidCloseTerminal((closed) => {
+                    if (closed === terminal) {
+                        cleanup();
+                        resolve();
+                    }
+                });
+                const safetyTimer = setTimeout(() => {
                     if (!disposed) {
-                        disposable.dispose();
-                        disposed = true;
-                        console.warn(`[TaskViewerProvider] Shell init timeout for terminal '${uniqueName}', sending startup command anyway`);
-                        if (terminal.exitStatus === undefined) {
-                            terminal.sendText(startupCommand.trim(), true);
-                        }
+                        console.warn(`[TaskViewerProvider] Shell init timeout for worktree terminal '${uniqueName}', sending startup command via fallback`);
+                        sendOnce();
+                        cleanup();
                         resolve();
                     }
                 }, 5000);

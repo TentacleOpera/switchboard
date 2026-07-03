@@ -54,3 +54,11 @@ These are push-capability details; the auto-archive *rule* itself is provider-ag
 **Complexity:** 5
 **Tags:** backend, ui, reliability, feature, api
 **Repo:** switchboard
+
+## Review Findings
+
+**Files changed:** `src/services/AutoArchiveService.ts` (new), `src/services/KanbanProvider.ts`, `src/services/LinearSyncService.ts`, `src/services/remote/RemoteProvider.ts`, `src/services/remote/LinearRemoteProvider.ts`, `src/services/remote/NotionRemoteProvider.ts`, `src/services/remote/GitStateProvider.ts`, `src/webview/kanban.html`, `src/extension.ts`. The `archiveCard` capability is declared on the `RemoteProvider` interface and implemented by all three providers (Linear uses `issueArchive`, Notion uses `PATCH /pages/{id}` archived:true, Git returns skipped). The Linear `archiveIssue` mutation was corrected from `issueUpdate(input:{archivedAt})` to the dedicated `issueArchive`, and `unarchiveIssue` was added. The setup UI (kanban.html setup tab) provides the dropdown, threshold, enable toggle, and autosave. Default is off on upgrade.
+
+**Validation:** TypeScript compilation skipped per session directives. Static verification: all KanbanDatabase methods (`getPlansByColumn`, `archivePlan`, `getWorkspaceId`, `getDominantWorkspaceId`) confirmed present. Provider capability gating verified — sweep checks `provider?.capabilities.archive === true` before pushing. `_sweeping` guard prevents concurrent sweeps. `recordPushResult` is wired to RemoteControlService for health surfacing integration.
+
+**Remaining risks:** (1) **MAJOR** — the dwell timer uses `plan.updatedAt` (last ANY DB update) as the proxy for "time in column." Any comment, priority change, or edit resets the dwell clock, so a frequently-updated plan may never archive. The DB schema has no `columnEnteredAt` field, so `updatedAt` is the only available proxy; fixing this requires a schema migration. (2) **NIT** — if the remote archive push fails, the next RemoteControlService poll could see the plan still in its old remote column and try to move it back (pre-existing issue with any archive, not specific to auto-archive). (3) **NIT** — `getActiveProviderKind` lazily builds a RemoteControlService via `_getRemoteControl` which has the side effect of registering git providers and caching the service (harmless but worth noting).

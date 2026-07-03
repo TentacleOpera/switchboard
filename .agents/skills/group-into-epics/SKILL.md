@@ -78,6 +78,10 @@ For each proposed epic, write:
 - How the Subtasks Achieve This: one bullet per member plan explaining what
   it does and how it contributes to the epic's goal. Format:
     - **Plan Name**: <what it does and how it contributes>
+- Dependencies & sequencing: note any ordering constraints between subtasks
+  (e.g. "Subtask A must land before Subtask B can be tested") and any
+  cross-subtask dependencies. If there are none, state "No hard ordering
+  constraints; subtasks can be executed in parallel."
 - Member plans with planId and one-line summary
 
 List genuinely standalone plans separately. Then stop and wait.
@@ -99,10 +103,13 @@ node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","
 
 The description becomes the ## Goal section in the epic file.
 After all epics are created, write the ## How the Subtasks Achieve This section
-into each epic file manually (the create-epic script only writes the Goal).
-Use the text from your step 3 proposal — paste it between the Goal and the
-`<!-- BEGIN SUBTASKS -->` marker. This section is preserved by _regenerateEpicFile
-on subsequent subtask changes, so it only needs to be written once.
+and the ## Dependencies & sequencing section into each epic file manually (the
+create-epic script only writes the Goal).
+Use the text from your step 3 proposal — paste the How the Subtasks Achieve This
+section between the Goal and the `<!-- BEGIN SUBTASKS -->` marker, then paste the
+Dependencies & sequencing section immediately after the Subtasks block. Both
+sections are preserved by _regenerateEpicFile on subsequent subtask changes, so
+they only need to be written once.
 
 To add more plans to an epic later, use assign-to-epic.js with the epic planId from the create-epic.js output.
 

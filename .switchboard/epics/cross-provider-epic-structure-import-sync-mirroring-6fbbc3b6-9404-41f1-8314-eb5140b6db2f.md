@@ -34,7 +34,37 @@ Make epic parent/child relationships round-trip between Switchboard and external
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Outbound Epic Sync to Linear + ClickUp](../plans/epic-sync-outbound.md) — **LEAD CODED**
-- [ ] [Plan: ClickUp Import — Parent-with-Subtasks Always Becomes Epic](../plans/clickup-import-epic-linking.md) — **LEAD CODED**
-- [ ] [Plan: Linear Import — Parent-with-Subtasks Always Becomes Epic](../plans/linear-import-epic-linking.md) — **LEAD CODED**
+- [x] [Plan: Outbound Epic Sync to Linear + ClickUp](../plans/epic-sync-outbound.md) — **CODED**
+- [x] [Plan: ClickUp Import — Parent-with-Subtasks Always Becomes Epic](../plans/clickup-import-epic-linking.md) — **CODED**
+- [x] [Plan: Linear Import — Parent-with-Subtasks Always Becomes Epic](../plans/linear-import-epic-linking.md) — **CODED**
 <!-- END SUBTASKS -->
+
+<!-- BEGIN REVIEW FINDINGS -->
+## Review Findings
+
+**Reviewer:** code-specialist subagent
+**Date:** 2026-07-02
+
+### Issues Found & Fixed
+
+1. **TYPE ERROR (fixed):** ClickUp `syncEpicWithSubtasks` fallback `KanbanPlanRecord` literal had excess properties (`repoScope`, `workspaceId`, `sourceType`, etc.) not in ClickUp's own simpler `KanbanPlanRecord` interface. Removed the extra fields — `syncPlan` doesn't use them.
+
+2. **RACE CONDITION (fixed):** ClickUp import had write-before-insert ordering (file written, then DB insert). Swapped to insert-before-write to match Linear import — prevents the watcher minting a random planId between file write and DB insert (ON CONFLICT would preserve the watcher's random ID, orphaning the subtask link).
+
+3. **LOGIC BUG (fixed):** ClickUp import used `isParent(taskId)` to classify epics, which would incorrectly classify intermediate parents (a task that is both child and parent) as epics. Added `isTopLevelParent(task)` check — only tasks with children AND no in-batch parent become epics. Intermediate parents become subtasks. Now matches Linear import's behavior.
+
+### Noted Gaps (not fixed — pre-existing, out of scope)
+
+- **`deleteEpic` handler** does not call `unlinkSubtasksFromEpic` when unlinking subtasks locally. External trackers retain the parent/child link to the deleted epic. Pre-existing gap — the new unlink methods could be wired here in a future pass.
+- **ClickUp `unlinkSubtasksFromEpic` workspaceId fallback** to empty string silently no-ops if `getWorkspaceId()` returns null. Low-risk (DB always initialized in practice).
+
+### Verified Correct
+
+- `crypto` import added to all 3 service files
+- Linear recursive GraphQL query (5 levels) syntactically valid
+- `_syncEpicOutbound` checks both configs, uses `Promise.allSettled`, maps subtask params to correct per-service shapes
+- All DB method signatures match call sites (`insertFileDerivedPlan`, `updateEpicStatus`, `updateLinearIssueIdByPlanFile`, `updateClickUpTaskIdByPlanFile`)
+- `removeSubtaskFromEpic` calls unlink on both services
+- `promoteToEpic` calls `_syncEpicOutbound` with empty subtasks
+- SKILL.md + embedded fallback text + docstrings updated
+<!-- END REVIEW FINDINGS -->
