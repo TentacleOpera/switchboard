@@ -69,14 +69,39 @@ It is **never called when the terminal dies**. So the interval keeps firing at t
 
 ## Edge-Case & Dependency Audit
 
+### Race Conditions
+- **Stop button while a tick is in-flight:** If the user clicks Stop while `_mcpMonitorTick` is mid-send (`_mcpMonitorInFlight === true`), the tick will complete its `sendRobustText` call. The `finally` block (line 20547-20549) resets `_mcpMonitorInFlight`. Then `_stopMcpMonitorLoop` clears the interval. No race — the in-flight send completes, no further ticks fire. This is acceptable (one final prompt may be sent before the stop takes effect).
+- **Close event vs. relaunch race:** `handleTerminalClosed` already guards against deleting a newly-registered same-name terminal via the `liveWithSameName` check (line 16024). Our monitor detection runs *after* state cleanup and independently re-queries `vscode.window.terminals`, so if a fresh monitor terminal is already live the `_postMcpMonitorConfig` push will correctly report 🟢 (its `_isMcpMonitorTerminalRunning` scan sees the live one). Stopping the loop on a stale close is still safe because `_startMcpMonitorLoop` is re-invoked on the next config/launch.
+
+### Security
+- **No new surface.** No new user input is parsed; the Stop button posts a fixed `{ type: 'stopMcpMonitorTerminal' }` message with no payload. The command handler takes no arguments. Terminal disposal uses the standard VS Code `terminal.dispose()` API. No injection, no privilege change.
+
+### Side Effects
 - **Terminal killed by VS Code (not user):** VS Code fires `onDidCloseTerminal` when a terminal exits for any reason (user close, process exit, panel disposal). All paths trigger `handleTerminalClosed`, so the fix covers all close scenarios.
-- **Terminal name after rename:** The companion rename plan changes the terminal name from "MCP Monitor" to "Comms Monitor". The name-matching logic in `handleTerminalClosed` must use the same name literal as `launchMcpMonitorTerminal`. If the rename hasn't shipped, use "MCP Monitor"; if it has, use "Comms Monitor". The plan uses a constant to avoid drift.
-- **Multiple windows:** `onDidCloseTerminal` fires in the window that owned the terminal. If the monitor terminal was in a different window, this window's `handleTerminalClosed` won't fire for it. The existing `_isMcpMonitorTerminalRunning` already handles this (it checks `vscode.window.terminals` which is per-window). The `_postMcpMonitorConfig` push is also per-window. No cross-window issue.
-- **Stop button while a tick is in-flight:** If the user clicks Stop while `_mcpMonitorTick` is mid-send (`_mcpMonitorInFlight === true`), the tick will complete its `sendRobustText` call. The `finally` block resets `_mcpMonitorInFlight`. Then `_stopMcpMonitorLoop` clears the interval. No race — the in-flight send completes, no further ticks fire. This is acceptable (one final prompt may be sent before the stop takes effect).
-- **Stop button vs. disable monitor:** "Stop" kills the terminal and stops the loop. "Disable" (the on/off dropdown) sets `enabled: false` in config and stops the loop but does NOT kill the terminal. These are separate actions. The Stop button is for "I want this terminal gone now." The disable dropdown is for "I don't want the monitor to run at all." Both should work independently.
+- **Stop button vs. disable monitor:** "Stop" kills the terminal and stops the loop. "Disable" (the on/off dropdown) sets `enabled: false` in config and stops the loop but does NOT kill the terminal. These are separate actions. The Stop button is for "I want this terminal gone now." The disable dropdown is for "I don't want the monitor to run at all." Both should work independently. Note: Stop does NOT change persisted `enabled`, so a later Launch behaves normally.
 - **Re-launch after stop:** After stopping, the status line shows 🔴 + "Launch" button. Clicking Launch calls `launchMcpMonitorTerminal`, which creates a fresh terminal and restarts the loop. This already works — no change needed.
-- **`_stopMcpMonitorLoop` also cancels the config-change timer and first-prompt timer** (from companion plans). Calling it on terminal death correctly cancels all pending timers.
-- **No `confirm()` dialogs.** The Stop button stops immediately — no confirmation, per project rules.
+- **`_stopMcpMonitorLoop` also cancels any config-change timer and first-prompt timer** (added by companion plans). Calling it on terminal death correctly cancels all pending timers. It must remain idempotent (current impl at 20495 already null-checks `_mcpMonitorTimer`).
+- **No `confirm()` dialogs.** The Stop button stops immediately — no confirmation, per project rules (see CLAUDE.md; `window.confirm()` is a silent no-op in VS Code webviews anyway).
+
+### Dependencies & Conflicts
+- **Terminal name after rename:** The companion **rename-display-labels** plan changes the terminal name from "MCP Monitor" to "Comms Monitor". The name-matching logic in `handleTerminalClosed` AND the new `stopMcpMonitorTerminal` must use the same name literal as `launchMcpMonitorTerminal` (line 20605). If the rename hasn't shipped, use "MCP Monitor"; if it has, use "Comms Monitor". Prefer a single shared constant to avoid drift across the four call sites (20518, 20605, 20686, and the two new lookups this plan adds).
+- **Shared status-line block:** kanban.html 7706-7724 is also edited by **dedicated-tab** (moves the block to a new tab) and **separate-terminal-auth-polling** (adds polling controls to the same status line). Coordinate merge order; keep the Stop button additive.
+- **Shared `_stopMcpMonitorLoop`:** also extended/called by **first-prompt-after-startup** and **apply-source-changes-immediately**. This plan only *calls* it (does not change its signature), minimizing conflict.
+- **Multiple windows:** `onDidCloseTerminal` fires in the window that owned the terminal. If the monitor terminal was in a different window, this window's `handleTerminalClosed` won't fire for it. The existing `_isMcpMonitorTerminalRunning` already handles this (it checks `vscode.window.terminals` which is per-window). The `_postMcpMonitorConfig` push is also per-window. No cross-window issue.
+
+## Dependencies
+
+- `sess_rename-display-labels — MCP Monitor → Comms Monitor terminal-name literal` (soft: this plan must use whichever literal is live; prefer a shared constant)
+- `sess_dedicated-tab — relocation of the COMMS-tab status-line block` (soft: merge-order coordination on kanban.html 7706-7724)
+- `sess_separate-terminal-auth-polling — polling controls added to the same status line` (soft: shared UI surface)
+- `sess_first-prompt-after-startup — extends _stopMcpMonitorLoop / adds first-prompt timer`
+- `sess_apply-source-changes-immediately — extends _stopMcpMonitorLoop timer handling`
+
+(These are epic siblings, not hard blockers — this plan can ship independently against the current `'MCP Monitor'` literal and current status-line block; the reviewer coordinates final merge order.)
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the shared COMMS status-line block and the `'MCP Monitor'` name literal are both being edited by sibling plans, so an uncoordinated merge could collide or leave the Stop/auto-detect logic matching a stale name; (2) calling `_stopMcpMonitorLoop` from new paths must stay idempotent alongside sibling timer additions. Mitigations: match the terminal name via the exact same literal/constant as `launchMcpMonitorTerminal`, keep the Stop button strictly additive to the status line, and rely on name-based (not PID-based) detection so terminal-close handling is robust. The behavioral core (push config on close, stop loop on death, immediate no-confirm stop) is low-risk and mirrors existing patterns.
 
 ## Proposed Changes
 

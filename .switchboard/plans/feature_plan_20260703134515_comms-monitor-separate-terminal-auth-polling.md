@@ -26,24 +26,56 @@ There is no separation between "terminal exists" and "polling is active." The `e
 
 ## Metadata
 
-- **Tags:** comms-monitor, mcp-monitor, authentication, ux, terminal, polling, lifecycle
+- **Tags:** authentication, ux, feature, frontend, backend, reliability
+  <!-- Tags constrained to the allowed improve-plan set. Domain descriptors that
+       are NOT valid tags but describe this work: comms-monitor, mcp-monitor,
+       terminal, polling, lifecycle. -->
 - **Complexity:** 5
 - **Project:** switchboard
+- **Repo:** (root — no bare sub-repo)
 - **Files touched:** `src/services/TaskViewerProvider.ts`, `src/services/GlobalIntegrationConfigService.ts`, `src/services/KanbanProvider.ts`, `src/webview/kanban.html`, `src/extension.ts`
+
+## User Review Required
+
+- **Tag semantics — `enabled` becomes "panel visibility only".** This plan repurposes the shipped `enabled` flag from "controls the loop" to "controls config-panel visibility", and introduces `pollingEnabled` as the new loop gate. Confirm this split is acceptable rather than, e.g., renaming `enabled` outright (renaming would break every reader that persists it — see companion "rename-display-labels" scope). The additive approach preserves all existing keys.
+- **Backward-compat default for existing `enabled: true` installs (~4,000 installs).** The read shim maps `pollingEnabled ?? enabled ?? false`, so existing users who had the monitor "on" will have polling auto-resume after upgrade. Confirm this is the desired behavior vs. defaulting everyone to "polling stopped" on upgrade (which would be a visible behavior change but arguably safer given the whole point of the feature is to stop unattended polling). **This default choice is the single most user-visible decision in the plan and must be signed off.**
+- **`lastCheckAt` field is out of scope.** The Proposed Changes below thread a `lastCheckAt?: string` field through the config get/set paths, but no such field exists in the current `McpMonitorConfig` (`GlobalIntegrationConfigService.ts:39-45`) and this feature does not require it. Treat it as **Clarification only** — either drop it from the diff or split it into a separate plan. It is retained in the code snippets below for continuity but flagged here as not-required.
+- **No confirmation dialogs** — per repo rule, all three buttons act immediately. Confirmed in design (auth check is a non-blocking diagnostic).
 
 ## Complexity Audit
 
-**Moderate.** The change separates one combined action into three independent buttons and adds a new `pollingEnabled` config field. No `authConfirmed` field or confirmation gate — the auth check is a pure diagnostic that sends a test prompt, and the user decides when to start polling. This is simpler than a gated wizard flow.
+### Routine
+- Additive config field `pollingEnabled` with a backward-compat read fallback — reuses the existing `getMcpMonitorConfig` / `setMcpMonitorConfig` `?? current.X` pattern verbatim.
+- New `checkMcpMonitorAuth` / `startMcpMonitorPolling` / `stopMcpMonitorPolling` methods mirror the existing `launchMcpMonitorTerminal` / `setMcpMonitorConfigFromKanban` shape (terminal lookup via `_normalizeAgentKey` + `_stripIdeSuffix`, `sendRobustText`, `_postMcpMonitorConfig`).
+- Command registration in `extension.ts` and message routing in `KanbanProvider.ts` follow the established `launchMcpMonitorTerminal` pattern one-for-one.
+- Three-button webview panel reuses the existing button/`guardInteraction` idioms already in `kanban.html`.
+
+### Complex / Risky
+- **Shared-symbol contention.** `_startMcpMonitorLoop` (20482) and `_mcpMonitorTick` (20512) are rewritten by BOTH this plan (gate flip `enabled`→`pollingEnabled`) and the sibling "per-source-intervals" plan (GCD multi-timer rewrite). Whoever lands second must reconcile, not clobber. HIGH conflict.
+- **Semantic repurposing of a shipped flag.** `enabled` changes meaning (loop gate → panel visibility). Any sibling that still reads `enabled` as "is the monitor running" ("first-prompt", "apply-source-changes-immediately") will misbehave until updated.
+- **One-shot first-prompt ownership.** This plan asserts the 30s one-shot must fire from `startMcpMonitorPolling`, but the "first-prompt-after-startup" sibling schedules it inside `launchMcpMonitorTerminal`. Direct contradiction — see Dependencies.
+- **Backward-compat behavior change** for the install base (auto-resume polling on upgrade).
+
+**Moderate overall.** The change separates one combined action into three independent buttons and adds a new `pollingEnabled` config field. No `authConfirmed` field or confirmation gate — the auth check is a pure diagnostic that sends a test prompt, and the user decides when to start polling. This is simpler than a gated wizard flow.
 
 The individual changes:
 - Config schema: add `pollingEnabled` (additive, backward-compatible read mapping from legacy `enabled`).
-- Backend: split `launchMcpMonitorTerminal` (remove polling start), add `checkMcpMonitorAuth` (send test prompt), add `startMcpMonitorPolling` / `stopMcpMonitorPolling`.
+- Backend: split `launchMcpMonitorTerminal` (remove polling start — only meaningful once companion plans add it), add `checkMcpMonitorAuth` (send test prompt), add `startMcpMonitorPolling` / `stopMcpMonitorPolling`.
 - UI: replace the single Launch button with three buttons (Start Terminal, Check Auth, Start/Stop Polling), shown conditionally based on terminal state and polling state.
 
-**Risk:** Low. The `pollingEnabled` field is additive with a backward-compat read fallback (`pollingEnabled ?? enabled ?? false`), so existing installs with `enabled: true` continue polling automatically. The auth check is non-blocking — it just sends text to the terminal, same as a normal tick.
+**Risk:** Low-to-moderate. The `pollingEnabled` field is additive with a backward-compat read fallback (`pollingEnabled ?? enabled ?? false`), so existing installs with `enabled: true` continue polling automatically. The auth check is non-blocking — it just sends text to the terminal, same as a normal tick. The residual risk is entirely in the shared-symbol overlap with sibling plans (see Dependencies).
 
 ## Edge-Case & Dependency Audit
 
+### Race Conditions
+- **Activation-time loop vs. terminal existence.** After the gate flips to `pollingEnabled`, the activation-time `_startMcpMonitorLoop()` (`TaskViewerProvider.ts:487`) will start the interval on startup for any backward-compat `enabled: true` install (mapped to `pollingEnabled: true`). `_mcpMonitorTick` (20512) already guards on "no live terminal → return", plus an in-flight guard (`_mcpMonitorInFlight`) and a `_mcpMonitorLastSendAt` debounce, so a tick with no terminal is a safe no-op. No new race introduced, but document that polling can be "active" before a terminal exists.
+- **`setMcpMonitorConfigFromKanban` still calls `_startMcpMonitorLoop()`** (line 20575). After the gate flip, toggling the on/off dropdown ("on" → `enabled: true`, panel visibility) re-invokes the loop, which now re-checks `pollingEnabled` and correctly does nothing unless polling was separately started. Verify the dropdown no longer implicitly starts polling.
+- **Double start.** Rapid clicks of "Start Polling" call `startMcpMonitorPolling` twice; `_startMcpMonitorLoop` clears any existing `_mcpMonitorTimer` before setting a new one (20488-20490), so no timer leak. The webview does not currently disable the Start Polling button on click (unlike Start Terminal) — consider disabling to avoid a duplicate first-prompt schedule.
+
+### Security
+- The auth-check prompt is built from user-controlled `sources` and `customInstruction` and injected into the terminal via `sendRobustText`, identical to the existing tick prompt path (`_buildMcpMonitorPrompt`). No new injection surface beyond what already ships. The diagnostic is explicitly read-only in intent but, unlike `_buildMcpMonitorPrompt`, the new `_buildMcpMonitorAuthPrompt` does NOT include the "do NOT take any actions" preamble — consider adding it so the auth check stays strictly diagnostic.
+
+### Side Effects
 - **Backward compatibility — existing `enabled: true` installs:** Existing users have `enabled: true` in their config. After this plan, `pollingEnabled` controls the loop. The `getMcpMonitorConfig` read path maps `enabled: true` → `pollingEnabled: true` for configs that don't have the new field. This is a read-time compat shim, not a file migration.
 - **Terminal killed between steps:** If the user creates the terminal (step 1) but kills it before starting polling (step 3), the polling button disappears (the terminal-close handler from the companion plan pushes updated status). If polling was active, the loop stops (companion plan's `handleTerminalClosed` calls `_stopMcpMonitorLoop`).
 - **Auth check when no terminal exists:** The "Check Authentication" button is only visible when a terminal is running. If the user somehow triggers it without a terminal, the backend method returns early (no terminal found).

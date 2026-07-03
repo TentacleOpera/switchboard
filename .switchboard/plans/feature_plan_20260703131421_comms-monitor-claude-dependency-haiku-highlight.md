@@ -131,7 +131,7 @@ Add the variable declaration near line 6078–6080, alongside `mcpMonitorConfig`
 
 ### 3. `src/webview/kanban.html` — add the dependency notice block
 
-Insert the notice at the top of the config panel (after `mcpConfigPanel` is created, line 7797, before the interval row). This is always visible when the panel is shown:
+Insert the notice at the top of the config panel (after `mcpConfigPanel` is created at line 7622, before the interval row is appended at line 7643). This is always visible when the panel is shown:
 
 ```js
             // Dependency Notice
@@ -204,12 +204,17 @@ For transparency, show the actual command that will be sent (collapsible to avoi
 
 ## Verification Plan
 
+### Automated Tests
+- No dedicated unit-test harness exists for the kanban webview DOM in this repo, so the primary verification is manual (below). If a lightweight test is added, target the pure `detectModel(cmd)` helper (extract it or duplicate its logic in a test): assert `detectModel('claude --model claude-haiku-4-5 …')` → `{name:'Haiku', isHaiku:true}`; `detectModel('claude --model claude-sonnet-4')` → `{name:'Sonnet'}`; `detectModel('my-agent')` → `{name:'Custom command', isCustom:true}`; `detectModel('')` → `{name:'Unknown'}`. This isolates the one piece of real logic from the DOM.
+- **Type/build:** `npm run compile` succeeds with no type errors (only needed if producing a VSIX; per CLAUDE.md `dist/` is not used in dev/test).
+
+### Manual Verification
 1. **Build:** `npm run compile` succeeds with no type errors.
 2. **Manual — dependency notice visible:**
    - Open AUTOMATION tab, enable the monitor. Confirm the "📋 Prerequisites" notice is visible at the top of the config panel, listing the `claude` CLI requirement, MCP server setup, and the dedicated terminal note.
 3. **Manual — model indicator shows Haiku (default):**
    - With no custom startup command configured (using the fallback), confirm the model indicator shows "💰 Model: Haiku" with the cost-savings note.
-   - Expand "Startup command (resolved)" — confirm it shows `claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"`.
+   - Expand "Startup command (resolved)" — confirm it shows the current `mcp_monitor` fallback command. **Do not hard-assert the full literal string** — sibling plan `remove-dontask-permission-mode` may remove `--permission-mode dontAsk` from `TaskViewerProvider.ts:3901`. Assert instead that the resolved command (a) starts with `claude`, and (b) contains `--model claude-haiku-4-5`. At time of writing the fallback is `claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"`; verify against whatever that line currently is.
 4. **Manual — model indicator shows non-Haiku warning:**
    - Configure a custom startup command for `mcp_monitor` that uses `--model claude-sonnet-4` (via the Setup tab or config file).
    - Reopen the AUTOMATION tab. Confirm the model indicator shows "⚠️ Model: Sonnet" with the cost warning recommending Haiku.
@@ -217,4 +222,10 @@ For transparency, show the actual command that will be sent (collapsible to avoi
    - Configure a custom startup command that is not `claude` (e.g. `my-agent`). Confirm the indicator shows "⚠️ Model: Custom command" with the "model unknown" note.
 6. **Manual — resolved command updates on config change:**
    - Change the startup command in Setup, return to AUTOMATION tab. Confirm the resolved command and model indicator reflect the new command (the `_postMcpMonitorConfig` push includes `resolvedStartupCommand`).
-7. **Regression:** The `_postMcpMonitorConfig` message now includes `resolvedStartupCommand` — existing message handlers that destructure the message (line 6803) ignore unknown fields, so no breakage. The `updateMcpMonitorConfig` handler in the webview only reads `config`, `presets`, and (now) `resolvedStartupCommand` — extra fields are harmless.
+7. **Regression:** The `_postMcpMonitorConfig` message now includes `resolvedStartupCommand` — existing message handlers that destructure the message (line 6732) ignore unknown fields, so no breakage. The `updateMcpMonitorConfig` handler in the webview only reads `config`, `presets`, `isMonitorRunning`, and (now) `resolvedStartupCommand` — extra fields are harmless.
+
+---
+
+## Recommendation
+
+**Complexity 4 → Send to Coder.** Additive, low-risk change reusing established config-push and DOM-build patterns, but it touches a shared cross-webview message surface (`_postMcpMonitorConfig`) and displays a fallback string that a sibling plan edits, so it needs a coder who will coordinate the epic-level shared surfaces rather than an unattended intern pass.

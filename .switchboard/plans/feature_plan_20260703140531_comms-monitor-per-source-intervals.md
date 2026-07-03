@@ -34,12 +34,33 @@ Example: Slack every 2 min, Gmail every 30 min, Calendar every 30 min. The timer
 
 ## Metadata
 
-- **Tags:** comms-monitor, mcp-monitor, polling, intervals, per-source, config, ux
-- **Complexity:** 6
+- **Tags:** feature, refactor, config, ux, reliability
+- **Complexity:** 7
 - **Project:** switchboard
+- **Repo:** switchboard
 - **Files touched:** `src/services/GlobalIntegrationConfigService.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/kanban.html`
 
+> Tags normalized to the allowed vocabulary (was: comms-monitor, mcp-monitor, polling, intervals, per-source — none of those are in the allowed tag list). Complexity raised 6 → 7 during the improve-plan pass: this replaces a *shipped* config field (`intervalMinutes`, requiring a migration/read-compat shim for ~4,000 installs), introduces a new GCD timer architecture, and is the highest-conflict plan on the config/timer surface — it coordinates with 5+ sibling plans that touch the same three symbols. That crosses from "Medium" into "High / new patterns + multi-file coordination + breaking change" territory.
+
+## User Review Required
+
+- **Field replacement is a breaking config change.** Confirm the read-time compat mapping (legacy `intervalMinutes` → all sources) is acceptable and that `intervalMinutes` is retained in the written config for rollback safety (per CLAUDE.md: preserve legacy keys, never drop them).
+- **`pollingEnabled` dependency.** This plan's code assumes the `pollingEnabled` field from sibling "separate-terminal-auth-polling" exists. Confirm the intended ship order (see Dependencies). If this plan ships first, the guard must fall back to `enabled`.
+- **`_buildMcpMonitorPrompt` end-state.** Three sibling plans rewrite this same method with different signatures. Confirm the merged signature before coding (see Cross-Plan Conflicts).
+- **Debounce decision** (keep-with-GCD vs. drop) — see Edge-Case audit.
+
 ## Complexity Audit
+
+### Routine
+- Adding per-source interval `<select>` elements to the kanban sources checklist (reuses the existing checkbox-render loop and `autobanSelectStyle`).
+- Extending `saveMonitorConfig` to serialize `sourceIntervals` (mirrors the existing message-post pattern).
+- Read-time backward-compat mapping in `getMcpMonitorConfig` (established `?? default` pattern already used throughout the service).
+
+### Complex / Risky
+- **Breaking config-schema change:** `intervalMinutes` (a *shipped* field) is replaced by `sourceIntervals`. Requires a read-compat shim and retention of the legacy key for ~4,000 installs. A missing migration silently resets everyone's interval.
+- **New timer architecture:** single fixed `setInterval` → GCD-computed interval with per-tick due-source filtering. New `_gcd` helper, new persistence of per-source `sourceLastCheckAt` on every send.
+- **High cross-plan conflict surface:** `_startMcpMonitorLoop`, `_mcpMonitorTick`, and `_buildMcpMonitorPrompt` are each rewritten by 2-4 sibling plans. Merge order matters.
+- **TypeScript ripple:** making `sourceIntervals`/`sourceLastCheckAt` non-optional on `McpMonitorConfig` forces updates to `getMcpMonitorConfigSync` (line 221) and the `GlobalConfig.mcpMonitor` inline type (lines 15-21) — both MISSED by the original draft and required for the build to pass.
 
 **Moderate-complex.** The change touches the config schema, the timer architecture, the prompt builder, and the UI. Each individual change is moderate, but the timer redesign (single global interval → GCD timer with per-source due-checking) is the most involved part.
 
@@ -57,8 +78,8 @@ Example: Slack every 2 min, Gmail every 30 min, Calendar every 30 min. The timer
 - **Source toggled off then on:** If the user unchecks Gmail and rechecks it later, its `lastCheckAt` is stale (from before it was unchecked). The next tick after re-enabling will include Gmail with a large diff window (since the old timestamp). This is acceptable — it's a one-time catch-up. Alternatively, clearing `lastCheckAt` on re-enable would make it default to "past 24 hours" — also acceptable. Decision: **keep the stale timestamp** — it's more correct (the user genuinely hasn't checked Gmail since then).
 - **All sources unchecked:** If the user unchecks all sources, `sourceIntervals` is empty, the GCD is undefined. The loop should stop (no sources to poll). `_startMcpMonitorLoop` checks for this and calls `_stopMcpMonitorLoop` if no sources are configured.
 - **Custom source interval:** The custom source gets its own interval like any other. The interval applies to whatever the custom instruction is.
-- **In-flight guard:** The in-flight guard (line 20438) prevents overlapping sends. If a tick is in-flight when the next GCD tick fires, the new tick is skipped. This is correct — the next GCD tick will pick up any sources that were due during the skipped tick.
-- **Debounce:** The secondary debounce (line 20444) uses `intervalMs * 0.5`. With per-source intervals, the debounce should use the GCD interval (the timer's actual frequency), not any individual source's interval. This prevents the debounce from blocking high-frequency ticks when a slow source is configured.
+- **In-flight guard:** The in-flight guard (line 20530 — verified) prevents overlapping sends. If a tick is in-flight when the next GCD tick fires, the new tick is skipped. This is correct — the next GCD tick will pick up any sources that were due during the skipped tick.
+- **Debounce:** The secondary debounce (line 20536 — verified) currently uses `intervalMs * 0.5`. With per-source intervals, the debounce should use the GCD interval (the timer's actual frequency), not any individual source's interval. **IMPORTANT — internal inconsistency to resolve at coding time:** the `_mcpMonitorTick` rewrite in Proposed Changes §2 below drops the debounce block entirely. Decide explicitly: either (a) keep the debounce, computing `intervalMs` from the GCD of active source intervals (matching the timer), or (b) drop it and rely solely on the per-source due-check + in-flight guard for gating. Option (b) is defensible because the due-check already prevents redundant sends per source, but note that the debounce also guarded against a config-change-triggered immediate tick landing right on top of a scheduled tick (see sibling "apply-source-changes-immediately"). Do not silently drop it without recording the decision.
 - **Companion plan interactions:**
   - The persistent `lastCheckAt` plan adds a global `lastCheckAt`. This plan makes it per-source. If the global plan ships first, the per-source migration reads the global value. If this plan ships first, the global plan is superseded.
   - The 30s one-shot first prompt plan fires a single tick after launch. With per-source intervals, the one-shot should fire a tick that includes ALL sources (first check covers everything), then subsequent ticks filter by due-source.
@@ -131,7 +152,15 @@ In `getMcpMonitorConfig` (line 233), add backward-compat mapping:
         };
 ```
 
-In `setMcpMonitorConfig` (line 245), write the new fields through using the same `?? current.X` pattern.
+In `setMcpMonitorConfig` (line 245), write the new fields through using the same `?? current.X` pattern. **Retain the legacy `intervalMinutes` key** in the written object (per CLAUDE.md — never drop keys that shipped; keep it for rollback safety on the ~4,000 install base).
+
+**MISSED BY ORIGINAL DRAFT — also required or the build breaks:**
+
+- **`getMcpMonitorConfigSync` (line 221):** this sync variant returns the same `McpMonitorConfig`. Once `sourceIntervals`/`sourceLastCheckAt` are non-optional on the interface, this method will fail to compile unless it also populates them. Apply the identical compat mapping (extract to a shared private helper to avoid duplicating the mapping logic between the sync and async getters).
+
+- **`GlobalConfig.mcpMonitor` inline type (lines 15-21):** the persisted shape is declared inline as `mcpMonitor?: { enabled?; intervalMinutes?; targetRole?; sources?; customInstruction? }`. Add `sourceIntervals?: Record<string, number>`, `sourceLastCheckAt?: Record<string, string>`, and (coordinated with the sibling) `pollingEnabled?: boolean`, or the assignment inside `setMcpMonitorConfig` will not typecheck.
+
+- **Interface field ordering / non-optional:** `sourceIntervals` and `sourceLastCheckAt` are declared non-optional in the new `McpMonitorConfig` (per the interface block above). Every code path that constructs a full `McpMonitorConfig` (both getters + `DEFAULT_MCP_MONITOR_CONFIG`) must set them, or mark them optional if any path cannot. Prefer non-optional + populate everywhere.
 
 ### 2. `src/services/TaskViewerProvider.ts` — GCD timer with per-source due-checking
 

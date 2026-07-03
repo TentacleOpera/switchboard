@@ -64,11 +64,45 @@ Either way, the user never gets Calendar data and has no clear path to fix it.
 - **Companion plan — three-step flow:** The "Check Authentication" button becomes more valuable with this change. The user runs the auth check, responds to any permission prompts, and then starts polling with everything pre-authorized. This is the recommended flow.
 - **No `confirm()` dialogs.** No UI changes.
 
+### Race Conditions
+- The only concurrency touchpoint is the polling loop's in-flight guard (`_mcpMonitorInFlight`, guard at line 20530). A blocked permission prompt holds the in-flight flag true until the current send resolves, so no overlapping tick fires. Removing `dontAsk` does not introduce any new shared state. No new race.
+
+### Security
+- Removing `dontAsk` does **not** widen Claude's authority. `--allowedTools "mcp__*"` is unchanged, so Claude is still restricted to MCP tools (no bash/edit/write). The effect is strictly that Claude will *ask* before a permission-gated MCP call instead of silently skipping it — a strict improvement in the direction of least surprise, not privilege escalation.
+- Interactive prompts run in a terminal the user owns; grants persist only for the session. No credentials are stored or logged by this change.
+
+### Side Effects
+- Terminal may now block on an interactive y/n prompt on first MCP access, OAuth grant, or token refresh (intended). Unattended first-run without a human watching will stall until answered — this is inherent to interactive permission and is the accepted tradeoff. The companion "Check Authentication" flow mitigates it.
+- No effect on `jules_monitor` or `claude_artifacts` fallbacks (separate branches in the same method).
+
+### Dependencies & Conflicts
+- **Direct shared-string conflict with sibling `comms-monitor-claude-dependency-haiku-highlight`:** that plan reads the resolved fallback via `getAgentStartupCommand('mcp_monitor')`, pushes it to the webview as `resolvedStartupCommand`, and its Verification Plan step 3 asserts the resolved command equals the literal `claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"`. Once THIS plan removes `--permission-mode dontAsk`, that literal assertion is stale. **Reconciliation (recommendation only — do not edit the sibling in this pass):** whichever plan lands second must update the expected string; if `haiku-highlight` lands after this plan, its step-3 expected command and its Symptom-2 quote (which also cites the now-corrected line 3892 → 3901) must drop `--permission-mode dontAsk`. The sibling's `haiku` substring model-detection is unaffected — only the exact-literal expectations are.
+- **No functional coupling otherwise:** the two plans edit different concerns (this one edits the string; the sibling only reads/displays it). They can ship in either order provided the sibling's literal expectation is kept in sync.
+
+## Dependencies
+
+- `sess_haiku_highlight — comms-monitor-claude-dependency-haiku-highlight` — sibling plan that reads and displays this same fallback command string (`resolvedStartupCommand`) in the AUTOMATION-tab model indicator and asserts its literal value in verification. Soft dependency: whichever ships second must keep the expected literal in sync (drop `--permission-mode dontAsk`). No code-merge dependency.
+- No other sibling in the epic touches `getAgentStartupCommand` or the `mcp_monitor` fallback string. `separate-terminal-auth-polling` and `stuck-running-status-and-stop-control` are behaviorally adjacent (they touch the monitor terminal/polling lifecycle) but do not edit this string.
+
+## Adversarial Synthesis
+
+Key risks: (1) the change is user-visible — the monitor terminal can now block on an interactive permission prompt, so an unattended first run stalls until answered; (2) the identical fallback literal is asserted verbatim by the `haiku-highlight` sibling, so an uncoordinated landing order leaves a stale verification expectation; (3) scope is fallback-only — users with a custom command that includes `dontAsk` are intentionally not migrated. Mitigations: the in-flight guard (line 20530) already prevents prompt-storms; the companion "Check Authentication" flow pre-clears prompts before unattended polling; the shared-string conflict is documented for the second-landing plan; and leaving custom commands untouched is the correct, non-destructive default (no forced rewrite of user config).
+
 ## Proposed Changes
 
 ### 1. `src/services/TaskViewerProvider.ts` — remove `--permission-mode dontAsk` from the fallback command
 
-Line 3892:
+**Line 3901** (inside `getAgentStartupCommand`). The current source (verified) is:
+
+```ts
+        // Fallback: mcp_monitor defaults to claude command with permission bypass flags when configured command is missing/blank
+        if (role === 'mcp_monitor' && (!cmd || cmd.trim() === '')) {
+            cmd = 'claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"';
+            console.log(`[TaskViewerProvider] Applied mcp_monitor fallback command: ${cmd}`);
+        }
+```
+
+Change it to:
 
 ```ts
         // Fallback: mcp_monitor defaults to claude command with haiku model and MCP-only tools.
@@ -81,7 +115,9 @@ Line 3892:
         }
 ```
 
-The only change is removing `--permission-mode dontAsk` from the command string. The comment is updated to explain why `dontAsk` is intentionally omitted.
+The only functional change is removing `--permission-mode dontAsk` from the command string. The comment on line 3899 (currently "defaults to claude command with **permission bypass flags**") is rewritten to explain why `dontAsk` is intentionally omitted, so the code doesn't read as an accidental deletion.
+
+> Line-anchor note: an earlier draft cited line **3892** for this fallback; the verified location is **3901** (the method `getAgentStartupCommand` begins at 3889; the `jules_monitor` fallback occupies 3894-3897; the `mcp_monitor` block is 3899-3903).
 
 ## Verification Plan
 

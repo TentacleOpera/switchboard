@@ -66,7 +66,7 @@ This plan modifies **shared surfaces also touched by sibling subtasks in the "MC
 - **Override vs. generated:** If the user edits the preview, then later toggles a source, the preview should regenerate from the template (discarding the manual edit) OR preserve the edit. Decision: **regenerate on source/interval toggle, preserve on pure text edits.** A "Reset to template" button is provided to explicitly discard the override. This avoids the user being stuck with a stale override after changing sources.
 - **Timestamp in preview:** The preview shows the *current* `lastCheckAt` boundary (or "past 24 hours" if none). At actual send time, the backend uses the live `lastCheckAt`. The preview is approximate — it shows what the prompt *would* look like now. This is acceptable; the timestamp is informational.
 - **Channel/inbox fields empty:** If the user doesn't fill in channel names, the prompt falls back to the generic "across my channels" phrasing. Channel-name fields are optional enhancements, not required.
-- **Custom instruction source:** The custom instruction textarea already exists (kanban.html:7840). It should be incorporated into the preview as an additional bullet, same as today.
+- **Custom instruction source:** The custom instruction textarea already exists (`customInstructionTextarea`, kanban.html:7666). It should be incorporated into the preview as an additional bullet, same as today.
 - **Long prompts:** The preview textarea should be scrollable and resizable (matching the existing `customInstructionTextarea` style with `resize:vertical`).
 - **Webview `confirm()` ban:** No confirm dialogs. The "Reset to template" button resets immediately.
 - **Dependency on persistent `lastCheckAt` plan:** This plan assumes `lastCheckAt` exists in the config (from the companion plan **first-prompt-after-startup**, Phase 2). If that plan hasn't shipped yet, the timestamp rendering falls back to "past 24 hours" — the preview still works, just without a timestamp boundary. No hard dependency.
@@ -238,7 +238,7 @@ Note: the preview deliberately passes `promptOverride: ''` so the rendered previ
 
 ### 4. `src/webview/kanban.html` — add source-detail fields (Slack channels, DM/channel toggles, Gmail label)
 
-After the sources checklist (line 7877) and before the status line, add a "Source Details" section that appears when the corresponding source is checked:
+After the sources checklist (`activeSources` is built at line 7654; the per-source checkboxes and their `change` handler are at lines 7679–7699) and before the status line, add a "Source Details" section that appears when the corresponding source is checked:
 
 ```js
             // Source Details (conditional on checked sources)
@@ -295,7 +295,7 @@ After the sources checklist (line 7877) and before the status line, add a "Sourc
             mcpConfigPanel.appendChild(detailsSection);
 ```
 
-Wire the Slack checkbox to show/hide `slackDetails` and the Gmail checkbox to show/hide `gmailDetails` (in the existing `checkbox.addEventListener('change', ...)` block at line 7864).
+Wire the Slack checkbox to show/hide `slackDetails` and the Gmail checkbox to show/hide `gmailDetails` (in the existing `checkbox.addEventListener('change', ...)` block at lines 7679–7699, which already calls `saveMonitorConfig()` at line 7699).
 
 ### 5. `src/webview/kanban.html` — add the editable prompt preview textarea
 
@@ -381,7 +381,7 @@ After the details section, add the preview:
 
 ### 6. `src/webview/kanban.html` — update `saveMonitorConfig` to include new fields and prompt override
 
-Update the `saveMonitorConfig` function (line 7906) to send the new fields:
+Update the `saveMonitorConfig` function (line 7732; **shared surface** — apply-source-changes-immediately also extends this function and `setMcpMonitorConfigFromKanban`) to send the new fields:
 
 ```js
             const saveMonitorConfig = () => {
@@ -403,9 +403,16 @@ Update the `saveMonitorConfig` function (line 7906) to send the new fields:
             };
 ```
 
-Wire all new inputs (`slackChanInput`, `dmOnlyCb`, `chanOnlyCb`, `gmailLabelInput`) to call `saveMonitorConfig` on `change`/`input`, same as the existing `intervalSelect` and `customInstructionTextarea` listeners (lines 7927-7928).
+Wire all new inputs (`slackChanInput`, `dmOnlyCb`, `chanOnlyCb`, `gmailLabelInput`) to call `saveMonitorConfig` on `change`/`input`, same as the existing `intervalSelect` and `customInstructionTextarea` listeners (lines 7753–7754).
 
 ## Verification Plan
+
+### Automated Tests
+
+- **Typecheck / build:** `npm run compile` (webpack) succeeds with no TypeScript errors — the primary automated gate for this change, since the MCP-monitor path has no dedicated unit-test harness today.
+- **Prompt-builder parity (recommended, if a unit test is added):** a small pure-function test asserting `_buildMcpMonitorPrompt` and the webview `buildPreviewPrompt` mirror produce identical text for representative configs (Slack-only, Slack DMs-only, Gmail with label, custom, empty sources, with/without `lastCheckAt`). This is the highest-value automated guard against builder drift.
+
+### Manual Verification
 
 1. **Build:** `npm run compile` succeeds with no type errors.
 2. **Manual — preview appears and updates live:**
@@ -436,3 +443,8 @@ Wire all new inputs (`slackChanInput`, `dmOnlyCb`, `chanOnlyCb`, `gmailLabelInpu
    - Edit the preview, reload the VS Code window.
    - Reopen AUTOMATION tab → the edited text is still in the preview textarea (loaded from `promptOverride` in config).
 9. **Regression:** Existing monitor behavior (interval polling, terminal launch, source presets) unaffected when no new fields are set. The `setMcpMonitorConfig` signature is additive — existing partial configs from older installs still work.
+10. **Regression — sync read path:** After updating `getMcpMonitorConfigSync` (line 221), confirm any sync consumer still compiles and returns the new fields (guards against silently dropping `promptOverride` on a sync read).
+
+## Recommendation
+
+**Complexity: 5 → Send to Coder.** This is a well-scoped multi-file change (config schema + backend builder + webview UI + one new message handler) that extends existing patterns. The elevated risk is not local complexity but epic-level coordination: `_buildMcpMonitorPrompt`, the `McpMonitorConfig` schema, and the kanban.html monitor block are shared with several sibling subtasks. The coder MUST reconcile the prompt-builder rewrite and the timestamp source-of-truth (`lastCheckAt` vs `sourceLastCheckAt`) with those siblings rather than merging in isolation.

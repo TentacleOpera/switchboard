@@ -35,9 +35,28 @@ A second, related gap: the "since your previous check" diff baseline currently l
 - **Project:** switchboard
 - **Files touched:** `src/services/TaskViewerProvider.ts`, `src/services/GlobalIntegrationConfigService.ts`, `src/webview/kanban.html`
 
+## User Review Required
+
+- **First-prompt delay = 30s (hard-coded).** Confirm 30s is the right wait for `claude` REPL boot. If a slower agent binary is configured as the startup command, 30s may fire before the REPL accepts input. Consider whether this should be configurable (out of scope now; flagged).
+- **Global vs per-source `lastCheckAt`.** This plan uses a single global baseline. If the `per-source-intervals` sibling ships, a newly-enabled source will over-report once (documented, accepted). Confirm this trade-off is acceptable rather than per-source timestamps.
+- **Boundary format in prompt.** The prompt injects `since <UTC toUTCString()>`. Confirm UTC (not local time) is acceptable in the user-visible prompt text.
+- **Epic-level coordination.** This plan touches several shared surfaces (see notes in Proposed Changes). It should not be coded independently of its siblings — see Dependencies and the cross-plan notes.
+
 ## Complexity Audit
 
-**Routine-to-moderate.** The change is localized to three files and follows existing patterns already in the codebase (`setTimeout`/`setInterval`, `_enqueueMcpMonitorTick`, terminal lifecycle guards, and the `getMcpMonitorConfig`/`setMcpMonitorConfig` persistence pair). No data migrations, no schema changes, no new dependencies.
+### Routine
+- Adding one private timer field (`_mcpMonitorFirstPromptTimer`) next to existing timer fields (lines 358-361).
+- A `setTimeout`/`clearTimeout` one-shot pair mirroring the existing `setInterval`/`clearInterval` discipline used by `_mcpMonitorTimer`.
+- Appending an optional `lastCheckAt?: string` field to `McpMonitorConfig` + `GlobalConfig.mcpMonitor` and threading it through the existing `get`/`set` accessor pair — a purely additive, backward-compatible config change.
+- Swapping one hard-coded phrase in `_buildMcpMonitorPrompt` for a computed `boundary` string; rest of the method untouched.
+- Copy edit to one `textContent` string in kanban.html.
+
+### Complex / Risky
+- **Timer lifecycle:** cancelling the one-shot if the terminal dies or the user disables the monitor — handled by extending `_stopMcpMonitorLoop` with `clearTimeout` discipline already used elsewhere.
+- **Config-file write amplification:** `_mcpMonitorTick` now writes `lastCheckAt` to `~/.switchboard/integration-config.json` on every successful send (~12 writes/hour at the 5-min default) — negligible, no batching needed.
+- **Shared-surface contention:** five of this plan's edits land on functions/blocks also edited by sibling subtasks (`launchMcpMonitorTerminal`, `_stopMcpMonitorLoop`, `_buildMcpMonitorPrompt`, the `McpMonitorConfig` schema, the kanban.html monitor UI block). Additive per this plan, but requires epic-level merge — the primary risk is a sibling clobbering this plan's edit, not a logic fault.
+
+**(Prose detail, preserved.) Routine-to-moderate.** The change is localized to three files and follows existing patterns already in the codebase (`setTimeout`/`setInterval`, `_enqueueMcpMonitorTick`, terminal lifecycle guards, and the `getMcpMonitorConfig`/`setMcpMonitorConfig` persistence pair). No data migrations, no schema changes, no new dependencies.
 
 The two mildly risky aspects:
 1. **Timer lifecycle** (cancelling the one-shot if the terminal dies or the user disables the monitor) — handled with the same `clearTimeout`/`clearInterval` discipline already used for `_mcpMonitorTimer`.
@@ -46,6 +65,13 @@ The two mildly risky aspects:
 **Migration note:** `lastCheckAt` is a new optional field on the persisted `mcpMonitor` object. Existing installs have no `lastCheckAt` and the read path defaults to `undefined`, which the prompt builder treats as "first ever check" → "past 24 hours". This is a clean additive change — no migration required, no compat shim, and existing installs behave exactly as they do today until the first successful send writes the new field.
 
 ## Edge-Case & Dependency Audit
+
+- **Race Conditions:** The one-shot `setTimeout(30s)` can race with (a) the regular interval tick, (b) the user disabling the monitor, and (c) the terminal dying. All three are serialized/guarded: ticks funnel through `_enqueueMcpMonitorTick` (a promise chain, line 20502) plus the `_mcpMonitorInFlight` boolean (line 20530), so two ticks never send concurrently; disable clears the one-shot via `_stopMcpMonitorLoop`; a dead terminal is caught by the exitStatus guard (line 20524). The `lastCheckAt` write is inside the in-flight window, so no interleaved write can race it.
+- **Security:** None. The prompt is read-only by construction ("do NOT take any actions"). `lastCheckAt` is a timestamp written to an already-existing user-owned config file; no new secrets, no new network surface, no new IPC.
+- **Side Effects:** New disk write on every successful tick (`setMcpMonitorConfig({ lastCheckAt })`); the prompt text now varies with persisted state; the kanban help copy changes. No effect on autoban or other agent-grid terminals.
+- **Dependencies & Conflicts:** Depends on the existing `GlobalIntegrationConfigService` get/set pair and `sendRobustText`. Conflicts are cross-plan (shared surfaces) — see the "Shared surface" notes in Proposed Changes and the `## Dependencies` section below.
+
+**Detailed edge-case walkthrough (preserved):**
 
 - **Terminal exits during the 30s window:** The one-shot tick calls `_enqueueMcpMonitorTick()`, which calls `_mcpMonitorTick()`, which already guards `if (!terminal || terminal.exitStatus !== undefined) return;` (line 20524). Safe — a dead terminal simply skips the send. Note also `handleTerminalClosed` (line 16006) fires when the monitor terminal is closed; the one-shot need not be cancelled there because the tick's dead-terminal guard already no-ops, but cancelling it there would be a harmless defensive add (out of scope for this plan).
 - **User disables MCP monitor during the 30s window:** `setMcpMonitorConfigFromKanban` (line 20573) → `_startMcpMonitorLoop()` (line 20575) → `if (!cfg.enabled) { this._stopMcpMonitorLoop(); return; }` (lines 20484-20487) → `_stopMcpMonitorLoop()` (line 20495) clears the interval. The one-shot must also be cleared here to avoid a stray prompt after disable (see change #4).
