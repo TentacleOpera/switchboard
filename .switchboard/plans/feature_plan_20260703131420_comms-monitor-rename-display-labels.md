@@ -20,35 +20,72 @@ Renaming the internal key would break **all existing installs** — their persis
 
 **Decision: display-only rename.** The internal key `mcp_monitor` stays. Only the human-readable labels shown in the UI change to "Comms Monitor". This is zero-risk to existing installs because no persisted key changes.
 
+**Clarification (verified against current code, 2026-07-03):** the string literal `'MCP Monitor'` is not merely a label — it is also the **terminal NAME**, and that name is used as a *de-facto lookup key* by two independent matching mechanisms across two files, and it derives the `state.terminals` map key. This means the rename is not "pure display": the name literal must be changed **atomically** everywhere or the grid-disposal logic will orphan/dispose the monitor terminal. See the Complex / Risky audit and the shared-surface note below.
+
 ## Metadata
 
-- **Tags:** comms-monitor, mcp-monitor, rename, ux, display-only
-- **Complexity:** 2
+- **Tags:** ux, refactor
+- **Complexity:** 3
 - **Project:** switchboard
+- **Repo:** (root workspace — not a bare sub-repo)
 - **Files touched:** `src/webview/sharedDefaults.js`, `src/webview/kanban.html`, `src/services/TaskViewerProvider.ts`, `src/extension.ts`
+
+> Original tags `comms-monitor, mcp-monitor, rename, display-only` were outside the allowed tag list and have been mapped to `ux, refactor`. The original intent (a UX-driven rename refactor) is preserved.
+
+## User Review Required
+
+- **Naming of the neutral strings (decision needed):** The status line, launch button, and help text in `kanban.html` **already** read generic "Monitor" (not "MCP Monitor") in the current code — see corrected anchors below. So they already satisfy the "remove MCP" goal. **Decision for the reviewer/user:** do we (a) leave them as generic "Monitor", or (b) upgrade them to "Comms Monitor" for positive, consistent branding? This plan recommends (b) for consistency, but it is a copy choice, not a correctness requirement.
+- **Shared terminal-name literal:** Because `'MCP Monitor'` is a cross-file lookup key (not just a label), this plan recommends — but does NOT implement — centralizing it as a single exported constant (e.g. `MCP_MONITOR_TERMINAL_NAME`) shared by `TaskViewerProvider.ts` and `extension.ts`. That refactor should be coordinated at the epic level because sibling subtasks add new lookups against the same name. Approve before centralizing.
+- **Code comments / log strings** (`// MCP Monitor Row`, `[MCP Monitor] Tick failed`): cosmetic, developer-facing. This plan renames them for consistency but they can be skipped without user impact — confirm you want them touched.
 
 ## Complexity Audit
 
-**Routine.** This is a string-replacement task across four files, touching only display labels. No logic changes, no schema changes, no migrations. The only risk is missing a label location or accidentally renaming an internal key — mitigated by an exhaustive grep audit (performed during investigation) and a verification grep step.
+### Routine
+- Straightforward string replacement of display labels in four files.
+- No schema changes, no migrations, no logic redesign.
+- Reuses existing patterns; each edit is mechanical.
+- The only label-only edits (truly zero-risk): `sharedDefaults.js:47` label, `kanban.html:7603` (`'MCP MONITOR:'`), `kanban.html:7775` (description text), and `TaskViewerProvider.ts:16517` (`displayName` ternary — display string used for messaging only).
 
-**What does NOT change (critical):**
-- The role key string `'mcp_monitor'` in all code paths (config lookups, state, startup commands, safety checks).
-- The config field name `mcpMonitor` in `GlobalIntegrationConfigService.ts`.
-- The `targetRole: 'mcp_monitor'` default.
-- The terminal name matching logic (`_stripIdeSuffix('MCP Monitor')` → see below for the one exception).
-
-**The terminal-name edge case:** `launchMcpMonitorTerminal` (TaskViewerProvider.ts:20513) creates a terminal named `'MCP Monitor'`, and `_mcpMonitorTick` (line 20426) / `_isMcpMonitorTerminalRunning` (line 20594) find it by matching that name. If we rename the terminal to "Comms Monitor", the matching logic must use the new name. This is safe because the match is always against the same literal — we change both the creation literal and the lookup literals together. Existing live terminals named "MCP Monitor" from a prior session would no longer be found by the new lookup — but the launch function disposes zombie terminals and creates a fresh one, so the user just relaunches once. This is acceptable and documented in the verification plan.
+### Complex / Risky
+- **The terminal-name literal `'MCP Monitor'` is a shared lookup key, not a plain label.** It is consumed by **two different matching mechanisms in two files** and it **derives a persisted-state map key**:
+  - `TaskViewerProvider.ts` matches via `_normalizeAgentKey(_stripIdeSuffix('MCP Monitor'))` at three sites: `_mcpMonitorTick` (line 20518), `launchMcpMonitorTerminal` (`targetName`, line 20605), `_isMcpMonitorTerminalRunning` (line 20686).
+  - `extension.ts` matches via a **regex** `matchesGridAgentName(t, 'MCP Monitor')` (line 2724) and by literal in `registeredTerminals.delete('MCP Monitor')` (lines 2729–2730), plus the agent-grid push name (line 2650) and `agentNames.add('MCP Monitor')` (line 2707).
+  - `launchMcpMonitorTerminal` uses `this._suffixedName(targetName)` as the **key into `state.terminals`** (line 20648), so changing `targetName` changes the persisted map key too.
+- **Atomicity requirement:** if the creation name changes to "Comms Monitor" but any lookup or the grid-disposal path still says "MCP Monitor", the hidden-grid cleanup in `extension.ts` (the `if (!includeMcpMonitor)` branch, lines 2723–2731) will fail to dispose or, worse, the tick/running-check will never find the live terminal. All name sites across both files must change in a single commit.
+- **Two matching subsystems keyed off one literal** (normalize-based vs regex-based) — a reviewer must confirm both are updated; grepping only one file is insufficient.
+- Mitigation: exhaustive grep audit across `src/` (both files), plus the verification greps below. Recommend centralizing the literal in a follow-up (epic-coordinated) to remove the atomicity footgun permanently.
 
 ## Edge-Case & Dependency Audit
 
-- **Existing live terminals named "MCP Monitor":** After the rename, the tick logic looks for "Comms Monitor". A terminal from a pre-rename session named "MCP Monitor" won't be found → tick skips it (dead-terminal guard). The user clicks "Launch" again → a new "Comms Monitor" terminal is created. One-time inconvenience, no data loss.
-- **Persisted terminal state with `role: 'mcp_monitor'`:** The role key in state is unchanged (`'mcp_monitor'`). The `friendlyName` field (line 20560) changes from `'MCP Monitor'` to `'Comms Monitor'` — this is a display field, not a lookup key. Existing state with `friendlyName: 'MCP Monitor'` is harmless (it's only used for display; the lookup uses `role`).
-- **Agent grid label:** `BUILT_IN_AGENT_LABELS` in `sharedDefaults.js` (line 47) has `{ key: 'mcp_monitor', label: 'MCP Monitor' }`. The `key` stays `'mcp_monitor'`; only `label` changes to `'Comms Monitor'`.
-- **Extension.ts agent push:** Line 2647 pushes `{ name: 'MCP Monitor', role: 'mcp_monitor' }`. The `role` stays; `name` changes to `'Comms Monitor'`.
-- **Console log / error messages:** Internal log strings like `[MCP Monitor] Tick failed` (line 20415) are developer-facing. Renaming them to `[Comms Monitor]` is cosmetic but keeps logs consistent with the new UI name. Low priority but included for consistency.
+### Race Conditions
+- None introduced. The rename does not change timing, the tick loop, or the in-flight/debounce guards. The only ordering constraint is *edit-time* atomicity (all name sites in one change), not runtime.
+
+### Security
+- None. No permission, auth, or command-execution surface changes. The startup-command fallback (`TaskViewerProvider.ts:3900`, keyed on `role === 'mcp_monitor'`) is untouched.
+
+### Side Effects
+- **Existing live terminals named "MCP Monitor":** After the rename, the tick + running-check look for "Comms Monitor". A terminal from a pre-rename session named "MCP Monitor" won't be found → tick skips it (dead-terminal guard). The user clicks "Launch" again → a new "Comms Monitor" terminal is created. One-time inconvenience, no data loss.
+- **Persisted terminal state map key derives from the name.** `state.terminals` is keyed by `_suffixedName(targetName)` (line 20648). Changing `targetName` to "Comms Monitor" means a new map entry is created on next launch; the old `MCP Monitor` entry becomes an orphaned/stale record. It is harmless (only read for display/registration; role-based lookups use `role: 'mcp_monitor'` which is unchanged), but note it is **not** purely a `friendlyName` display field as the original draft implied — the name also feeds the map key. No migration is required because the entry is re-created on launch and the stale one is inert. (Clarification vs. original draft, which described only `friendlyName` as affected.)
+- **`friendlyName` field** (line 20652) is set from `targetName`, so it updates automatically to "Comms Monitor". Existing state with `friendlyName: 'MCP Monitor'` is harmless (display-only).
+- **Agent grid label:** `BUILT_IN_AGENT_LABELS` in `sharedDefaults.js:47` — `key` stays `'mcp_monitor'`; only `label` changes.
+- **Console log / error messages:** `[MCP Monitor] Tick failed` (line 20507) is developer-facing; renaming to `[Comms Monitor]` is cosmetic. The startup-command fallback log (line 3902) already reads `Applied mcp_monitor fallback command` (key form, no display text) — leave as-is for code-searchability.
 - **No `confirm()` dialogs introduced.**
 
+### Dependencies & Conflicts
+- **Shared surface — the `'MCP Monitor'` name literal** is touched by several sibling subtasks in this epic (they add *new* lookups/UI against the monitor terminal). Sibling plans most likely to collide: `dedicated-tab`, `stuck-running-status-and-stop-control`, `separate-terminal-auth-polling`, `per-source-intervals` (all touch the AUTOMATION monitor panel and/or the terminal lifecycle). If they add references to `'MCP Monitor'` after this plan lands, those references will be stale. **Recommendation (do not implement here):** promote the literal to a shared exported constant and coordinate the swap at the epic level so every subtask references the constant rather than the string. Flag this to the epic owner.
+- No new npm/runtime dependencies. `GlobalIntegrationConfigService.ts` field `mcpMonitor` (line 15) and `targetRole: 'mcp_monitor'` default (line 50) are unchanged.
+
+## Dependencies
+
+- None identified (`sess_XXXXXXXXXXXXX` — no upstream planning session this plan depends on). Cross-subtask coordination is a *recommendation*, not a hard dependency — this plan is independently shippable if executed atomically.
+
+## Adversarial Synthesis
+
+**Risk Summary:** The single real risk is that `'MCP Monitor'` is a cross-file terminal-name lookup key (two matching mechanisms in `TaskViewerProvider.ts` and `extension.ts`, plus it derives the `state.terminals` map key) — not a plain label — so a partial rename silently breaks grid disposal or the "is-running" check. Mitigation: change every name site atomically in one commit and run the verification greps against both files; do not centralize the literal in this pass (recommend it to the epic owner instead). Secondary, benign risk: an orphaned pre-rename terminal-state entry and a stale live terminal, both self-healing on next Launch — no migration needed.
+
 ## Proposed Changes
+
+> **Line anchors below were re-verified against current code on 2026-07-03 and CORRECTED — the original draft's numbers had drifted by ~90–100 lines in `TaskViewerProvider.ts` and ~3 lines in `extension.ts`, and several `kanban.html` targets referenced strings that no longer exist.**
 
 ### 1. `src/webview/sharedDefaults.js` — update the agent label
 
@@ -58,65 +95,76 @@ Line 47:
     { key: 'mcp_monitor', label: 'Comms Monitor' }
 ```
 
-### 2. `src/webview/kanban.html` — update all display labels
+### 2. `src/webview/kanban.html` — update display labels
 
-- Line 7777: `mcpLabel.textContent = 'COMMS MONITOR:';`
-- Line 7949: `mcpDesc.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';`
-- Line 7903 (help text, if not already updated by the companion plan): replace "MCP Monitor" with "Comms Monitor" in the help text.
-- Line 7884: `statusLine.innerHTML = '🟢 <strong>Comms Monitor terminal:</strong> running';`
-- Line 7886: `statusLine.innerHTML = '🔴 <strong>No comms monitor terminal running.</strong>';`
-- Line 7888: `launchBtn.textContent = 'Launch Comms Monitor Terminal';`
+- **Line 7603** (was drafted as 7777): `mcpLabel.textContent = 'COMMS MONITOR:';`
+- **Line 7775** (was drafted as 7949): `mcpDesc.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';`
+- **Status line / launch button / help text — CORRECTION:** the draft targeted lines 7884/7886/7888/7903 with strings like `'🟢 MCP Monitor terminal: running'` and `'Launch MCP Monitor Terminal'`. **Those strings do not exist in the current code.** The current code already reads generic "Monitor" with no "MCP" prefix:
+  - Line 7710: `statusLine.innerHTML = '🟢 <strong>Monitor terminal:</strong> running';`
+  - Line 7712: `statusLine.innerHTML = '🔴 <strong>No monitor terminal running.</strong>';`
+  - Line 7714: `launchBtn.textContent = 'Launch Monitor Terminal';`
+  - Line 7729 (help text): already MCP-label-free — reads "...sends a prompt to your monitor terminal..." and "...via your claude.ai MCP servers..." (note: "MCP servers" here is a correct technical term, NOT the feature label — leave it).
+  - **Recommended (copy decision — see User Review Required):** for positive branding, change these three to "Comms Monitor terminal" / "No Comms Monitor terminal running." / "Launch Comms Monitor Terminal". If the reviewer prefers minimal churn, they can be left as generic "Monitor" since they already contain no "MCP" label.
+- **Code comments (cosmetic, optional):** lines 7599 (`// MCP Monitor Row`), 7621 (`// MCP Monitor Config Panel`), 7777 (`// Append MCP Monitor components...`). Rename to "Comms Monitor" for consistency or skip — no user impact.
 
 ### 3. `src/services/TaskViewerProvider.ts` — update terminal name and display strings
 
-- Line 20513: `const targetName = 'Comms Monitor';`
-- Line 20426: `const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('Comms Monitor'));`
-- Line 20594: `const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('Comms Monitor'));`
-- Line 16425: `const displayName = role === 'jules_monitor' ? "Jules Monitor" : "Comms Monitor";`
-- Line 20560: `state.terminals[key].friendlyName = 'Comms Monitor';` (was `targetName`, which is now `'Comms Monitor'` — this line already uses `targetName` so it updates automatically, but verify).
-- Line 20415: `console.error('[Comms Monitor] Tick failed:', err);`
-- Line 3893: `console.log(\`[TaskViewerProvider] Applied comms_monitor fallback command: ${cmd}\`);` (cosmetic — the role key in the log stays `mcp_monitor` for code-searchability; alternatively keep as-is. Recommended: change the display portion but keep the key reference: `Applied mcp_monitor (Comms Monitor) fallback command`.)
+- **Line 20605** (was drafted as 20513): `const targetName = 'Comms Monitor';`  *(inside `launchMcpMonitorTerminal`)*
+- **Line 20518** (was drafted as 20426): `const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('Comms Monitor'));`  *(inside `_mcpMonitorTick`)*
+- **Line 20686** (was drafted as 20594): `const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('Comms Monitor'));`  *(inside `_isMcpMonitorTerminalRunning`)*
+- **Line 16517** (was drafted as 16425): `const displayName = role === 'jules_monitor' ? "Jules Monitor" : "Comms Monitor";`
+- **Line 20652** (was drafted as 20560): `state.terminals[key].friendlyName = targetName;` — already uses the `targetName` variable, so it updates **automatically** once `targetName` is renamed. **No literal edit needed here — but note (correction):** the same `targetName` also feeds the map key at **line 20648** (`const key = this._suffixedName(targetName)`), so the persisted-state key changes too (see Side Effects). Verify, do not hand-edit line 20648.
+- **Line 20507** (was drafted as 20415): `console.error('[Comms Monitor] Tick failed:', err);` *(cosmetic, developer-facing)*
+- **Line 3902 (was drafted as 3893) — CORRECTION:** the current log already reads `Applied mcp_monitor fallback command` (key form only, no display text). The draft's proposed edit is moot. **Leave unchanged** for code-searchability; the `role === 'mcp_monitor'` guard at line 3900 stays.
 
-### 4. `src/extension.ts` — update the agent grid name
+### 4. `src/extension.ts` — update the agent-grid name (all name sites, atomically)
 
-- Line 2647: `agents.push({ name: 'Comms Monitor', role: 'mcp_monitor' });`
-- Line 2675: `agentNames.add('Comms Monitor');`
-- Line 2692: `vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, 'Comms Monitor'));`
-- Line 2694: `outputChannel?.appendLine(\`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Comms Monitor'\`);`
-- Line 2697-2698: `registeredTerminals.delete('Comms Monitor');` and `registeredTerminals.delete(suffixedName('Comms Monitor'));`
+- **Line 2650** (was drafted as 2647): `agents.push({ name: 'Comms Monitor', role: 'mcp_monitor' });`  *(role key stays `mcp_monitor`)*
+- **Line 2707** (was drafted as 2675): `if (!includeMcpMonitor) { agentNames.add('Comms Monitor'); }`
+- **Line 2724** (was drafted as 2692): `const mcpMatches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, 'Comms Monitor'));`
+- **Line 2726** (was drafted as 2694): `outputChannel?.appendLine(\`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Comms Monitor'\`);`
+- **Line 2729** (was drafted as 2697): `registeredTerminals.delete('Comms Monitor');`
+- **Line 2730** (was drafted as 2698): `registeredTerminals.delete(suffixedName('Comms Monitor'));`
 
-### What does NOT change (verification checklist)
+> **Atomicity note:** the name in `extension.ts` (agent-grid push + disposal) and the name in `TaskViewerProvider.ts` (creation + tick + running-check) MUST match after the change, or the grid cleanup path (`if (!includeMcpMonitor)`) will fail to find/dispose the terminal and the tick will never target it. Change all of §3 and §4 together.
 
-- `GlobalIntegrationConfigService.ts`: `mcpMonitor` field name, `targetRole: 'mcp_monitor'` default — **unchanged**.
-- `sharedDefaults.js` line 13: `mcp_monitor: false` in `DEFAULT_VISIBLE_AGENTS` — **unchanged** (this is the key, not the label).
-- `TaskViewerProvider.ts` line 3931: `mcp_monitor: false` in defaults — **unchanged**.
-- `TaskViewerProvider.ts` line 20536: `await this.setVisibleAgent('mcp_monitor', true);` — **unchanged**.
-- `TaskViewerProvider.ts` line 20559: `state.terminals[key].role = 'mcp_monitor';` — **unchanged**.
-- `TaskViewerProvider.ts` line 20567: `await this.getAgentStartupCommand('mcp_monitor');` — **unchanged**.
-- `TaskViewerProvider.ts` line 3891: `if (role === 'mcp_monitor' && ...)` — **unchanged**.
-- `TaskViewerProvider.ts` line 16423: `if (role === 'jules_monitor' || role === 'mcp_monitor')` — **unchanged**.
-- `KanbanProvider.ts` line 5753: `'switchboard.launchMcpMonitorTerminal'` command ID — **unchanged** (renaming the command ID would break keybindings and external references; the command is internal).
-- `extension.ts` line 1335: `'switchboard.launchMcpMonitorTerminal'` registration — **unchanged**.
+### What does NOT change (verification checklist — anchors re-verified)
+
+- `GlobalIntegrationConfigService.ts`: `mcpMonitor` field (line 15), `targetRole: 'mcp_monitor'` default (line 50) — **unchanged**.
+- `sharedDefaults.js` line 13: `mcp_monitor: false` in `DEFAULT_VISIBLE_AGENTS` — **unchanged** (key, not label).
+- `TaskViewerProvider.ts` line 3940 (was drafted as 3931): `mcp_monitor: false` in defaults — **unchanged**.
+- `TaskViewerProvider.ts` line 3900 (was drafted as 3891): `if (role === 'mcp_monitor' && ...)` fallback guard — **unchanged**.
+- `TaskViewerProvider.ts` line 16515 (was drafted as 16423): `if (role === 'jules_monitor' || role === 'mcp_monitor')` safety invariant — **unchanged**.
+- `TaskViewerProvider.ts` line 20628 (was drafted as 20536): `await this.setVisibleAgent('mcp_monitor', true);` — **unchanged**.
+- `TaskViewerProvider.ts` line 20651 (was drafted as 20559): `state.terminals[key].role = 'mcp_monitor';` — **unchanged**.
+- `TaskViewerProvider.ts` line 20659 (was drafted as 20567): `await this.getAgentStartupCommand('mcp_monitor');` — **unchanged**.
+- `extension.ts` line 2641: `const includeMcpMonitor = visibleAgents.mcp_monitor !== false;` — **unchanged** (reads the visibility key).
+- Command ID `'switchboard.launchMcpMonitorTerminal'` (registration + KanbanProvider references) — **unchanged** (renaming it would break keybindings/external references; the command is internal).
+- The kanban message types `launchMcpMonitorTerminal`, `setMcpMonitorConfig`, `updateMcpMonitorConfig` (kanban.html + provider) — **unchanged** (wire-protocol strings, not display).
 
 ## Verification Plan
 
-1. **Build:** `npm run compile` succeeds with no type errors.
-2. **Grep audit — no stray "MCP Monitor" display labels remain:**
-   - `grep -rn "MCP Monitor" src/` (excluding `dist/`) should return **zero** matches in display strings. The only acceptable remaining matches are in code comments or the command ID `launchMcpMonitorTerminal` (which is internal, not displayed).
-   - `grep -rn "MCP MONITOR" src/` should return **zero** matches.
-3. **Grep audit — internal keys preserved:**
-   - `grep -rn "'mcp_monitor'" src/` should return the **same** matches as before the rename (config lookups, state, startup command, safety checks).
-   - `grep -rn "mcpMonitor" src/services/GlobalIntegrationConfigService.ts` should be **unchanged**.
-4. **Manual — AUTOMATION tab label:**
-   - Open the kanban AUTOMATION tab. Confirm the dropdown label reads "COMMS MONITOR:" (not "MCP MONITOR:").
-   - Confirm the description text says "Comms Monitor" (not "MCP Monitor").
-   - Confirm the launch button reads "Launch Comms Monitor Terminal".
-5. **Manual — terminal name:**
-   - Click "Launch Comms Monitor Terminal". Confirm the created terminal is named "Comms Monitor" in the VS Code terminal panel.
-   - Confirm the status line reads "🟢 Comms Monitor terminal: running".
-6. **Manual — agent grid:**
-   - If the agent grid is visible, confirm the monitor agent tile is labeled "Comms Monitor".
-7. **Manual — existing installs (migration safety):**
-   - On an install with pre-existing `~/.switchboard/integration-config.json` containing `mcpMonitor` config: confirm the config is still read correctly (the field name didn't change). The monitor enables, the interval persists, sources persist.
-   - On an install with a live terminal from a pre-rename session (named "MCP Monitor"): confirm the tick logic does not find it (expected — name mismatch). Click "Launch" → new "Comms Monitor" terminal is created and ticks work.
-8. **Regression:** The `switchboard.launchMcpMonitorTerminal` command ID is unchanged — any existing keybindings or external command references still work.
+### Automated Tests
+- **Build:** `npm run compile` (webpack) succeeds with no type errors. (Note per CLAUDE.md: `dist/` is not used in dev/test; compile only validates types here.)
+- **Grep audit — no stray "MCP Monitor" display labels remain:**
+  - `grep -rn "MCP Monitor" src/` should return only acceptable matches: the command ID substring `launchMcpMonitorTerminal`, the `GlobalIntegrationConfigService.ts` doc comment (line 12, optional), and any intentionally-kept `MCP servers` technical references — **zero** display-label matches.
+  - `grep -rn "MCP MONITOR" src/` should return **zero** matches.
+- **Grep audit — internal keys preserved (must be unchanged count):**
+  - `grep -rn "'mcp_monitor'" src/` returns the **same** matches as before the rename (config lookups, state role, startup command, safety checks, visibility default).
+  - `grep -rn "mcpMonitor" src/services/GlobalIntegrationConfigService.ts` is **unchanged**.
+- **Grep audit — name consistency across the two files (footgun check):**
+  - `grep -rn "'Comms Monitor'" src/services/TaskViewerProvider.ts src/extension.ts` — confirm the creation name (TaskViewerProvider) and every grid/disposal reference (extension.ts) both use the new literal; no lingering `'MCP Monitor'` name literal in either file.
+
+### Manual
+1. **AUTOMATION tab label:** Open the kanban AUTOMATION tab. Dropdown label reads "COMMS MONITOR:". Description text says "Comms Monitor". (If option (b) chosen) launch button reads "Launch Comms Monitor Terminal".
+2. **Terminal name:** Click Launch. The created terminal is named "Comms Monitor" in the VS Code terminal panel. Status line updates to the running state.
+3. **Grid consistency (critical footgun test):** With the monitor visible, confirm the agent grid does NOT dispose the freshly-launched "Comms Monitor" terminal (proves `extension.ts` name matching was updated in lockstep). Then toggle monitor visibility off and confirm the hidden-grid cleanup disposes it (proves the `if (!includeMcpMonitor)` disposal path matches the new name).
+4. **Agent grid label:** If the agent grid is visible, the monitor tile is labeled "Comms Monitor".
+5. **Existing installs (migration safety):**
+   - Install with pre-existing `~/.switchboard/integration-config.json` containing `mcpMonitor` config: config is still read correctly (field name unchanged); monitor enables, interval + sources persist.
+   - Install with a live pre-rename terminal named "MCP Monitor": tick does not find it (expected — name mismatch); clicking Launch creates a new "Comms Monitor" terminal that ticks correctly. Confirm no crash from the orphaned old `state.terminals` entry.
+6. **Regression:** The `switchboard.launchMcpMonitorTerminal` command ID is unchanged — existing keybindings/external command references still work.
+
+---
+
+**Recommendation: Send to Intern.** Complexity 3 (routine, 1-3 band). The edits are mechanical string swaps, but they MUST be applied atomically across `TaskViewerProvider.ts` and `extension.ts` because the terminal-name literal is a shared cross-file lookup key — the intern must not stop after editing one file. Run the name-consistency grep and the grid-disposal manual test before marking done.

@@ -136,4 +136,14 @@ The only functional change is removing `--permission-mode dontAsk` from the comm
    - While a permission prompt is shown in the terminal, confirm the polling loop doesn't send a new prompt (the in-flight guard blocks it). After the user responds, confirm the next tick fires normally.
 6. **Manual — custom command override unaffected:**
    - Configure a custom startup command for `mcp_monitor` (e.g. `claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"`). Confirm the custom command is used, not the fallback. The user can still opt into `dontAsk` if they want it.
-7. **Regression:** Other agent roles (`jules_monitor`, `claude_artifacts`) are unaffected — their fallback commands are separate.
+7. **Regression:** Other agent roles (`jules_monitor`, `claude_artifacts`) are unaffected — their fallback commands are separate (`jules_monitor` at 3894-3897, `claude_artifacts` at 3905-3909).
+
+### Automated Tests
+
+- No unit test currently exercises `getAgentStartupCommand`. The one meaningful automatable assertion is a string check: given `role === 'mcp_monitor'` and an empty configured command, the resolved fallback equals `claude --model claude-haiku-4-5 --allowedTools "mcp__*"` and does **not** contain `--permission-mode dontAsk`. If a lightweight unit test is added, assert both the positive (`--allowedTools "mcp__*"` present, `--model claude-haiku-4-5` present) and negative (`dontAsk` absent) conditions so a future re-introduction of the flag is caught.
+- If the `haiku-highlight` sibling adds a test asserting the resolved-command literal, that test must be updated in lockstep with this change (see Dependencies & Conflicts).
+- Primary verification remains the manual terminal checks above; `npm run compile` type-check is the automated gate.
+
+## Recommendation
+
+**Complexity 2 → Send to Intern.** A single-line string edit with an accompanying comment update, no schema/UI/migration impact, and one well-documented cross-plan literal to keep in sync. The behavioral implication (interactive prompts) is intended and covered by the existing in-flight guard.

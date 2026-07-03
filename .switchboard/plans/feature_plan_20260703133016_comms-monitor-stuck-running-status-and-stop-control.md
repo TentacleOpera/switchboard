@@ -107,26 +107,20 @@ It is **never called when the terminal dies**. So the interval keeps firing at t
 
 ### 1. `src/services/TaskViewerProvider.ts` — notify the webview and stop the loop when the monitor terminal closes
 
-In `handleTerminalClosed` (line 15914), after the state cleanup and before the final `_refreshTerminalStatuses`, add a check for whether the closed terminal was the monitor terminal. If so, stop the loop and push the updated config:
+In `handleTerminalClosed` (line 16006), after `_removeAutobanTerminalReferences` (line 16043) and before the final `_refreshTerminalStatuses` (line 16045), add a check for whether the closed terminal was the monitor terminal. If so, stop the loop and push the updated config. **Clarification:** the exact current body around the insertion point is:
 
 ```ts
-    public async handleTerminalClosed(terminal: vscode.Terminal) {
-        try {
-            const pid = await this._waitWithTimeout(terminal.processId, 1000, undefined);
-            let cleanedTerminalName: string | undefined;
-            await this.updateState(async (state) => {
-                // ... existing state cleanup ...
-            });
-
             if (cleanedTerminalName) {
-                this.clearTerminalAgentInfo(cleanedTerminalName);
+                this.clearTerminalAgentInfo(cleanedTerminalName);      // line 16040
             }
 
-            await this._removeAutobanTerminalReferences(cleanedTerminalName || terminal.name);
+            await this._removeAutobanTerminalReferences(cleanedTerminalName || terminal.name);  // 16043
 
             // NEW: If the closed terminal was the Comms Monitor, stop the polling
             // loop and push the updated status to the kanban webview so the status
-            // line flips from 🟢 to 🔴.
+            // line flips from 🟢 to 🔴. Match by NAME (available synchronously on the
+            // close event) rather than PID, so detection is robust even when
+            // terminal.processId does not resolve within the 1s timeout.
             const monitorName = this._normalizeAgentKey(this._stripIdeSuffix('MCP Monitor'));
             const closedName = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name));
             if (closedName === monitorName) {
@@ -134,18 +128,16 @@ In `handleTerminalClosed` (line 15914), after the state cleanup and before the f
                 await this._postMcpMonitorConfig();
             }
 
-            this._refreshTerminalStatuses();
-        } catch (e) {
-            console.error('[TaskViewerProvider] Failed to handle terminal closure:', e);
-        }
-    }
+            this._refreshTerminalStatuses();   // existing call at line 16045
 ```
 
-**Note on the name literal:** Use `'MCP Monitor'` here to match `launchMcpMonitorTerminal` (line 20513) and `_isMcpMonitorTerminalRunning` (line 20594). If the companion rename plan ships, update all three to `'Comms Monitor'` together. The rename plan already documents this.
+The surrounding `try { ... } catch (e) { console.error('[TaskViewerProvider] Failed to handle terminal closure:', e); }` wrapper is already present (16007 / 16046-16048) — do not duplicate it.
+
+**Note on the name literal:** Use `'MCP Monitor'` here to match `launchMcpMonitorTerminal` (line 20605), `_mcpMonitorTick` (line 20518) and `_isMcpMonitorTerminalRunning` (line 20686). If the companion **rename-display-labels** plan ships, update all four to `'Comms Monitor'` together — ideally via a single shared constant. The rename plan already documents this coordination.
 
 ### 2. `src/services/TaskViewerProvider.ts` — add a `stopMcpMonitorTerminal` public method
 
-Add a method that kills the terminal and stops the loop, for the Stop button:
+Add a method that kills the terminal and stops the loop, for the Stop button. Place it near `launchMcpMonitorTerminal` (line 20604) so the launch/stop pair lives together and shares the same name literal:
 
 ```ts
     /**
@@ -175,7 +167,7 @@ Add a method that kills the terminal and stops the loop, for the Stop button:
 
 ### 3. `src/extension.ts` — register the stop command
 
-Register a command for the Stop button (near line 1335 where `launchMcpMonitorTerminal` is registered):
+Register a command for the Stop button (immediately after the `launchMcpMonitorTerminal` registration at lines 1338-1341, which reads `vscode.commands.registerCommand('switchboard.launchMcpMonitorTerminal', ...)`):
 
 ```ts
     const stopMcpMonitorTerminalDisposable = vscode.commands.registerCommand('switchboard.stopMcpMonitorTerminal', async () => {
@@ -186,7 +178,7 @@ Register a command for the Stop button (near line 1335 where `launchMcpMonitorTe
 
 ### 4. `src/services/KanbanProvider.ts` — add a `stopMcpMonitorTerminal` message handler
 
-Add a case in the message handler (near line 5752 where `launchMcpMonitorTerminal` is handled):
+Add a case in the message handler immediately after the `launchMcpMonitorTerminal` case (lines 6269-6272):
 
 ```ts
             case 'stopMcpMonitorTerminal': {

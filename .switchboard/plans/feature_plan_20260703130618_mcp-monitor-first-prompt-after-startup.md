@@ -30,8 +30,8 @@ A second, related gap: the "since your previous check" diff baseline currently l
 
 ## Metadata
 
-- **Tags:** mcp-monitor, automation, kanban, terminal, bugfix, ux, persistence
-- **Complexity:** 4
+- **Tags:** bugfix, ux, reliability, feature
+- **Complexity:** 5
 - **Project:** switchboard
 - **Files touched:** `src/services/TaskViewerProvider.ts`, `src/services/GlobalIntegrationConfigService.ts`, `src/webview/kanban.html`
 
@@ -86,6 +86,23 @@ The two mildly risky aspects:
 - **IDE / extension restart:** `_mcpMonitorLastSendAt` (in-memory debounce clock) is lost on restart, but `lastCheckAt` on disk survives. The first tick after restart reads `lastCheckAt` from config and injects the correct boundary. The debounce guard (line 20536) uses `_mcpMonitorLastSendAt = 0` after restart, so it never blocks — correct.
 - **Newly-enabled source mid-stream:** A single global `lastCheckAt` is shared across all sources. If the user enables Gmail after Slack was running, the first Gmail check says "since <when Slack was last checked>" and may over-report Gmail items from that window. This is acceptable (one-time over-report on newly-enabled sources) and far better than the current silent reset. Per-source timestamps would be over-engineering for this feature.
 - **Clock skew / manual config edit:** If a user manually edits `lastCheckAt` to a future time, the prompt would ask Claude for "since <future>" which Claude handles gracefully (reports nothing new → "All clear"). Not a crash risk.
+
+## Dependencies
+
+This subtask is 1 of 10 in the **MCP Monitor improvements** epic. It has no external session dependencies, but it shares code surfaces with several siblings that must be merged, not applied blindly:
+
+- `sess_epic_mcp_monitor — editable-prompt-preview` — co-edits `_buildMcpMonitorPrompt`. The `${boundary}` injection must compose with any editable/stored prompt template. **Reconcile before coding either.**
+- `sess_epic_mcp_monitor — per-source-intervals` — co-edits the `McpMonitorConfig` interface, the `setMcpMonitorConfig` merge block, and the loop/tick structure. Additive to the schema; but if intervals become per-source, the single global `lastCheckAt` and single first-prompt one-shot may need to fan out.
+- `sess_epic_mcp_monitor — stuck-running-status-and-stop-control` — co-edits `_stopMcpMonitorLoop`. Merge both cleanup extensions.
+- `sess_epic_mcp_monitor — separate-terminal-auth-polling` — co-edits `launchMcpMonitorTerminal`. If launch now polls for auth before the terminal is usable, the 30s first-prompt timer should be started *after* auth completes, not at launch, or it may fire into an auth prompt.
+- `sess_epic_mcp_monitor — rename-display-labels` — may rewrite the same kanban.html help copy this plan edits, and touches display labels; must NOT change the `'MCP Monitor'` terminal-name literal (the singleton guard key).
+- `sess_epic_mcp_monitor — dedicated-tab` — relocates the monitor UI block in kanban.html; the help-text edit must follow the block to its new location.
+
+(No blocking upstream session prerequisites — these are peer coordination points, resolved at epic synthesis.)
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks are (1) shared-surface contention — five edits land on functions/blocks also edited by siblings, so the dominant failure mode is a merge clobber, not a logic bug; (2) the 30s first-prompt one-shot racing terminal disable/death, mitigated by extending `_stopMcpMonitorLoop` and the existing exitStatus + in-flight guards; (3) the global `lastCheckAt` over-reporting once on a newly-enabled source (accepted). Mitigations: treat every shared surface as append-only with an explicit epic-level merge note, gate the one-shot behind the same lifecycle cleanup as the interval, and persist `lastCheckAt` only after a confirmed successful send so a failed tick never advances the baseline.
 
 ## Proposed Changes
 

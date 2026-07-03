@@ -164,7 +164,9 @@ In `setMcpMonitorConfig` (line 245), write the new fields through using the same
 
 ### 2. `src/services/TaskViewerProvider.ts` — GCD timer with per-source due-checking
 
-Replace `_startMcpMonitorLoop` (line 20390):
+> **Anchor + dependency note:** `_startMcpMonitorLoop` is at **line 20482** (not 20390). The code block below guards on `cfg.pollingEnabled`, which **does not exist in current `main`** — the current guard is `if (!cfg.enabled)` (line 20484). `pollingEnabled` is introduced by sibling "separate-terminal-auth-polling". If this plan is coded before that sibling merges, `cfg.pollingEnabled` is `undefined`, `!undefined === true`, and the loop stops immediately. Either (a) depend on that sibling shipping first, or (b) write the guard as `if (!(cfg.pollingEnabled ?? cfg.enabled))` so it degrades gracefully. The config-service mapping already returns `pollingEnabled: cfg.pollingEnabled ?? cfg.enabled ?? false`, so option (b) is consistent.
+
+Replace `_startMcpMonitorLoop` (line 20482):
 
 ```ts
     private async _startMcpMonitorLoop() {
@@ -195,7 +197,7 @@ Replace `_startMcpMonitorLoop` (line 20390):
     }
 ```
 
-Replace `_mcpMonitorTick` (line 20420) to filter sources by due-status:
+Replace `_mcpMonitorTick` (line 20512 — verified; reached via the serialized `_enqueueMcpMonitorTick` queue at line 20502, keep that indirection) to filter sources by due-status. **Note:** the block below omits the secondary debounce present at line 20536 — resolve per the Edge-Case audit before coding. Also `cfg.pollingEnabled` here has the same fallback caveat as §2:
 
 ```ts
     private async _mcpMonitorTick() {
@@ -250,7 +252,7 @@ Replace `_mcpMonitorTick` (line 20420) to filter sources by due-status:
 
 ### 3. `src/services/TaskViewerProvider.ts` — update prompt builder to accept due sources
 
-Update `_buildMcpMonitorPrompt` (line 20460) to accept a `dueSources` parameter and only include those sources:
+Update `_buildMcpMonitorPrompt` (line 20552 — verified) to accept a `dueSources` parameter and only include those sources. **Contradiction warning:** two sibling plans also rewrite this exact method — "editable-prompt-preview" (adds a `promptOverride` and parameterizes the Slack/Gmail lines) and "first-prompt-after-startup" (adds the `cfg.lastCheckAt` timestamp boundary the block below assumes). The `boundary` logic below is inherited from first-prompt and is NOT in current `main` (current preamble is a fixed "since your previous check" string). See Cross-Plan Conflicts for the merged end-state signature:
 
 ```ts
     private _buildMcpMonitorPrompt(cfg: McpMonitorConfig, dueSources?: string[]): string {
@@ -282,7 +284,7 @@ Note: the `boundary` uses the per-source `lastCheckAt` from the config. For a mo
 
 ### 4. `src/webview/kanban.html` — replace global interval dropdown with per-source interval selectors
 
-Remove the global interval row (lines 7799-7817). Instead, add an interval selector next to each source checkbox in the sources checklist (lines 7847-7875):
+Remove the global interval row (lines 7626-7643 — verified) **and** its change listener (`intervalSelect.addEventListener('change', saveMonitorConfig)` at line 7753, which will dangle once `intervalSelect` is gone). Instead, add an interval selector next to each source checkbox in the sources checklist render loop (lines 7673-7701 — verified):
 
 ```js
             Object.entries(presetsToRender).forEach(([key, label]) => {

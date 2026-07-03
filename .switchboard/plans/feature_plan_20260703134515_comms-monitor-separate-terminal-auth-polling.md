@@ -83,11 +83,36 @@ The individual changes:
 - **Auth expires mid-polling:** The user authenticates, starts polling, but the Claude session expires hours later. Tool calls start failing. The polling loop continues (it doesn't know auth failed). The user sees errors in the terminal, clicks "Stop Polling," re-authenticates in the terminal, and clicks "Start Polling" again. This is the expected recovery flow.
 - **MCP server not configured (vs. Claude auth failure):** The auth check prompt asks Claude to check authentication status for each MCP server and explain how to authenticate if needed. If MCP servers aren't configured, Claude will report no servers connected. If servers are configured but not authenticated (e.g. Slack OAuth not completed), Claude will explain how to authenticate. Both cases are visible to the user in the terminal output, with actionable guidance from Claude.
 - **Re-start polling after stop:** After stopping polling (but keeping the terminal), the user can restart polling without re-creating the terminal or re-checking auth. The "Start Polling" button is available whenever a live terminal exists.
-- **Companion plan interactions:**
-  - The "Stop Monitor" button plan adds a stop control that kills the terminal. This plan adds "Stop Polling" (stops the loop, keeps the terminal). They're different actions.
+- **No `confirm()` dialogs.** All buttons act immediately.
+
+### Dependencies & Conflicts
+This plan is the **central, highest-conflict** member of its 10-plan epic. It touches the same symbols as several siblings. Conflicts are documented here and in `## Dependencies` for the epic orchestrator to sequence — **do not resolve them unilaterally in this plan.**
+
+- **`enabled` → `pollingEnabled` gate flip (HIGH conflict).** Siblings "first-prompt-after-startup" and "apply-source-changes-immediately" gate behavior on `cfg.enabled`. Once this plan makes `enabled` mean "panel visibility only", those siblings must be updated to read `pollingEnabled` for "is the loop running", or they will fire against the wrong flag. This plan does NOT edit those siblings.
+- **`_startMcpMonitorLoop` (20482) + `_mcpMonitorTick` (20512) shared rewrite (HIGH conflict).** Sibling "per-source-intervals" also rewrites both methods to a GCD-based multi-timer keyed per source and builds on `pollingEnabled`. This plan only flips the single-`intervalMinutes` gate from `enabled` to `pollingEnabled`. Heavy overlap — the two rewrites must be merged into one reconciled implementation (gate = `pollingEnabled`, timer = per-source GCD), landed once, not applied twice.
+- **One-shot first-prompt ownership (DIRECT contradiction).** "first-prompt-after-startup" schedules a 30s one-shot inside `launchMcpMonitorTerminal`. THIS plan asserts the one-shot must move to `startMcpMonitorPolling` (so polling-start, not terminal-creation, triggers the first prompt). These cannot both hold — the epic must pick where the one-shot lives. This plan's position: it belongs in `startMcpMonitorPolling`.
+- **Status-line UI shared surface.** The monitor status line in `kanban.html` (current terminal-status/launch block around lines 7709-7730) is also modified by "stuck-running-status-and-stop-control" (adds a Stop button / running-status indicator) and relocated wholesale by "dedicated-tab" (moves the UI into a new COMMS tab). This plan replaces the single Launch button with a three-button panel. All three plans edit the same DOM region — merge, don't overwrite. This plan's UI should target whatever container the monitor ends up in after "dedicated-tab".
+- **`remove-dontask-permission-mode`** — no known symbol overlap; independent.
+- **Companion plan interactions (behavioral):**
+  - The "Stop Monitor" button plan adds a stop control that kills the terminal. This plan adds "Stop Polling" (stops the loop, keeps the terminal). They're different actions and both should coexist.
   - The 30s one-shot first prompt plan starts polling after launch. After this plan, the one-shot should only fire after the user clicks "Start Polling," not after terminal creation.
   - The dedicated COMMS tab plan moves the UI. This plan's UI changes target whatever tab the monitor lives in.
-- **No `confirm()` dialogs.** All buttons act immediately.
+
+## Dependencies
+
+- `sess_epic_comms_monitor — parent epic (10 subtasks)` — this plan must be sequenced against its siblings; it is the shared-state hub.
+- `sess_first_prompt_after_startup — one-shot ownership` — contradiction on where the 30s one-shot lives (launch vs. start-polling). Must be reconciled.
+- `sess_apply_source_changes_immediately — enabled gate` — reads `enabled` as loop control; must migrate to `pollingEnabled`.
+- `sess_per_source_intervals — loop rewrite` — GCD multi-timer rewrite of `_startMcpMonitorLoop`/`_mcpMonitorTick`; heaviest overlap, build on `pollingEnabled`.
+- `sess_stuck_running_status_and_stop_control — status-line UI` — shares the status-line DOM region (adds Stop button).
+- `sess_dedicated_tab — UI relocation` — moves the monitor UI into a COMMS tab; this plan's buttons must follow.
+- `sess_rename_display_labels — label copy` — may rename the monitor's user-facing labels; keep button text in sync.
+
+> Session IDs above are placeholders for the sibling plan identities; the epic orchestrator should substitute the real `sess_` IDs when sequencing. Recorded here per the required `sess_XXX — <topic>` format.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks — (1) two siblings ("per-source-intervals" and this plan) independently rewrite `_startMcpMonitorLoop`/`_mcpMonitorTick`, and a naive second-lands-wins merge silently drops one gate or timer; (2) repurposing the shipped `enabled` flag will break any sibling still reading it as "loop running" until they migrate to `pollingEnabled`; (3) the backward-compat default auto-resumes polling for ~4,000 existing `enabled: true` installs, a user-visible behavior change. Mitigations — land the loop rewrite once as a reconciled implementation (gate `pollingEnabled` + per-source GCD timer), migrate all `enabled`-readers in the same epic pass, and get explicit sign-off on the auto-resume default. The auth check itself is low-risk (non-blocking terminal send).
 
 ## Proposed Changes
 
