@@ -155,6 +155,19 @@ export class AutoArchiveService {
         return this._sweep();
     }
 
+    /** Persisted per-plan column-dwell map: planId → { column, since (epoch ms) }. */
+    private async _getDwellMap(): Promise<Record<string, { column: string; since: number }>> {
+        const db = this._deps.getDb();
+        if (!db || !(await db.ensureReady())) { return {}; }
+        return db.getConfigJson<Record<string, { column: string; since: number }>>('autoArchive.columnDwell', {});
+    }
+
+    private async _setDwellMap(map: Record<string, { column: string; since: number }>): Promise<void> {
+        const db = this._deps.getDb();
+        if (!db || !(await db.ensureReady())) { return; }
+        await db.setConfigJson('autoArchive.columnDwell', map);
+    }
+
     private async _sweep(): Promise<{ archived: number; errors: string[] }> {
         if (this._sweeping) { return { archived: 0, errors: [] }; }
         this._sweeping = true;
@@ -172,11 +185,36 @@ export class AutoArchiveService {
             const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
             if (!workspaceId) { return { archived: 0, errors }; }
 
+            const now = Date.now();
+
+            // Maintain a persisted "time in current column" map (planId → {column, since}).
+            // Dwell is measured from when a plan ENTERED its current column — NOT from
+            // plan.updatedAt, which bumps on any edit/comment and would let a busy plan
+            // dodge auto-archiving forever. We observe every plan each sweep and reset the
+            // timestamp only when a plan's column actually changes; entries for deleted
+            // plans are pruned. (First sight of a plan stamps `now`, so a plan already
+            // resident gets one conservative threshold delay — never a premature archive.)
+            const dwellMap = await this._getDwellMap();
+            const allPlans = await db.getAllPlans(workspaceId);
+            const liveIds = new Set<string>();
+            let dwellChanged = false;
+            for (const p of allPlans) {
+                liveIds.add(p.planId);
+                const prev = dwellMap[p.planId];
+                if (!prev || prev.column !== p.kanbanColumn) {
+                    dwellMap[p.planId] = { column: p.kanbanColumn, since: now };
+                    dwellChanged = true;
+                }
+            }
+            for (const id of Object.keys(dwellMap)) {
+                if (!liveIds.has(id)) { delete dwellMap[id]; dwellChanged = true; }
+            }
+            if (dwellChanged) { await this._setDwellMap(dwellMap); }
+
             const plans = await db.getPlansByColumn(workspaceId, config.triggerColumn);
             if (plans.length === 0) { return { archived: 0, errors }; }
 
             const thresholdMs = config.thresholdHours * 60 * 60 * 1000;
-            const now = Date.now();
             const workspaceRoot = this._deps.getWorkspaceRoot();
 
             // Resolve the active remote provider for archive push (may be null).
@@ -187,9 +225,11 @@ export class AutoArchiveService {
             const archiveMgr = new ArchiveManager(workspaceRoot);
 
             for (const plan of plans) {
-                const updatedAt = new Date(plan.updatedAt).getTime();
-                if (isNaN(updatedAt)) { continue; }
-                if ((now - updatedAt) < thresholdMs) { continue; }
+                // Dwell from column-entry time; fall back to updatedAt if the plan was
+                // somehow never observed entering (belt-and-suspenders).
+                const enteredAt = dwellMap[plan.planId]?.since ?? new Date(plan.updatedAt).getTime();
+                if (isNaN(enteredAt)) { continue; }
+                if ((now - enteredAt) < thresholdMs) { continue; }
 
                 // 1. Move to Completed + mark status in the kanban DB.
                 const moved = await db.archivePlan(plan.planFile, workspaceId, 'archived');
@@ -232,7 +272,7 @@ export class AutoArchiveService {
                 }
 
                 archived++;
-                this._log(`Auto-archived ${plan.topic || plan.planFile} (dwelled ${Math.round((now - updatedAt) / 60000)}m in ${config.triggerColumn}).`);
+                this._log(`Auto-archived ${plan.topic || plan.planFile} (dwelled ${Math.round((now - enteredAt) / 60000)}m in ${config.triggerColumn}).`);
             }
 
             if (archived > 0) {

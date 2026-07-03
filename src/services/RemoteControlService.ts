@@ -329,7 +329,12 @@ export class RemoteControlService {
             if (config.provider === 'control-plane' || config.provider === 'wiki') {
                 const gitProvider = this._gitProviders.get(config.provider as GitProviderKind);
                 if (gitProvider) {
-                    void gitProvider.pushExportedState();
+                    // Feed the git-mirror push outcome into the Remote-tab health panel.
+                    // 'skipped' (nothing to push) leaves the last-push status unchanged.
+                    void gitProvider.pushExportedState().then(res => {
+                        if (res === 'pushed') { this.recordPushResult(true); }
+                        else if (res === 'failed') { this.recordPushResult(false, 'board-state mirror push failed'); }
+                    });
                 }
             }
 

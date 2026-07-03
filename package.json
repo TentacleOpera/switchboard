@@ -513,9 +513,9 @@
         },
         "switchboard.planAutoFetch.intervalSeconds": {
           "type": "integer",
-          "default": 300,
+          "default": 60,
           "minimum": 60,
-          "description": "Interval in seconds between periodic auto-fetches.",
+          "description": "Interval in seconds between periodic auto-fetches. 60s keeps the git-native control-plane channel responsive; raise it to reduce background git fetches.",
           "scope": "resource"
         },
         "switchboard.planAutoFetch.remote": {

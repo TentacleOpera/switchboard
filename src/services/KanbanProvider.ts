@@ -8982,14 +8982,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!db || !(await db.ensureReady())) break;
                 const epic = await db.getPlanByPlanId(msg.sessionId);
                 if (!epic || !epic.isEpic) break;
+                // Capture the subtasks up front — after tombstone/clear we can no longer
+                // enumerate them, and we need their plan files to unlink them from the
+                // external trackers below.
+                const epicSubtasks = await db.getSubtasksByEpicId(epic.planId);
                 // Epic abandon: remove every child worktree (subtask + integration) —
                 // discarded, not merged. Runs regardless of deleteSubtasks: even when
                 // subtasks are kept on the board (unlinked from the epic), their
                 // per-subtask worktrees no longer have a convergence point to target.
                 await this._cleanupEpicWorktrees(workspaceRoot, db, epic.planId, 'abandoned');
                 if (msg.deleteSubtasks) {
-                    const subtasks = await db.getSubtasksByEpicId(epic.planId);
-                    for (const st of subtasks) {
+                    for (const st of epicSubtasks) {
                         await db.tombstonePlan(st.planId);
                     }
                 } else {
@@ -8997,6 +9000,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 await db.tombstonePlan(epic.planId);
                 await this._refreshBoard(workspaceRoot);
+                // Unlink the subtasks from external trackers (best-effort) so no Linear
+                // issue / ClickUp task is left parented to the now-deleted epic.
+                if (epicSubtasks.length > 0) {
+                    const linearSvc = this._getLinearService(workspaceRoot);
+                    const clickupSvc = this._getClickUpService(workspaceRoot);
+                    const subtaskFiles = epicSubtasks.map(st => st.planFile);
+                    await Promise.allSettled([
+                        linearSvc.unlinkSubtasksFromEpic(subtaskFiles),
+                        clickupSvc.unlinkSubtasksFromEpic(subtaskFiles)
+                    ]);
+                }
                 break;
             }
             case 'getEpicDetails': {

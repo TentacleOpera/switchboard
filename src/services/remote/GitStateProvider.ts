@@ -303,17 +303,17 @@ export class GitStateProvider implements RemoteProvider {
 
     // ── Outbound push (net-new, NOT an interface method) ──────────
 
-    public async pushExportedState(): Promise<void> {
+    public async pushExportedState(): Promise<'pushed' | 'skipped' | 'failed'> {
         if (this._pushInFlight) {
             this._pushPending = true;
-            return;
+            return 'skipped';
         }
         this._pushInFlight = true;
 
         try {
             const root = this._getRoot();
-            if (!root) { return; }
-            if (!fs.existsSync(path.join(root, '.git'))) { return; }
+            if (!root) { return 'skipped'; }
+            if (!fs.existsSync(path.join(root, '.git'))) { return 'skipped'; }
 
             // Fetch first and reconcile to avoid non-fast-forward
             try {
@@ -334,7 +334,7 @@ export class GitStateProvider implements RemoteProvider {
                             await this._git(['merge', '--ff-only', `origin/${branch}`], { cwd: root });
                         } catch (mergeErr) {
                             this._log(`Cannot reconcile with remote — skipping push: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`);
-                            return;
+                            return 'skipped';
                         }
                     }
                 }
@@ -358,16 +358,16 @@ export class GitStateProvider implements RemoteProvider {
                     return PlanAutoFetchService.MIRROR_FILE_RE.test(normalized);
                 });
                 if (mirrorLines.length === 0) {
-                    return;
+                    return 'skipped';
                 }
             } catch {
-                return;
+                return 'skipped';
             }
 
             try {
                 await this._git(['commit', '-m', 'switchboard: update board state mirror'], { cwd: root });
             } catch {
-                return;
+                return 'skipped';
             }
 
             try {
@@ -375,11 +375,14 @@ export class GitStateProvider implements RemoteProvider {
                 const branch = currentBranch.trim();
                 await this._git(['push', 'origin', branch || 'HEAD'], { cwd: root });
                 this._log('Pushed board state mirror');
+                return 'pushed';
             } catch (e) {
                 this._log(`push failed: ${e instanceof Error ? e.message : String(e)}`);
+                return 'failed';
             }
         } catch (e) {
             this._log(`pushExportedState error: ${e instanceof Error ? e.message : String(e)}`);
+            return 'failed';
         } finally {
             this._pushInFlight = false;
             if (this._pushPending) {
