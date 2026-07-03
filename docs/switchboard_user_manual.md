@@ -35,7 +35,7 @@
 27. [Webview Panels Reference](#27-webview-panels-reference)
 28. [Memo Capture Mode](#28-memo-capture-mode)
 29. [Automated Triage Pipeline](#29-automated-triage-pipeline)
-30. [Linear Remote Control](#30-linear-remote-control)
+30. [Remote Control (provider-agnostic)](#30-remote-control-provider-agnostic)
 31. [Troubleshooting / FAQ](#31-troubleshooting--faq)
 32. [Using Switchboard with claude.ai](#32-using-switchboard-with-claudeai)
 
@@ -1203,7 +1203,7 @@ The board itself with drag-and-drop columns. Controls strip:
 - **PROJECT CONTEXT** — Toggle (off by default). When on, the active project's PRD (authored on the Project Panel's PROJECTS tab) is injected into every dispatched prompt across all roles.
 - **Scan Folders** — Force immediate plan scan (`switchboard.triggerPlanScan`).
 - **AUTOBAN** — Start/stop the automation engine.
-- **Remote Control** — Start/stop Linear remote control.
+- **Remote Control** — Start/stop remote control (Linear / Notion / ClickUp; configured in the Project panel → REMOTE tab).
 - **CLI Triggers** — Toggle between CLI terminal dispatch and clipboard prompt mode.
 - **Collapse Coders** — Toggle collapsed view for coder columns.
 - **Pair Programming Mode** dropdown — Select CLI Parallel / Hybrid / Full Clipboard.
@@ -1232,8 +1232,8 @@ Per-role prompt customization:
 **AUTOMATION Tab**
 Automation panel for configuring AUTOBAN rules and timing per column. Includes batch size, complexity filter, routing mode, max sends per terminal, global session cap, and terminal pool management.
 
-**REMOTE Tab**
-Configure Linear Remote Control — select boards, sync mode (manual/constant), and ping frequency. See §30.
+**REMOTE Tab** (Project panel)
+Configure Remote Control — provider (Linear / Notion / ClickUp), boards to sync, remote mode (Ingest / Full), comment-polling and push toggles, silent syncing, and ping frequency. Includes a Sync Health panel. See §30. (This config tab lives in the Project panel; the start/stop toggle is on the Kanban toolbar.)
 
 **WORKTREES Tab**
 Manage git worktrees for epic-based dispatch routing. Create, list, and delete worktrees associated with epics.
@@ -1498,21 +1498,43 @@ The verdict is posted via the `clickup_api` or `linear_api` skill — it **never
 
 ---
 
-## 30. Linear Remote Control
+## 30. Remote Control (provider-agnostic)
 
-Drive your Kanban board from the Linear mobile app.
+Drive your Kanban board from a remote surface — the **Linear** or **Notion** mobile/web app, or a push-only **ClickUp** mirror.
 
 ### How It Works
-Remote Control polls Linear on a timer (no webhooks), mirrors state changes to Kanban columns and dispatches the column's agent, and ingests comments — routing each to the current column's agent.
+Remote Control polls the active provider on a timer (no webhooks). In **Full** mode it mirrors remote state changes onto Kanban columns and dispatches the target column's agent; in either mode it ingests comments and routes each to the current column's agent. Delta polling asks the provider "what changed since my cursor?" — state and comments are two separate streams with two cursors.
+
+### Providers & capabilities
+Providers implement a common seam and declare capabilities (`pull`, `push`, `projectContextPush`, `archive`); the UI gates controls on capability, not on provider name.
+
+| Provider | Pull | Push | Notes |
+| :--- | :--- | :--- | :--- |
+| **Linear** | ✓ | ✓ | Full remote-control surface. |
+| **Notion** | ✓ | ✓ | Full; drive via the Notion app / MCP. |
+| **ClickUp** | — | ✓ | Push-only stakeholder-visibility mirror (no inbound dispatch). |
+
+(A separate **git-native** channel — control-plane / wiki — mirrors whole-board state via git; see *Board State Export* below and §on the Control Plane. It is configured by `switchboard.boardStateExport`, not by this tab.)
 
 ### Configuration
-Kanban **REMOTE** tab:
-- **Boards to sync** (multi-select)
-- **Silent sync** — keep mirroring while pinging is off
-- **Ping mode** — manual / constant
+Configure in the **Project panel → REMOTE** tab (the config tab moved here from the Kanban panel; only the start/stop toggle remains on the Kanban toolbar):
+- **Provider** — Linear / Notion / ClickUp (push-only)
+- **Workspace** and **Boards to sync** (multi-select)
+- **Silent syncing** — keep selected boards mirrored even while pinging is off
+- **Remote mode** — *Ingest (pull only)* or *Full (pull + mirror + dispatch)*. Full is disabled for providers without `pull`.
+- **Poll comments from remote** — comment-polling toggle
+- **Push status & content to remote** — push toggle; disabled for providers without `push`
 - **Ping frequency** — 30–120s (default 60)
+- **Start / Stop Remote Control** button (active state shows "Pinging…")
 
-Toggle remote control on/off from the toolbar remote control button.
+Toggle remote control on/off from the Kanban toolbar remote-control button as well.
+
+### Sync Health
+While remote control is active, a **Sync Health** panel (auto-refreshed ~every 15s) surfaces:
+- **Last poll** — ✓/✗ with timestamp and truncated error (red on failure)
+- **Last push** — ✓/✗ with timestamp and error
+- **Rate-limit backoff** — "⏳ Rate-limited — backing off…" when the provider returns 429/529 (60s window)
+- **Persistent failure** — "⚠ N consecutive failures — check token/connection" once failures reach 3
 
 ### Guards
 - **Self-comment marker** — skips its own outbound comments on ingest.
@@ -1522,7 +1544,15 @@ Toggle remote control on/off from the toolbar remote control button.
 - **Per-poll card cap** — 100 cards (most-recently-updated first; remainder deferred to the next cycle).
 
 ### Config Storage
-Stored in the Kanban DB `config` table (key `remote.config`), **not** in `settings.json`. The `RemoteConfig` fields: `boards` (string[]), `silentSync` (boolean), `pingFrequencySeconds` (30–120, default 60). The poll loop runs when the toolbar toggle is on and stops when it's off.
+Stored in the Kanban DB `config` table (key `remote.config`), **not** in `settings.json`. The `RemoteConfig` fields: `provider` (`linear`|`notion`|`clickup`), `boards` (string[]), `silentSync` (boolean), `pingFrequencySeconds` (30–120, default 60), `mode` (`ingest`|`full`), `push` (boolean), `comments` (boolean). The poll loop runs when the toolbar toggle is on and stops when it's off.
+
+### Board State Export (git-native mirror)
+Independently of the provider channel above, board state can be mirrored to git so it travels with the repo. Set the destination in the **Setup** panel → *Board State Export*:
+- `none` — no git footprint (default)
+- `control-plane` — push to the control-plane repo
+- `wiki` — push to `<remote>.wiki.git`
+
+Outbound pushes commit `.switchboard/kanban-board.md` and `.switchboard/kanban-state-*.md` ("switchboard: update board state mirror"); inbound state/comment deltas are read back from git with a commit-SHA cursor and an author trust gate (`switchboard.planAutoFetch.trustedAuthors`). Settings: `switchboard.boardStateExport`, `switchboard.boardStateExport.remoteUrl`.
 
 ---
 

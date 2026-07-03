@@ -185,8 +185,21 @@ Configure via: `switchboard.defaultMode` (`action` | `plan`)
 ### Automated Triage Pipeline (ClickUp & Linear)
 One-click setup in the Setup panel creates a "Bug Triage" board that auto-pulls bugs from ClickUp or Linear, routes them to the Ticket Updater agent for triage verdicts (severity, area, recommended action, routing), and syncs the verdicts back as comments on the source ticket. The agent never overwrites the ticket description — it posts a short structured comment only (target ≤120 words).
 
-### Linear Remote Control
-Drive your Kanban board from the Linear app on your phone. Moving a card between Linear states moves it on the board and dispatches that column's agent. Comments posted on a Linear issue are routed to the card's current column agent. Configure boards, sync mode, and ping frequency in the Kanban REMOTE tab. Toggle remote control from the toolbar button. Config is stored in the Kanban database (key `remote.config`), not in `settings.json`.
+### Remote Control (provider-agnostic)
+Drive your Kanban board from a remote surface — the **Linear** or **Notion** mobile/web app, or a **ClickUp** mirror. Switchboard polls the active provider on a timer (no webhooks): moving a card between remote states mirrors it onto the board and dispatches that column's agent, and comments posted remotely are routed to the card's current column agent.
+
+Configure it in the **Project panel → REMOTE tab**; start/stop from the Kanban toolbar remote-control button. Controls:
+- **Provider** — Linear, Notion, or ClickUp (push-only stakeholder mirror).
+- **Boards to sync** — pick which project boards participate.
+- **Remote mode** — *Ingest (pull only)* mirrors remote state without dispatching, or *Full (pull + mirror + dispatch)* also runs the column agent. (Full is disabled for push-only providers.)
+- **Poll comments from remote** and **Push status & content to remote** — independent toggles (push is disabled for providers that don't support it).
+- **Silent syncing** — keep boards mirrored even while pinging is off.
+- **Ping frequency** — 30–120s (default 60).
+
+A **Sync Health** panel surfaces last poll/push status, rate-limit backoff, and persistent-failure warnings so silent breakage (bad token, revoked connection) is visible. Config is stored in the Kanban database (key `remote.config`), not in `settings.json`.
+
+### Board State Export (git-native mirror)
+Independently of the provider channel, Switchboard can mirror board state to git so it travels with your repo. Set **Board State Export** in the Setup panel — `none` (no git footprint), `control-plane` (push to the control-plane repo), or `wiki` (push to `<remote>.wiki.git`). Settings: `switchboard.boardStateExport`, `switchboard.boardStateExport.remoteUrl`.
 
 ### Live Sync Mode
 Automatically syncs edits back to ClickUp/Linear every 30 seconds.

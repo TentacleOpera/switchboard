@@ -66,8 +66,18 @@ Access unlimited Gemini Pro planning quota:
 ### One-Click Triage Pipeline
 In the Setup panel, click "ENABLE TRIAGE PIPELINE" under ClickUp or Linear to auto-create a Bug Triage board. Bugs are pulled in, routed to the Ticket Updater agent, and triage verdicts (severity, area, assessment, recommended action, routing — ≤120 words) are synced back as comments. The agent never overwrites the ticket description.
 
-### Linear Remote Control
-Drive your board from your phone via the Linear app. Configure in the Kanban REMOTE tab — select boards, set ping mode (manual/constant), and ping frequency (30-120s). Moving a Linear issue between states dispatches the corresponding Kanban column agent; comments are routed to the current column's agent. Toggle from the toolbar remote control button. Config stored in the Kanban DB, not `settings.json`.
+### Remote Control (Linear / Notion / ClickUp)
+Drive your board from your phone or browser via a remote provider. Configure it in the **Project panel → REMOTE tab** and toggle it on/off from the Kanban toolbar remote-control button:
+- **Provider** — Linear, Notion, or ClickUp (push-only mirror).
+- **Boards to sync** — which project boards participate.
+- **Remote mode** — *Ingest (pull only)* just mirrors remote state; *Full (pull + mirror + dispatch)* also dispatches the target column's agent.
+- **Poll comments from remote** / **Push status & content to remote** — independent toggles.
+- **Silent syncing** — keep mirroring even while pinging is off.
+- **Ping frequency** — 30–120s (default 60).
+
+Moving a remote issue between states dispatches the corresponding Kanban column agent (in Full mode); comments are routed to the current column's agent. A **Sync Health** panel shows last poll/push status, rate-limit backoff, and persistent-failure warnings. Config is stored in the Kanban DB (key `remote.config`), not `settings.json`.
+
+Separately, **Board State Export** (Setup panel) mirrors board state to git — `none`, `control-plane`, or `wiki` — via `switchboard.boardStateExport`.
 
 ---
 
