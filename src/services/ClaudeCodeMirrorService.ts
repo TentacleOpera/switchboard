@@ -41,11 +41,17 @@ interface MirrorEntry {
 // 2026-07-03: added `sw` alias + remote-session skills (improve-remote-plan,
 // create-epic) + move-task proxies (clickup-move-task, linear-move-issue) that
 // were previously advertised in AGENTS.md but never generated into workspaces.
+// 2026-07-03: added `/switchboard` front-door router (workflows/switchboard-index.md)
+// and `/improve-epic` (workflows/improve-epic.md) epic-reconciliation skill.
 const MIRROR_MANIFEST: MirrorEntry[] = [
     // Workflows → user-invocable skills (default both-mode).
+    // /switchboard — front door: detects local vs remote and routes to the right skill.
+    { source: 'workflows/switchboard-index.md', name: 'switchboard', invocation: 'default' },
     { source: 'workflows/memo.md', name: 'memo', invocation: 'default' },
     { source: 'workflows/accuracy.md', name: 'accuracy', invocation: 'default' },
     { source: 'workflows/improve-plan.md', name: 'improve-plan', invocation: 'default' },
+    // /improve-epic — epic reconciliation; authorised to restructure the subtask set.
+    { source: 'workflows/improve-epic.md', name: 'improve-epic', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
     { source: 'workflows/sw-remote.md', name: 'sw-remote', invocation: 'default' },
     // /sw — short alias generated from the same source as switchboard-chat.
