@@ -189,7 +189,9 @@ Add a case in the message handler immediately after the `launchMcpMonitorTermina
 
 ### 5. `src/webview/kanban.html` — add a Stop button to the running status branch
 
-Update the status line (line 7883-7897) to show a Stop button when the monitor is running:
+Update the status line (line 7706-7724) to show a Stop button when the monitor is running. **Current code (7706-7724)** has only a bare 🟢 `innerHTML` in the running branch (no button) and a Launch button in the not-running branch; the local flag `isMcpMonitorTerminalRunning` is set from `msg.isMonitorRunning` in the `updateMcpMonitorConfig` case (line 6734). The change adds a Stop button to the running branch only, leaving the not-running (Launch) branch as-is:
+
+> **Shared-surface coordination:** this exact block is relocated by **dedicated-tab** and gets extra polling controls from **separate-terminal-auth-polling**. Keep this edit additive (append a Stop button to the running branch); do not restructure the surrounding block. The reviewer coordinates final merge order.
 
 ```js
             // Status Line

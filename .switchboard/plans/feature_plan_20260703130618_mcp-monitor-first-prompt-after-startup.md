@@ -345,3 +345,12 @@ In `_mcpMonitorTick` (the `try { ... } finally { ... }` block at lines 20540-205
     - Inspect `~/.switchboard/integration-config.json` — `lastCheckAt` should be unchanged (the write only happens after a successful send).
     - Relaunch the terminal; the next prompt should cover the window since the *last successful* send, not since the failed tick.
 11. **Regression:** Existing automation-engine (autoban) behavior and other agent-grid terminal launches are unaffected — changes are scoped to the MCP monitor path. The `setMcpMonitorConfig` signature change is additive (`lastCheckAt` optional), so existing callers in `kanban.html` and `KanbanProvider.ts` that pass partial config are unaffected.
+
+### Automated Tests
+- No unit-test harness exists for the timer/terminal lifecycle in this file (VS Code API surface). Verification is manual (steps above) plus `npm run compile` (webpack) type-check. If a lightweight unit exists for `_buildMcpMonitorPrompt`, add a case asserting: (a) `lastCheckAt: undefined` → prompt contains `"in the past 24 hours"`; (b) `lastCheckAt: <ISO>` → prompt contains `"since <toUTCString()>"`. Pure-function, no VS Code mocks needed.
+
+---
+
+## Recommendation
+
+**Complexity 5 → Send to Coder.** The implementation is routine (additive timer + additive optional config field + one prompt string), but it touches five shared surfaces co-edited by sibling subtasks, so it must be coded with the epic-level merge notes in hand — not in isolation. Coordinate `_buildMcpMonitorPrompt` with `editable-prompt-preview`, the `McpMonitorConfig` schema/merge block with `per-source-intervals`, `_stopMcpMonitorLoop` with `stuck-running-status-and-stop-control`, and the launch/first-prompt timing with `separate-terminal-auth-polling` before writing code.

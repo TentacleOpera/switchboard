@@ -118,7 +118,11 @@ This plan is the **central, highest-conflict** member of its 10-plan epic. It to
 
 ### 1. `src/services/GlobalIntegrationConfigService.ts` — add `pollingEnabled` field
 
-Extend `GlobalConfig.mcpMonitor` (line 15) and `McpMonitorConfig` (line 39):
+**Verified anchors (current code):** the `mcpMonitor?` block is at lines **15-21**, `McpMonitorConfig` at **39-45**, `DEFAULT_MCP_MONITOR_CONFIG` at **47-53**, `getMcpMonitorConfigSync` at **221** (return **224-231**), `getMcpMonitorConfig` at **233** (return **236-242**), `setMcpMonitorConfig` at **245** (write **248-254**).
+
+> **Note (lastCheckAt is out of scope):** the current `mcpMonitor?` block and `McpMonitorConfig` have NO `lastCheckAt` field. The snippets below add one, but it is **not required** for this feature (see User Review Required). Drop it or split it out unless a sibling needs it.
+
+Extend the `mcpMonitor?` block (line 15) and `McpMonitorConfig` (line 39):
 
 ```ts
     mcpMonitor?: {
@@ -128,7 +132,7 @@ Extend `GlobalConfig.mcpMonitor` (line 15) and `McpMonitorConfig` (line 39):
         targetRole?: string;
         sources?: string[];
         customInstruction?: string;
-        lastCheckAt?: string;
+        lastCheckAt?: string;       // OUT OF SCOPE — see note above
     };
 ```
 
@@ -140,9 +144,11 @@ export interface McpMonitorConfig {
     targetRole: string;
     sources: string[];
     customInstruction: string;
-    lastCheckAt?: string;
+    lastCheckAt?: string;          // OUT OF SCOPE — see note above
 }
 ```
+
+Also add `pollingEnabled: false` to `DEFAULT_MCP_MONITOR_CONFIG` (lines 47-53) so the default object satisfies the non-optional interface field.
 
 In `getMcpMonitorConfig` (line 233) and `getMcpMonitorConfigSync` (line 221), add backward-compat mapping:
 

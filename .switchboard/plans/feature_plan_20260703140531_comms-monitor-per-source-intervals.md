@@ -368,7 +368,7 @@ Remove the global interval row (lines 7626-7643 — verified) **and** its change
 
 ### 6. `src/webview/kanban.html` — update webview state default
 
-Near line 6139:
+At line 6078 (verified — current: `let mcpMonitorConfig = { enabled: false, intervalMinutes: 5, targetRole: 'mcp_monitor', sources: ['slack'], customInstruction: '' };`):
 
 ```js
         let mcpMonitorConfig = {
