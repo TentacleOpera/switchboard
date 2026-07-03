@@ -77,3 +77,7 @@ Inside `initializeKanbanDbOnStartup()`'s per-workspace-root loop, after the DB i
 4. **Manual:** configure Linear/Notion remote control, change a linked issue's status remotely with the IDE closed, restart, confirm the card advances once (and its agent dispatches, per the User Review decision) with no duplicate.
 
 **Recommendation:** Complexity 3 — a small wrapper across three files delegating to existing, tested infrastructure. The only real decision is dispatch-at-startup (above).
+
+## Review Findings
+
+**Files reviewed:** `src/services/RemoteControlService.ts` (`reconcileOnce()`), `src/services/KanbanProvider.ts` (`reconcileRemoteOnStartup()`), `src/services/TaskViewerProvider.ts` (startup call site). No code changes applied. Implementation is clean: `reconcileOnce()` delegates to `_poll()` without setting `_active` or scheduling a timer; `silentSync` and `boards.length === 0` guards match `start()` semantics; `reconcileRemoteOnStartup()` wraps in try/catch; call site is correctly placed after DB bootstrap and before orphan detection in `initializeKanbanDbOnStartup()`. **Regression analysis:** no double-trigger (no other startup code calls `_poll()`; manual `remoteStart()` is button-triggered only); `_polling` re-entrancy guard prevents overlap if user clicks "start" during reconcile; no orphaned references; no new config keys. **No remaining risks.**

@@ -847,13 +847,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
     void migrateTriageRuleDefaults().then(() => {
         void kanbanProvider!.initializeIntegrationAutoPull();
+        void kanbanProvider!.startAutoArchiveForAll();
     }).catch(err => {
         console.error('[Switchboard] Error migrating triage rule defaults:', err);
         void kanbanProvider!.initializeIntegrationAutoPull();
+        void kanbanProvider!.startAutoArchiveForAll();
     });
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             void kanbanProvider!.initializeIntegrationAutoPull();
+            void kanbanProvider!.startAutoArchiveForAll();
             // Deferred migration: if activation happened with no workspace folders,
             // run the global integration config migration now that a workspace is open.
             void MigrationService.runMigration();
@@ -2660,14 +2663,43 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!suppressMain) {
             const normalizeGridTerminalName = (value: string | undefined): string => (value || '').trim();
             const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            // Build a set of terminal names that are main repo terminals (not worktree).
+            // Only needed when worktree terminals exist and could collide by name.
+            const mainRepoTerminalNames = new Set<string>();
+            if (gridWorktrees.length > 0) {
+                try {
+                    const terminalState = await taskViewerProvider.readTerminalRegistryState(effectiveWorkspaceRoot);
+                    for (const [name, info] of Object.entries(terminalState || {})) {
+                        const entry = info as any;
+                        const termWtPath = entry.worktreePath ? path.resolve(entry.worktreePath) : '';
+                        if (termWtPath === path.resolve(effectiveCwd)) {
+                            mainRepoTerminalNames.add(name);
+                            mainRepoTerminalNames.add(entry.friendlyName || name);
+                        }
+                    }
+                } catch {
+                    // Fall back to name-only matching (pre-fix behavior) for safety.
+                }
+            }
+
             const matchesGridAgentName = (terminal: vscode.Terminal, agentName: string): boolean => {
                 const creationName = (terminal.creationOptions as vscode.TerminalOptions | undefined)?.name;
                 const terminalName = normalizeGridTerminalName(terminal.name);
                 const createdName = normalizeGridTerminalName(creationName);
-                // Matches primary agent names (exact, or with VS Code duplicate suffix like " (2)")
-                // but excludes pool terminals which use bare number suffix like " 2"
                 const primaryPattern = new RegExp(`^${escapeRegex(agentName)}(?: \\(\\d+\\))?$`);
-                return primaryPattern.test(terminalName) || primaryPattern.test(createdName);
+                if (!primaryPattern.test(terminalName) && !primaryPattern.test(createdName)) {
+                    return false;
+                }
+                if (mainRepoTerminalNames.size === 0) {
+                    return true;
+                }
+                const suffixedTerminalName = suffixedName(terminalName);
+                const suffixedCreatedName = createdName ? suffixedName(createdName) : '';
+                return mainRepoTerminalNames.has(terminalName) ||
+                       mainRepoTerminalNames.has(suffixedTerminalName) ||
+                       mainRepoTerminalNames.has(createdName) ||
+                       mainRepoTerminalNames.has(suffixedCreatedName);
             };
             const clearGridBlockers = async () => {
                 const agentNames = new Set(agents.map(a => a.name));

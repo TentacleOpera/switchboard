@@ -477,14 +477,7 @@
             font-family: var(--font-mono);
         }
 
-        #notebook-content {
-            flex-direction: column;
-            padding: 16px;
-            gap: 16px;
-            overflow-y: auto;
-            height: 100%;
-            background: var(--panel-bg);
-        }
+        /* NotebookLM tab moved to project.html (Project panel). */
 
         /* Planning Cards */
         .planning-card {
@@ -2273,8 +2266,7 @@
         }
 
         /* Tab content wrappers — solid backgrounds that block the body grid */
-        .cyber-theme-enabled #research-content,
-        .cyber-theme-enabled #notebook-content {
+        .cyber-theme-enabled #research-content {
             background: transparent;
         }
 
@@ -2366,7 +2358,6 @@
 
         /* Claudify: solid near-black surface + subtle warm grid (no translucency, no blur) */
         body.theme-claudify #docs-content,
-        body.theme-claudify #notebook-content,
         body.theme-claudify #research-content,
         body.theme-claudify #tickets-content,
         body.theme-claudify #preview-pane,
@@ -3448,7 +3439,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="html">HTML</button>
         <button class="shared-tab-btn" data-tab="tickets" id="tickets-tab-btn">TICKETS</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
-        <button class="shared-tab-btn" data-tab="notebook">NotebookLM</button>
     </div>
     <div class="container">
         <!-- Unified Docs Tab: breadcrumb on top, then sidebar + content -->
@@ -3510,50 +3500,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </div>
         </div>
-        <div id="notebook-content" class="shared-tab-content">
-            <!-- NotebookLM Card -->
-            <div class="planning-card">
-                <div class="planning-card-header">NOTEBOOKLM INTEGRATION</div>
-                <div class="planning-card-description">NotebookLM integration allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.</div>
-
-                <div id="webai-status" class="planning-status"></div>
-
-                <div class="planning-card-section" style="margin-bottom: 16px;">
-                    <div class="planning-card-description" style="margin-bottom: 4px;">Workspace</div>
-                    <select id="notebook-workspace-filter" class="planning-input" style="width: 100%; background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
-                    </select>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">1. BUNDLE CODE</div>
-                    <div class="planning-card-description">Package code into docx files for NotebookLM compatibility.</div>
-                    <button id="btn-bundle-code" class="planning-button">BUNDLE CODE</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">2. UPLOAD TO NOTEBOOKLM</div>
-                    <div class="planning-card-description">Create new Notebook and upload all files in the integration folder as sources.</div>
-                    <div class="planning-controls">
-                        <button id="btn-open-notebooklm" class="planning-button">OPEN NOTEBOOKLM</button>
-                        <button id="btn-open-airlock-folder" class="planning-button secondary">OPEN FOLDER</button>
-                    </div>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">3. COPY SPRINT PLANNING PROMPT</div>
-                    <div class="planning-card-description">Generate a prompt for NotebookLM to write expanded plans for every plan in the NEW Kanban column. Copy the output and use Step 4 below to import.</div>
-                    <button id="btn-copy-sprint-prompt" class="planning-button secondary">COPY SPRINT PROMPT</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">4. IMPORT PLANS</div>
-                    <div class="planning-card-description">
-                        Paste your expanded plans from NotebookLM. Plans matching titles in the NEW column will overwrite the originals; others will be created as new plans.
-                    </div>
-                    <button id="btn-import-notebooklm-plans" class="planning-button secondary">IMPORT PLANS</button>
-                </div>
-            </div>
-        </div>
+        <!-- The NotebookLM tab moved to project.html (Project panel) — it is the
+             dev-docs on-ramp and now sits beside the Dev Docs tab it feeds. -->
         <!-- HTML Tab — stakeholder HTML previews, independent from Design panel's HTML Previews -->
         <div id="html-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-planning-html">

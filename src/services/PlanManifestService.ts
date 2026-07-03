@@ -209,7 +209,10 @@ export class PlanManifestService {
 
         // Defensive: warn when a bare epic-looking filename is auto-resolved to plans/,
         // since epics live under .switchboard/epics/ and will likely defer-then-drop.
-        if (/^epic-/i.test(resolvedPlanFile) && !resolvedPlanFile.startsWith('.switchboard/epics/')) {
+        // Test against the ORIGINAL entry.planFile (before auto-resolve prepends
+        // .switchboard/plans/), since resolvedPlanFile starts with '.switchboard/'
+        // and would never match /^epic-/i.
+        if (/^epic-/i.test(entry.planFile) && !resolvedPlanFile.startsWith('.switchboard/epics/')) {
             log?.(`[PlanManifest] ⚠️ Bare epic-looking filename '${entry.planFile}' auto-resolved to plans/ — epics must use the full .switchboard/epics/ prefix. This entry will likely defer-then-drop.`);
         }
 

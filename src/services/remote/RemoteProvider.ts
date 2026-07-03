@@ -21,6 +21,16 @@ export interface RemoteStateDelta {
     remoteId: string;
     /** Opaque provider state key. Linear: state UUID. Notion: the `Kanban Column` select name. */
     stateKey: string;
+    /** If the remote card's parent changed, the new parent's remote id (or '' if unparented).
+     *  Undefined = no parent change detected (provider didn't query it). */
+    parentRemoteId?: string;
+    /** If the remote card is itself a parent (has children), mark it as an epic candidate.
+     *  Undefined = provider didn't query it. */
+    isEpicCandidate?: boolean;
+    /** ISO timestamp of the remote item's last update. Linear: issue.updatedAt. Notion: page.last_edited_time. */
+    updatedAt?: string;
+    /** Remote item body/description. Linear: issue.description. Notion: undefined (deferred). */
+    description?: string;
 }
 
 /** A single inbound comment from the remote agent. */
@@ -37,8 +47,68 @@ export interface RemoteCommentDelta {
     authoredBySelf: boolean;
 }
 
+/**
+ * Declared provider capabilities — gates UI honestly (no toggle offers a capability
+ * a provider lacks). The Remote Sync Refactor (1/3) formalized pull/push; the
+ * project-context + archive capabilities ride the same object so epic 1's context
+ * sync and the auto-archive rule dispatch through the provider seam, not a parallel
+ * pipeline.
+ */
+export interface RemoteProviderCapabilities {
+    /** Provider can pull/ingest state + comments (Linear, Notion). ClickUp = false. */
+    pull: boolean;
+    /** Provider can push state + content (Linear, ClickUp, Notion-after-2/3). */
+    push: boolean;
+    /** Provider can receive the project-level context bundle (Dev Docs + PRDs + constitution). */
+    projectContextPush: boolean;
+    /** Provider can archive a card (Linear issueArchive / Notion page archive). */
+    archive: boolean;
+}
+
+/** One project-context document (a dev doc, a project PRD, or the constitution). */
+export interface ProjectContextDocument {
+    kind: 'devdoc' | 'prd' | 'constitution';
+    /** Display title — dev-doc H1, project name for PRDs, 'Workspace Constitution'. */
+    title: string;
+    /** Raw markdown body. */
+    markdown: string;
+}
+
+/** The assembled project-level context pushed outward. Switchboard is the source of truth. */
+export interface ProjectContextBundle {
+    /** Workspace display name (basename of the workspace root). */
+    workspaceLabel: string;
+    /** Board keys from remote.config ('' = base board) — Linear resolves project docs from these. */
+    boards: string[];
+    documents: ProjectContextDocument[];
+    /** Single combined markdown rendering of all documents (providers may use this or the parts). */
+    combinedMarkdown: string;
+    /** ISO timestamp of this sync run (for staleness banners in the pushed doc). */
+    syncedAt: string;
+}
+
+/** Outcome of a project-context push against one provider. */
+export interface ProjectContextPushResult {
+    ok: boolean;
+    /** true → provider isn't configured for this workspace; not an error. */
+    skipped?: boolean;
+    /** Human-readable outcome: 'replaced', 'appended', or an error/skip reason. */
+    detail?: string;
+}
+
+/** Outcome of archiving a single remote card. */
+export interface ArchiveResult {
+    ok: boolean;
+    /** true → provider isn't configured for this workspace; not an error. */
+    skipped?: boolean;
+    error?: string;
+}
+
 export interface RemoteProvider {
-    readonly kind: 'linear' | 'notion' | 'control-plane' | 'wiki';
+    readonly kind: 'linear' | 'notion' | 'clickup' | 'control-plane' | 'wiki';
+
+    /** Declared capabilities — gate callers on these, never on `kind`. */
+    readonly capabilities: RemoteProviderCapabilities;
 
     /**
      * State deltas since `sinceCursor` (an opaque cursor string the provider serializes
@@ -77,4 +147,36 @@ export interface RemoteProvider {
      * (no feedback loop).
      */
     postComment(remoteId: string, body: string): Promise<void>;
+
+    /**
+     * Push a column/state change to the remote (outbound status sync).
+     * Implementations delegate to the concrete sync service's syncPlan.
+     * Pull-only providers log and return (no-op stub).
+     */
+    pushState(remoteId: string, column: string): Promise<void>;
+
+    /**
+     * Push plan body/content to the remote description/body (outbound content sync).
+     * Implementations delegate to the concrete sync service's syncPlanContent.
+     * Pull-only providers log and return (no-op stub).
+     */
+    pushContent(remoteId: string, markdown: string): Promise<void>;
+
+    /**
+     * Push the project-level context bundle (Dev Docs + PRDs + constitution) to the
+     * provider's project surface — Notion: the Switchboard context page beside the
+     * plans DB; Linear: a "Switchboard Project Context" document on the matching
+     * project(s). Notion writes MUST obey the overwrite guard: append-by-default,
+     * full replace only after a verified no-inline-children check, and abort (never
+     * destructive-write) when the check can't be made.
+     */
+    pushProjectContext(bundle: ProjectContextBundle): Promise<ProjectContextPushResult>;
+
+    /**
+     * Archive a remote card (Linear issueArchive / Notion page archive). Called
+     * by the auto-archive rule after the local plan is moved to Completed +
+     * archived locally — the local board is the source of truth and push mirrors
+     * the archive outward. Idempotent: safe to call on an already-archived card.
+     */
+    archiveCard(remoteId: string): Promise<ArchiveResult>;
 }

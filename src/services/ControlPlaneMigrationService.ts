@@ -1248,8 +1248,47 @@ export class ControlPlaneMigrationService {
         lines.push('');
         lines.push('# Catch-all: exclude any child directory containing .git');
         lines.push('/*/');
+        // Un-ignore .switchboard/ — the mirror content (kanban-board.md, etc.)
+        // lives here and MUST be tracked when the control plane is a git repo.
+        lines.push('!.switchboard/');
+        // Write the .gitignore, preserving any existing user content that isn't
+        // already managed by Switchboard. Merge: keep existing non-Switchboard lines,
+        // replace the Switchboard-managed block (delimited by sentinel comments).
+        const switchboardStart = '# Switchboard Control Plane .gitignore';
+        let existingContent = '';
+        try {
+            existingContent = await fs.promises.readFile(gitignorePath, 'utf8');
+        } catch { /* no existing .gitignore */ }
 
-        // Write (or overwrite) the .gitignore
-        await fs.promises.writeFile(gitignorePath, `${lines.join('\n')}\n`, 'utf8');
+        const switchblock = `${lines.join('\n')}\n`;
+        if (existingContent) {
+            // Remove any previous Switchboard block (between sentinel and the next
+            // non-Switchboard line or EOF), then append the fresh block.
+            const existingLines = existingContent.split('\n');
+            const preserved: string[] = [];
+            let inSwitchblock = false;
+            for (const line of existingLines) {
+                if (line === switchboardStart) { inSwitchblock = true; continue; }
+                if (inSwitchblock) {
+                    // End of switchblock: a line that doesn't start with #, /, !, or empty
+                    if (line && !line.startsWith('#') && !line.startsWith('/') && !line.startsWith('!')) {
+                        inSwitchblock = false;
+                        preserved.push(line);
+                    }
+                    continue;
+                }
+                preserved.push(line);
+            }
+            // Trim trailing empties from preserved content
+            while (preserved.length > 0 && preserved[preserved.length - 1].trim() === '') {
+                preserved.pop();
+            }
+            const merged = preserved.length > 0
+                ? `${preserved.join('\n')}\n\n${switchblock}`
+                : switchblock;
+            await fs.promises.writeFile(gitignorePath, merged, 'utf8');
+        } else {
+            await fs.promises.writeFile(gitignorePath, switchblock, 'utf8');
+        }
     }
 }

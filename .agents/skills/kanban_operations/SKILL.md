@@ -42,7 +42,7 @@ node .agents/skills/kanban_operations/create-epic.js "Onboarding revamp" '["a1b2
 - `plan_ids_json` is a JSON array of **`planId`** values (the `planId` field from `get-state.js` output) — NOT `sessionId`. File-watcher-imported plans have an empty `session_id`, so `planId` is the only reliable key.
 - Output (stdout): `{"ok":true,"epicPlanId":"...","epicSessionId":"..."}` on success, or `{"ok":false,"error":"..."}` on failure. Exit code 0/1 matches.
 - The epic inherits its project/column from the subtasks and appears on the board immediately.
-- **No external sync:** epic creation updates the Switchboard board and writes a `.switchboard/epics/` file. It does **NOT** sync to Linear/ClickUp.
+- **External sync:** epic creation and assignment sync the epic as a parent issue (Linear) or parent task (ClickUp) and link subtasks as children, IF real-time sync is enabled for that tracker. Subtasks without an existing external issue/task are skipped — they will be linked on a future epic-sync trigger once their individual sync creates an external issue. Sync is best-effort: failures are logged but do not roll back the local epic creation.
 - **Requires the running extension** — there is no direct-DB fallback (unlike `move-card.js`). Epic creation spans project inheritance, column resolution, a file write, and subtask linking; replicating that in raw DB calls would risk an orphaned epic. If the extension isn't reachable the script fails with a clear message.
 
 ## Assign Plans to an Epic
@@ -58,7 +58,7 @@ node .agents/skills/kanban_operations/assign-to-epic.js <epicPlanId-from-create>
 
 - `epic_plan_id` is the `epicPlanId` returned by `create-epic.js`. `plan_ids_json` is a JSON array of `planId` values to add.
 - Output: `{"ok":true,"assigned":["..."],"skipped":["..."]}`. A plan already on another epic (or that is itself an epic / missing) is reported in `skipped` and left untouched — it does not abort the batch.
-- Same constraints as `create-epic.js`: no Linear/ClickUp sync, requires the running extension (no direct-DB fallback).
+- Same constraints as `create-epic.js`: requires the running extension (no direct-DB fallback). Epic assignment syncs the newly assigned subtasks as children of the epic's external issue/task IF real-time sync is enabled.
 
 ## Suggest Epics Workflow (scan → propose → confirm → execute)
 

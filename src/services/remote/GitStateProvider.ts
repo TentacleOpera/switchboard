@@ -4,7 +4,7 @@ import * as cp from 'child_process';
 import { promisify } from 'util';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import { hasMarker, stampMarker } from '../commentMarker';
-import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta } from './RemoteProvider';
+import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta, RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult, ArchiveResult } from './RemoteProvider';
 import { PlanAutoFetchService } from '../PlanAutoFetchService';
 
 const execFileAsync = promisify(cp.execFile);
@@ -24,6 +24,7 @@ const COLUMN_LINE_RE = /^\*\*Column:\*\*\s*(.+)$/m;
 export class GitStateProvider implements RemoteProvider {
     public readonly kind: 'control-plane' | 'wiki';
     public readonly gitKind: GitProviderKind;
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: false, projectContextPush: false, archive: false };
     private _deps: GitStateProviderDeps;
     private _pushInFlight = false;
     private _pushPending = false;
@@ -104,33 +105,49 @@ export class GitStateProvider implements RemoteProvider {
             return { deltas: [], nextCursor: sinceCursor };
         }
 
-        const deltas: RemoteStateDelta[] = [];
         const trusted = await this._getTrustedEmails(root);
 
+        // Trust check: verify ALL authors in the range are trusted. If any commit
+        // is untrusted, drop all deltas — a cumulative diff (cursor..remoteHead)
+        // can't isolate individual commits' contributions, so processing any
+        // trusted commit's diff would also process untrusted changes.
+        let allTrusted = true;
         for (const entry of logOutput.split('\n').filter(l => l.trim())) {
             const parts = entry.split('\0');
             const sha = (parts[0] || '').trim();
             const authorEmail = (parts[1] || '').trim().toLowerCase();
-
             if (!sha) { continue; }
-
             if (!trusted.has(authorEmail)) {
-                this._log(`Untrusted author ${authorEmail} on commit ${sha} — dropping state delta`);
-                continue;
+                this._log(`Untrusted author ${authorEmail} on commit ${sha} — dropping all state deltas in range`);
+                allTrusted = false;
+                break;
             }
+        }
+        if (!allTrusted) {
+            return { deltas: [], nextCursor: remoteHead || sinceCursor };
+        }
 
-            try {
-                const { stdout: diffOutput } = await this._git([
-                    'diff', `${sinceCursor}..${sha}`, '--', '.switchboard/'
-                ], { cwd: root });
+        // Single cumulative diff from cursor to remote head — avoids per-commit
+        // cumulative diff duplication that would cause intermediate column moves
+        // and spurious agent dispatches.
+        const deltas: RemoteStateDelta[] = [];
+        try {
+            const { stdout: diffOutput } = await this._git([
+                'diff', `${sinceCursor}..${remoteHead}`, '--', '.switchboard/'
+            ], { cwd: root });
 
-                const planDeltas = this._parseColumnDeltasFromDiff(diffOutput);
-                for (const d of planDeltas) {
-                    deltas.push(d);
-                }
-            } catch (e) {
-                this._log(`diff parse failed for ${sha}: ${e instanceof Error ? e.message : String(e)}`);
+            const planDeltas = this._parseColumnDeltasFromDiff(diffOutput);
+            // Deduplicate by remoteId: keep only the last stateKey per plan,
+            // so intermediate column values don't trigger spurious dispatches.
+            const byRemoteId = new Map<string, RemoteStateDelta>();
+            for (const d of planDeltas) {
+                byRemoteId.set(d.remoteId, d);
             }
+            for (const d of byRemoteId.values()) {
+                deltas.push(d);
+            }
+        } catch (e) {
+            this._log(`diff parse failed: ${e instanceof Error ? e.message : String(e)}`);
         }
 
         return { deltas, nextCursor: remoteHead || sinceCursor };
@@ -173,7 +190,6 @@ export class GitStateProvider implements RemoteProvider {
             return { deltas: [], nextCursor: sinceCursor };
         }
 
-        const deltas: RemoteCommentDelta[] = [];
         const trusted = await this._getTrustedEmails(root);
 
         try {
@@ -182,36 +198,48 @@ export class GitStateProvider implements RemoteProvider {
                 '.switchboard/'
             ], { cwd: root });
 
+            // Trust check: verify ALL authors in the range are trusted (same
+            // rationale as fetchStateDeltas — cumulative diff can't isolate).
+            let allTrusted = true;
             for (const entry of logOutput.split('\n').filter(l => l.trim())) {
                 const parts = entry.split('\0');
                 const sha = (parts[0] || '').trim();
                 const authorEmail = (parts[1] || '').trim().toLowerCase();
-
                 if (!sha) { continue; }
-
                 if (!trusted.has(authorEmail)) {
-                    this._log(`Untrusted author ${authorEmail} on commit ${sha} — dropping comment delta`);
-                    continue;
+                    this._log(`Untrusted author ${authorEmail} on commit ${sha} — dropping all comment deltas in range`);
+                    allTrusted = false;
+                    break;
                 }
+            }
 
-                try {
-                    const { stdout: diffOutput } = await this._git([
-                        'diff', `${sinceCursor}..${sha}`, '--', '.switchboard/'
-                    ], { cwd: root });
+            if (allTrusted) {
+                // Single cumulative diff — avoids per-commit duplication where the
+                // same comment appears in multiple commit diffs with different
+                // commentIds, causing duplicate comment processing.
+                const { stdout: diffOutput } = await this._git([
+                    'diff', `${sinceCursor}..${remoteHead}`, '--', '.switchboard/'
+                ], { cwd: root });
 
-                    const commentDeltas = this._parseCommentDeltasFromDiff(diffOutput, sha);
-                    for (const d of commentDeltas) {
+                const commentDeltas = this._parseCommentDeltasFromDiff(diffOutput, remoteHead);
+                // Deduplicate by createdAt+remoteId — a comment block may appear
+                // once in the cumulative diff, but dedup is defense-in-depth.
+                const seen = new Set<string>();
+                const deltas: RemoteCommentDelta[] = [];
+                for (const d of commentDeltas) {
+                    const key = `${d.remoteId}:${d.createdAt}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
                         deltas.push(d);
                     }
-                } catch (e) {
-                    this._log(`comment diff parse failed for ${sha}: ${e instanceof Error ? e.message : String(e)}`);
                 }
+                return { deltas, nextCursor: remoteHead || sinceCursor };
             }
         } catch (e) {
             this._log(`comment log failed: ${e instanceof Error ? e.message : String(e)}`);
         }
 
-        return { deltas, nextCursor: remoteHead || sinceCursor };
+        return { deltas: [], nextCursor: remoteHead || sinceCursor };
     }
 
     public stateKeyToColumn(stateKey: string): string | undefined {
@@ -254,19 +282,38 @@ export class GitStateProvider implements RemoteProvider {
         }
     }
 
+    public async pushState(_remoteId: string, _column: string): Promise<void> {
+        // No-op — git providers mirror the whole board via pushExportedState(), not per-card.
+    }
+
+    public async pushContent(_remoteId: string, _markdown: string): Promise<void> {
+        // No-op — git providers mirror the whole board via pushExportedState(), not per-card.
+    }
+
+    public async pushProjectContext(_bundle: ProjectContextBundle): Promise<ProjectContextPushResult> {
+        return { ok: true, skipped: true, detail: 'Git providers do not support project-context push' };
+    }
+
+    public async archiveCard(_remoteId: string): Promise<ArchiveResult> {
+        // Git providers mirror board state via the exported kanban-board.md; the
+        // local archive (status=completed, column=COMPLETED) is already reflected
+        // in the next mirror push. No separate archive API call needed.
+        return { ok: true, skipped: true };
+    }
+
     // ── Outbound push (net-new, NOT an interface method) ──────────
 
-    public async pushExportedState(): Promise<void> {
+    public async pushExportedState(): Promise<'pushed' | 'skipped' | 'failed'> {
         if (this._pushInFlight) {
             this._pushPending = true;
-            return;
+            return 'skipped';
         }
         this._pushInFlight = true;
 
         try {
             const root = this._getRoot();
-            if (!root) { return; }
-            if (!fs.existsSync(path.join(root, '.git'))) { return; }
+            if (!root) { return 'skipped'; }
+            if (!fs.existsSync(path.join(root, '.git'))) { return 'skipped'; }
 
             // Fetch first and reconcile to avoid non-fast-forward
             try {
@@ -287,7 +334,7 @@ export class GitStateProvider implements RemoteProvider {
                             await this._git(['merge', '--ff-only', `origin/${branch}`], { cwd: root });
                         } catch (mergeErr) {
                             this._log(`Cannot reconcile with remote — skipping push: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`);
-                            return;
+                            return 'skipped';
                         }
                     }
                 }
@@ -311,16 +358,16 @@ export class GitStateProvider implements RemoteProvider {
                     return PlanAutoFetchService.MIRROR_FILE_RE.test(normalized);
                 });
                 if (mirrorLines.length === 0) {
-                    return;
+                    return 'skipped';
                 }
             } catch {
-                return;
+                return 'skipped';
             }
 
             try {
                 await this._git(['commit', '-m', 'switchboard: update board state mirror'], { cwd: root });
             } catch {
-                return;
+                return 'skipped';
             }
 
             try {
@@ -328,11 +375,14 @@ export class GitStateProvider implements RemoteProvider {
                 const branch = currentBranch.trim();
                 await this._git(['push', 'origin', branch || 'HEAD'], { cwd: root });
                 this._log('Pushed board state mirror');
+                return 'pushed';
             } catch (e) {
                 this._log(`push failed: ${e instanceof Error ? e.message : String(e)}`);
+                return 'failed';
             }
         } catch (e) {
             this._log(`pushExportedState error: ${e instanceof Error ? e.message : String(e)}`);
+            return 'failed';
         } finally {
             this._pushInFlight = false;
             if (this._pushPending) {

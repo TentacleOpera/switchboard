@@ -16,6 +16,11 @@ export interface NotionRemoteSetup {
     commentsDatabaseId: string;
     /** Integration bot id from `GET /v1/users/me` — drives `authoredBySelf`. */
     botId: string;
+    /**
+     * The "Switchboard Project Context" page (Dev Docs + PRDs + constitution mirror).
+     * Created lazily by the first project-context push; empty until then.
+     */
+    contextPageId?: string;
 }
 
 /** Minimal config surface — satisfied by KanbanDatabase, avoids an import cycle. */
@@ -33,6 +38,7 @@ export async function loadNotionRemoteSetup(db: NotionRemoteConfigStore): Promis
             plansDatabaseId: String(parsed.plansDatabaseId || ''),
             commentsDatabaseId: String(parsed.commentsDatabaseId || ''),
             botId: String(parsed.botId || ''),
+            contextPageId: String(parsed.contextPageId || ''),
         };
     } catch {
         return null;
@@ -40,9 +46,18 @@ export async function loadNotionRemoteSetup(db: NotionRemoteConfigStore): Promis
 }
 
 export async function saveNotionRemoteSetup(db: NotionRemoteConfigStore, setup: NotionRemoteSetup): Promise<void> {
+    // Callers that predate contextPageId (e.g. NotionBackupService.setupRemoteControl)
+    // build the blob without it — preserve the stored id rather than wiping it on
+    // a setup re-run. Pass an explicit '' to intentionally clear it.
+    let contextPageId = setup.contextPageId;
+    if (contextPageId === undefined) {
+        const existing = await loadNotionRemoteSetup(db);
+        contextPageId = existing?.contextPageId || '';
+    }
     await db.setConfig(NOTION_REMOTE_SETUP_KEY, JSON.stringify({
         plansDatabaseId: String(setup.plansDatabaseId || ''),
         commentsDatabaseId: String(setup.commentsDatabaseId || ''),
         botId: String(setup.botId || ''),
+        contextPageId: String(contextPageId || ''),
     }));
 }

@@ -1,9 +1,14 @@
 import * as fs from 'fs';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import type { NotionFetchService } from '../NotionFetchService';
-import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta } from './RemoteProvider';
-import { loadNotionRemoteSetup, type NotionRemoteSetup } from './notionRemoteConfig';
+import type {
+    RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
+    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult,
+    ArchiveResult
+} from './RemoteProvider';
+import { loadNotionRemoteSetup, saveNotionRemoteSetup, type NotionRemoteSetup } from './notionRemoteConfig';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
+import { guardedWritePageBody } from './notionOverwriteGuard';
 
 /**
  * Notion backend for Remote Control delta polling (D2/D3/D4/D7).
@@ -35,6 +40,7 @@ const LIMITER_MS = 350;       // Notion ~3 req/sec
 
 export class NotionRemoteProvider implements RemoteProvider {
     public readonly kind = 'notion' as const;
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, projectContextPush: true, archive: true };
     private _deps: NotionRemoteProviderDeps;
     private _setup: NotionRemoteSetup | null = null;
     private _botId = '';
@@ -92,7 +98,20 @@ export class NotionRemoteProvider implements RemoteProvider {
         for (const row of rows) {
             const remoteId = String(row.id || '');
             const stateKey = String(row.properties?.['Kanban Column']?.select?.name || '').trim();
-            if (remoteId && stateKey) { deltas.push({ remoteId, stateKey }); }
+            if (remoteId && stateKey) {
+                // Epic structure — read Is Epic checkbox + Epic relation (added by
+                // NotionBackupService._ensureEpicProperties). If the properties don't
+                // exist yet (pre-epic-schema setup), these read falsy — safe degradation.
+                const epicRelation = row.properties?.['Epic']?.relation;
+                const parentRemoteId = Array.isArray(epicRelation) && epicRelation.length > 0
+                    ? String(epicRelation[0]?.id || '') : '';
+                deltas.push({
+                    remoteId,
+                    stateKey,
+                    parentRemoteId,
+                    isEpicCandidate: row.properties?.['Is Epic']?.checkbox === true,
+                });
+            }
             const ts = String(row.last_edited_time || '');
             if (ts && ts > nextCursor) { nextCursor = ts; }
         }
@@ -169,6 +188,221 @@ export class NotionRemoteProvider implements RemoteProvider {
         const result = await this._deps.notion.postManagedComment(remoteId, body);
         if (!result.success) {
             throw new Error(`Notion postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
+        }
+    }
+
+    public async archiveCard(remoteId: string): Promise<ArchiveResult> {
+        const setup = await this._ensureSetup();
+        if (!setup?.plansDatabaseId) {
+            return { ok: true, skipped: true };
+        }
+        const pageId = String(remoteId || '').trim();
+        if (!pageId) {
+            return { ok: false, error: 'No remote id provided' };
+        }
+        // Notion page archive = PATCH /pages/{id} with archived:true. Idempotent
+        // (archiving an already-archived page is a no-op success).
+        const result = await this._deps.notion.httpRequest('PATCH', `/pages/${pageId}`, { archived: true }, 15000);
+        if (result.status >= 200 && result.status < 300) {
+            this._log(`Archived Notion page ${pageId}.`);
+            return { ok: true };
+        }
+        return { ok: false, error: `Notion archive failed (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}` };
+    }
+
+    // ── Project-context push (epic: Project Context & Remote UI Hub) ──────
+    //
+    // Writes the Dev Docs + PRDs + constitution bundle to a dedicated
+    // "Switchboard Project Context" page created beside the plans DB. Obeys the
+    // Notion overwrite guard (notion-overwrite-guard.md): a full clear-and-rewrite
+    // is allowed ONLY after verifying the page has no inline sub-pages/databases/
+    // templates; otherwise blocks are appended (nested content survives); if the
+    // children check itself fails, abort without writing anything.
+
+    public async pushProjectContext(bundle: ProjectContextBundle): Promise<ProjectContextPushResult> {
+        const setup = await this._ensureSetup();
+        if (!setup?.plansDatabaseId) {
+            return { ok: true, skipped: true, detail: 'Notion remote not set up' };
+        }
+
+        const pageId = await this._ensureContextPage(setup, bundle.workspaceLabel);
+        if (!pageId) {
+            return { ok: false, detail: 'Could not create/find the Switchboard Project Context page' };
+        }
+
+        // Build the content blocks, prefixed with a heading so the synced
+        // section is unambiguous whether it lands as an append or a replace.
+        const blocks = [
+            this._headingBlock(1, `Project Context (synced ${bundle.syncedAt})`),
+            ...this._markdownToBlocks(bundle.combinedMarkdown),
+        ];
+
+        // Delegate to the centralized overwrite guard — the single guarded write
+        // path for all Notion body writes (notion-overwrite-guard.md).
+        const outcome = await guardedWritePageBody(this._deps.notion, pageId, blocks, (m) => this._log(m));
+        return { ok: outcome.ok, detail: outcome.detail };
+    }
+
+    /** Find-or-create the context page. Created beside the plans DB (same parent). */
+    private async _ensureContextPage(setup: NotionRemoteSetup, workspaceLabel: string): Promise<string | null> {
+        if (setup.contextPageId) {
+            // Validate the stored id still resolves (page may have been trashed).
+            const probe = await this._deps.notion.httpRequest('GET', `/pages/${setup.contextPageId}`, undefined, 15000);
+            if (probe.status === 200 && !probe.data?.archived && !probe.data?.in_trash) {
+                return setup.contextPageId;
+            }
+            this._log(`Context page ${setup.contextPageId} no longer resolves — creating a fresh one.`);
+        }
+
+        // The plans DB's parent anchors the context page next to the board mirror.
+        const dbInfo = await this._deps.notion.httpRequest('GET', `/databases/${setup.plansDatabaseId}`, undefined, 15000);
+        if (dbInfo.status !== 200) {
+            this._log(`_ensureContextPage: reading plans DB failed (HTTP ${dbInfo.status}).`);
+            return null;
+        }
+        const parent = dbInfo.data?.parent;
+        const parentPageId = parent?.type === 'page_id' ? String(parent.page_id || '') : '';
+        if (!parentPageId) {
+            // Workspace-level DBs can't parent a plain page via the API — surface it.
+            this._log('_ensureContextPage: plans DB has no page parent — cannot create the context page.');
+            return null;
+        }
+
+        const created = await this._deps.notion.httpRequest('POST', '/pages', {
+            parent: { page_id: parentPageId },
+            properties: {
+                title: { title: [{ type: 'text', text: { content: `Switchboard Project Context — ${workspaceLabel}` } }] },
+            },
+        }, 15000);
+        if (created.status !== 200 || !created.data?.id) {
+            this._log(`_ensureContextPage: page creation failed (HTTP ${created.status}).`);
+            return null;
+        }
+        const pageId = String(created.data.id);
+        this._setup = { ...setup, contextPageId: pageId };
+        await saveNotionRemoteSetup(this._deps.db, this._setup);
+        return pageId;
+    }
+
+    private _headingBlock(level: 1 | 2 | 3, text: string): any {
+        const key = `heading_${level}`;
+        return { object: 'block', type: key, [key]: { rich_text: this._richText(text) } };
+    }
+
+    /** Notion caps one rich_text item at 2000 chars — split long runs. */
+    private _richText(text: string): any[] {
+        const runs: any[] = [];
+        for (let i = 0; i < text.length; i += 2000) {
+            runs.push({ type: 'text', text: { content: text.slice(i, i + 2000) } });
+        }
+        return runs.length ? runs : [{ type: 'text', text: { content: '' } }];
+    }
+
+    /**
+     * Minimal markdown → Notion blocks. Headings, bullets, fenced code, and
+     * paragraphs — enough for planning docs; anything fancier degrades to a
+     * paragraph rather than being dropped.
+     */
+    private _markdownToBlocks(markdown: string): any[] {
+        const blocks: any[] = [];
+        const lines = String(markdown || '').split('\n');
+        let paragraph: string[] = [];
+        let codeLines: string[] | null = null;
+        let codeLang = '';
+
+        const flushParagraph = () => {
+            const text = paragraph.join('\n').trim();
+            paragraph = [];
+            if (text) {
+                blocks.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: this._richText(text) } });
+            }
+        };
+
+        for (const line of lines) {
+            if (codeLines !== null) {
+                if (line.trimEnd() === '```') {
+                    blocks.push({
+                        object: 'block', type: 'code',
+                        code: { rich_text: this._richText(codeLines.join('\n')), language: codeLang || 'plain text' },
+                    });
+                    codeLines = null;
+                    codeLang = '';
+                } else {
+                    codeLines.push(line);
+                }
+                continue;
+            }
+            const fence = line.match(/^```(\S*)\s*$/);
+            if (fence) {
+                flushParagraph();
+                codeLines = [];
+                codeLang = fence[1] || '';
+                continue;
+            }
+            const heading = line.match(/^(#{1,3})\s+(.*)$/);
+            if (heading) {
+                flushParagraph();
+                blocks.push(this._headingBlock(Math.min(3, heading[1].length) as 1 | 2 | 3, heading[2].trim()));
+                continue;
+            }
+            if (/^(-{3,}|\*{3,})\s*$/.test(line)) {
+                flushParagraph();
+                blocks.push({ object: 'block', type: 'divider', divider: {} });
+                continue;
+            }
+            const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+            if (bullet) {
+                flushParagraph();
+                blocks.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: this._richText(bullet[1]) } });
+                continue;
+            }
+            if (!line.trim()) {
+                flushParagraph();
+                continue;
+            }
+            paragraph.push(line);
+        }
+        if (codeLines !== null) {
+            // Unterminated fence — emit what we have rather than dropping it.
+            blocks.push({
+                object: 'block', type: 'code',
+                code: { rich_text: this._richText(codeLines.join('\n')), language: codeLang || 'plain text' },
+            });
+        }
+        flushParagraph();
+        return blocks;
+    }
+
+    public async pushState(remoteId: string, column: string): Promise<void> {
+        // Write the `Kanban Column` select property on the Notion page.
+        // Same pattern as NotionBackupService._upsertPlanToNotion (PATCH /pages/{id}).
+        try {
+            const result = await this._deps.notion.httpRequest(
+                'PATCH', `/pages/${remoteId}`,
+                { properties: { 'Kanban Column': { select: { name: column } } } },
+                10000
+            );
+            if (result.status >= 400) {
+                // Missing select option — log and skip, don't crash the sync loop.
+                if (result.status === 400 || result.status === 422) {
+                    this._log(`pushState: column "${column}" is not a valid Kanban Column select option for page ${remoteId} — skipping. Re-run Notion remote setup to sync column options.`);
+                } else if (result.status === 404) {
+                    this._log(`pushState: page ${remoteId} not found (deleted?) — skipping.`);
+                } else {
+                    this._log(`pushState: PATCH /pages/${remoteId} failed (HTTP ${result.status}).`);
+                }
+            }
+        } catch (e) {
+            this._log(`pushState failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    public async pushContent(remoteId: string, markdown: string): Promise<void> {
+        // Delegate to NotionFetchService.updatePageContent — it handles size guarding
+        // (1MB limit), block deletion, and chunked re-append as paragraph blocks.
+        const result = await this._deps.notion.updatePageContent(remoteId, markdown);
+        if (!result.success) {
+            throw new Error(`Notion pushContent failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
     }
 

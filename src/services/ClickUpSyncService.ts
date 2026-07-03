@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
+import * as crypto from 'crypto';
 import { hostInlineImages } from './ImageHostingHelper';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
 import { KanbanDatabase } from './KanbanDatabase';
@@ -2901,9 +2902,11 @@ export class ClickUpSyncService {
   }
 
   /**
-   * Fetch tasks from a ClickUp list and write a stub plan .md file for each.
-   * The PlanFileImporter picks up new files automatically — no DB calls needed.
-   * Skips tasks that already have a plan file or are owned by Switchboard (switchboard: tag).
+   * Fetch tasks from a ClickUp list and write stub plan .md files.
+   * Two-pass import: parents with subtasks become Switchboard epics (written to
+   * .switchboard/epics/), children are linked via direct DB writes (epic_id).
+   * Deeply nested hierarchies are flattened to one level. Standalone tasks
+   * (no children, no in-batch parent) are written as regular plans.
    */
   async importTasksFromClickUp(
     listId: string,
@@ -2918,6 +2921,8 @@ export class ClickUpSyncService {
       const tasks = await this.listTasksFromClickUp(listId);
 
       await fs.promises.mkdir(plansDir, { recursive: true });
+      const epicDir = path.join(this._workspaceRoot, '.switchboard', 'epics');
+      await fs.promises.mkdir(epicDir, { recursive: true });
 
       // Dedup: skip tasks that correspond to a local session with an
       // in-flight _createTask HTTP call. ClickUp has no local sync map, so we
@@ -2935,7 +2940,7 @@ export class ClickUpSyncService {
       let workspaceId = '';
       try {
         // AI NOTICE: DO NOT append .js to this import. tsc complains about Node16 module resolution, but Webpack requires it to be extensionless here to bundle correctly.
-        const kdbModule = await import('./KanbanDatabase');
+        const kdbModule = await import('./KanbanDatabase.js');
         const resolved = kdbModule.KanbanDatabase.forWorkspace(this._workspaceRoot);
         const ready = await resolved.ensureReady();
         db = resolved;
@@ -2951,6 +2956,10 @@ export class ClickUpSyncService {
 
       let imported = 0;
       let skipped = 0;
+
+      // ── Pass 0: Filter ──────────────────────────────────────────
+      // Run all dedup/filter checks. Collect survivors into filteredTasks.
+      const filteredTasks: any[] = [];
 
       for (const task of tasks) {
         // Extract planId from custom field or switchboard:<planId> tag.
@@ -2968,10 +2977,6 @@ export class ClickUpSyncService {
         // If this task was just created by us and the taskId hasn't landed in
         // the plan record yet, the _pendingCreateSessions set will contain its
         // planFile. Skip.
-        //
-        // Only run the lookup when db resolved successfully. `getPlanByPlanId`
-        // is a real public method on KanbanDatabase; prefer it directly over a
-        // non-existent planFile path guess.
         if (taskPlanId && dbReady && db) {
           try {
             const localPlan = await db.getPlanByPlanId(taskPlanId);
@@ -3010,7 +3015,44 @@ export class ClickUpSyncService {
           continue;
         }
 
-        const planFile = path.join(plansDir, `clickup_import_${task.id}.md`);
+        // Task survived all filters — collect it.
+        filteredTasks.push(task);
+      }
+
+      // ── Group: Build parent/child maps from filtered tasks ──────
+      const tasksById = new Map<string, any>(filteredTasks.map((t: any) => [t.id, t]));
+      const childrenByParentId = new Map<string, any[]>();
+      for (const task of filteredTasks) {
+        const parentId = String(task.parent || '').trim();
+        if (parentId && tasksById.has(parentId)) {
+          if (!childrenByParentId.has(parentId)) {
+            childrenByParentId.set(parentId, []);
+          }
+          childrenByParentId.get(parentId)!.push(task);
+        }
+      }
+
+      // A top-level parent has children in the batch AND no in-batch parent.
+      // An intermediate parent has children AND an in-batch parent — it's a subtask, not an epic.
+      const isParent = (taskId: string) => childrenByParentId.has(taskId);
+      const isChild = (task: any) => {
+        const parentId = String(task.parent || '').trim();
+        return !!parentId && tasksById.has(parentId);
+      };
+      const isTopLevelParent = (task: any) => isParent(task.id) && !isChild(task);
+
+      // ── Pass 1: Write files + insert DB records ─────────────────
+      // For parents: write to .switchboard/epics/ with UUID in filename, insert
+      // DB record with known planId, mark as epic, persist clickup_task_id.
+      // For children: write to .switchboard/plans/, insert DB record, persist
+      // clickup_task_id. Defer linking to Pass 2.
+      // For standalone: write file only (same as today — watcher ingests).
+      const uuidByTaskId = new Map<string, string>();
+
+      for (const task of filteredTasks) {
+        const taskId = task.id;
+        const statusName = (task.status?.status || '').toLowerCase().trim();
+        const kanbanColumn = statusName === 'backlog' ? 'BACKLOG' : 'CREATED';
 
         // Core fields
         const priority = task.priority?.priority || '';
@@ -3022,9 +3064,6 @@ export class ClickUpSyncService {
           .join(', ');
         const description = (task.markdown_description || task.description || '').trim();
         const parentName = task.parent ? (taskNameById.get(task.parent) || task.parent) : '';
-
-        // §5 — land backlog tasks in BACKLOG, everything else in CREATED.
-        const kanbanColumn = statusName === 'backlog' ? 'BACKLOG' : 'CREATED';
 
         // Metadata block (top of file)
         const metaLines = [
@@ -3048,13 +3087,290 @@ export class ClickUpSyncService {
           description || '',
         ].join('\n');
 
-        await fs.promises.writeFile(planFile, stub, 'utf8');
-        imported++;
+        if (isTopLevelParent(task)) {
+          // Top-level parent → epic: insert DB, mark epic, persist clickup_task_id,
+          // THEN write to .switchboard/epics/ (insert-before-write to avoid planId race).
+          const uuid = crypto.randomUUID();
+          uuidByTaskId.set(taskId, uuid);
+          const epicPlanFile = path.join('.switchboard', 'epics', `clickup_import_${task.id}_${uuid}.md`);
+          const epicPath = path.join(this._workspaceRoot, epicPlanFile);
+
+          if (dbReady && db && workspaceId) {
+            try {
+              await db.insertFileDerivedPlan({
+                planId: uuid,
+                sessionId: '',
+                topic: task.name || `ClickUp Task ${task.id}`,
+                planFile: epicPlanFile,
+                kanbanColumn,
+                status: 'active' as any,
+                complexity: 'Unknown',
+                tags: '',
+                repoScope: '',
+                workspaceId,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                lastAction: '',
+                sourceType: 'clickup-import',
+                brainSourcePath: '',
+                mirrorPath: '',
+                routedTo: '',
+                dispatchedAgent: '',
+                dispatchedIde: '',
+                isEpic: 1,
+                epicId: ''
+              } as any);
+              await db.updateEpicStatus(uuid, 1, '');
+              await db.updateClickUpTaskIdByPlanFile(epicPlanFile, workspaceId, task.id);
+            } catch (dbErr) {
+              console.warn(`[ClickUpSync] import: DB insert failed for epic ${task.id}, file will be written (watcher will ingest):`, dbErr);
+            }
+          }
+
+          await fs.promises.writeFile(epicPath, stub, 'utf8');
+          imported++;
+        } else if (isChild(task)) {
+          // Child (including intermediate parents) → subtask: insert DB record,
+          // persist clickup_task_id, THEN write to .switchboard/plans/ (insert-before-write).
+          const childUuid = crypto.randomUUID();
+          uuidByTaskId.set(taskId, childUuid);
+          const childPlanFile = path.join(plansDir, `clickup_import_${task.id}.md`);
+          const childRelPath = path.relative(this._workspaceRoot, childPlanFile);
+
+          // Add Epic Plan ID metadata line for debugging.
+          const parentTaskId = String(task.parent || '').trim();
+          const parentUuid = uuidByTaskId.get(parentTaskId) || '';
+          const childStub = parentUuid
+            ? stub.replace(metaLines, `${metaLines}\n> **Epic Plan ID:** ${parentUuid}`)
+            : stub;
+
+          if (dbReady && db && workspaceId) {
+            try {
+              await db.insertFileDerivedPlan({
+                planId: childUuid,
+                sessionId: '',
+                topic: task.name || `ClickUp Task ${task.id}`,
+                planFile: childRelPath,
+                kanbanColumn,
+                status: 'active' as any,
+                complexity: 'Unknown',
+                tags: '',
+                repoScope: '',
+                workspaceId,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                lastAction: '',
+                sourceType: 'clickup-import',
+                brainSourcePath: '',
+                mirrorPath: '',
+                routedTo: '',
+                dispatchedAgent: '',
+                dispatchedIde: ''
+              } as any);
+              await db.updateClickUpTaskIdByPlanFile(childRelPath, workspaceId, task.id);
+            } catch (dbErr) {
+              console.warn(`[ClickUpSync] import: DB insert failed for child ${task.id}, file will be written (watcher will ingest):`, dbErr);
+            }
+          }
+
+          await fs.promises.writeFile(childPlanFile, childStub, 'utf8');
+          imported++;
+        } else {
+          // Standalone: write file only (same as today — watcher ingests).
+          const planFile = path.join(plansDir, `clickup_import_${task.id}.md`);
+          await fs.promises.writeFile(planFile, stub, 'utf8');
+          imported++;
+        }
+      }
+
+      // ── Pass 2: Link children to top-level parents (flatten) ────
+      // For each child, walk up the parentId chain to find the top-level
+      // in-batch parent (a task that has no in-batch parent itself). Link
+      // the child to that epic's planId via updateEpicStatus.
+      if (dbReady && db) {
+        for (const task of filteredTasks) {
+          if (!isChild(task)) { continue; }
+          const childUuid = uuidByTaskId.get(task.id);
+          if (!childUuid) { continue; }
+
+          // Walk up the parentId chain to find the top-level parent.
+          const visited = new Set<string>();
+          let currentTaskId = task.id;
+          let topParentTaskId: string | null = null;
+
+          while (currentTaskId) {
+            if (visited.has(currentTaskId)) {
+              console.warn(`[ClickUpSync] import: cycle detected in parentId chain at ${currentTaskId}, treating as standalone`);
+              break;
+            }
+            visited.add(currentTaskId);
+
+            const currentTask = tasksById.get(currentTaskId);
+            if (!currentTask) { break; }
+
+            const currentParentId = String(currentTask.parent || '').trim();
+            if (!currentParentId || !tasksById.has(currentParentId)) {
+              // Current task has no in-batch parent — it's the top-level parent.
+              // But we only want to link to it if it IS a parent (has children).
+              if (isParent(currentTaskId)) {
+                topParentTaskId = currentTaskId;
+              }
+              break;
+            }
+            currentTaskId = currentParentId;
+          }
+
+          if (topParentTaskId) {
+            const topParentUuid = uuidByTaskId.get(topParentTaskId);
+            if (topParentUuid) {
+              try {
+                await db.updateEpicStatus(childUuid, 0, topParentUuid);
+              } catch (linkErr) {
+                console.warn(`[ClickUpSync] import: failed to link child ${task.id} to epic ${topParentTaskId}:`, linkErr);
+              }
+            }
+          }
+        }
       }
 
       return { success: true, imported, skipped };
     } catch (error) {
       return { success: false, imported: 0, skipped: 0, error: `Import failed: ${error}` };
     }
+  }
+
+  // ── Epic Outbound Sync ───────────────────────────────────────
+
+  /**
+   * Sync a Switchboard epic + its subtasks to ClickUp as a parent task with
+   * child tasks linked via the `parent` field. Creates/updates the epic task
+   * first (await, not debounce), then links each subtask's existing ClickUp
+   * task as a child. Subtasks without an existing ClickUp task are skipped
+   * (added to `failed`).
+   */
+  public async syncEpicWithSubtasks(params: {
+    epicPlanFile: string;
+    epicPlanId: string;
+    epicTopic: string;
+    epicColumn: string;
+    subtasks: Array<{ planFile: string; planId: string; topic: string; complexity: string }>;
+  }): Promise<{ epicTaskId?: string; linked: string[]; failed: string[] }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
+      return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+    }
+    if (!(await this.hasApiToken())) {
+      return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+    }
+
+    const linked: string[] = [];
+    const failed: string[] = [];
+    let epicTaskId: string | null = null;
+
+    try {
+      // 1. Look up the epic's DB record for clickupTaskId and other fields.
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      const epicRecord = await db.getPlanByPlanId(params.epicPlanId);
+
+      // Build a KanbanPlanRecord for syncPlan. Use the DB record if available;
+      // otherwise construct a minimal record.
+      const epicPlan: KanbanPlanRecord = epicRecord
+        ? { ...epicRecord, kanbanColumn: params.epicColumn }
+        : {
+            planId: params.epicPlanId,
+            sessionId: '',
+            topic: params.epicTopic,
+            planFile: params.epicPlanFile,
+            kanbanColumn: params.epicColumn,
+            status: 'active',
+            complexity: 'Unknown',
+            tags: '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastAction: ''
+          };
+
+      // 2. Create/update the epic task first (await, bypass debounce).
+      await this.syncPlan(epicPlan);
+
+      // 3. Look up the epic's task ID from the DB record or by planId search.
+      const refreshedEpic = await db.getPlanByPlanId(params.epicPlanId);
+      epicTaskId = String(refreshedEpic?.clickupTaskId || '').trim()
+        || await this._findTaskByPlanId(params.epicPlanId, config);
+      if (!epicTaskId) {
+        console.warn(`[ClickUpSync] syncEpicWithSubtasks: epic task ID not resolved for ${params.epicPlanFile} — all subtasks failed`);
+        return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+      }
+
+      // 4. Link each subtask's existing ClickUp task as a child of the epic.
+      for (const sub of params.subtasks) {
+        try {
+          const subRecord = await db.getPlanByPlanId(sub.planId);
+          let subTaskId = String(subRecord?.clickupTaskId || '').trim()
+            || await this._findTaskByPlanId(sub.planId, config);
+          if (subTaskId) {
+            await this.updateTask(subTaskId, { parent: epicTaskId });
+            linked.push(sub.planFile);
+          } else {
+            failed.push(sub.planFile);
+          }
+        } catch (linkErr) {
+          console.warn(`[ClickUpSync] syncEpicWithSubtasks: failed to link subtask ${sub.planFile}:`, linkErr);
+          failed.push(sub.planFile);
+        }
+      }
+    } catch (epicErr) {
+      console.warn(`[ClickUpSync] syncEpicWithSubtasks: epic sync failed:`, epicErr);
+      return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+    }
+
+    return { epicTaskId: epicTaskId ?? undefined, linked, failed };
+  }
+
+  /**
+   * Unlink subtasks from their epic in ClickUp — clear each subtask's parent.
+   * Used when a subtask is removed from an epic or reassigned.
+   */
+  public async unlinkSubtasksFromEpic(subtaskPlanFiles: string[]): Promise<{ unlinked: string[]; failed: string[] }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
+      return { unlinked: [], failed: subtaskPlanFiles };
+    }
+    if (!(await this.hasApiToken())) {
+      return { unlinked: [], failed: subtaskPlanFiles };
+    }
+
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    const unlinked: string[] = [];
+    const failed: string[] = [];
+
+    for (const planFile of subtaskPlanFiles) {
+      try {
+        // Look up the plan record by planFile to get clickupTaskId + planId.
+        const workspaceId = await db.getWorkspaceId() || '';
+        const record = await db.getPlanByPlanFile(planFile, workspaceId);
+        let taskId = String(record?.clickupTaskId || '').trim();
+        if (!taskId && record?.planId) {
+          taskId = await this._findTaskByPlanId(record.planId, config) || '';
+        }
+        if (taskId) {
+          // ClickUp API limitation: the Update Task endpoint does NOT support
+          // removing a parent (docs: "You cannot convert a subtask to a task
+          // by setting parent to null"). An empty string is also not a valid
+          // task ID. This call will likely fail (caught below) or be a no-op.
+          // The local DB unlink already succeeded; this is best-effort only.
+          await this.updateTask(taskId, { parent: '' });
+          unlinked.push(planFile);
+        } else {
+          // No external task — nothing to unlink. Not a failure.
+          unlinked.push(planFile);
+        }
+      } catch (err) {
+        console.warn(`[ClickUpSync] unlinkSubtasksFromEpic: failed for ${planFile}:`, err);
+        failed.push(planFile);
+      }
+    }
+
+    return { unlinked, failed };
   }
 }

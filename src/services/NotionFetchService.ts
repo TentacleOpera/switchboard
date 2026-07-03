@@ -624,6 +624,13 @@ export class NotionFetchService {
   /**
    * Update a Notion page content by replacing its block children.
    * This is used for sync-to-source functionality.
+   *
+   * Enforces the Notion overwrite guard (notion-overwrite-guard.md): a full
+   * clear-and-rewrite is permitted ONLY after verifying the page has no inline
+   * sub-pages/databases/templates; otherwise blocks are appended (nested
+   * content survives); if the children check itself fails, abort without
+   * writing anything. This is a code-level data-loss guard — it does not
+   * depend on agent/skill compliance.
    */
   async updatePageContent(pageId: string, content: string): Promise<{ success: boolean; error?: string }> {
     try {
@@ -633,36 +640,26 @@ export class NotionFetchService {
         return { success: false, error: 'Content exceeds 1MB size limit for sync' };
       }
 
-      // For v1, we'll use a simple approach: delete all existing blocks and append new ones
-      // In a more sophisticated implementation, we would parse markdown and convert to Notion blocks
-      
-      // First, delete existing block children
-      const deleteResult = await this.httpRequest('DELETE', `/blocks/${pageId}/children`);
-      if (deleteResult.status !== 200) {
-        return { success: false, error: `Failed to clear page blocks (HTTP ${deleteResult.status})` };
-      }
-
-      // Append content as chunked paragraph blocks (≤2000 chars each) to match createPage behaviour
+      // Build content as chunked paragraph blocks (≤2000 chars each) to match
+      // createPage behaviour, then route through the centralized overwrite guard.
+      const { guardedWritePageBody } = await import('./remote/notionOverwriteGuard.js');
       const MAX_BLOCK_TEXT = 2000;
       const chunks: string[] = [];
       for (let i = 0; i < content.length; i += MAX_BLOCK_TEXT) {
         chunks.push(content.slice(i, i + MAX_BLOCK_TEXT));
       }
-      const blockPayload = {
-        children: chunks.map(chunk => ({
-          object: 'block',
-          type: 'paragraph',
-          paragraph: {
-            rich_text: [{ type: 'text', text: { content: chunk } }]
-          }
-        }))
-      };
+      const blocks = chunks.map(chunk => ({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [{ type: 'text', text: { content: chunk } }]
+        }
+      }));
 
-      const appendResult = await this.httpRequest('PATCH', `/blocks/${pageId}/children`, blockPayload);
-      if (appendResult.status >= 200 && appendResult.status < 300) {
-        return { success: true };
-      }
-      return { success: false, error: `Failed to append content (HTTP ${appendResult.status})` };
+      const outcome = await guardedWritePageBody(this, pageId, blocks, (m: string) => console.log(`[NotionFetchService] ${m}`));
+      return outcome.ok
+        ? { success: true }
+        : { success: false, error: outcome.detail };
     } catch (err: any) {
       return { success: false, error: String(err) };
     }

@@ -209,7 +209,7 @@
             overflow-y: auto;
             background: var(--panel-bg);
         }
-        #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane, #architect-list-pane {
+        #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane, #architect-list-pane, #devdocs-list-pane {
             width: 240px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -269,7 +269,7 @@
         .edit-mode #constitution-preview-content,
         .edit-mode #system-preview-content,
         .edit-mode #tuning-preview-content,
-        .edit-mode #projects-preview-content {
+        .edit-mode #projects-preview-content, .edit-mode #devdocs-preview-content {
             display: none;
         }
         /* Active Doc Banner */
@@ -556,7 +556,7 @@
         .content-row.collapsed #constitution-list-pane,
         .content-row.collapsed #system-list-pane,
         .content-row.collapsed #tuning-list-pane,
-        .content-row.collapsed #projects-list-pane {
+        .content-row.collapsed #projects-list-pane, .content-row.collapsed #devdocs-list-pane {
             padding: 4px;
             overflow: hidden;
         }
@@ -566,7 +566,7 @@
         .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #system-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #projects-list-pane > *:not(.sidebar-toggle-row) {
+        .content-row.collapsed #projects-list-pane > *:not(.sidebar-toggle-row), .content-row.collapsed #devdocs-list-pane > *:not(.sidebar-toggle-row) {
             display: none !important;
         }
 
@@ -797,7 +797,7 @@
         .cyber-theme-enabled #constitution-list-pane,
         .cyber-theme-enabled #system-list-pane,
         .cyber-theme-enabled #tuning-list-pane,
-        .cyber-theme-enabled #projects-list-pane {
+        .cyber-theme-enabled #projects-list-pane, .cyber-theme-enabled #devdocs-list-pane {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -813,7 +813,7 @@
         .cyber-theme-enabled #epics-preview-pane,
         .cyber-theme-enabled #constitution-preview-pane,
         .cyber-theme-enabled #tuning-preview-pane,
-        .cyber-theme-enabled #projects-preview-pane {
+        .cyber-theme-enabled #projects-preview-pane, .cyber-theme-enabled #devdocs-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
                 linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
@@ -832,7 +832,7 @@
         .cyber-theme-enabled #constitution-preview-content code,
         .cyber-theme-enabled #system-preview-content code,
         .cyber-theme-enabled #tuning-preview-content code,
-        .cyber-theme-enabled #projects-preview-content code {
+        .cyber-theme-enabled #projects-preview-content code, .cyber-theme-enabled #devdocs-preview-content code {
             box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
         }
 
@@ -842,7 +842,7 @@
         .cyber-theme-enabled #constitution-preview-content pre,
         .cyber-theme-enabled #system-preview-content pre,
         .cyber-theme-enabled #tuning-preview-content pre,
-        .cyber-theme-enabled #projects-preview-content pre {
+        .cyber-theme-enabled #projects-preview-content pre, .cyber-theme-enabled #devdocs-preview-content pre {
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
                          inset 0 0 12px rgba(0, 0, 0, 0.3);
         }
@@ -853,7 +853,7 @@
         .cyber-theme-enabled #constitution-preview-content blockquote,
         .cyber-theme-enabled #system-preview-content blockquote,
         .cyber-theme-enabled #tuning-preview-content blockquote,
-        .cyber-theme-enabled #projects-preview-content blockquote {
+        .cyber-theme-enabled #projects-preview-content blockquote, .cyber-theme-enabled #devdocs-preview-content blockquote {
             border-left-color: var(--accent-teal);
             box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
@@ -871,13 +871,13 @@
         body.theme-claudify #constitution-content,
         body.theme-claudify #system-content,
         body.theme-claudify #tuning-content,
-        body.theme-claudify #projects-content,
+        body.theme-claudify #projects-content, body.theme-claudify #devdocs-content,
         body.theme-claudify #kanban-preview-pane,
         body.theme-claudify #epics-preview-pane,
         body.theme-claudify #constitution-preview-pane,
         body.theme-claudify #system-preview-pane,
         body.theme-claudify #tuning-preview-pane,
-        body.theme-claudify #projects-preview-pane {
+        body.theme-claudify #projects-preview-pane, body.theme-claudify #devdocs-preview-pane {
             background-color: #1C1C1C;   /* neutral flat surface (claudify has no glass overlay) */
             background-image:
                 linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
@@ -891,7 +891,7 @@
         body.theme-claudify #constitution-preview-content h1,
         body.theme-claudify #system-preview-content h1,
         body.theme-claudify #tuning-preview-content h1,
-        body.theme-claudify #projects-preview-content h1 {
+        body.theme-claudify #projects-preview-content h1, body.theme-claudify #devdocs-preview-content h1 {
             font-family: 'GeistPixel', var(--font-family);
             letter-spacing: -0.05em;
             font-stretch: 90%;
@@ -915,7 +915,7 @@
         body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6,
         body.theme-claudify #system-preview-content h2, body.theme-claudify #system-preview-content h3, body.theme-claudify #system-preview-content h4, body.theme-claudify #system-preview-content h5, body.theme-claudify #system-preview-content h6,
         body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6,
-        body.theme-claudify #projects-preview-content h2, body.theme-claudify #projects-preview-content h3, body.theme-claudify #projects-preview-content h4, body.theme-claudify #projects-preview-content h5, body.theme-claudify #projects-preview-content h6 {
+        body.theme-claudify #projects-preview-content h2, body.theme-claudify #devdocs-preview-content h2, body.theme-claudify #projects-preview-content h3, body.theme-claudify #devdocs-preview-content h3, body.theme-claudify #projects-preview-content h4, body.theme-claudify #devdocs-preview-content h4, body.theme-claudify #projects-preview-content h5, body.theme-claudify #devdocs-preview-content h5, body.theme-claudify #projects-preview-content h6, body.theme-claudify #devdocs-preview-content h6 {
             font-family: var(--font-family);
             letter-spacing: normal;
             font-stretch: 100%;
@@ -928,7 +928,7 @@
         #constitution-preview-content,
         #system-preview-content,
         #tuning-preview-content,
-        #projects-preview-content {
+        #projects-preview-content, #devdocs-preview-content {
             flex: 1;
             width: 100%;
             box-sizing: border-box;
@@ -945,7 +945,7 @@
         #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6,
         #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6,
         #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6,
-        #projects-preview-content h1, #projects-preview-content h2, #projects-preview-content h3, #projects-preview-content h4, #projects-preview-content h5, #projects-preview-content h6 {
+        #projects-preview-content h1, #devdocs-preview-content h1, #projects-preview-content h2, #devdocs-preview-content h2, #projects-preview-content h3, #devdocs-preview-content h3, #projects-preview-content h4, #devdocs-preview-content h4, #projects-preview-content h5, #devdocs-preview-content h5, #projects-preview-content h6, #devdocs-preview-content h6 {
             margin-top: 24px;
             margin-bottom: 12px;
             font-weight: 600;
@@ -959,7 +959,7 @@
         body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
-        body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
+        body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #devdocs-preview-content h1, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #devdocs-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #devdocs-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #devdocs-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #devdocs-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6, body.cyber-theme-enabled #devdocs-preview-content h6 {
             font-family: var(--font-family);
             line-height: 1.1;
         }
@@ -969,7 +969,7 @@
         body.cyber-theme-enabled #constitution-preview-content h1,
         body.cyber-theme-enabled #system-preview-content h1,
         body.cyber-theme-enabled #tuning-preview-content h1,
-        body.cyber-theme-enabled #projects-preview-content h1 {
+        body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #devdocs-preview-content h1 {
             color: #ffffff;
         }
         /* Cyber theme — doc preview h2-h6 use accent color */
@@ -978,7 +978,7 @@
         body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
-        body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
+        body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #devdocs-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #devdocs-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #devdocs-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #devdocs-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6, body.cyber-theme-enabled #devdocs-preview-content h6 {
             color: var(--accent-primary);
         }
 
@@ -987,7 +987,7 @@
         #constitution-preview-content h1,
         #system-preview-content h1,
         #tuning-preview-content h1,
-        #projects-preview-content h1 {
+        #projects-preview-content h1, #devdocs-preview-content h1 {
             font-size: 2em; /* 2em relative to 14px base = 28px */
             margin-top: 0;
             padding-bottom: 0.3em;
@@ -1002,7 +1002,7 @@
         #constitution-preview-content h2,
         #system-preview-content h2,
         #tuning-preview-content h2,
-        #projects-preview-content h2 {
+        #projects-preview-content h2, #devdocs-preview-content h2 {
             font-size: 1.5em; /* 1.5em relative to 14px base = 21px */
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--accent-teal-dim);
@@ -1017,25 +1017,25 @@
         #constitution-preview-content h3,
         #system-preview-content h3,
         #tuning-preview-content h3,
-        #projects-preview-content h3,
+        #projects-preview-content h3, #devdocs-preview-content h3,
         #kanban-preview-content h4,
         #epics-preview-content h4,
         #constitution-preview-content h4,
         #system-preview-content h4,
         #tuning-preview-content h4,
-        #projects-preview-content h4,
+        #projects-preview-content h4, #devdocs-preview-content h4,
         #kanban-preview-content h5,
         #epics-preview-content h5,
         #constitution-preview-content h5,
         #system-preview-content h5,
         #tuning-preview-content h5,
-        #projects-preview-content h5,
+        #projects-preview-content h5, #devdocs-preview-content h5,
         #kanban-preview-content h6,
         #epics-preview-content h6,
         #constitution-preview-content h6,
         #system-preview-content h6,
         #tuning-preview-content h6,
-        #projects-preview-content h6 {
+        #projects-preview-content h6, #devdocs-preview-content h6 {
             text-transform: uppercase;
             color: var(--accent-teal);
         }
@@ -1045,7 +1045,7 @@
         #constitution-preview-content h3,
         #system-preview-content h3,
         #tuning-preview-content h3,
-        #projects-preview-content h3 {
+        #projects-preview-content h3, #devdocs-preview-content h3 {
             font-size: 1.25em; /* 1.25em relative to 14px base = 17.5px */
         }
 
@@ -1054,7 +1054,7 @@
         #constitution-preview-content h4,
         #system-preview-content h4,
         #tuning-preview-content h4,
-        #projects-preview-content h4 {
+        #projects-preview-content h4, #devdocs-preview-content h4 {
             font-size: 1em;
         }
 
@@ -1063,7 +1063,7 @@
         #constitution-preview-content h5,
         #system-preview-content h5,
         #tuning-preview-content h5,
-        #projects-preview-content h5 {
+        #projects-preview-content h5, #devdocs-preview-content h5 {
             font-size: 0.875em;
         }
 
@@ -1072,7 +1072,7 @@
         #constitution-preview-content h6,
         #system-preview-content h6,
         #tuning-preview-content h6,
-        #projects-preview-content h6 {
+        #projects-preview-content h6, #devdocs-preview-content h6 {
             font-size: 0.85em;
         }
 
@@ -1081,7 +1081,7 @@
         #constitution-preview-content p,
         #system-preview-content p,
         #tuning-preview-content p,
-        #projects-preview-content p {
+        #projects-preview-content p, #devdocs-preview-content p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
             color: var(--text-primary, #e0e0e0);
@@ -1093,7 +1093,7 @@
         #constitution-preview-content li,
         #system-preview-content li,
         #tuning-preview-content li,
-        #projects-preview-content li {
+        #projects-preview-content li, #devdocs-preview-content li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
             color: var(--vscode-editor-foreground, #cccccc);
@@ -1105,7 +1105,7 @@
         #constitution-preview-content li p,
         #system-preview-content li p,
         #tuning-preview-content li p,
-        #projects-preview-content li p {
+        #projects-preview-content li p, #devdocs-preview-content li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
@@ -1114,7 +1114,7 @@
         #constitution-preview-content pre,
         #system-preview-content pre,
         #tuning-preview-content pre,
-        #projects-preview-content pre {
+        #projects-preview-content pre, #devdocs-preview-content pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
             border-radius: 3px;
@@ -1128,7 +1128,7 @@
         #constitution-preview-content pre code,
         #system-preview-content pre code,
         #tuning-preview-content pre code,
-        #projects-preview-content pre code {
+        #projects-preview-content pre code, #devdocs-preview-content pre code {
             background: none;
             padding: 0;
             border: none;
@@ -1142,7 +1142,7 @@
         #constitution-preview-content code,
         #system-preview-content code,
         #tuning-preview-content code,
-        #projects-preview-content code {
+        #projects-preview-content code, #devdocs-preview-content code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
@@ -1158,7 +1158,7 @@
         #constitution-preview-content blockquote,
         #system-preview-content blockquote,
         #tuning-preview-content blockquote,
-        #projects-preview-content blockquote {
+        #projects-preview-content blockquote, #devdocs-preview-content blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
@@ -1172,7 +1172,7 @@
         #constitution-preview-content ul, #constitution-preview-content ol,
         #system-preview-content ul, #system-preview-content ol,
         #tuning-preview-content ul, #tuning-preview-content ol,
-        #projects-preview-content ul, #projects-preview-content ol {
+        #projects-preview-content ul, #devdocs-preview-content ul, #projects-preview-content ol, #devdocs-preview-content ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
         }
@@ -1183,7 +1183,7 @@
         #constitution-preview-content table,
         #system-preview-content table,
         #tuning-preview-content table,
-        #projects-preview-content table {
+        #projects-preview-content table, #devdocs-preview-content table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
             font-size: inherit; /* Inherits from container */
@@ -1194,7 +1194,7 @@
         #constitution-preview-content th,
         #system-preview-content th,
         #tuning-preview-content th,
-        #projects-preview-content th {
+        #projects-preview-content th, #devdocs-preview-content th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
             font-weight: 600;
@@ -1206,7 +1206,7 @@
         #constitution-preview-content td,
         #system-preview-content td,
         #tuning-preview-content td,
-        #projects-preview-content td {
+        #projects-preview-content td, #devdocs-preview-content td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
             color: var(--vscode-editor-foreground, var(--text-primary));
@@ -1217,7 +1217,7 @@
         #constitution-preview-content tr:hover td,
         #system-preview-content tr:hover td,
         #tuning-preview-content tr:hover td,
-        #projects-preview-content tr:hover td {
+        #projects-preview-content tr:hover td, #devdocs-preview-content tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
         }
 
@@ -1226,7 +1226,7 @@
         #constitution-preview-content .table-wrapper,
         #system-preview-content .table-wrapper,
         #tuning-preview-content .table-wrapper,
-        #projects-preview-content .table-wrapper {
+        #projects-preview-content .table-wrapper, #devdocs-preview-content .table-wrapper {
             overflow-x: auto;
             max-width: 100%;
             margin-bottom: 16px;
@@ -1238,7 +1238,7 @@
         #constitution-preview-content a,
         #system-preview-content a,
         #tuning-preview-content a,
-        #projects-preview-content a {
+        #projects-preview-content a, #devdocs-preview-content a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
         }
@@ -1248,7 +1248,7 @@
         #constitution-preview-content a:hover,
         #system-preview-content a:hover,
         #tuning-preview-content a:hover,
-        #projects-preview-content a:hover {
+        #projects-preview-content a:hover, #devdocs-preview-content a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
         }
@@ -1258,7 +1258,7 @@
         #constitution-preview-content hr,
         #system-preview-content hr,
         #tuning-preview-content hr,
-        #projects-preview-content hr {
+        #projects-preview-content hr, #devdocs-preview-content hr {
             border: 0;
             height: 1px;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
@@ -1269,7 +1269,7 @@
         #constitution-preview-content img,
         #system-preview-content img,
         #tuning-preview-content img,
-        #projects-preview-content img {
+        #projects-preview-content img, #devdocs-preview-content img {
             max-width: 100%;
             max-height: 100%;
             position: relative;
@@ -1282,7 +1282,7 @@
         #constitution-preview-content .empty-state,
         #system-preview-content .empty-state,
         #tuning-preview-content .empty-state,
-        #projects-preview-content .empty-state {
+        #projects-preview-content .empty-state, #devdocs-preview-content .empty-state {
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1508,6 +1508,158 @@
             box-sizing: border-box;
         }
         .active-path-btn:hover { border-color: var(--accent-teal, #00e5ff); }
+
+        /* ── Remote tab (§10, relocated from kanban.html) ── */
+        .workspace-project-select {
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            padding: 2px 8px;
+            min-width: 280px;
+            min-height: 24px;
+        }
+        .workspace-project-select:focus {
+            outline: none;
+            border-color: var(--accent-teal-dim);
+        }
+        .subsection-header {
+          display:flex; align-items:center; gap:8px;
+          font-family:var(--font-mono); font-size:10px; font-weight:600;
+          color:var(--accent-teal); text-transform:uppercase;
+          letter-spacing:1px; margin-bottom:8px;
+        }
+        .db-subsection { border-top:1px solid var(--border-color); padding:10px 0; }
+        .startup-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; }
+        .remote-checkbox-list {
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: var(--panel-bg2);
+            padding: 6px 8px;
+            max-height: 160px;
+            overflow-y: auto;
+        }
+        .remote-checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            padding: 3px 0;
+        }
+        .remote-checkbox-row input { accent-color: var(--accent-teal); }
+        .remote-number-input {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            padding: 3px 6px;
+            width: 120px;
+        }
+        .remote-number-input:focus { outline: none; border-color: var(--accent-teal-dim); }
+
+        /* ── NotebookLM tab (relocated from planning.html) ── */
+        .planning-card {
+            border: var(--card-border);
+            border-radius: 6px;
+            padding: 16px;
+            background: var(--card-bg);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            box-shadow: var(--shadow-md);
+            margin-bottom: 16px;
+            transition: all 0.15s;
+        }
+        .planning-card-header {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--accent-teal-dim);
+        }
+        .planning-card-description {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-primary);
+        }
+        .planning-card-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .planning-card-section + .planning-card-section {
+            margin-top: 8px;
+            border-top: 1px solid var(--accent-teal-dim);
+            padding-top: 16px;
+        }
+        .planning-card-section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-teal);
+            margin-top: 12px;
+            margin-bottom: 8px;
+        }
+        .planning-status {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            padding: 4px 0;
+        }
+        .planning-controls {
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            justify-content: flex-start;
+        }
+        .planning-button.secondary {
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+        }
+        .planning-button.secondary:hover:not(:disabled) {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+            box-shadow: none;
+        }
+        .planning-input {
+            width: 100%;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            box-sizing: border-box;
+        }
+        /* Remote + NotebookLM tabs scroll as simple content columns
+           (block layout, not the flex column .shared-tab-content defaults to) */
+        #remote-content.active, #notebook-content.active {
+            display: block;
+            overflow-y: auto;
+        }
+        #notebook-content { padding: 16px; }
+        #notebook-content .planning-card { max-width: 720px; }
+        body.theme-claudify #remote-content, body.theme-claudify #notebook-content {
+            background-color: #1C1C1C;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
     </style>
 </head>
 <body>
@@ -1516,9 +1668,12 @@
         <button class="shared-tab-btn" data-tab="epics">EPICS</button>
         <button class="shared-tab-btn" data-tab="projects">PROJECTS</button>
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
+        <button class="shared-tab-btn" data-tab="devdocs">DEV DOCS</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
         <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
         <button class="shared-tab-btn" data-tab="architect">ARCHITECT</button>
+        <button class="shared-tab-btn" data-tab="notebook">NOTEBOOKLM</button>
+        <button class="shared-tab-btn" data-tab="remote">REMOTE</button>
     </div>
     <div class="container">
         <!-- Kanban tab -->
@@ -1710,6 +1865,217 @@
             </div>
         </div>
 
+        <!-- Dev Docs tab (developer documentation authored for the remote-agent context sync) -->
+        <div id="devdocs-content" class="shared-tab-content">
+            <div class="controls-strip">
+                <select id="devdocs-workspace-filter">
+                    <option value="">All Workspaces</option>
+                </select>
+                <button id="btn-create-devdoc" class="strip-btn" title="Create a new developer doc">+ New Doc</button>
+                <button id="btn-edit-devdocs" class="strip-btn" disabled>Edit</button>
+                <button id="btn-save-devdocs" class="strip-btn" style="display:none;">Save</button>
+                <button id="btn-cancel-devdocs" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-delete-devdocs" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
+                <span id="devdocs-status" style="font-size:11px; color:var(--text-secondary);"></span>
+            </div>
+            <div class="content-row">
+                <div id="devdocs-list-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Loading docs...</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div class="cyber-scanlines"></div>
+                    <div id="devdocs-preview-pane" class="constitution-preview-pane">
+                        <div id="devdocs-preview-content">
+                            <div class="empty-state">Select a dev doc to view it</div>
+                        </div>
+                        <textarea id="devdocs-editor" class="markdown-editor"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- NotebookLM tab (relocated from planning.html — the dev-docs on-ramp) -->
+        <div id="notebook-content" class="shared-tab-content">
+            <div class="planning-card">
+                <div class="planning-card-header">NOTEBOOKLM INTEGRATION</div>
+                <div class="planning-card-description">NotebookLM integration allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.</div>
+
+                <div id="webai-status" class="planning-status"></div>
+
+                <div class="planning-card-section" style="margin-bottom: 16px;">
+                    <div class="planning-card-description" style="margin-bottom: 4px;">Workspace</div>
+                    <select id="notebook-workspace-filter" class="planning-input" style="width: 100%;">
+                    </select>
+                </div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">1. BUNDLE CODE</div>
+                    <div class="planning-card-description">Package code into docx files for NotebookLM compatibility.</div>
+                    <button id="btn-bundle-code" class="planning-button">BUNDLE CODE</button>
+                </div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">2. UPLOAD TO NOTEBOOKLM</div>
+                    <div class="planning-card-description">Create new Notebook and upload all files in the integration folder as sources.</div>
+                    <div class="planning-controls">
+                        <button id="btn-open-notebooklm" class="planning-button">OPEN NOTEBOOKLM</button>
+                        <button id="btn-open-airlock-folder" class="planning-button secondary">OPEN FOLDER</button>
+                    </div>
+                </div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">3. COPY SPRINT PLANNING PROMPT</div>
+                    <div class="planning-card-description">Generate a prompt for NotebookLM to write expanded plans for every plan in the NEW Kanban column. Copy the output and use Step 4 below to import.</div>
+                    <button id="btn-copy-sprint-prompt" class="planning-button secondary">COPY SPRINT PROMPT</button>
+                </div>
+
+                <div class="planning-card-section">
+                    <div class="planning-card-section-title">4. IMPORT PLANS</div>
+                    <div class="planning-card-description">
+                        Paste your expanded plans from NotebookLM. Plans matching titles in the NEW column will overwrite the originals; others will be created as new plans.
+                    </div>
+                    <button id="btn-import-notebooklm-plans" class="planning-button secondary">IMPORT PLANS</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Remote tab (§10, relocated from kanban.html — config only) -->
+        <div id="remote-content" class="shared-tab-content">
+            <div style="padding:12px; overflow-y:auto; height:100%; max-width:640px;">
+                <div class="db-subsection" style="border-top:none;">
+                    <div class="subsection-header"><span id="remote-subsection-title">Remote Control</span></div>
+                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
+                        Drive your boards remotely. Moving a card between remote states moves it here and
+                        dispatches that column's agent; comments are routed to the current column's agent,
+                        which replies back through the remote. Polling only — no webhooks, nothing to expose.
+                        <br><strong>Notion</strong> has no active-issue cap — pick it when Linear's free-tier
+                        limit gets in the way. Notion is an <em>agent</em> control surface: connect Notion to
+                        claude.ai and let the remote Claude session drive it via the Notion MCP connector.
+                    </div>
+
+                    <!-- Provider selector -->
+                    <label style="display:block; margin-bottom:10px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Provider</span>
+                        <select id="remote-provider" class="workspace-project-select">
+                            <option value="linear">Linear</option>
+                            <option value="notion">Notion</option>
+                            <option value="clickup">ClickUp (push-only)</option>
+                        </select>
+                    </label>
+
+                    <!-- Workspace selector -->
+                    <label style="display:block; margin-bottom:10px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Workspace</span>
+                        <select id="remote-workspace" class="workspace-project-select"></select>
+                    </label>
+
+                    <!-- Boards to sync: themed checkbox list, includes "No Project" base board -->
+                    <div style="margin-bottom:10px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
+                        <div id="remote-boards-list" class="remote-checkbox-list"></div>
+                    </div>
+
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                        <input type="checkbox" id="remote-silent-sync">
+                        <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
+                    </label>
+
+                    <!-- Remote mode: Ingest (pull only) vs Full (pull + mirror + dispatch) -->
+                    <div style="margin-bottom:10px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Remote mode</span>
+                        <label style="display:inline-flex; align-items:center; gap:4px; margin-right:16px; cursor:pointer;">
+                            <input type="radio" name="remote-mode" value="ingest" id="remote-mode-ingest">
+                            <span>Ingest (pull only)</span>
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
+                            <input type="radio" name="remote-mode" value="full" id="remote-mode-full">
+                            <span>Full (pull + mirror + dispatch)</span>
+                        </label>
+                    </div>
+
+                    <!-- Comment polling toggle -->
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                        <input type="checkbox" id="remote-comments">
+                        <span>Poll comments from remote</span>
+                    </label>
+
+                    <!-- Push toggle — grayed out if provider lacks push capability -->
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;" id="remote-push-label">
+                        <input type="checkbox" id="remote-push">
+                        <span>Push status &amp; content to remote</span>
+                    </label>
+
+                    <label style="display:block; margin-bottom:12px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
+                        <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60">
+                    </label>
+
+                    <!-- Start/stop pinging (the kanban board toolbar keeps its own toggle) -->
+                    <div style="margin-bottom:12px; display:flex; align-items:center; gap:10px;">
+                        <button id="btn-remote-control-toggle" class="strip-btn">Start Remote Control</button>
+                        <span id="remote-control-state" style="font-size:10px; color:var(--text-secondary);"></span>
+                    </div>
+
+                    <!-- Sync health: last poll/push status, rate-limit/backoff, persistent-failure indicator -->
+                    <div id="remote-health-section" style="margin-bottom:12px; padding:8px 10px; border:1px solid var(--border-color, rgba(127,127,127,0.2)); border-radius:4px; font-size:11px; line-height:1.6; display:none;">
+                        <div class="subsection-header" style="margin-bottom:6px;"><span>Sync Health</span></div>
+                        <div id="remote-health-poll" style="color:var(--text-secondary);"></div>
+                        <div id="remote-health-push" style="color:var(--text-secondary);"></div>
+                        <div id="remote-health-throttle" style="color:var(--text-secondary); display:none;"></div>
+                        <div id="remote-health-failure" style="color:var(--text-secondary); display:none; margin-top:4px; font-weight:bold;"></div>
+                    </div>
+
+                    <!-- Linear-only: one-time setup helper for Linear's native AI agent.
+                         Generates instructions tailored to the user's column mappings. -->
+                    <div id="remote-linear-agent-skill" style="margin-bottom:12px; display:none;">
+                        <button id="btn-copy-linear-agent-skill" class="strip-btn"
+                                title="Copy tailored instructions for Linear's native AI agent">
+                            Copy Linear Agent Skill
+                        </button>
+                        <span id="copy-linear-agent-skill-status" style="font-size:11px; color:var(--text-secondary); margin-left:8px;"></span>
+                    </div>
+
+                    <!-- Project-context sync: Dev Docs + PRDs + constitution → Notion context
+                         page + Linear project docs, so the remote agent plans from real context. -->
+                    <div style="margin-top:6px; margin-bottom:12px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
+                        <div class="subsection-header"><span>Project Context Sync</span></div>
+                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                            Mirrors this workspace's <strong>Dev Docs + project PRDs + constitution</strong> to the
+                            remote — a "Switchboard Project Context" page in Notion and a project document in
+                            Linear — so the remote planning agent works from real context instead of the card
+                            text alone. Switchboard is the source of truth; remote edits are overwritten.
+                        </div>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                            <input type="checkbox" id="remote-context-auto">
+                            <span>Auto-sync after saving a Dev Doc, PRD, or the constitution</span>
+                        </label>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <button id="btn-context-sync-now" class="strip-btn">Sync Context Now</button>
+                            <span id="remote-context-status" style="font-size:10px; color:var(--text-secondary);"></span>
+                        </div>
+                        <div id="remote-context-last-result" style="margin-top:6px; font-size:10px; color:var(--text-secondary);"></div>
+                    </div>
+
+                    <!-- Notion-only one-time setup: creates the plans + comments databases,
+                         backs up the selected boards, and matches the column select to the board. -->
+                    <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
+                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                            Run this once after selecting boards. It creates the Notion plans + "Switchboard
+                            Comments" databases, backs up the selected boards' cards, and matches the
+                            <code>Kanban Column</code> options to your board.
+                        </div>
+                        <button id="btn-notion-remote-setup" class="strip-btn">Run Notion setup sync</button>
+                        <span id="remote-notion-setup-status" style="display:block; margin-top:6px; font-size:10px; color:var(--text-secondary);"></span>
+                    </div>
+
+                    <span id="remote-config-status" style="font-size:10px; color:var(--text-secondary);"></span>
+                </div>
+            </div>
+        </div>
+
         <!-- Tuning tab -->
         <div id="tuning-content" class="shared-tab-content">
             <div class="controls-strip">
@@ -1850,6 +2216,29 @@
                 <div style="font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); padding-top: 10px;">
                     Interval (default 300s), remote, default branch, and trusted authors are configurable in VS Code Settings → Switchboard → Plan Auto Fetch.
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Dev Doc Modal -->
+    <div id="new-devdoc-modal" class="kanban-log-overlay" style="display: none;">
+        <div class="kanban-log-modal" style="width: 400px;">
+            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
+                Create New Dev Doc
+            </div>
+            <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="new-devdoc-name" style="font-size: 11px; color: var(--text-secondary);">Doc Name *</label>
+                    <input type="text" id="new-devdoc-name" placeholder="e.g. Architecture Overview" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="new-devdoc-workspace" style="font-size: 11px; color: var(--text-secondary);">Workspace</label>
+                    <select id="new-devdoc-workspace" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;"></select>
+                </div>
+            </div>
+            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
+                <button id="btn-new-devdoc-cancel" class="strip-btn">Cancel</button>
+                <button id="btn-new-devdoc-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
             </div>
         </div>
     </div>

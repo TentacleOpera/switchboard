@@ -35,9 +35,11 @@ import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { LinearAutomationService } from './LinearAutomationService';
 import { LinearSyncService, type LinearConfig } from './LinearSyncService';
 import { RemoteControlService, type RemoteConfig, type RemoteProviderKind } from './RemoteControlService';
+import { AutoArchiveService, type AutoArchiveConfig } from './AutoArchiveService';
 import type { RemoteProvider } from './remote/RemoteProvider';
 import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
+import { ClickUpRemoteProvider } from './remote/ClickUpRemoteProvider';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBackupService } from './NotionBackupService';
@@ -145,8 +147,11 @@ export class KanbanProvider implements vscode.Disposable {
     private _clickUpAutomationServices = new Map<string, ClickUpAutomationService>();
     private _linearServices = new Map<string, LinearSyncService>();
     private _remoteControls = new Map<string, RemoteControlService>();
+    private _autoArchiveServices = new Map<string, AutoArchiveService>();
     /** §11 — true while any board is under remote control; injects REMOTE_MODE_DIRECTIVE. */
     private _remoteControlActive = false;
+    /** Effective workspace roots with a project-context push in flight (auto/manual guard). */
+    private _projectContextSyncInFlight = new Set<string>();
     private _linearAutomationServices = new Map<string, LinearAutomationService>();
     private _notionServices = new Map<string, NotionFetchService>();
     private _cacheServices = new Map<string, import('./PlanningPanelCacheService').PlanningPanelCacheService>();
@@ -509,13 +514,17 @@ export class KanbanProvider implements vscode.Disposable {
     public async setGlobalPlanWatcher(watcher: import('./GlobalPlanWatcherService').GlobalPlanWatcherService): Promise<void> {
         this._globalPlanWatcher = watcher;
 
-        // Create ContinuousSyncService
+        // Create ContinuousSyncService with unified push dispatch + description sync deps.
         this._continuousSync = new ContinuousSyncService(
             this,
             this._globalPlanWatcher,
             (root) => this._getClickUpService(root),
             (root) => this._getLinearService(root),
-            (root) => this._getKanbanDb(root)
+            (root) => this._getKanbanDb(root),
+            // Unified push provider resolver — resolves the provider from the plan's remote IDs.
+            (root, plan) => this._getPushProviderForPlan(root, plan),
+            // On successful Linear push, persist the description cursor for bidirectional sync.
+            (issueId, ts) => { void this._setDescriptionCursor('linear', issueId, ts); }
         );
         this._disposables.push(this._continuousSync);
 
@@ -975,6 +984,8 @@ export class KanbanProvider implements vscode.Disposable {
         this._integrationAutoPull.dispose();
         this._remoteControls.forEach(rc => rc.dispose());
         this._remoteControls.clear();
+        this._autoArchiveServices.forEach(aas => aas.dispose());
+        this._autoArchiveServices.clear();
         this._clickUpAutomationServices.clear();
         this._linearAutomationServices.clear();
         this._clickUpSyncWarnings.clear();
@@ -1591,6 +1602,58 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Resolve the push-capable RemoteProvider for a plan, based on its remote IDs.
+     * Priority: ClickUp > Linear > Notion (matches ContinuousSyncService's existing logic).
+     * Returns null if the plan has no remote link or the provider can't be constructed.
+     */
+    private _getPushProviderForPlan(
+        workspaceRoot: string,
+        plan: import('./KanbanDatabase').KanbanPlanRecord
+    ): RemoteProvider | null {
+        const resolved = this.resolveEffectiveWorkspaceRoot(workspaceRoot);
+        const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
+        const getPlansDir = () => this._getIntegrationImportDir(resolved);
+        const log = (m: string) => this._outputChannel?.appendLine(m);
+        if (plan.clickupTaskId) {
+            return new ClickUpRemoteProvider(this._getClickUpService(resolved), {
+                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
+            });
+        }
+        if (plan.linearIssueId) {
+            return new LinearRemoteProvider(this._getLinearService(resolved), {
+                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
+            });
+        }
+        if (plan.notionPageId) {
+            return new NotionRemoteProvider({
+                notion: this._getNotionService(resolved),
+                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
+            });
+        }
+        return null;
+    }
+
+    /** Persisted description-sync cursors per issue (issueId → ISO timestamp). */
+    private async _getDescriptionCursors(kind: RemoteProviderKind): Promise<Record<string, string>> {
+        const root = this._resolveWorkspaceRoot();
+        if (!root) { return {}; }
+        const db = this._getKanbanDb(root);
+        if (!db || !(await db.ensureReady())) { return {}; }
+        return db.getConfigJson<Record<string, string>>(`remote.descriptionCursor.${kind}`, {});
+    }
+
+    /** Persist a description-sync cursor for an issue. */
+    private async _setDescriptionCursor(kind: RemoteProviderKind, issueId: string, timestamp: string): Promise<void> {
+        const root = this._resolveWorkspaceRoot();
+        if (!root) { return; }
+        const db = this._getKanbanDb(root);
+        if (!db || !(await db.ensureReady())) { return; }
+        const cursors = await this._getDescriptionCursors(kind);
+        cursors[issueId] = timestamp;
+        await db.setConfigJson(`remote.descriptionCursor.${kind}`, cursors);
+    }
+
+    /**
      * §10 — lazily build the Remote Control service for a workspace root. The poll
      * callbacks reuse the existing column-move + agent-dispatch paths so a Linear-driven
      * move behaves identically to a manual board drag.
@@ -1602,45 +1665,20 @@ export class KanbanProvider implements vscode.Disposable {
         const service = new RemoteControlService({
             getDb: () => this._getKanbanDb(resolved),
             getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
-            getProvider: (kind: RemoteProviderKind): RemoteProvider | null => {
-                const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
-                const getPlansDir = () => this._getIntegrationImportDir(resolved);
-                const log = (m: string) => this._outputChannel?.appendLine(m);
-                if (kind === 'notion') {
-                    return new NotionRemoteProvider({
-                        notion: this._getNotionService(resolved),
-                        db: this._getKanbanDb(resolved),
-                        getWorkspaceId, getPlansDir, log,
-                    });
-                }
-                if (kind === 'control-plane') {
-                    const { GitStateProvider } = require('./remote/GitStateProvider');
-                    const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
-                    return new GitStateProvider('control-plane', {
-                        db: this._getKanbanDb(resolved),
-                        getWorkspaceId, getPlansDir, log,
-                        getExportRoot: () => cpRoot !== resolved ? cpRoot : null,
-                    });
-                }
-                if (kind === 'wiki') {
-                    const { GitStateProvider } = require('./remote/GitStateProvider');
-                    return new GitStateProvider('wiki', {
-                        db: this._getKanbanDb(resolved),
-                        getWorkspaceId, getPlansDir, log,
-                        getExportRoot: () => resolved,
-                    });
-                }
-                return new LinearRemoteProvider(this._getLinearService(resolved), {
-                    db: this._getKanbanDb(resolved),
-                    getWorkspaceId, getPlansDir, log,
-                });
-            },
+            getProvider: (kind: RemoteProviderKind): RemoteProvider | null => this._buildRemoteProvider(resolved, kind),
             onColumnMove: async (plan, targetColumn) => {
                 return this._remoteApplyColumnMove(resolved, plan, targetColumn);
             },
             onComment: async (plan, body) => {
                 await this._remoteDispatchComment(resolved, plan, body);
             },
+            // Description sync deps (Linear bidirectional description sync)
+            getDescriptionCursors: (kind) => this._getDescriptionCursors(kind),
+            setDescriptionCursor: (kind, issueId, ts) => this._setDescriptionCursor(kind, issueId, ts),
+            onDescriptionPulled: (issueId, hash) => {
+                this._continuousSync?.markExternallyWritten(issueId, hash);
+            },
+            getWorkspaceRoot: () => resolved,
             log: (m) => this._outputChannel?.appendLine(m)
         });
 
@@ -1671,6 +1709,158 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Build a provider for an (already-resolved) workspace root. Shared by the
+     * RemoteControlService deps and the project-context push, so both paths get
+     * identically-wired providers.
+     */
+    private _buildRemoteProvider(resolved: string, kind: RemoteProviderKind): RemoteProvider {
+        const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
+        const getPlansDir = () => this._getIntegrationImportDir(resolved);
+        const log = (m: string) => this._outputChannel?.appendLine(m);
+        if (kind === 'notion') {
+            return new NotionRemoteProvider({
+                notion: this._getNotionService(resolved),
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
+            });
+        }
+        if (kind === 'control-plane') {
+            const { GitStateProvider } = require('./remote/GitStateProvider');
+            const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
+            return new GitStateProvider('control-plane', {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
+                getExportRoot: () => cpRoot !== resolved ? cpRoot : null,
+            });
+        }
+        if (kind === 'wiki') {
+            const { GitStateProvider } = require('./remote/GitStateProvider');
+            return new GitStateProvider('wiki', {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
+                getExportRoot: () => resolved,
+            });
+        }
+        if (kind === 'clickup') {
+            return new ClickUpRemoteProvider(this._getClickUpService(resolved), {
+                db: this._getKanbanDb(resolved),
+                getWorkspaceId, getPlansDir, log,
+            });
+        }
+        return new LinearRemoteProvider(this._getLinearService(resolved), {
+            db: this._getKanbanDb(resolved),
+            getWorkspaceId, getPlansDir, log,
+        });
+    }
+
+    /**
+     * Lazily build the AutoArchiveService for a workspace root. The sweep
+     * callback reuses the existing column-move + archive machinery so an
+     * auto-archived plan behaves identically to a manual archive.
+     */
+    private _getAutoArchive(workspaceRoot: string): AutoArchiveService {
+        const resolved = this.resolveEffectiveWorkspaceRoot(workspaceRoot);
+        const existing = this._autoArchiveServices.get(resolved);
+        if (existing) { return existing; }
+        const service = new AutoArchiveService({
+            getDb: () => this._getKanbanDb(resolved),
+            getWorkspaceRoot: () => resolved,
+            getProvider: (kind: RemoteProviderKind): RemoteProvider | null => this._buildRemoteProvider(resolved, kind),
+            getActiveProviderKind: async () => {
+                const rc = this._remoteControls.get(resolved);
+                if (!rc) {
+                    // Build a temporary RC to read config without starting the poll loop.
+                    const tmp = this._getRemoteControl(resolved);
+                    const config = await tmp.getConfig();
+                    return config.boards.length > 0 ? config.provider : null;
+                }
+                const config = await rc.getConfig();
+                return config.boards.length > 0 ? config.provider : null;
+            },
+            getDefaultTriggerColumn: async () => this._getDefaultTriggerColumn(resolved),
+            recordPushResult: (ok, error) => {
+                const rc = this._remoteControls.get(resolved) || this._getRemoteControl(resolved);
+                rc.recordPushResult(ok, error);
+            },
+            log: (m) => this._outputChannel?.appendLine(m),
+        });
+        this._autoArchiveServices.set(resolved, service);
+        return service;
+    }
+
+    /**
+     * Resolve the column id that sits immediately before COMPLETED by board
+     * order. Used as the default archive-trigger column when the user hasn't
+     * explicitly chosen one.
+     */
+    private async _getDefaultTriggerColumn(workspaceRoot: string): Promise<string> {
+        try {
+            const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
+            const customAgents = this._taskViewerProvider
+                ? await this._taskViewerProvider.getCustomAgents(workspaceRoot)
+                : [];
+            const allColumns = await this._buildKanbanColumns(customAgents, customColumns);
+            const visible = allColumns.filter(c => c.id !== 'CREATED' && c.id !== 'COMPLETED');
+            if (visible.length === 0) { return 'CODE REVIEWED'; }
+            // Sort by order ascending; the last visible column before COMPLETED is the default.
+            visible.sort((a, b) => (a.order || 0) - (b.order || 0));
+            return visible[visible.length - 1].id;
+        } catch {
+            return 'CODE REVIEWED';
+        }
+    }
+
+    /** Webview-facing: get the auto-archive config + available columns for the dropdown. */
+    public async autoArchiveGetConfigPayload(workspaceRoot?: string): Promise<Record<string, unknown>> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { type: 'autoArchiveConfig', config: null, columns: [] }; }
+        const service = this._getAutoArchive(resolved);
+        const config = await service.getConfig();
+        // Build the column list for the dropdown (visible non-fixed columns).
+        const customColumns = await this._getCustomKanbanColumns(resolved);
+        const customAgents = this._taskViewerProvider
+            ? await this._taskViewerProvider.getCustomAgents(resolved)
+            : [];
+        const allColumns = await this._buildKanbanColumns(customAgents, customColumns);
+        const columns = allColumns
+            .filter(c => c.id !== 'CREATED' && c.id !== 'COMPLETED')
+            .map(c => ({ id: c.id, label: c.label }))
+            .sort((a, b) => {
+                const ca = allColumns.find(c => c.id === a.id)?.order || 0;
+                const cb = allColumns.find(c => c.id === b.id)?.order || 0;
+                return ca - cb;
+            });
+        return { type: 'autoArchiveConfig', config, columns };
+    }
+
+    /** Webview-facing: save the auto-archive config and (re)start the sweep. */
+    public async autoArchiveSetConfig(workspaceRoot: string | undefined, config: AutoArchiveConfig): Promise<Record<string, unknown>> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { type: 'autoArchiveConfig', config: null, columns: [] }; }
+        const service = this._getAutoArchive(resolved);
+        const normalized = await service.setConfig(config);
+        // (Re)start the sweep if enabled; stop if disabled.
+        service.stop();
+        if (normalized.enabled) {
+            await service.start();
+        }
+        // Return the full payload (with columns) so the webview stays in sync.
+        return this.autoArchiveGetConfigPayload(resolved);
+    }
+
+    /** Start auto-archive sweeps for all known workspace roots (called on board init). */
+    public async startAutoArchiveForAll(): Promise<void> {
+        for (const root of this._getWorkspaceRoots()) {
+            try {
+                const service = this._getAutoArchive(root);
+                await service.start();
+            } catch (e) {
+                console.error(`[KanbanProvider] Failed to start auto-archive for ${root}:`, e);
+            }
+        }
+    }
+
+    /**
      * Build the full `remoteConfig` webview payload for a workspace. Shared by the
      * getRemoteConfig and setRemoteConfig handlers so both responses stay symmetric —
      * the autosave echo MUST carry boardKeys/workspaces or the webview checkbox list
@@ -1692,6 +1882,11 @@ export class KanbanProvider implements vscode.Disposable {
             label: item.label,
             active: item.workspaceRoot === workspaceRoot,
         }));
+        // Declared provider capabilities for honest UI gating.
+        // Linear: pull+push, Notion: pull+push (after 2/3), ClickUp: push-only.
+        const capabilities = config.provider === 'clickup'
+            ? { pull: false, push: true }
+            : { pull: true, push: true };
         return {
             type: 'remoteConfig',
             config,
@@ -1700,7 +1895,302 @@ export class KanbanProvider implements vscode.Disposable {
             workspaceRoot,            // echo which workspace this config is for
             workspaces,               // dropdown options
             active: rc.isActive,
+            capabilities,             // declared provider capabilities for honest UI gating
         };
+    }
+
+    // ── §10 public Remote Control API ─────────────────────────────────
+    // The Remote tab lives in project.html (PlanningPanelProvider), but the
+    // per-workspace RemoteControlService instances and their dispatch callbacks
+    // live here. PlanningPanelProvider delegates through these methods so both
+    // webviews (project Remote tab, kanban toolbar toggle) drive the SAME
+    // service instances — never a second polling loop.
+
+    /** Build the full remoteConfig payload for the Remote tab. Null when no workspace resolves. */
+    public async remoteGetConfigPayload(workspaceRoot?: string): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const rc = this._getRemoteControl(resolved);
+        const config = await rc.getConfig();
+        return this._buildRemoteConfigPayload(resolved, config, rc);
+    }
+
+    /** Persist a RemoteConfig and return the echo payload (same shape as remoteGetConfigPayload). */
+    public async remoteSetConfig(workspaceRoot: string | undefined, config: RemoteConfig): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved || !config) { return null; }
+        const rc = this._getRemoteControl(resolved);
+        await rc.setConfig(config);
+        this._remoteControlActive = rc.isActive;
+        const normalized = await rc.getConfig();
+        return this._buildRemoteConfigPayload(resolved, normalized, rc);
+    }
+
+    /** One-time Notion remote setup: creates plans + comments DBs, backs up selected boards. */
+    public async remoteRunNotionSetup(workspaceRoot?: string): Promise<{ success: boolean; backedUp?: number; error?: string }> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { success: false, error: 'No workspace' }; }
+        const rc = this._getRemoteControl(resolved);
+        const config = await rc.getConfig();
+        try {
+            const columns = await this._getCurrentClickUpColumns(resolved);
+            const backup = new NotionBackupService(this.resolveEffectiveWorkspaceRoot(resolved), this._context.secrets);
+            const result = await backup.setupRemoteControl(
+                this.resolveEffectiveWorkspaceRoot(resolved),
+                config.boards,
+                columns
+            );
+            return { success: result.success, backedUp: result.backedUp, error: result.error };
+        } catch (e) {
+            return { success: false, error: e instanceof Error ? e.message : String(e) };
+        }
+    }
+
+    /** Start pinging; returns the resulting active state. Mirrors the state to the kanban toolbar. */
+    public async remoteStart(workspaceRoot?: string): Promise<boolean> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolved) {
+            try {
+                const rc = this._getRemoteControl(resolved);
+                await rc.start();
+                this._remoteControlActive = rc.isActive;
+            } catch (e) {
+                console.error('[KanbanProvider] remoteStart failed:', e);
+                this._remoteControlActive = false;
+            }
+        } else {
+            this._remoteControlActive = false;
+        }
+        this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+        return this._remoteControlActive;
+    }
+
+    /**
+     * One-shot startup reconciliation: resolve the per-root RemoteControlService
+     * and run a single poll cycle (without starting the timer) so cards advance
+     * from remote status changes accumulated while the machine was off.
+     * Wrapped in try/catch so one root's failure doesn't block others.
+     */
+    public async reconcileRemoteOnStartup(workspaceRoot: string): Promise<void> {
+        try {
+            const rc = this._getRemoteControl(workspaceRoot);
+            await rc.reconcileOnce();
+        } catch (e) {
+            console.error(`[KanbanProvider] reconcileRemoteOnStartup failed for ${workspaceRoot}:`, e);
+        }
+    }
+
+    /** Stop pinging; returns the resulting active state. Mirrors the state to the kanban toolbar. */
+    public remoteStop(workspaceRoot?: string): boolean {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolved) {
+            try {
+                const rc = this._getRemoteControl(resolved);
+                rc.stop();
+                this._remoteControlActive = rc.isActive;
+            } catch (e) {
+                console.error('[KanbanProvider] remoteStop failed:', e);
+                this._remoteControlActive = false;
+            }
+        } else {
+            this._remoteControlActive = false;
+        }
+        this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+        return this._remoteControlActive;
+    }
+
+    /**
+     * Remote-sync health snapshot for the Remote tab UI (epic 7). Returns
+     * last poll/push status, rate-limit/backoff state, and consecutive-failure
+     * count so silent failures are visible instead of console-only.
+     */
+    public async remoteGetHealthPayload(workspaceRoot?: string): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        try {
+            const rc = this._getRemoteControl(resolved);
+            const health = await rc.getHealth();
+            return { type: 'remoteSyncHealth', workspaceRoot: resolved, health };
+        } catch (e) {
+            console.error('[KanbanProvider] remoteGetHealthPayload failed:', e);
+            return null;
+        }
+    }
+
+    /**
+     * Generate the tailored "Linear agent skill" text for the Remote tab's copy
+     * button — instructions for Linear's native AI agent, pre-filled with the
+     * user's actual column→state mappings and poll cadence. Returns an error
+     * string (not a throw) when Linear sync isn't configured.
+     */
+    public async remoteBuildLinearAgentSkillText(workspaceRoot?: string): Promise<{ text?: string; error?: string }> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return { error: 'No workspace resolved.' }; }
+        const rc = this._getRemoteControl(resolved);
+        const remoteConfig = await rc.getConfig();
+        const linear = this._getLinearService(resolved);
+        const linearConfig = await linear.loadConfig();
+        if (!linearConfig || !linearConfig.setupComplete ||
+            !linearConfig.columnToStateId ||
+            Object.keys(linearConfig.columnToStateId).length === 0) {
+            return { error: 'Configure Linear sync first (map columns to Linear statuses in Setup).' };
+        }
+        const pingSeconds = remoteConfig.pingFrequencySeconds || 60;
+        const columns = Object.keys(linearConfig.columnToStateId).filter(
+            col => linearConfig.columnToStateId[col] // skip unmapped columns
+        );
+        if (columns.length === 0) {
+            return { error: 'Configure Linear sync first (map columns to Linear statuses in Setup).' };
+        }
+        const mappingLines = columns
+            .map(col => `- Move to "${col}" → dispatches the ${col} agent`)
+            .join('\n');
+        const text = `You are a controller for the Switchboard AI development board.
+
+## How it works
+Switchboard polls Linear every ${pingSeconds}s. When you move an issue to a new state, it dispatches the corresponding local AI agent. Comments you post on an issue are routed to that column's agent; responses appear as new comments.
+
+## Column → Agent mapping
+${mappingLines}
+
+## How to write plans
+Place the implementation plan in the issue description. No special format is required, but use clear sections (Goal, Tasks, Notes). The local agent reads whatever is in the description.
+
+## Responding to questions
+If the user asks a question in a comment, post it as a comment on the issue. The local agent will respond in a follow-up comment within one polling cycle.
+
+## Setup notes
+- Remote control must be enabled (toolbar button in VS Code).
+- Only move issues between states that appear in the mapping above.
+- Do not create new Linear states — only use the ones listed.`;
+        return { text };
+    }
+
+    // ── Project-context sync (epic: Project Context & Remote UI Hub) ──────
+    // Dev Docs + PRDs + constitution → Notion context page + Linear project
+    // docs, via the providers' pushProjectContext capability. Switchboard is
+    // the source of truth; the providers receive a mirror.
+
+    /** Current sync state for the Remote tab's controls. */
+    public async projectContextGetStatus(workspaceRoot?: string): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const db = this._getKanbanDb(this.resolveEffectiveWorkspaceRoot(resolved));
+        if (!(await db.ensureReady())) { return null; }
+        const { loadProjectContextState } = require('./remote/projectContextSync');
+        const state = await loadProjectContextState(db);
+        return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+    }
+
+    /** Toggle auto-push (fires after Dev Doc / PRD / constitution saves). */
+    public async projectContextSetEnabled(workspaceRoot: string | undefined, enabled: boolean): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const db = this._getKanbanDb(this.resolveEffectiveWorkspaceRoot(resolved));
+        if (!(await db.ensureReady())) { return null; }
+        const { loadProjectContextState, saveProjectContextState } = require('./remote/projectContextSync');
+        const state = await loadProjectContextState(db);
+        state.enabled = enabled === true;
+        await saveProjectContextState(db, state);
+        return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+    }
+
+    /**
+     * Assemble and push the project context. Auto runs (post-save) respect the
+     * enabled flag and the coarse content-hash gate; a manual Sync Now pushes
+     * unconditionally.
+     */
+    public async projectContextSyncNow(
+        workspaceRoot: string | undefined,
+        opts: { auto?: boolean } = {}
+    ): Promise<Record<string, unknown> | null> {
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolved) { return null; }
+        const effective = this.resolveEffectiveWorkspaceRoot(resolved);
+        const db = this._getKanbanDb(effective);
+        if (!(await db.ensureReady())) { return null; }
+
+        // In-flight guard: an auto (debounced) sync must not run concurrently
+        // with a manual "Sync Now" or a prior auto run still pushing — the
+        // Notion append path would duplicate content and both would race on the
+        // shared state row. A manual sync always proceeds (user-intent wins).
+        if (this._projectContextSyncInFlight.has(effective)) {
+            if (opts.auto) {
+                const { loadProjectContextState } = require('./remote/projectContextSync');
+                const state = await loadProjectContextState(db);
+                return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+            }
+        }
+        this._projectContextSyncInFlight.add(effective);
+        try {
+
+        const {
+            loadProjectContextState, saveProjectContextState,
+            assembleProjectContextBundle, summarizePushResults,
+        } = require('./remote/projectContextSync');
+        const state = await loadProjectContextState(db);
+
+        if (opts.auto && !state.enabled) {
+            return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        }
+
+        const rc = this._getRemoteControl(resolved);
+        const remoteConfig = await rc.getConfig();
+        const { getConstitutionPath } = require('./constitutionUtils');
+        const workspaceId = (await db.getWorkspaceId()) || '';
+        const projectNames: string[] = workspaceId ? await db.getProjects(workspaceId) : [];
+
+        const assembled = await assembleProjectContextBundle({
+            workspaceRoot: effective,
+            workspaceLabel: path.basename(effective),
+            boards: remoteConfig.boards,
+            constitutionPath: getConstitutionPath(this._context, effective),
+            projectNames,
+        });
+
+        if (!assembled) {
+            state.lastSyncAt = new Date().toISOString();
+            state.lastResult = 'nothing to push — no Dev Docs, PRDs, or constitution found';
+            await saveProjectContextState(db, state);
+            return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        }
+
+        // Coarse change gate — auto runs only. Manual Sync Now always pushes.
+        if (opts.auto && assembled.hash === state.lastHash) {
+            return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        }
+
+        const notionResult = await this._buildRemoteProvider(effective, 'notion')
+            .pushProjectContext(assembled.bundle)
+            .catch((e: unknown) => ({ ok: false, skipped: false, detail: e instanceof Error ? e.message : String(e) }));
+        const linearResult = await this._buildRemoteProvider(effective, 'linear')
+            .pushProjectContext(assembled.bundle)
+            .catch((e: unknown) => ({ ok: false, skipped: false, detail: e instanceof Error ? e.message : String(e) }));
+
+        // Record push health for the Remote tab health UI (epic 7).
+        const healthRc = this._remoteControls.get(effective);
+        if (healthRc) {
+            const pushOk = (notionResult.ok && !notionResult.skipped) || (linearResult.ok && !linearResult.skipped);
+            const pushErr = !pushOk
+                ? [notionResult.skipped ? null : notionResult.detail, linearResult.skipped ? null : linearResult.detail].filter(Boolean).join('; ')
+                : undefined;
+            healthRc.recordPushResult(pushOk, pushErr);
+        }
+
+        const summary = summarizePushResults({ notion: notionResult, linear: linearResult });
+        state.providers = summary.providers;
+        state.lastResult = summary.lastResult;
+        state.lastSyncAt = assembled.bundle.syncedAt;
+        // Advance the gate only when at least one provider actually accepted the
+        // content — a failed run must retry on the next save, not be gated away.
+        const pushedAnywhere = (notionResult.ok && !notionResult.skipped) || (linearResult.ok && !linearResult.skipped);
+        if (pushedAnywhere) { state.lastHash = assembled.hash; }
+        await saveProjectContextState(db, state);
+        this._outputChannel?.appendLine(`[ProjectContextSync] ${state.lastResult}`);
+        return { type: 'projectContextSyncStatus', workspaceRoot: resolved, state };
+        } finally {
+            this._projectContextSyncInFlight.delete(effective);
+        }
     }
 
     /** §9 — apply a Linear-driven column move, then dispatch the destination column's agent. */
@@ -2177,6 +2667,31 @@ export class KanbanProvider implements vscode.Disposable {
             topic: plan.topic,
             complexity: plan.complexity
         }, targetColumn);
+    }
+
+    /**
+     * Push a column move to Notion via the provider's pushState.
+     * Only fires if the plan has a notionPageId and Notion remote control is set up.
+     * No realTimeSyncEnabled flag for Notion — push is gated by the remote.config push
+     * flag (formalized in Plan 3/3). For now, push fires if Notion is the active provider.
+     */
+    private async _queueNotionSync(
+        workspaceRoot: string,
+        plan: import('./KanbanDatabase').KanbanPlanRecord,
+        targetColumn: string
+    ): Promise<void> {
+        if (!plan.notionPageId) { return; }
+        try {
+            const rc = this._getRemoteControl(workspaceRoot);
+            const config = await rc.getConfig();
+            // Only push if Notion is the active provider, push is enabled, and remote control is active.
+            if (config.provider !== 'notion' || !config.push || !rc.isActive) { return; }
+            const provider = this._getPushProviderForPlan(workspaceRoot, plan);
+            if (!provider || !provider.capabilities.push) { return; }
+            await provider.pushState(plan.notionPageId, targetColumn);
+        } catch (e) {
+            this._outputChannel?.appendLine(`[KanbanProvider] _queueNotionSync failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
     }
 
     public async initializeIntegrationAutoPull(): Promise<void> {
@@ -5055,7 +5570,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             await Promise.allSettled([
                 this._queueClickUpSync(workspaceRoot, plan, targetColumn),
-                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+                this._queueLinearSync(workspaceRoot, plan, targetColumn),
+                this._queueNotionSync(workspaceRoot, plan, targetColumn)
             ]);
         } catch (err) {
             console.error('[KanbanProvider] queueIntegrationSyncForSession failed:', err);
@@ -5079,7 +5595,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             await Promise.allSettled([
                 this._queueClickUpSync(workspaceRoot, plan, targetColumn),
-                this._queueLinearSync(workspaceRoot, plan, targetColumn)
+                this._queueLinearSync(workspaceRoot, plan, targetColumn),
+                this._queueNotionSync(workspaceRoot, plan, targetColumn)
             ]);
         } catch (err) {
             console.error('[KanbanProvider] queueIntegrationSyncForPlanFile failed:', err);
@@ -5796,88 +6313,31 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
 
             case 'getRemoteConfig': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    const config = await rc.getConfig();
-                    const payload = await this._buildRemoteConfigPayload(workspaceRoot, config, rc);
-                    this._panel?.webview.postMessage(payload);
-                }
+                // The Remote tab now lives in project.html; this case remains for the
+                // kanban toolbar toggle's state hydration on webview boot.
+                const payload = await this.remoteGetConfigPayload(msg.workspaceRoot);
+                if (payload) { this._panel?.webview.postMessage(payload); }
                 break;
             }
             case 'setRemoteConfig': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot && msg.config) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    await rc.setConfig(msg.config as RemoteConfig);
-                    this._remoteControlActive = rc.isActive;
-                    const config = await rc.getConfig();
-                    const payload = await this._buildRemoteConfigPayload(workspaceRoot, config, rc);
-                    this._panel?.webview.postMessage(payload);
-                }
+                const payload = await this.remoteSetConfig(msg.workspaceRoot, msg.config as RemoteConfig);
+                if (payload) { this._panel?.webview.postMessage(payload); }
                 break;
             }
             case 'runNotionRemoteSetup': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot) {
-                    const rc = this._getRemoteControl(workspaceRoot);
-                    const config = await rc.getConfig();
-                    try {
-                        const columns = await this._getCurrentClickUpColumns(workspaceRoot);
-                        const backup = new NotionBackupService(this.resolveEffectiveWorkspaceRoot(workspaceRoot), this._context.secrets);
-                        const result = await backup.setupRemoteControl(
-                            this.resolveEffectiveWorkspaceRoot(workspaceRoot),
-                            config.boards,
-                            columns
-                        );
-                        this._panel?.webview.postMessage({
-                            type: 'notionRemoteSetupResult',
-                            success: result.success,
-                            backedUp: result.backedUp,
-                            error: result.error,
-                        });
-                    } catch (e) {
-                        this._panel?.webview.postMessage({
-                            type: 'notionRemoteSetupResult',
-                            success: false,
-                            error: e instanceof Error ? e.message : String(e),
-                        });
-                    }
+                    const result = await this.remoteRunNotionSetup(workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'notionRemoteSetupResult', ...result });
                 }
                 break;
             }
             case 'startRemoteControl': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot) {
-                    try {
-                        const rc = this._getRemoteControl(workspaceRoot);
-                        await rc.start();
-                        this._remoteControlActive = rc.isActive;
-                    } catch (e) {
-                        console.error('[KanbanProvider] startRemoteControl failed:', e);
-                        this._remoteControlActive = false;
-                    }
-                } else {
-                    this._remoteControlActive = false;
-                }
-                this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+                await this.remoteStart(msg.workspaceRoot);
                 break;
             }
             case 'stopRemoteControl': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot) {
-                    try {
-                        const rc = this._getRemoteControl(workspaceRoot);
-                        rc.stop();
-                        this._remoteControlActive = rc.isActive;
-                    } catch (e) {
-                        console.error('[KanbanProvider] stopRemoteControl failed:', e);
-                        this._remoteControlActive = false;
-                    }
-                } else {
-                    this._remoteControlActive = false;
-                }
-                this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+                this.remoteStop(msg.workspaceRoot);
                 break;
             }
             case 'triggerAction': {
@@ -6299,7 +6759,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 
                 // Import ArchiveManager and archive the selected plans
                 // AI NOTICE: DO NOT append .js to this import. tsc complains about Node16 module resolution, but Webpack requires it to be extensionless here to bundle correctly.
-                const { ArchiveManager } = await import('./ArchiveManager');
+                const { ArchiveManager } = await import('./ArchiveManager.js');
                 const archiveMgr = new ArchiveManager(workspaceRoot);
                 
                 // Check if archive is configured
@@ -7809,6 +8269,16 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
                 this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 break;
             }
+            case 'getAutoArchiveConfig': {
+                const payload = await this.autoArchiveGetConfigPayload(msg.workspaceRoot);
+                this._panel?.webview.postMessage(payload);
+                break;
+            }
+            case 'saveAutoArchiveConfig': {
+                const payload = await this.autoArchiveSetConfig(msg.workspaceRoot, msg.config);
+                this._panel?.webview.postMessage(payload);
+                break;
+            }
             case 'updateKanbanStructure': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !this._taskViewerProvider || !Array.isArray(msg.sequence)) { break; }
@@ -8435,6 +8905,8 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
                 await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
                 this._markConfigDirty(); // defense-in-depth: ensure the post-promotion refresh isn't skipped by the no-op guard
                 await this._refreshBoard(workspaceRoot);
+                // Sync the promoted plan's external issue (best-effort, no children to link yet).
+                await this._syncEpicOutbound(workspaceRoot, newRelPath, plan.planId, effectiveTopic, plan.kanbanColumn, []);
                 break;
             }
             case 'createEpic': {
@@ -8500,6 +8972,13 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
                     await this._regenerateEpicFile(workspaceRoot, epicId, db);
                 }
                 await this._refreshBoard(workspaceRoot);
+                // Unlink the removed subtask from external trackers (best-effort).
+                const linearSvc = this._getLinearService(workspaceRoot);
+                const clickupSvc = this._getClickUpService(workspaceRoot);
+                await Promise.allSettled([
+                    linearSvc.unlinkSubtasksFromEpic([subtask.planFile]),
+                    clickupSvc.unlinkSubtasksFromEpic([subtask.planFile])
+                ]);
                 break;
             }
             case 'deleteEpic': {
@@ -8509,14 +8988,17 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
                 if (!db || !(await db.ensureReady())) break;
                 const epic = await db.getPlanByPlanId(msg.sessionId);
                 if (!epic || !epic.isEpic) break;
+                // Capture the subtasks up front — after tombstone/clear we can no longer
+                // enumerate them, and we need their plan files to unlink them from the
+                // external trackers below.
+                const epicSubtasks = await db.getSubtasksByEpicId(epic.planId);
                 // Epic abandon: remove every child worktree (subtask + integration) —
                 // discarded, not merged. Runs regardless of deleteSubtasks: even when
                 // subtasks are kept on the board (unlinked from the epic), their
                 // per-subtask worktrees no longer have a convergence point to target.
                 await this._cleanupEpicWorktrees(workspaceRoot, db, epic.planId, 'abandoned');
                 if (msg.deleteSubtasks) {
-                    const subtasks = await db.getSubtasksByEpicId(epic.planId);
-                    for (const st of subtasks) {
+                    for (const st of epicSubtasks) {
                         await db.tombstonePlan(st.planId);
                     }
                 } else {
@@ -8524,6 +9006,17 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
                 }
                 await db.tombstonePlan(epic.planId);
                 await this._refreshBoard(workspaceRoot);
+                // Unlink the subtasks from external trackers (best-effort) so no Linear
+                // issue / ClickUp task is left parented to the now-deleted epic.
+                if (epicSubtasks.length > 0) {
+                    const linearSvc = this._getLinearService(workspaceRoot);
+                    const clickupSvc = this._getClickUpService(workspaceRoot);
+                    const subtaskFiles = epicSubtasks.map(st => st.planFile);
+                    await Promise.allSettled([
+                        linearSvc.unlinkSubtasksFromEpic(subtaskFiles),
+                        clickupSvc.unlinkSubtasksFromEpic(subtaskFiles)
+                    ]);
+                }
                 break;
             }
             case 'getEpicDetails': {
@@ -9413,8 +9906,9 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
      * Shared entry point for BOTH the webview `createEpic` message and the agent/API
      * path (LocalApiServer `/kanban/epic` → TaskViewerProvider → here). Mirrors the
      * webview behaviour exactly: DB upsert + epic file write + subtask linking +
-     * board refresh. Does NOT sync to Linear/ClickUp — epic creation has never fanned
-     * out to external trackers, and `registerPendingCreation` makes the watcher skip
+     * board refresh. Syncs the epic + subtasks outbound to Linear/ClickUp as parent
+     * issue/task + child issues/tasks IF real-time sync is enabled (best-effort,
+     * does not block on failure). `registerPendingCreation` makes the watcher skip
      * the new file. Returns a result object instead of showing VS Code dialogs so the
      * caller decides how to surface failures.
      */
@@ -9598,6 +10092,14 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
         console.log(`[KanbanProvider] createEpicFromPlanIds: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
         this._markConfigDirty(); // defense-in-depth: ensure the post-creation refresh isn't skipped by the no-op guard
         await this._refreshBoard(workspaceRoot);
+        // Sync the epic + subtasks outbound to Linear/ClickUp (best-effort, does not block on failure).
+        const subtaskSyncParams = subtasks.map((st: any) => ({
+            planFile: st.planFile,
+            planId: st.planId,
+            topic: st.topic,
+            complexity: st.complexity
+        }));
+        await this._syncEpicOutbound(workspaceRoot, epicPlanFile, effectiveEpicPlanId, epicName, effectiveColumn, subtaskSyncParams);
         return { success: true, epicPlanId: effectiveEpicPlanId, epicSessionId: sessionId };
     }
 
@@ -9641,6 +10143,7 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
         const epicWorktreeModeSnapshot = (await db.getConfig('epic_worktree_mode')) || 'none';
         const assigned: string[] = [];
         const skipped: string[] = [];
+        const assignedRecords: any[] = [];
         for (const pid of ids) {
             const subtask = await db.getPlanByPlanId(pid);
             // Skip-and-report: missing, itself an epic, or already on a different epic.
@@ -9649,12 +10152,69 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
             await db.updateEpicStatus(subtask.planId, 0, epic.planId);
             await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, epic.planId, epic.topic, subtask.planId, subtask.topic, epicWorktreeModeSnapshot);
             assigned.push(pid);
+            assignedRecords.push(subtask);
         }
         if (assigned.length > 0) {
             await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
             await this._refreshBoard(workspaceRoot);
+            // Sync the newly assigned subtasks outbound to Linear/ClickUp (best-effort).
+            const subtaskSyncParams = assignedRecords.map((st: any) => ({
+                planFile: st.planFile,
+                planId: st.planId,
+                topic: st.topic,
+                complexity: st.complexity
+            }));
+            await this._syncEpicOutbound(workspaceRoot, epic.planFile, epic.planId, epic.topic, epic.kanbanColumn, subtaskSyncParams);
         }
         return { success: true, assigned, skipped };
+    }
+
+    /**
+     * Best-effort outbound sync of an epic + its subtasks to Linear and ClickUp.
+     * Creates/updates the epic as a parent issue/task, then links subtasks as
+     * children via the tracker's native parent/child fields. Does NOT block on
+     * sync failure — the epic is already created locally; sync is diagnostic-only.
+     * Uses Promise.allSettled so one service failing doesn't affect the other.
+     */
+    private async _syncEpicOutbound(
+        workspaceRoot: string,
+        epicPlanFile: string,
+        epicPlanId: string,
+        epicTopic: string,
+        epicColumn: string,
+        subtasks: Array<{ planFile: string; planId: string; topic: string; complexity: string }>
+    ): Promise<void> {
+        const linear = this._getLinearService(workspaceRoot);
+        const clickup = this._getClickUpService(workspaceRoot);
+        const [linearConfig, clickupConfig] = await Promise.all([
+            linear.loadConfig(),
+            clickup.loadConfig()
+        ]);
+        const linearEnabled = linearConfig?.setupComplete === true && linearConfig.realTimeSyncEnabled === true;
+        const clickupEnabled = clickupConfig?.setupComplete === true && clickupConfig.realTimeSyncEnabled === true;
+        if (!linearEnabled && !clickupEnabled) { return; }
+
+        const linearSubtasks = subtasks.map(s => ({ planFile: s.planFile, topic: s.topic, complexity: s.complexity }));
+        const clickupSubtasks = subtasks.map(s => ({ planFile: s.planFile, planId: s.planId, topic: s.topic, complexity: s.complexity }));
+
+        const results = await Promise.allSettled([
+            linearEnabled ? linear.syncEpicWithSubtasks({
+                epicPlanFile, epicTopic, epicColumn, subtasks: linearSubtasks
+            }) : Promise.resolve(null),
+            clickupEnabled ? clickup.syncEpicWithSubtasks({
+                epicPlanFile, epicPlanId, epicTopic, epicColumn, subtasks: clickupSubtasks
+            }) : Promise.resolve(null)
+        ]);
+
+        const linearResult = results[0].status === 'fulfilled' ? results[0].value : null;
+        const clickupResult = results[1].status === 'fulfilled' ? results[1].value : null;
+        if (results[0].status === 'rejected') {
+            console.warn(`[KanbanProvider] epic sync: linear rejected — ${results[0].reason}`);
+        }
+        if (results[1].status === 'rejected') {
+            console.warn(`[KanbanProvider] epic sync: clickup rejected — ${results[1].reason}`);
+        }
+        console.log(`[KanbanProvider] epic sync: linear linked=${linearResult?.linked.length ?? 0} failed=${linearResult?.failed.length ?? 0}, clickup linked=${clickupResult?.linked.length ?? 0} failed=${clickupResult?.failed.length ?? 0}`);
     }
 
     /**
@@ -9696,7 +10256,7 @@ FOCUS: Each plan file path above is the single source of truth for that plan; ig
 
 6. BACKLOG (optional) — ask the user; only proceed if they say yes.
 
-Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. It does NOT sync to Linear/ClickUp.`;
+Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. Epic creation syncs the epic as a parent issue/task and links subtasks as children in Linear/ClickUp IF real-time sync is enabled.`;
             }
         }
         // Strip YAML frontmatter (the skill description is for model-invocation discovery,

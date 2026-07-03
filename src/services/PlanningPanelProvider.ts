@@ -31,7 +31,8 @@ import { buildWorkspaceItems } from './workspaceUtils';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
-import { getProjectPrdPath } from './prdUtils';
+import { getProjectPrdPath, sanitizeProjectSlug } from './prdUtils';
+import { bundleWorkspaceContext } from './ContextBundler';
 import { PlanAutoFetchService } from './PlanAutoFetchService';
 import { classifyHttpError } from './errorMessages';
 
@@ -2368,6 +2369,186 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 break;
             }
+            case 'notebookDefaultRoot': {
+                // Restore the NotebookLM tab's persisted workspace. The 'notebook.root'
+                // key predates the tab's move from planning.html — same store, so a
+                // selection made before the move survives it.
+                const restoredRoot = this._stateStore.getPanelState<string>('notebook.root');
+                const allowedRoots = buildWorkspaceItems(allRoots).map(item => item.workspaceRoot);
+                const kanbanRoot = this._kanbanProvider?.getCurrentWorkspaceRoot() || null;
+                let defaultRoot: string | undefined;
+                if (restoredRoot && allowedRoots.includes(restoredRoot)) {
+                    defaultRoot = restoredRoot;
+                } else if (kanbanRoot && allowedRoots.includes(kanbanRoot)) {
+                    defaultRoot = kanbanRoot;
+                } else {
+                    defaultRoot = allowedRoots[0] || allRoots[0];
+                }
+                const nbPanel = isProject ? this._projectPanel : this._panel;
+                nbPanel?.webview.postMessage({ type: 'notebookDefaultRoot', root: defaultRoot || '' });
+                break;
+            }
+
+            // ── Remote Control (§10) — delegated to KanbanProvider ─────────
+            // The Remote tab renders here (project.html) but the per-workspace
+            // RemoteControlService instances live on KanbanProvider (their poll
+            // callbacks dispatch column agents). Delegation keeps ONE service
+            // instance per workspace regardless of which webview drives it.
+            case 'getRemoteConfig': {
+                const payload = await this._kanbanProvider?.remoteGetConfigPayload(msg.workspaceRoot);
+                const remotePanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { remotePanel?.webview.postMessage(payload); }
+                break;
+            }
+            case 'setRemoteConfig': {
+                const payload = await this._kanbanProvider?.remoteSetConfig(msg.workspaceRoot, msg.config);
+                const remotePanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { remotePanel?.webview.postMessage(payload); }
+                break;
+            }
+            case 'runNotionRemoteSetup': {
+                const remotePanel = isProject ? this._projectPanel : this._panel;
+                if (!this._kanbanProvider) {
+                    remotePanel?.webview.postMessage({ type: 'notionRemoteSetupResult', success: false, error: 'Kanban provider unavailable' });
+                    break;
+                }
+                const result = await this._kanbanProvider.remoteRunNotionSetup(msg.workspaceRoot);
+                remotePanel?.webview.postMessage({ type: 'notionRemoteSetupResult', ...result });
+                break;
+            }
+            case 'startRemoteControl': {
+                const active = (await this._kanbanProvider?.remoteStart(msg.workspaceRoot)) === true;
+                const remotePanel = isProject ? this._projectPanel : this._panel;
+                remotePanel?.webview.postMessage({ type: 'remoteControlState', active });
+                break;
+            }
+            case 'stopRemoteControl': {
+                const active = this._kanbanProvider?.remoteStop(msg.workspaceRoot) === true;
+                const remotePanel = isProject ? this._projectPanel : this._panel;
+                remotePanel?.webview.postMessage({ type: 'remoteControlState', active });
+                break;
+            }
+            case 'getRemoteHealth': {
+                const payload = await this._kanbanProvider?.remoteGetHealthPayload(msg.workspaceRoot);
+                const healthPanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { healthPanel?.webview.postMessage(payload); }
+                break;
+            }
+            case 'copyLinearAgentSkill': {
+                const skillPanel = isProject ? this._projectPanel : this._panel;
+                if (!this._kanbanProvider) {
+                    skillPanel?.webview.postMessage({ type: 'linearAgentSkillText', text: null, error: 'Kanban provider unavailable' });
+                    break;
+                }
+                const result = await this._kanbanProvider.remoteBuildLinearAgentSkillText(msg.workspaceRoot);
+                skillPanel?.webview.postMessage({
+                    type: 'linearAgentSkillText',
+                    text: result.text || null,
+                    error: result.error,
+                });
+                break;
+            }
+            case 'getProjectContextSyncStatus': {
+                const payload = await this._kanbanProvider?.projectContextGetStatus(msg.workspaceRoot);
+                const ctxPanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { ctxPanel?.webview.postMessage(payload); }
+                break;
+            }
+            case 'setProjectContextSyncEnabled': {
+                const payload = await this._kanbanProvider?.projectContextSetEnabled(msg.workspaceRoot, msg.enabled === true);
+                const ctxPanel = isProject ? this._projectPanel : this._panel;
+                if (payload) { ctxPanel?.webview.postMessage(payload); }
+                break;
+            }
+            case 'projectContextSyncNow': {
+                const ctxPanel = isProject ? this._projectPanel : this._panel;
+                ctxPanel?.webview.postMessage({ type: 'projectContextSyncRunning' });
+                const payload = await this._kanbanProvider?.projectContextSyncNow(msg.workspaceRoot, { auto: false });
+                if (payload) { ctxPanel?.webview.postMessage(payload); }
+                else { ctxPanel?.webview.postMessage({ type: 'projectContextSyncStatus', state: null, error: 'No workspace resolved' }); }
+                break;
+            }
+
+            // ── Dev Docs (project-context authoring surface) ────────────────
+            case 'loadDevDocs': {
+                const docs = await this._listDevDocs(allRoots);
+                const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                devDocsPanel?.webview.postMessage({ type: 'devDocsList', docs });
+                break;
+            }
+            case 'readDevDoc': {
+                const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                const safePath = this._resolveDevDocPath(allRoots, msg.path);
+                if (!safePath) {
+                    devDocsPanel?.webview.postMessage({ type: 'devDocContent', path: msg.path, content: '', renderedHtml: '', error: 'Invalid dev doc path' });
+                    break;
+                }
+                let content = '';
+                try { content = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty */ }
+                let renderedHtml = '';
+                try {
+                    renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+                } catch { renderedHtml = ''; }
+                devDocsPanel?.webview.postMessage({ type: 'devDocContent', path: msg.path, content, renderedHtml });
+                break;
+            }
+            case 'saveDevDoc': {
+                const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                const safePath = this._resolveDevDocPath(allRoots, msg.path);
+                if (!safePath || typeof msg.content !== 'string') {
+                    devDocsPanel?.webview.postMessage({ type: 'devDocSaved', path: msg.path, ok: false, error: 'Invalid dev doc path' });
+                    break;
+                }
+                let ok = false;
+                let error = '';
+                try {
+                    await fs.promises.mkdir(path.dirname(safePath), { recursive: true });
+                    await fs.promises.writeFile(safePath, msg.content, 'utf8');
+                    ok = true;
+                } catch (err) {
+                    error = err instanceof Error ? err.message : String(err);
+                }
+                devDocsPanel?.webview.postMessage({ type: 'devDocSaved', path: msg.path, ok, error });
+                if (ok) { this._onProjectContextContentChanged(msg.workspaceRoot); }
+                break;
+            }
+            case 'createDevDoc': {
+                const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const name = typeof msg.name === 'string' ? msg.name.trim() : '';
+                if (!root || !name) {
+                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: false, error: 'Workspace and doc name are required' });
+                    break;
+                }
+                const slug = sanitizeProjectSlug(name);
+                const docPath = path.join(root, '.switchboard', 'devdocs', `${slug}.md`);
+                try {
+                    await fs.promises.mkdir(path.dirname(docPath), { recursive: true });
+                    if (!fs.existsSync(docPath)) {
+                        await fs.promises.writeFile(docPath, `# ${name}\n\n`, 'utf8');
+                    }
+                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: true, path: docPath });
+                } catch (err) {
+                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: false, error: err instanceof Error ? err.message : String(err) });
+                }
+                break;
+            }
+            case 'deleteDevDoc': {
+                const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                const safePath = this._resolveDevDocPath(allRoots, msg.path);
+                if (!safePath) {
+                    devDocsPanel?.webview.postMessage({ type: 'devDocDeleted', path: msg.path, ok: false, error: 'Invalid dev doc path' });
+                    break;
+                }
+                try {
+                    await fs.promises.unlink(safePath);
+                    devDocsPanel?.webview.postMessage({ type: 'devDocDeleted', path: msg.path, ok: true });
+                    this._onProjectContextContentChanged(msg.workspaceRoot);
+                } catch (err) {
+                    devDocsPanel?.webview.postMessage({ type: 'devDocDeleted', path: msg.path, ok: false, error: err instanceof Error ? err.message : String(err) });
+                }
+                break;
+            }
             case 'setupTicketsWatcher': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (root) { this._setupTicketsViewWatcher(root); }
@@ -2928,7 +3109,8 @@ Start by checking which documents exist, then present the menu.`;
             case 'importNotebookLMPlans': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
                 const result = await vscode.commands.executeCommand('switchboard.importNotebookLMPlans', targetRoot) as { overwritten: number; created: number; errors: number } | undefined;
-                this._panel?.webview.postMessage({ type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
+                const nbTarget = isProject ? this._projectPanel : this._panel;
+                nbTarget?.webview.postMessage({ type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
                 break;
             }
             case 'importResearchDoc': {
@@ -2939,7 +3121,8 @@ Start by checking which documents exist, then present the menu.`;
             case 'airlock_export': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
                 const result = await this._handleAirlockExport(targetRoot);
-                this._panel?.webview.postMessage({ type: 'airlock_exportComplete', ...result });
+                const airlockTarget = isProject ? this._projectPanel : this._panel;
+                airlockTarget?.webview.postMessage({ type: 'airlock_exportComplete', ...result });
                 break;
             }
             case 'airlock_openNotebookLM': {
@@ -3863,6 +4046,9 @@ Start by checking which documents exist, then present the menu.`;
                         tab: 'constitution',
                         governanceFile: key
                     });
+                    // Only the constitution participates in project-context sync
+                    // (CLAUDE.md/AGENTS.md are local agent governance, not remote context).
+                    if (key === 'constitution') { this._onProjectContextContentChanged(wsRoot); }
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
                     this._postToBothPanels({
@@ -3966,6 +4152,7 @@ Start by checking which documents exist, then present the menu.`;
                         ok,
                         path: filePath
                     });
+                    if (ok) { this._onProjectContextContentChanged(wsRoot); }
                 }
                 break;
             }
@@ -8573,6 +8760,75 @@ Read the current content above. Determine what's missing. Produce a complete epi
         }
     }
 
+    // ── Dev Docs (project-context authoring surface) ────────────────────
+    // Developer docs live per-workspace at .switchboard/devdocs/*.md, beside
+    // the PRD (.switchboard/projects/<slug>/prd.md) and constitution storage.
+    // Together those three form the project context synced to Notion/Linear.
+
+    /** Enumerate every workspace's dev docs. Title = first `# ` heading, else filename. */
+    private async _listDevDocs(allRoots: string[]): Promise<Array<{
+        path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string;
+    }>> {
+        const docs: Array<{ path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string }> = [];
+        const items = buildWorkspaceItems(allRoots);
+        for (const item of items) {
+            const dir = path.join(item.workspaceRoot, '.switchboard', 'devdocs');
+            let entries: string[] = [];
+            try { entries = await fs.promises.readdir(dir); } catch { continue; }
+            for (const entry of entries.sort()) {
+                if (!entry.endsWith('.md')) { continue; }
+                const filePath = path.join(dir, entry);
+                let title = entry.replace(/\.md$/, '');
+                try {
+                    const head = (await fs.promises.readFile(filePath, 'utf8')).slice(0, 2000);
+                    const match = head.match(/^#\s+(.+)$/m);
+                    if (match) { title = match[1].trim(); }
+                } catch { /* keep filename title */ }
+                docs.push({
+                    path: filePath,
+                    fileName: entry,
+                    title,
+                    workspaceRoot: item.workspaceRoot,
+                    workspaceLabel: item.label,
+                });
+            }
+        }
+        return docs;
+    }
+
+    /**
+     * Accept a webview-supplied dev-doc path only when it resolves inside some
+     * workspace's .switchboard/devdocs/ directory — the webview is untrusted input.
+     */
+    private _resolveDevDocPath(allRoots: string[], candidate: unknown): string | null {
+        if (typeof candidate !== 'string' || !candidate.endsWith('.md')) { return null; }
+        const resolved = path.resolve(candidate);
+        for (const root of allRoots) {
+            const devDocsDir = path.resolve(root, '.switchboard', 'devdocs');
+            if (resolved.startsWith(devDocsDir + path.sep)) { return resolved; }
+        }
+        return null;
+    }
+
+    /**
+     * Called after any project-context content write (dev doc, PRD, constitution).
+     * Debounced auto-push: projectContextSyncNow({auto:true}) respects the user's
+     * enabled flag and the coarse content-hash gate, so this is cheap to fire on
+     * every save. The refreshed status lands in the Remote tab if it's open.
+     */
+    private _projectContextSyncDebounce: NodeJS.Timeout | undefined;
+    private _onProjectContextContentChanged(workspaceRoot?: string): void {
+        const root = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!root || !this._kanbanProvider) { return; }
+        if (this._projectContextSyncDebounce) { clearTimeout(this._projectContextSyncDebounce); }
+        this._projectContextSyncDebounce = setTimeout(() => {
+            this._projectContextSyncDebounce = undefined;
+            void this._kanbanProvider?.projectContextSyncNow(root, { auto: true })
+                .then(payload => { if (payload) { this._projectPanel?.webview.postMessage(payload); } })
+                .catch(err => console.warn('[PlanningPanel] project-context auto-sync failed:', err));
+        }, 5000);
+    }
+
     private async _handleAirlockExport(workspaceRoot: string): Promise<{ success: boolean; message: string }> {
         try {
             const integrationDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
@@ -8580,11 +8836,26 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 fs.mkdirSync(integrationDir, { recursive: true });
             }
 
-            // For now, return a success message. The actual bundling logic
-            // can be implemented later by calling the appropriate service.
-            return { success: true, message: 'NotebookLM folder ready. Export functionality coming soon.' };
+            // Bundle the workspace into NotebookLM-compatible .docx parts.
+            const { outputDir, timestamp } = await bundleWorkspaceContext(workspaceRoot);
+
+            // Ship the planning guide alongside the bundle so NotebookLM answers
+            // are grounded in how this project writes plans.
+            const howToPlanPath = path.join(outputDir, `${timestamp}-how_to_plan.md`);
+            let howToPlanContent = '# How to Plan\n\nRefer to the project guidelines for planning.';
+            try {
+                howToPlanContent = await fs.promises.readFile(path.join(workspaceRoot, '.agents', 'rules', 'how_to_plan.md'), 'utf8');
+            } catch {
+                try {
+                    // Backward-compatible fallback: a user who kept their old .agent/ folder.
+                    howToPlanContent = await fs.promises.readFile(path.join(workspaceRoot, '.agent', 'rules', 'how_to_plan.md'), 'utf8');
+                } catch { /* keep the default stub */ }
+            }
+            await fs.promises.writeFile(howToPlanPath, howToPlanContent, 'utf8');
+
+            return { success: true, message: `Bundle complete → ${path.basename(outputDir)}. Upload the folder contents to NotebookLM.` };
         } catch (err) {
-            return { success: false, message: `Failed to prepare NotebookLM folder: ${String(err)}` };
+            return { success: false, message: `NotebookLM export failed: ${err instanceof Error ? err.message : String(err)}` };
         }
     }
 

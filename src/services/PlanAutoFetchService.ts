@@ -74,12 +74,12 @@ export class PlanAutoFetchService implements vscode.Disposable {
             return;
         }
 
-        // Get interval (default 300s, min 60s)
-        let intervalSeconds = 300;
+        // Get interval (default 60s, min 60s) — 60s keeps the control-plane channel responsive.
+        let intervalSeconds = 60;
         for (const root of this._getAllowedRoots()) {
             const config = vscode.workspace.getConfiguration('switchboard.planAutoFetch', vscode.Uri.file(root));
             if (config.get<boolean>('enabled', false)) {
-                const val = config.get<number>('intervalSeconds', 300);
+                const val = config.get<number>('intervalSeconds', 60);
                 if (val && val > 0) {
                     intervalSeconds = Math.max(60, val);
                     break; // use the first found
@@ -125,8 +125,9 @@ export class PlanAutoFetchService implements vscode.Disposable {
     private async _runCycleForRoot(root: string, config: vscode.WorkspaceConfiguration): Promise<void> {
         const resolvedRoot = path.resolve(root);
 
-        // Determine if this root is a control-plane target (§5), which uses a
-        // faster cadence and needs the discard-before-merge step.
+        // Determine if this root is a control-plane target (§5), which needs the
+        // discard-before-merge step below. (Cadence is now 60s by default for all
+        // auto-fetch targets, so the control-plane channel converges within ~1 min.)
         let isControlPlaneTarget = false;
         try {
             const exportConfig = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(resolvedRoot));
@@ -161,7 +162,7 @@ export class PlanAutoFetchService implements vscode.Disposable {
         const remote = config.get<string>('remote', 'origin') || 'origin';
         const defaultBranchSetting = config.get<string>('defaultBranch', '');
         const trustedAuthors = config.get<string[]>('trustedAuthors', []) || [];
-        const intervalSeconds = Math.max(60, config.get<number>('intervalSeconds', 300));
+        const intervalSeconds = Math.max(60, config.get<number>('intervalSeconds', 60));
 
         // Backoff check
         const failureInfo = this._failuresMap.get(resolvedRoot);

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
+import * as crypto from 'crypto';
 import { hostInlineImages } from './ImageHostingHelper';
 import { CANONICAL_COLUMNS } from './ClickUpSyncService';
 import { KanbanDatabase } from './KanbanDatabase';
@@ -33,6 +34,7 @@ export interface LinearConfig {
   completeSyncEnabled?: boolean;  // default: true — sync completed status to Linear
   excludeBacklog?: boolean;  // default: true — exclude backlog issues from sync
   selectedProjectName: string;  // Persisted project picker value for sidebar filter
+  ticketSaveLocation?: string;  // base dir for local ticket .md files (set via Setup / migration)
 }
 
 export interface LinearApplyOptions {
@@ -246,7 +248,8 @@ export class LinearSyncService {
         : raw.deleteSyncEnabled === true,
       completeSyncEnabled: raw.completeSyncEnabled !== false,  // default true
       excludeBacklog: raw.excludeBacklog !== false,  // default true — exclude backlog issues
-      selectedProjectName: raw.selectedProjectName || ''  // normalize missing/undefined to empty string
+      selectedProjectName: raw.selectedProjectName || '',  // normalize missing/undefined to empty string
+      ticketSaveLocation: raw.ticketSaveLocation || '',
     };
   }
 
@@ -500,7 +503,7 @@ export class LinearSyncService {
    * Also skips blank lines immediately after the H1 to avoid a leading blank line.
    * Does NOT handle Setext-style H1s (underlined with ===).
    */
-  private _stripH1Header(markdownContent: string): string {
+  public _stripH1Header(markdownContent: string): string {
     const lines = markdownContent.split(/\r?\n/);
 
     // Find the first non-blank line
@@ -1671,18 +1674,21 @@ export class LinearSyncService {
     }
 
     try {
+      // Use the dedicated issueArchive mutation (idempotent on already-archived
+      // issues). The prior issueUpdate(input:{archivedAt}) form fails on
+      // archived issues (they become read-only) and is the wrong API for this
+      // operation.
       const result = await this.graphqlRequest(`
-        mutation($id: String!, $archivedAt: DateTime!) {
-          issueUpdate(id: $id, input: { archivedAt: $archivedAt }) {
+        mutation($id: String!) {
+          issueArchive(id: $id) {
             success
           }
         }
       `, {
-        id: normalizedIssueId,
-        archivedAt: new Date().toISOString()
+        id: normalizedIssueId
       });
 
-      if (result.data?.issueUpdate?.success) {
+      if (result.data?.issueArchive?.success) {
         console.log(`[LinearSync] Archived Linear issue ${normalizedIssueId}`);
         return { success: true };
       } else {
@@ -1690,6 +1696,44 @@ export class LinearSyncService {
       }
     } catch (error) {
       return { success: false, error: `Failed to archive Linear issue: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
+  /**
+   * Unarchive a Linear issue. Archived issues are read-only — `issueUpdate`
+   * fails on them. To push late content edits to an archived issue, unarchive
+   * first, push, then re-archive. Uses the dedicated `issueUnarchive` mutation.
+   */
+  async unarchiveIssue(issueId: string): Promise<{ success: boolean; error?: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      return { success: false, error: 'Linear not configured' };
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      return { success: false, error: 'Issue ID is required' };
+    }
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($id: String!) {
+          issueUnarchive(id: $id) {
+            success
+          }
+        }
+      `, {
+        id: normalizedIssueId
+      });
+
+      if (result.data?.issueUnarchive?.success) {
+        console.log(`[LinearSync] Unarchived Linear issue ${normalizedIssueId}`);
+        return { success: true };
+      } else {
+        return { success: false, error: `Linear issue ${normalizedIssueId} rejected the unarchive request.` };
+      }
+    } catch (error) {
+      return { success: false, error: `Failed to unarchive Linear issue: ${error instanceof Error ? error.message : String(error)}` };
     }
   }
 
@@ -2348,6 +2392,14 @@ export class LinearSyncService {
 
   // ── Import Issues (legacy — used by extension.ts) ────────────
 
+  /**
+   * Two-pass import: parent issues with children ALWAYS become Switchboard epics
+   * (written to .switchboard/epics/), children are linked via direct DB writes
+   * (epic_id). Deeply nested hierarchies are flattened to one level. The GraphQL
+   * query fetches the full hierarchy recursively (5 levels deep). Insert-before-
+   * write ordering prevents the child-planId race (watcher would mint a random
+   * planId if it fires between file write and DB insert).
+   */
   async importIssuesFromLinear(plansDir: string): Promise<{ success: boolean; imported: number; skipped: number; error?: string }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
@@ -2399,6 +2451,11 @@ export class LinearSyncService {
 
       const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
       const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
+
+      // Recursive GraphQL query: fetches the full hierarchy 5 levels deep.
+      // Each level nests children { nodes { ... children { nodes { ... } } } }.
+      // Comments/attachments/project/cycle are only on top-level issues to keep
+      // the query size manageable. Children at all levels get core fields + parent.
       const QUERY = `
         query($filter: IssueFilter!, $after: String) {
           issues(
@@ -2413,7 +2470,38 @@ export class LinearSyncService {
               labels { nodes { name } }
               dueDate createdAt estimate
               parent { id title identifier }
-              children { nodes { id identifier title description url priority state { name type } assignee { name email } labels { nodes { name } } dueDate createdAt estimate parent { id } } }
+              children { nodes {
+                id identifier title description url priority
+                state { name type }
+                assignee { name email }
+                labels { nodes { name } }
+                dueDate createdAt estimate
+                parent { id }
+                children { nodes {
+                  id identifier title description url priority
+                  state { name type }
+                  assignee { name email }
+                  labels { nodes { name } }
+                  dueDate createdAt estimate
+                  parent { id }
+                  children { nodes {
+                    id identifier title description url priority
+                    state { name type }
+                    assignee { name email }
+                    labels { nodes { name } }
+                    dueDate createdAt estimate
+                    parent { id }
+                    children { nodes {
+                      id identifier title description url priority
+                      state { name type }
+                      assignee { name email }
+                      labels { nodes { name } }
+                      dueDate createdAt estimate
+                      parent { id }
+                    } }
+                  } }
+                } }
+              } }
               project { name }
               cycle { name number }
               comments { nodes { body user { name } createdAt } }
@@ -2439,22 +2527,34 @@ export class LinearSyncService {
       // Apply client-side project name filters
       const filteredIssues = this._applyProjectNameFilters(allIssues, config);
 
-      const subIssues = filteredIssues.flatMap((issue: any) => issue.children?.nodes || []);
-      const allTasks = [...new Map([...filteredIssues, ...subIssues].map((t: any) => [t.id, t])).values()];
-
-      const issueNameById = new Map<string, string>(allTasks.map((t: any) => [t.id, `${t.title} (${t.identifier})`]));
-      const subIssuesByParentId = new Map<string, any[]>();
-      for (const task of allTasks) {
-        if (task.parent?.id) {
-          const siblings = subIssuesByParentId.get(task.parent.id) || [];
-          siblings.push(task);
-          subIssuesByParentId.set(task.parent.id, siblings);
+      // Recursively flatten: top-level issues + all their descendants (any depth).
+      const allTasks: any[] = [];
+      const seenIds = new Set<string>();
+      const collectIssue = (issue: any) => {
+        if (!issue || seenIds.has(issue.id)) { return; }
+        seenIds.add(issue.id);
+        allTasks.push(issue);
+        if (issue.children?.nodes) {
+          for (const child of issue.children.nodes) {
+            collectIssue(child);
+          }
         }
+      };
+      for (const issue of filteredIssues) {
+        collectIssue(issue);
       }
 
+      const issueNameById = new Map<string, string>(allTasks.map((t: any) => [t.id, `${t.title} (${t.identifier})`]));
+
       await fs.promises.mkdir(plansDir, { recursive: true });
+      const epicDir = path.join(this._workspaceRoot, '.switchboard', 'epics');
+      await fs.promises.mkdir(epicDir, { recursive: true });
       let imported = 0;
       let skipped = 0;
+
+      // ── Pass 0: Filter ──────────────────────────────────────────
+      // Run all dedup/filter checks. Collect survivors into filteredTasks.
+      const filteredTasks: any[] = [];
 
       for (const issue of allTasks) {
         if (syncMapIssueIds.has(issue.id)) { skipped++; continue; }
@@ -2486,7 +2586,40 @@ export class LinearSyncService {
         const planFile = path.join(plansDir, `linear_import_${issue.id}.md`);
         try { await fs.promises.access(planFile); skipped++; continue; } catch { /* proceed */ }
 
-        // Note: backlog issues reach here only when excludeBacklog is explicitly false
+        // Issue survived all filters — collect it.
+        filteredTasks.push(issue);
+      }
+
+      // ── Group: Build parent/child maps from filtered tasks ──────
+      const tasksById = new Map<string, any>(filteredTasks.map((t: any) => [t.id, t]));
+      const childrenByParentId = new Map<string, any[]>();
+      for (const task of filteredTasks) {
+        const parentId = task.parent?.id;
+        if (parentId && tasksById.has(parentId)) {
+          if (!childrenByParentId.has(parentId)) {
+            childrenByParentId.set(parentId, []);
+          }
+          childrenByParentId.get(parentId)!.push(task);
+        }
+      }
+
+      // A top-level parent has children in the batch AND no in-batch parent.
+      // An intermediate parent has children AND an in-batch parent — it's a subtask, not an epic.
+      const isParent = (taskId: string) => childrenByParentId.has(taskId);
+      const isChild = (task: any) => {
+        const parentId = task.parent?.id;
+        return !!parentId && tasksById.has(parentId);
+      };
+      const isTopLevelParent = (task: any) => isParent(task.id) && !isChild(task);
+
+      // ── Pass 1: Insert DB records + write files (insert BEFORE write) ──
+      // Insert-before-write ordering prevents the child-planId race: if the
+      // watcher fires between file write and DB insert, ON CONFLICT preserves
+      // the import's planId (not the watcher's random one).
+      const uuidByIssueId = new Map<string, string>();
+
+      for (const issue of filteredTasks) {
+        const stateType = (issue.state?.type || '').toLowerCase();
         const kanbanColumn = stateType === 'backlog' ? 'BACKLOG' : 'CREATED';
         const priority = ['', 'urgent', 'high', 'normal', 'low'][issue.priority] || '';
         const dueDate = issue.dueDate || '';
@@ -2497,8 +2630,6 @@ export class LinearSyncService {
 
         const metaLines = [
           `> Imported from Linear issue \`${issue.identifier}\``,
-          // Provider linkage — UUID, not the human identifier — so the watcher can
-          // round-trip sync back to this issue (see GlobalPlanWatcherService §1).
           `> **Linear Issue ID:** ${issue.id}`,
           issue.url         ? `> **URL:** ${issue.url}`              : '',
           parentRef         ? `> **Parent Issue:** ${parentRef}`     : '',
@@ -2509,8 +2640,7 @@ export class LinearSyncService {
           issue.state?.name ? `> **State:** ${issue.state.name}`    : '',
         ].filter(Boolean).join('\n');
 
-        // §2 — capture comments (most valuable triage context) and attachments.
-        // Caps: 20 most recent comments, 2000 chars each. Empty sections omitted.
+        // §2 — capture comments and attachments (top-level issues only).
         const COMMENT_CAP = 20;
         const COMMENT_CHAR_CAP = 2000;
         const commentNodes = (issue.comments?.nodes || []).slice(-COMMENT_CAP);
@@ -2536,7 +2666,6 @@ export class LinearSyncService {
         const stub = [
           `# ${issue.title || `Linear Issue ${issue.identifier}`}`,
           '',
-          // §5 — land backlog items in BACKLOG, everything else in CREATED.
           `kanbanColumn: ${kanbanColumn}`,
           '',
           metaLines,
@@ -2546,13 +2675,258 @@ export class LinearSyncService {
           attachmentsSection,
         ].join('\n');
 
-        await fs.promises.writeFile(planFile, stub, 'utf8');
-        imported++;
+        if (isTopLevelParent(issue)) {
+          // Top-level parent → epic: insert DB, mark epic, persist linear_issue_id,
+          // THEN write to .switchboard/epics/ (insert-before-write).
+          const uuid = crypto.randomUUID();
+          uuidByIssueId.set(issue.id, uuid);
+          const epicPlanFile = path.join('.switchboard', 'epics', `linear_import_${issue.id}_${uuid}.md`);
+
+          if (ready && workspaceId) {
+            try {
+              await db.insertFileDerivedPlan({
+                planId: uuid,
+                sessionId: '',
+                topic: issue.title || `Linear Issue ${issue.identifier}`,
+                planFile: epicPlanFile,
+                kanbanColumn,
+                status: 'active' as any,
+                complexity: 'Unknown',
+                tags: '',
+                repoScope: '',
+                workspaceId,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                lastAction: '',
+                sourceType: 'linear-import',
+                brainSourcePath: '',
+                mirrorPath: '',
+                routedTo: '',
+                dispatchedAgent: '',
+                dispatchedIde: '',
+                isEpic: 1,
+                epicId: ''
+              } as any);
+              await db.updateEpicStatus(uuid, 1, '');
+              await db.updateLinearIssueIdByPlanFile(epicPlanFile, workspaceId, issue.id);
+            } catch (dbErr) {
+              console.warn(`[LinearSync] import: DB insert failed for epic ${issue.id}, file will be written (watcher will ingest):`, dbErr);
+            }
+          }
+
+          const epicPath = path.join(this._workspaceRoot, epicPlanFile);
+          await fs.promises.writeFile(epicPath, stub, 'utf8');
+          imported++;
+        } else if (isChild(issue)) {
+          // Child (including intermediate parents) → subtask: insert DB, persist
+          // linear_issue_id, THEN write to .switchboard/plans/ (insert-before-write).
+          const childUuid = crypto.randomUUID();
+          uuidByIssueId.set(issue.id, childUuid);
+          const childPlanFile = path.join(plansDir, `linear_import_${issue.id}.md`);
+          const childRelPath = path.relative(this._workspaceRoot, childPlanFile);
+
+          // Add Epic Plan ID metadata line for debugging (if parent UUID is known).
+          const parentIssueId = issue.parent?.id;
+          const parentUuid = parentIssueId ? uuidByIssueId.get(parentIssueId) || '' : '';
+          const childStub = parentUuid
+            ? stub.replace(metaLines, `${metaLines}\n> **Epic Plan ID:** ${parentUuid}`)
+            : stub;
+
+          if (ready && workspaceId) {
+            try {
+              await db.insertFileDerivedPlan({
+                planId: childUuid,
+                sessionId: '',
+                topic: issue.title || `Linear Issue ${issue.identifier}`,
+                planFile: childRelPath,
+                kanbanColumn,
+                status: 'active' as any,
+                complexity: 'Unknown',
+                tags: '',
+                repoScope: '',
+                workspaceId,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                lastAction: '',
+                sourceType: 'linear-import',
+                brainSourcePath: '',
+                mirrorPath: '',
+                routedTo: '',
+                dispatchedAgent: '',
+                dispatchedIde: ''
+              } as any);
+              await db.updateLinearIssueIdByPlanFile(childRelPath, workspaceId, issue.id);
+            } catch (dbErr) {
+              console.warn(`[LinearSync] import: DB insert failed for child ${issue.id}, file will be written (watcher will ingest):`, dbErr);
+            }
+          }
+
+          await fs.promises.writeFile(childPlanFile, childStub, 'utf8');
+          imported++;
+        } else {
+          // Standalone: write file only (same as today — watcher ingests).
+          const planFile = path.join(plansDir, `linear_import_${issue.id}.md`);
+          await fs.promises.writeFile(planFile, stub, 'utf8');
+          imported++;
+        }
+      }
+
+      // ── Pass 2: Link children to top-level parents (flatten) ────
+      // For each child, walk up the parentId chain to find the top-level
+      // in-batch parent (a task that has no in-batch parent itself). Link
+      // the child to that epic's planId via updateEpicStatus.
+      if (ready) {
+        for (const issue of filteredTasks) {
+          if (!isChild(issue)) { continue; }
+          const childUuid = uuidByIssueId.get(issue.id);
+          if (!childUuid) { continue; }
+
+          // Walk up the parent chain to find the top-level parent.
+          const visited = new Set<string>();
+          let currentIssueId: string | null = issue.id;
+          let topParentIssueId: string | null = null;
+
+          while (currentIssueId) {
+            if (visited.has(currentIssueId)) {
+              console.warn(`[LinearSync] import: cycle detected in parentId chain at ${currentIssueId}, treating as standalone`);
+              break;
+            }
+            visited.add(currentIssueId);
+
+            const currentIssue = tasksById.get(currentIssueId);
+            if (!currentIssue) { break; }
+
+            const currentParentId = currentIssue.parent?.id;
+            if (!currentParentId || !tasksById.has(currentParentId)) {
+              // Current issue has no in-batch parent — it's the top-level parent.
+              if (isParent(currentIssueId)) {
+                topParentIssueId = currentIssueId;
+              }
+              break;
+            }
+            currentIssueId = currentParentId;
+          }
+
+          if (topParentIssueId) {
+            const topParentUuid = uuidByIssueId.get(topParentIssueId);
+            if (topParentUuid) {
+              try {
+                await db.updateEpicStatus(childUuid, 0, topParentUuid);
+              } catch (linkErr) {
+                console.warn(`[LinearSync] import: failed to link child ${issue.id} to epic ${topParentIssueId}:`, linkErr);
+              }
+            }
+          }
+        }
       }
 
       return { success: true, imported, skipped };
     } catch (error) {
       return { success: false, imported: 0, skipped: 0, error: `Import failed: ${error}` };
     }
+  }
+
+  // ── Epic Outbound Sync ───────────────────────────────────────
+
+  /**
+   * Sync a Switchboard epic + its subtasks to Linear as a parent issue with
+   * child issues linked via parentId. Creates/updates the epic issue first
+   * (await, not debounce), then links each subtask's existing Linear issue
+   * as a child. Subtasks without an existing Linear issue are skipped (added
+   * to `failed`) — they will be linked on a future epic-sync trigger once
+   * their individual sync creates an issue.
+   */
+  public async syncEpicWithSubtasks(params: {
+    epicPlanFile: string;
+    epicTopic: string;
+    epicColumn: string;
+    subtasks: Array<{ planFile: string; topic: string; complexity: string }>;
+  }): Promise<{ epicIssueId?: string; linked: string[]; failed: string[] }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
+      return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+    }
+    if (!(await this.hasApiToken())) {
+      return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+    }
+
+    const linked: string[] = [];
+    const failed: string[] = [];
+    let epicIssueId: string | null = null;
+
+    try {
+      // 1. Create/update the epic issue first (await, bypass debounce).
+      await this.syncPlan(
+        { planFile: params.epicPlanFile, topic: params.epicTopic, complexity: 'Unknown' },
+        params.epicColumn
+      );
+
+      // 2. Look up the epic's issue ID. If still a creating_* temp marker, retry once.
+      epicIssueId = await this.getIssueIdForPlan(params.epicPlanFile);
+      if (epicIssueId && epicIssueId.startsWith('creating_')) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        epicIssueId = await this.getIssueIdForPlan(params.epicPlanFile);
+      }
+      if (!epicIssueId || epicIssueId.startsWith('creating_')) {
+        console.warn(`[LinearSync] syncEpicWithSubtasks: epic issue ID not resolved for ${params.epicPlanFile} — all subtasks failed`);
+        return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+      }
+
+      // 3. Link each subtask's existing Linear issue as a child of the epic.
+      for (const sub of params.subtasks) {
+        try {
+          const subIssueId = await this.getIssueIdForPlan(sub.planFile);
+          if (subIssueId && !subIssueId.startsWith('creating_')) {
+            await this.updateIssueParent(subIssueId, epicIssueId);
+            linked.push(sub.planFile);
+          } else {
+            failed.push(sub.planFile);
+          }
+        } catch (linkErr) {
+          console.warn(`[LinearSync] syncEpicWithSubtasks: failed to link subtask ${sub.planFile}:`, linkErr);
+          failed.push(sub.planFile);
+        }
+      }
+    } catch (epicErr) {
+      console.warn(`[LinearSync] syncEpicWithSubtasks: epic sync failed:`, epicErr);
+      return { linked: [], failed: params.subtasks.map(s => s.planFile) };
+    }
+
+    return { epicIssueId: epicIssueId ?? undefined, linked, failed };
+  }
+
+  /**
+   * Unlink subtasks from their epic in Linear — set each subtask's parent to null.
+   * Used when a subtask is removed from an epic or reassigned.
+   */
+  public async unlinkSubtasksFromEpic(subtaskPlanFiles: string[]): Promise<{ unlinked: string[]; failed: string[] }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
+      return { unlinked: [], failed: subtaskPlanFiles };
+    }
+    if (!(await this.hasApiToken())) {
+      return { unlinked: [], failed: subtaskPlanFiles };
+    }
+
+    const unlinked: string[] = [];
+    const failed: string[] = [];
+
+    for (const planFile of subtaskPlanFiles) {
+      try {
+        const issueId = await this.getIssueIdForPlan(planFile);
+        if (issueId && !issueId.startsWith('creating_')) {
+          await this.updateIssueParent(issueId, null);
+          unlinked.push(planFile);
+        } else {
+          // No external issue — nothing to unlink. Not a failure.
+          unlinked.push(planFile);
+        }
+      } catch (err) {
+        console.warn(`[LinearSync] unlinkSubtasksFromEpic: failed for ${planFile}:`, err);
+        failed.push(planFile);
+      }
+    }
+
+    return { unlinked, failed };
   }
 }

@@ -1,7 +1,9 @@
 import * as path from 'path';
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
-import type { RemoteProvider } from './remote/RemoteProvider';
+import type { RemoteProvider, RemoteStateDelta } from './remote/RemoteProvider';
 import type { GitStateProvider, GitProviderKind } from './remote/GitStateProvider';
+import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 /**
  * §7/§9/§10 — Remote Control (provider-agnostic: Linear, Notion, or git-backed).
@@ -21,7 +23,10 @@ import type { GitStateProvider, GitProviderKind } from './remote/GitStateProvide
  * human editing both sides at once (that's last-write-wins, not a case we defend):
  *  - state: a delta whose column equals the card's CURRENT column is a no-op. Once a move
  *    is applied the local column matches, so our own outbound push re-surfacing as a delta
- *    just no-ops here. That single equality check is the whole guard.
+ *    just no-ops here. That single equality check is the whole guard. This guard is now
+ *    load-bearing for Notion too (pushState bumps last_edited_time → state delta re-fetches
+ *    → column matches → no-op). Content push (pushContent) also bumps last_edited_time,
+ *    but the column hasn't changed → echo guard no-ops the state delta.
  *  - authoredBySelf: outbound comments (Linear marker / Notion `created_by` = bot) are
  *    skipped on ingest;
  *  - processed-comment-id set: this is Notion-API hygiene, not race defense — Notion rounds
@@ -31,7 +36,7 @@ import type { GitStateProvider, GitProviderKind } from './remote/GitStateProvide
  *    on the next poll (delayed, not lost).
  */
 
-export type RemoteProviderKind = 'linear' | 'notion' | 'control-plane' | 'wiki';
+export type RemoteProviderKind = 'linear' | 'notion' | 'clickup' | 'control-plane' | 'wiki';
 
 export interface RemoteConfig {
     /** Which remote backend drives the board. One active at a time (no hot-swap). */
@@ -42,14 +47,43 @@ export interface RemoteConfig {
     silentSync: boolean;
     /** Poll cadence, 30–120s. */
     pingFrequencySeconds: number;
+    /** Remote mode: 'ingest' = pull only (no state mirror, no agent dispatch); 'full' = pull + mirror + dispatch. */
+    mode: 'ingest' | 'full';
+    /** Whether push (status + content) is active. Gates push at trigger sites. */
+    push: boolean;
+    /** Whether comment polling is active. */
+    comments: boolean;
 }
 
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     provider: 'linear',
     boards: [],
     silentSync: false,
-    pingFrequencySeconds: 60
+    pingFrequencySeconds: 60,
+    mode: 'ingest',
+    push: false,
+    comments: true
 };
+
+/**
+ * Remote-sync health snapshot (epic 7 — Remote-Sync Health & Error Surfacing).
+ * Surfaced in the Remote tab so silent failures (bad token, revoked connection,
+ * rate-limit storm) are visible instead of console-only.
+ */
+export interface RemoteSyncHealth {
+    active: boolean;
+    provider: RemoteProviderKind;
+    lastPollAt: string | null;
+    lastPollOk: boolean;
+    lastPollError: string | null;
+    consecutiveFailures: number;
+    /** True when the provider returned 429/529 and backoff is engaged. */
+    throttled: boolean;
+    throttleUntil: string | null;
+    lastPushAt: string | null;
+    lastPushOk: boolean;
+    lastPushError: string | null;
+}
 
 const REMOTE_CONFIG_KEY = 'remote.config';
 const COMMENT_SEEN_CAP = 500;
@@ -67,6 +101,14 @@ interface RemoteControlDeps {
     onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
     /** Route an inbound comment to the card's current column agent (§7). */
     onComment: (plan: KanbanPlanRecord, commentBody: string) => Promise<void>;
+    /** Persisted description-sync cursors per issue (issueId → ISO timestamp). */
+    getDescriptionCursors?: (kind: RemoteProviderKind) => Promise<Record<string, string>>;
+    /** Persist a description-sync cursor for an issue. */
+    setDescriptionCursor?: (kind: RemoteProviderKind, issueId: string, timestamp: string) => Promise<void>;
+    /** Called after a description is pulled and written to disk. Registers the content hash for loop prevention. */
+    onDescriptionPulled?: (issueId: string, contentHash: string) => void;
+    /** Resolve the workspace root for file path operations (plan files). */
+    getWorkspaceRoot?: () => string;
     log?: (msg: string) => void;
 }
 
@@ -76,12 +118,58 @@ export class RemoteControlService {
     private _polling = false;
     private _active = false;
     private _gitProviders = new Map<GitProviderKind, GitStateProvider>();
+    // ── Health state (epic 7 — Remote-Sync Health & Error Surfacing) ──
+    private _lastPollAt: string | null = null;
+    private _lastPollOk = true;
+    private _lastPollError: string | null = null;
+    private _consecutiveFailures = 0;
+    private _throttled = false;
+    private _throttleUntil: string | null = null;
+    private _lastPushAt: string | null = null;
+    private _lastPushOk = true;
+    private _lastPushError: string | null = null;
 
     constructor(deps: RemoteControlDeps) {
         this._deps = deps;
     }
 
     public get isActive(): boolean { return this._active; }
+
+    /**
+     * Health snapshot for the Remote tab UI (epic 7). Reads the in-memory
+     * last-status state recorded by the poll/push loops — no DB hit.
+     */
+    public async getHealth(): Promise<RemoteSyncHealth> {
+        const config = await this.getConfig();
+        // Clear the throttled flag once the backoff window expires.
+        if (this._throttled && this._throttleUntil) {
+            const until = Date.parse(this._throttleUntil);
+            if (isFinite(until) && Date.now() >= until) {
+                this._throttled = false;
+                this._throttleUntil = null;
+            }
+        }
+        return {
+            active: this._active,
+            provider: config.provider,
+            lastPollAt: this._lastPollAt,
+            lastPollOk: this._lastPollOk,
+            lastPollError: this._lastPollError,
+            consecutiveFailures: this._consecutiveFailures,
+            throttled: this._throttled,
+            throttleUntil: this._throttleUntil,
+            lastPushAt: this._lastPushAt,
+            lastPushOk: this._lastPushOk,
+            lastPushError: this._lastPushError,
+        };
+    }
+
+    /** Record an outbound push outcome (called by push dispatch paths). */
+    public recordPushResult(ok: boolean, error?: string): void {
+        this._lastPushAt = new Date().toISOString();
+        this._lastPushOk = ok;
+        this._lastPushError = ok ? null : (error || 'unknown error');
+    }
 
     /** Register a git-backed provider for outbound push and inbound polling. */
     public registerGitProvider(provider: GitStateProvider): void {
@@ -110,7 +198,10 @@ export class RemoteControlService {
                 provider: this._normalizeProviderKind(parsed.provider),
                 boards: this._normalizeBoards(parsed.boards),
                 silentSync: parsed.silentSync === true,
-                pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds)
+                pingFrequencySeconds: this._clampFrequency(parsed.pingFrequencySeconds),
+                mode: parsed.mode === 'full' ? 'full' : 'ingest',
+                push: parsed.push === true,
+                comments: parsed.comments !== false, // default true
             };
         } catch {
             return { ...DEFAULT_REMOTE_CONFIG };
@@ -124,7 +215,10 @@ export class RemoteControlService {
             provider: this._normalizeProviderKind(config.provider),
             boards: this._normalizeBoards(config.boards),
             silentSync: config.silentSync === true,
-            pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds)
+            pingFrequencySeconds: this._clampFrequency(config.pingFrequencySeconds),
+            mode: config.mode === 'full' ? 'full' : 'ingest',
+            push: config.push === true,
+            comments: config.comments !== false,
         };
         await db.setConfig(REMOTE_CONFIG_KEY, JSON.stringify(normalized));
         if (this._active) {
@@ -134,7 +228,7 @@ export class RemoteControlService {
     }
 
     private _normalizeProviderKind(value: unknown): RemoteProviderKind {
-        const valid: RemoteProviderKind[] = ['linear', 'notion', 'control-plane', 'wiki'];
+        const valid: RemoteProviderKind[] = ['linear', 'notion', 'clickup', 'control-plane', 'wiki'];
         const str = String(value || '');
         return valid.includes(str as RemoteProviderKind) ? (str as RemoteProviderKind) : 'linear';
     }
@@ -174,6 +268,20 @@ export class RemoteControlService {
         this._log(`Started (provider=${config.provider}, every ${config.pingFrequencySeconds}s, ${config.boards.length} board(s)).`);
     }
 
+    /**
+     * One-shot reconciliation: run a single poll cycle (state + comments) without
+     * starting the recurring timer or marking the service active. Called at IDE
+     * startup so cards advance from remote status changes accumulated while the
+     * machine was off. Reuses the existing cursors, echo guards, seed-on-first-poll,
+     * and import logic — no parallel pipeline, no new key.
+     */
+    public async reconcileOnce(): Promise<void> {
+        const config = await this.getConfig();
+        if (config.boards.length === 0) { return; } // unconfigured — clean no-op
+        if (config.silentSync) { return; } // opt-in: match start() semantics
+        await this._poll();
+    }
+
     /** Stop pinging. Silent sync, when on, continues elsewhere; the ping loop stops here. */
     public stop(): void {
         this._active = false;
@@ -210,8 +318,10 @@ export class RemoteControlService {
             const allPlans = await db.getAllPlans(workspaceId);
             const byRemoteId = this._indexByRemoteId(provider.kind, allPlans, boardSet);
 
-            await this._pollState(db, provider, byRemoteId);
+            const refreshedThisCycle = new Set<string>();
+            await this._pollState(db, provider, byRemoteId, refreshedThisCycle);
             await this._pollComments(db, provider, byRemoteId);
+            await this._pollDescriptions(db, provider, byRemoteId, refreshedThisCycle);
 
             // Outbound push: if the active provider is git-backed, push the exported
             // mirror after processing inbound deltas. Debounced/single-flight inside
@@ -219,11 +329,38 @@ export class RemoteControlService {
             if (config.provider === 'control-plane' || config.provider === 'wiki') {
                 const gitProvider = this._gitProviders.get(config.provider as GitProviderKind);
                 if (gitProvider) {
-                    void gitProvider.pushExportedState();
+                    // Feed the git-mirror push outcome into the Remote-tab health panel.
+                    // 'skipped' (nothing to push) leaves the last-push status unchanged.
+                    void gitProvider.pushExportedState().then(res => {
+                        if (res === 'pushed') { this.recordPushResult(true); }
+                        else if (res === 'failed') { this.recordPushResult(false, 'board-state mirror push failed'); }
+                    });
                 }
             }
+
+            // Health: record successful poll.
+            this._lastPollAt = new Date().toISOString();
+            this._lastPollOk = true;
+            this._lastPollError = null;
+            this._consecutiveFailures = 0;
         } catch (e) {
-            this._log(`Poll error: ${e instanceof Error ? e.message : String(e)}`);
+            const msg = e instanceof Error ? e.message : String(e);
+            this._log(`Poll error: ${msg}`);
+            // Health: record failed poll.
+            this._lastPollAt = new Date().toISOString();
+            this._lastPollOk = false;
+            this._lastPollError = msg;
+            this._consecutiveFailures++;
+            // Detect rate-limit / backoff indicators in the error message.
+            // NotionFetchService.httpRequest retries internally but may surface
+            // a 429/529 after exhausting attempts; Linear graphqlRequest throws.
+            const lower = msg.toLowerCase();
+            if (lower.includes('429') || lower.includes('529') || lower.includes('rate limit') || lower.includes('retry-after')) {
+                this._throttled = true;
+                // Backoff window: 60s default (the internal retry already waited;
+                // this just flags the UI until the next successful poll clears it).
+                this._throttleUntil = new Date(Date.now() + 60000).toISOString();
+            }
         } finally {
             this._polling = false;
         }
@@ -258,6 +395,11 @@ export class RemoteControlService {
                     const basename = path.basename(p.planFile, '.md');
                     map.set(basename, p);
                 }
+            } else if (kind === 'clickup') {
+                // ClickUp: push-only, but index by clickupTaskId for completeness.
+                if (p.clickupTaskId) {
+                    map.set(p.clickupTaskId, p);
+                }
             }
         }
         return map;
@@ -269,6 +411,7 @@ export class RemoteControlService {
         if (kind === 'control-plane' || kind === 'wiki') {
             return plan.planFile ? path.basename(plan.planFile, '.md') : '';
         }
+        if (kind === 'clickup') { return plan.clickupTaskId || ''; }
         return '';
     }
 
@@ -277,7 +420,8 @@ export class RemoteControlService {
     private async _pollState(
         db: KanbanDatabase,
         provider: RemoteProvider,
-        byRemoteId: Map<string, KanbanPlanRecord>
+        byRemoteId: Map<string, KanbanPlanRecord>,
+        refreshedThisCycle: Set<string>
     ): Promise<void> {
         const key = stateCursorKey(provider.kind);
         const cursor = await db.getConfig(key);
@@ -307,20 +451,30 @@ export class RemoteControlService {
             return;
         }
 
+        const config = await this.getConfig();
         const { deltas, nextCursor } = await provider.fetchStateDeltas(cursor);
         for (const d of deltas) {
             let plan: KanbanPlanRecord | null | undefined = byRemoteId.get(d.remoteId);
             if (!plan) {
                 // New remote item (a plan authored in Linear/Notion) with no local file →
                 // import it as a new markdown plan, then treat it like any tracked card.
+                // State import runs in BOTH ingest and full mode.
                 plan = await provider.importRemotePlan(d.remoteId);
                 if (!plan) { continue; }
                 byRemoteId.set(d.remoteId, plan);
                 this._log(`Imported new ${provider.kind} plan ${d.remoteId} → ${plan.planFile}.`);
             }
+            // Mirror epic structure changes (parent/child links) BEFORE column dispatch so
+            // that a column cascade on an epic reaches its now-linked subtasks.
+            if (d.parentRemoteId !== undefined || d.isEpicCandidate !== undefined) {
+                await this._mirrorEpicStructure(db, plan, d, byRemoteId);
+            }
             const column = provider.stateKeyToColumn(d.stateKey);
             if (!column) { continue; }
-            await this._applyStateMirror(provider, plan, column);
+            // In ingest mode, skip state mirror (column move + agent dispatch).
+            // State import (above) still runs — the remote is a plan source.
+            if (config.mode === 'ingest') { continue; }
+            await this._applyStateMirror(provider, plan, column, refreshedThisCycle);
         }
         // Advance AFTER processing. State idempotency comes from the echo guard, so a
         // re-fetched (same-minute / inclusive-cursor) item simply no-ops.
@@ -332,7 +486,8 @@ export class RemoteControlService {
     private async _applyStateMirror(
         provider: RemoteProvider,
         plan: KanbanPlanRecord,
-        targetColumn: string
+        targetColumn: string,
+        refreshedThisCycle: Set<string>
     ): Promise<void> {
         // The whole echo guard: never re-apply the column the card is already in. Our own
         // outbound push re-surfaces as a delta with the column we just set → no-op here.
@@ -343,6 +498,8 @@ export class RemoteControlService {
         try {
             // Pull the remote-authored body/description into the local plan BEFORE dispatch.
             await provider.refreshLocalPlanFromRemote(remoteId);
+            // Track that this card was already refreshed so _pollDescriptions doesn't double-pull.
+            refreshedThisCycle.add(remoteId);
             const { dispatched } = await this._deps.onColumnMove(plan, targetColumn);
             if (dispatched) {
                 provider.postComment(
@@ -355,6 +512,51 @@ export class RemoteControlService {
         }
     }
 
+    /**
+     * Mirror epic structure changes (parent/child links) detected by the provider's state
+     * delta query. Runs BEFORE `_applyStateMirror` so that a column cascade on an epic
+     * reaches its now-linked subtasks in the same poll cycle.
+     *
+     * Idempotent: only writes if the local state differs from the delta. The echo guard
+     * for outbound sync (epic-sync-outbound) is the idempotency guard itself — if the
+     * local plan is already linked to the same epic, no write occurs.
+     */
+    private async _mirrorEpicStructure(
+        db: KanbanDatabase,
+        plan: KanbanPlanRecord,
+        delta: RemoteStateDelta,
+        byRemoteId: Map<string, KanbanPlanRecord>
+    ): Promise<void> {
+        // 1. If this card is a parent (isEpicCandidate), ensure it's marked isEpic locally.
+        if (delta.isEpicCandidate === true && !plan.isEpic) {
+            await db.updateEpicStatus(plan.planId, 1, '');
+            this._log(`Epic mirror: ${plan.planId} marked as epic (remote says it has children).`);
+        }
+
+        // 2. If this card's parent changed, link/unlink locally.
+        if (delta.parentRemoteId !== undefined) {
+            if (delta.parentRemoteId === '') {
+                // Unparented remotely → unlink locally
+                if (plan.epicId) {
+                    await db.updateEpicStatus(plan.planId, 0, '');
+                    this._log(`Epic mirror: ${plan.planId} unlinked from epic ${plan.epicId}.`);
+                }
+            } else {
+                // Parented remotely → find the parent's local plan by remote id
+                const parentPlan = byRemoteId.get(delta.parentRemoteId);
+                if (parentPlan && parentPlan.planId !== plan.planId) {
+                    if (plan.epicId !== parentPlan.planId) {
+                        await db.updateEpicStatus(plan.planId, 0, parentPlan.planId);
+                        this._log(`Epic mirror: ${plan.planId} linked to epic ${parentPlan.planId}.`);
+                    }
+                } else if (!parentPlan) {
+                    // Parent isn't tracked locally — can't link. Log (don't fail).
+                    this._log(`Epic mirror: parent ${delta.parentRemoteId} not tracked locally — cannot link ${plan.planId}.`);
+                }
+            }
+        }
+    }
+
     // ── Comment stream (§7) ─────────────────────────────────────────
 
     private async _pollComments(
@@ -362,6 +564,9 @@ export class RemoteControlService {
         provider: RemoteProvider,
         byRemoteId: Map<string, KanbanPlanRecord>
     ): Promise<void> {
+        const config = await this.getConfig();
+        if (!config.comments) { return; } // comment polling gated by config
+
         const key = commentCursorKey(provider.kind);
         const cursor = await db.getConfig(key);
         if (!cursor) {
@@ -440,5 +645,99 @@ export class RemoteControlService {
     private _getWikiRoot(): string | null {
         const cp = this._gitProviders.get('wiki');
         return cp ? cp.getExportRoot() : null;
+    }
+
+    // ── Description stream (bidirectional content sync) ─────────────
+
+    /**
+     * Poll for description-only changes (content edits that don't change the column).
+     * Uses a separate per-issue cursor (`remote.descriptionCursor.${kind}`) that only
+     * advances after successful processing. Skips cards already refreshed by
+     * `_applyStateMirror` in the same poll cycle (column+description changed together).
+     *
+     * Only Linear is supported — Notion description pull is deferred. The provider's
+     * `fetchStateDeltas` must populate `description` and `updatedAt` on the deltas.
+     */
+    private async _pollDescriptions(
+        db: KanbanDatabase,
+        provider: RemoteProvider,
+        byRemoteId: Map<string, KanbanPlanRecord>,
+        refreshedThisCycle: Set<string>
+    ): Promise<void> {
+        if (!this._deps.getDescriptionCursors || !this._deps.setDescriptionCursor) { return; }
+        if (provider.kind !== 'linear') { return; } // Linear-only for now
+
+        const key = `remote.descriptionCursor.${provider.kind}`;
+        const cursors = await this._deps.getDescriptionCursors(provider.kind);
+
+        // Re-fetch state deltas to get description data (same query, includes description).
+        // The state cursor is used as the "since" timestamp — this is acceptable because
+        // description changes bump updatedAt, which is the same field the state cursor tracks.
+        const stateCursor = await db.getConfig(stateCursorKey(provider.kind));
+        if (!stateCursor) { return; }
+
+        const { deltas } = await provider.fetchStateDeltas(stateCursor);
+        let cursorsChanged = false;
+
+        for (const d of deltas) {
+            if (!d.description && !d.updatedAt) { continue; }
+            if (refreshedThisCycle.has(d.remoteId)) { continue; } // already refreshed by state mirror
+
+            const plan = byRemoteId.get(d.remoteId);
+            if (!plan) { continue; }
+
+            const cursor = cursors[d.remoteId] || '';
+            if (!d.updatedAt || d.updatedAt <= cursor) { continue; } // already synced
+
+            const pulledBody = d.description || '';
+            if (!pulledBody.trim()) { continue; } // never clobber with empty
+
+            // Large description guard (matches maxContentSizeBytes in LiveSyncTypes)
+            if (pulledBody.length > 102400) { continue; }
+
+            // Reconstruct full file content: preserve existing H1 title + pulled body.
+            // Linear description doesn't include the H1 — it was stripped before push.
+            const workspaceRoot = this._deps.getWorkspaceRoot?.() || '';
+            const planPath = path.isAbsolute(plan.planFile)
+                ? plan.planFile
+                : path.join(workspaceRoot, plan.planFile);
+            let existingContent = '';
+            try { existingContent = await fs.promises.readFile(planPath, 'utf8'); } catch { /* ok */ }
+
+            // Extract existing H1 title line
+            const h1Match = existingContent.match(/^# .+\n?/);
+            const h1Line = h1Match ? h1Match[0] : `# ${plan.topic || 'Untitled'}\n`;
+            const newContent = h1Line + '\n' + pulledBody;
+
+            // Hash-based conflict check: if local content already matches what we'd write, skip
+            const newHash = crypto.createHash('sha256').update(newContent).digest('hex');
+            const existingHash = crypto.createHash('sha256').update(existingContent).digest('hex');
+            if (newHash === existingHash) {
+                // Already in sync — just advance cursor
+                cursors[d.remoteId] = d.updatedAt;
+                cursorsChanged = true;
+                continue;
+            }
+
+            // PULL: write new content to plan file.
+            // Register hash BEFORE write so loop prevention is active when watcher fires.
+            if (this._deps.onDescriptionPulled) {
+                this._deps.onDescriptionPulled(d.remoteId, newHash);
+            }
+            try {
+                await fs.promises.writeFile(planPath, newContent, 'utf8');
+                cursors[d.remoteId] = d.updatedAt;
+                cursorsChanged = true;
+                this._log(`Pulled description for ${d.remoteId} → ${plan.planFile}.`);
+            } catch (e) {
+                this._log(`Failed to pull description for ${d.remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+                // Don't advance cursor — retry on next poll
+            }
+        }
+
+        if (cursorsChanged) {
+            // Persist the whole cursors map to the DB config table.
+            await db.setConfig(key, JSON.stringify(cursors));
+        }
     }
 }

@@ -2,7 +2,11 @@ import * as fs from 'fs';
 import type { LinearSyncService } from '../LinearSyncService';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import { hasMarker } from '../commentMarker';
-import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta } from './RemoteProvider';
+import type {
+    RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
+    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult,
+    ArchiveResult
+} from './RemoteProvider';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
 
 /**
@@ -24,6 +28,7 @@ interface LinearRemoteProviderDeps {
 
 export class LinearRemoteProvider implements RemoteProvider {
     public readonly kind = 'linear' as const;
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, projectContextPush: true, archive: true };
     private _linear: LinearSyncService;
     private _deps: LinearRemoteProviderDeps;
     private _stateIdToColumn: Record<string, string> = {};
@@ -47,7 +52,7 @@ export class LinearRemoteProvider implements RemoteProvider {
         const QUERY = `
           query {
             issues(filter: { updatedAt: { gt: ${since} } }, first: 100) {
-              nodes { id updatedAt state { id } }
+              nodes { id updatedAt description state { id } parent { id } children { nodes { id } } }
             }
           }
         `;
@@ -59,9 +64,22 @@ export class LinearRemoteProvider implements RemoteProvider {
             for (const node of nodes) {
                 const remoteId = String(node.id || '');
                 const stateKey = String(node.state?.id || '');
-                if (remoteId && stateKey) { deltas.push({ remoteId, stateKey }); }
-                const ts = String(node.updatedAt || '');
-                if (ts && ts > nextCursor) { nextCursor = ts; }
+                const updatedAt = String(node.updatedAt || '');
+                const description = String(node.description || '');
+                if (remoteId && stateKey) {
+                    deltas.push({
+                        remoteId,
+                        stateKey,
+                        // Epic structure — parent/children are native Linear GraphQL fields.
+                        // updatedAt bumps on parentId changes (issue property update), so a
+                        // parent/child link change IS detected by this delta query.
+                        parentRemoteId: String(node.parent?.id || ''),
+                        isEpicCandidate: (node.children?.nodes?.length || 0) > 0,
+                        updatedAt: updatedAt || undefined,
+                        description: description || undefined,
+                    });
+                }
+                if (updatedAt && updatedAt > nextCursor) { nextCursor = updatedAt; }
             }
         } catch (e) {
             console.warn('[LinearRemoteProvider] fetchStateDeltas failed:', e);
@@ -149,6 +167,142 @@ export class LinearRemoteProvider implements RemoteProvider {
         const result = await this._linear.postManagedComment(remoteId, body);
         if (!result.success) {
             throw new Error(`Linear postComment failed for ${remoteId}: ${result.error || 'unknown error'}`);
+        }
+    }
+
+    public async archiveCard(remoteId: string): Promise<ArchiveResult> {
+        const config = await this._linear.loadConfig();
+        if (!config?.setupComplete) {
+            return { ok: true, skipped: true };
+        }
+        const id = String(remoteId || '').trim();
+        if (!id) {
+            return { ok: false, error: 'No remote id provided' };
+        }
+        const result = await this._linear.archiveIssue(id);
+        return result.success
+            ? { ok: true }
+            : { ok: false, error: result.error };
+    }
+
+    // ── Project-context push (epic: Project Context & Remote UI Hub) ──────
+    //
+    // Upserts a "Switchboard Project Context" document (Dev Docs + PRDs +
+    // constitution, markdown) on each Linear project matching a configured
+    // board name. Linear documents take markdown directly — no conversion.
+
+    private static readonly CONTEXT_DOC_TITLE = 'Switchboard Project Context';
+
+    public async pushProjectContext(bundle: ProjectContextBundle): Promise<ProjectContextPushResult> {
+        const config = await this._linear.loadConfig();
+        if (!config?.setupComplete || !config.teamId) {
+            return { ok: true, skipped: true, detail: 'Linear not set up' };
+        }
+
+        let projects: { id: string; name: string }[];
+        try {
+            projects = await this._linear.getAvailableProjects();
+        } catch (e) {
+            return { ok: false, detail: `Could not list Linear projects: ${e instanceof Error ? e.message : String(e)}` };
+        }
+
+        // Board names match Linear project names by the sync convention; fall back
+        // to the configured selected project when no board name resolves.
+        const wanted = new Set(
+            bundle.boards.filter(b => b).map(b => b.toLowerCase())
+        );
+        let targets = projects.filter(p => wanted.has(p.name.toLowerCase()));
+        if (targets.length === 0 && config.selectedProjectName) {
+            targets = projects.filter(p => p.name.toLowerCase() === config.selectedProjectName!.toLowerCase());
+        }
+        if (targets.length === 0) {
+            return { ok: true, skipped: true, detail: 'No Linear project matches the configured boards' };
+        }
+
+        const errors: string[] = [];
+        for (const project of targets) {
+            try {
+                await this._upsertContextDocument(project.id, bundle.combinedMarkdown);
+            } catch (e) {
+                errors.push(`${project.name}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+        if (errors.length === targets.length) {
+            return { ok: false, detail: `All project doc writes failed — ${errors.join('; ')}` };
+        }
+        return {
+            ok: true,
+            detail: errors.length
+                ? `updated ${targets.length - errors.length}/${targets.length} project doc(s); failed: ${errors.join('; ')}`
+                : `updated ${targets.length} project doc(s)`,
+        };
+    }
+
+    /** Find the context document on a project by title and update it, else create it. */
+    private async _upsertContextDocument(projectId: string, markdown: string): Promise<void> {
+        const existing = await this._linear.graphqlRequest(`
+            query($projectId: String!) {
+              project(id: $projectId) { documents { nodes { id title } } }
+            }
+        `, { projectId });
+        const nodes = existing?.data?.project?.documents?.nodes || [];
+        const match = nodes.find((n: any) => String(n?.title || '').trim() === LinearRemoteProvider.CONTEXT_DOC_TITLE);
+
+        if (match?.id) {
+            const updated = await this._linear.graphqlRequest(`
+                mutation($id: String!, $input: DocumentUpdateInput!) {
+                  documentUpdate(id: $id, input: $input) { success }
+                }
+            `, { id: String(match.id), input: { content: markdown } });
+            if (updated?.data?.documentUpdate?.success !== true) {
+                throw new Error('documentUpdate returned success=false');
+            }
+            return;
+        }
+
+        const created = await this._linear.graphqlRequest(`
+            mutation($input: DocumentCreateInput!) {
+              documentCreate(input: $input) { success document { id } }
+            }
+        `, { input: { title: LinearRemoteProvider.CONTEXT_DOC_TITLE, content: markdown, projectId } });
+        if (created?.data?.documentCreate?.success !== true) {
+            throw new Error('documentCreate returned success=false');
+        }
+    }
+
+    public async pushState(remoteId: string, column: string): Promise<void> {
+        // Delegate to LinearSyncService.syncPlan — it maps column→stateId, handles
+        // completeSyncEnabled gate, and creates/updates the issue. The remoteId IS
+        // the Linear issue id; syncPlan looks up the plan by planFile via getIssueIdForPlan,
+        // but we already have the issue id, so we use issueUpdate directly.
+        try {
+            const config = await this._linear.loadConfig();
+            if (!config?.setupComplete) { return; }
+            if (!(await this._linear.hasApiToken())) { return; }
+            const stateId = config.columnToStateId[column];
+            if (!stateId) {
+                this._deps.log?.(`[LinearRemoteProvider] pushState: no Linear state mapped for column "${column}" — skipping.`);
+                return;
+            }
+            const result = await this._linear.graphqlRequest(`
+                mutation($id: String!, $stateId: String!) {
+                    issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+                }
+            `, { id: remoteId, stateId });
+            if (!result?.data?.issueUpdate?.success) {
+                this._deps.log?.(`[LinearRemoteProvider] pushState: issueUpdate failed for ${remoteId}.`);
+            }
+        } catch (e) {
+            this._deps.log?.(`[LinearRemoteProvider] pushState failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    public async pushContent(remoteId: string, markdown: string): Promise<void> {
+        // Delegate to LinearSyncService.syncPlanContent — it strips H1, truncates, and
+        // calls issueUpdate with the description.
+        const result = await this._linear.syncPlanContent(remoteId, markdown);
+        if (!result.success) {
+            throw new Error(`Linear pushContent failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
     }
 

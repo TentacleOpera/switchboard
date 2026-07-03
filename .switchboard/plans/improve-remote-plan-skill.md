@@ -319,3 +319,7 @@ Add a row to the `### 📚 Available Skills` table:
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder**. The skill file is pure documentation (agent instructions with GraphQL templates), and the table registration is a two-line edit in two files. The complexity comes from the Notion gap (a User Review decision) and the status-mapping discovery (a runtime UX flow, not code complexity).
+
+## Review Findings
+
+**Files reviewed:** `.claude/skills/improve-remote-plan/SKILL.md`, `AGENTS.md`, `CLAUDE.md`. **One fix applied:** added `source "$(git rev-parse --show-toplevel)/.agents/skills/_lib/sb_api_call.sh"` instruction to Prerequisites — without it, `sb_api_call` is an undefined shell function and every bash example in the skill fails with "command not found." The `linear_api.md` skill sources this helper; the improve-remote-plan skill was missing the step. Linear-only scoping, single `issueUpdate` mutation with GraphQL variables, user-confirmed status mapping, and 250K char limit are all correct. Registered in both AGENTS.md and CLAUDE.md. **NIT (deferred):** skill lives only in `.claude/skills/`, not in `.agents/skills/` or MIRROR_MANIFEST. **Remaining risk:** the `.agents/` sourcing gap for Antigravity hosts.

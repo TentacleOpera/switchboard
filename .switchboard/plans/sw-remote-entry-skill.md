@@ -228,3 +228,7 @@ Per session directives, automated tests are **not run** in this planning pass �
 ## Recommendation
 
 Complexity 3 → **Send to Intern**
+
+## Review Findings
+
+**Files reviewed:** `.agents/workflows/sw-remote.md`, `.claude/skills/sw-remote/SKILL.md`, `src/services/ClaudeCodeMirrorService.ts`, `AGENTS.md`, `CLAUDE.md`, `.agents/skills/switchboard_remote_notion.md.migrated.bak`. **One fix applied:** restored the "Notion tier differences" bullet (tier-gated query fallback) to section 7 of both `sw-remote.md` and the mirrored `SKILL.md` — it was dropped during absorption from `switchboard_remote_notion.md`, creating silent content loss. MIRROR_MANIFEST entry added correctly (`invocation: 'default'`); `switchboard_remote_notion` entry removed; source file archived as `.migrated.bak`; mirrored `.claude/skills/switchboard-remote-notion/SKILL.md` deleted; AGENTS.md and CLAUDE.md tables updated (Workflow Registry + Available Skills rows added, notion row removed). Absorbed content (loop description, pre-flight, project-context grounding, Notion steps, capability note) is faithful. **NIT:** `add-switchboard-remote-skill.md` supersede step is moot — file was deleted in commit `b11b667`. **Remaining risk:** `phase2-remote-plan-from-notion-docs.md` (epic 1) still references `.agents/skills/switchboard_remote_notion.md` as source of truth — cross-epic stale reference, out of scope to fix here.

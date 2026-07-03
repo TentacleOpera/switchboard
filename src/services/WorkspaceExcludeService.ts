@@ -122,7 +122,7 @@ export class WorkspaceExcludeService {
         }
 
         if (strategy === 'targetedGitignore') {
-            await this._upsertManagedBlock(gitignoreFile, WorkspaceExcludeService.TARGETED_RULES);
+            await this._upsertManagedBlock(gitignoreFile, this._effectiveTargetedRules());
             if (excludeFile) {
                 await this._removeManagedBlock(excludeFile);
             }
@@ -156,6 +156,30 @@ export class WorkspaceExcludeService {
         }
 
         console.warn('[WorkspaceExcludeService] Unknown strategy "' + String(strategy) + '" — skipping.');
+    }
+
+    // The board-state mirror files are only un-ignored (shared via git) when the
+    // boardStateExport feature is on. Rows are dropped from the managed block when
+    // export is 'none' (the default) so an unconfigured workspace keeps a zero git
+    // footprint — the files stay ignored and can't be committed or conflict.
+    private static readonly MIRROR_EXPORT_RULES: string[] = [
+        '!.switchboard/kanban-board.md',
+        '!.switchboard/kanban-state-*.md',
+    ];
+
+    private _boardStateExportEnabled(): boolean {
+        const target = vscode.workspace
+            .getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot))
+            .get<string>('boardStateExport', 'none');
+        return !!target && target !== 'none';
+    }
+
+    private _effectiveTargetedRules(): string[] {
+        if (this._boardStateExportEnabled()) {
+            return [...WorkspaceExcludeService.TARGETED_RULES];
+        }
+        const mirror = new Set(WorkspaceExcludeService.MIRROR_EXPORT_RULES);
+        return WorkspaceExcludeService.TARGETED_RULES.filter(r => !mirror.has(r));
     }
 
     static getTargetedRules(): string[] {
