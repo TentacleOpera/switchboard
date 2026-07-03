@@ -258,3 +258,7 @@ Update the status line (line 7706-7724) to show a Stop button when the monitor i
    - Launch the monitor with a 1-minute interval. Wait for a tick to start (watch for the prompt in the terminal). Immediately click "Stop Monitor".
    - Confirm the in-flight `sendRobustText` completes (the prompt finishes typing). The terminal is then disposed. No crash or error.
 9. **Regression:** Other terminal closures (agent grid terminals, autoban terminals) are unaffected — the monitor-specific check in `handleTerminalClosed` only fires when the terminal name matches "MCP Monitor". The existing `handleTerminalClosed` state cleanup and autoban reference removal still run for all terminals.
+
+## Recommendation
+
+**Complexity 5 → Send to Coder.** Multi-file (4 files) but each change is small and mirrors existing patterns; the only elevated risk is cross-plan coordination on the shared COMMS status-line block and the `'MCP Monitor'` terminal-name literal, which the reviewer/coder must reconcile at merge time with the sibling plans (rename-display-labels, dedicated-tab, separate-terminal-auth-polling).

@@ -86,6 +86,38 @@ Example: Slack every 2 min, Gmail every 30 min, Calendar every 30 min. The timer
   - The config-change immediate-tick plan fires a tick on config change. With per-source intervals, a config change should restart the loop (to recompute the GCD) and fire an immediate tick for the changed sources.
 - **No `confirm()` dialogs.**
 
+## Cross-Plan Conflicts (epic siblings — DOCUMENT ONLY, do not resolve here)
+
+This is the highest-conflict plan on the config/timer surface. It shares all three core symbols with several siblings. Reconciliation is a cross-subtask concern for the epic owner — this section records the merged end-state, not a unilateral redesign.
+
+1. **SUPERSESSION — `lastCheckAt` (sibling "first-prompt-after-startup"):** first-prompt adds a single GLOBAL `lastCheckAt` to `McpMonitorConfig` (for the diff baseline) plus a 30s one-shot first tick. This plan REPLACES that with per-source `sourceLastCheckAt: Record<string,string>`. The persistence here should ABSORB first-prompt's: the read-compat mapping already maps a legacy global `lastCheckAt` → all sources' `sourceLastCheckAt`. **End-state:** `sourceLastCheckAt` is authoritative; global `lastCheckAt` is kept only as a deprecated read-compat/rollback key. first-prompt's 30s one-shot should fire a tick that includes ALL active sources (first check covers everything), after which the per-source due-check takes over.
+
+2. **CONTRADICTION — `_buildMcpMonitorPrompt` signature (siblings "editable-prompt-preview", "first-prompt-after-startup"):** three plans rewrite this one method with different signatures:
+   - This plan: `_buildMcpMonitorPrompt(cfg, dueSources?: string[])` — filters to due sources.
+   - "editable-prompt-preview": adds a `promptOverride` and parameterizes the Slack/Gmail preset lines.
+   - "first-prompt-after-startup": adds the `cfg.lastCheckAt` → `boundary` string (which this plan's block already presumes exists).
+   **Suggested merged signature (for epic owner):** `_buildMcpMonitorPrompt(cfg, opts?: { dueSources?: string[]; promptOverride?: string })`, where the boundary is derived per-source (or falls back to the global/legacy `lastCheckAt`) and `promptOverride`, if set, short-circuits the preset assembly. Do NOT implement this merge unilaterally — flag for reconciliation.
+
+3. **BUILDS ON `pollingEnabled` (sibling "separate-terminal-auth-polling"):** the `enabled` vs `pollingEnabled` split (terminal-running vs. actively-polling) is introduced by that sibling and does not exist on `main`. This plan's loop/tick guards depend on it. Ship order: separate-terminal before (or with) this plan; otherwise use the `?? cfg.enabled` fallback noted in §2.
+
+4. **CO-EDITS `_startMcpMonitorLoop` / `_mcpMonitorTick` (siblings "separate-terminal-auth-polling", "apply-source-changes-immediately"):** apply-source-changes fires an immediate tick on config change and expects the loop to restart. With per-source intervals, a config change must restart the loop to recompute the GCD *and* fire an immediate tick for changed sources. separate-terminal restructures the same loop around `pollingEnabled`. These three plans will produce overlapping diffs on the same ~40 lines — the epic owner should sequence them and expect a manual merge, not clean auto-apply.
+
+5. **UI surface overlap (siblings "rename-display-labels", "dedicated-tab"):** rename-display-labels changes the source labels/copy in the same kanban sources checklist this plan restructures (7673-7701); "dedicated-tab" may relocate the whole COMMS panel. Low logical conflict but same-region diffs.
+
+## Dependencies
+
+- `sess_first_prompt_after_startup — global lastCheckAt + 30s one-shot first prompt` (SUPERSEDED by this plan's per-source `sourceLastCheckAt`)
+- `sess_editable_prompt_preview — _buildMcpMonitorPrompt promptOverride + parameterized preset lines` (signature contradiction — merge required)
+- `sess_separate_terminal_auth_polling — pollingEnabled field + loop restructure` (this plan builds on it)
+- `sess_apply_source_changes_immediately — config-change immediate tick + loop restart` (co-edits `_startMcpMonitorLoop`/`_mcpMonitorTick`)
+- `sess_rename_display_labels — source label/copy changes in same checklist region`
+
+> Session IDs are placeholders keyed to the sibling plan slugs — the epic owner should substitute the real `sess_*` IDs at reconciliation time.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks — (1) replacing a *shipped* `intervalMinutes` field can silently reset ~4,000 installs' polling interval if the read-compat shim or `getMcpMonitorConfigSync`/inline-type updates are missed; (2) the loop/prompt guards assume `pollingEnabled` and `lastCheckAt` that don't yet exist on `main`, so ship order or graceful fallbacks are mandatory; (3) this plan collides with 4+ siblings on the same three symbols, so merges will be manual. Mitigations — retain legacy keys and map them read-time, use `?? cfg.enabled` / `?? ''` fallbacks so the plan is safe to ship in any order, resolve the `_buildMcpMonitorPrompt` merged signature with the epic owner before coding, and make an explicit keep-or-drop decision on the debounce.
+
 ## Proposed Changes
 
 ### 1. `src/services/GlobalIntegrationConfigService.ts` — replace `intervalMinutes` with `sourceIntervals`, make `lastCheckAt` per-source
@@ -384,6 +416,15 @@ At line 6078 (verified — current: `let mcpMonitorConfig = { enabled: false, in
 ```
 
 ## Verification Plan
+
+### Automated Tests
+- **`_gcd` unit test:** `[5]`→5, `[2,30]`→2, `[6,10,15]`→1, `[30,30]`→30, `[1,30]`→1. Guard the empty-array case (must not be called when no active sources).
+- **Config read-compat unit test:** given a persisted `{ intervalMinutes: 5 }` with no `sourceIntervals`, `getMcpMonitorConfig()` (and `getMcpMonitorConfigSync()`) return `sourceIntervals: { slack:5, gmail:5, gcal:5, custom:5 }`; given a legacy global `lastCheckAt`, it maps to all keys of `sourceLastCheckAt`.
+- **Config write-through unit test:** `setMcpMonitorConfig({ sourceIntervals })` preserves existing `sourceLastCheckAt`, retains the legacy `intervalMinutes` key, and does not drop unknown keys.
+- **Due-source filter unit test:** with `sourceLastCheckAt.slack` 3 min ago and interval 2 min → slack is due; with gmail 10 min ago and interval 30 min → gmail not due.
+- **Typecheck:** `npm run compile` — confirms the interface ripple (sync getter + inline `GlobalConfig.mcpMonitor` type) is fully covered.
+
+### Manual Tests
 
 1. **Build:** `npm run compile` succeeds with no type errors.
 2. **Manual — per-source intervals appear:**

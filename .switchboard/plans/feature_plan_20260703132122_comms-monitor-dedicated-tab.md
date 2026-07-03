@@ -130,7 +130,7 @@ The generic tab-switch handler (`kanbanTabButtons.forEach` at **3879-3935**) mat
 
 ### 2. `src/webview/kanban.html` — add the COMMS tab content container
 
-After the automation tab content (line 2613), add:
+The automation tab content is `#automation-tab-content` at **2581-2583** (its root is `<div id="automation-panel-root" class="automation-panel"></div>`). Add a sibling COMMS content div nearby (e.g. after the UAT/SETUP content blocks; exact position doesn't matter since the generic handler toggles `active`). Mirror the automation pattern:
 
 ```html
     <!-- Comms Tab Content -->

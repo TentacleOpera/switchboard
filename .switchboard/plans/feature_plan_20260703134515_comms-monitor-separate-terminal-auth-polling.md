@@ -284,7 +284,13 @@ Sends a real MCP diagnostic prompt to the terminal so the user can see whether C
     public async startMcpMonitorPolling(): Promise<void> {
         await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: true });
         await this._startMcpMonitorLoop();
-        // Schedule the first prompt (30s one-shot from companion plan)
+        // Schedule the first prompt (30s one-shot). NOTE: `_scheduleMcpMonitorFirstPrompt`
+        // does NOT yet exist in TaskViewerProvider.ts — it is introduced by the
+        // "first-prompt-after-startup" sibling. Only call it once that symbol lands;
+        // guard with a typeof/optional check or land the two plans together. This is the
+        // DIRECT contradiction with that sibling (it schedules the one-shot in
+        // launchMcpMonitorTerminal instead). Epic must decide ownership; this plan's
+        // position is that the one-shot belongs HERE, in startMcpMonitorPolling.
         this._scheduleMcpMonitorFirstPrompt();
         await this._postMcpMonitorConfig();
     }
@@ -301,7 +307,7 @@ Sends a real MCP diagnostic prompt to the terminal so the user can see whether C
 
 ### 6. `src/extension.ts` — register the new commands
 
-Near line 1335 (where `launchMcpMonitorTerminal` is registered):
+**Verified anchor:** `switchboard.launchMcpMonitorTerminal` is registered at **line 1338** (`context.subscriptions.push` at 1341). Add the new registrations immediately after.
 
 ```ts
     const checkMcpMonitorAuthDisposable = vscode.commands.registerCommand('switchboard.checkMcpMonitorAuth', async () => {
