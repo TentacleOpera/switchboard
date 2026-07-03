@@ -12,11 +12,13 @@ Each monitored source (Slack, Gmail, Google Calendar, Custom) should have its ow
 
 1. **Config schema:** `McpMonitorConfig` (`GlobalIntegrationConfigService.ts:39`) has a single `intervalMinutes: number` field. There's no per-source interval concept.
 
-2. **Timer architecture:** `_startMcpMonitorLoop` (`TaskViewerProvider.ts:20390`) creates a single `setInterval` at `intervalMs = intervalMinutes * 60 * 1000`. Every tick calls `_mcpMonitorTick` which builds a prompt from ALL configured sources and sends it. There's no notion of "this source is due but that one isn't."
+2. **Timer architecture:** `_startMcpMonitorLoop` (`TaskViewerProvider.ts:20482` — verified 2026-07-03) creates a single `setInterval` at `intervalMs = Math.max(cfg.intervalMinutes, 1) * 60 * 1000`, wired to `_enqueueMcpMonitorTick` (line 20502), which serializes into `_mcpMonitorTick` (line 20512). Every tick builds a prompt from ALL configured sources and sends it. There's no notion of "this source is due but that one isn't." (Companion `_stopMcpMonitorLoop` is at line 20495.)
 
-3. **Prompt builder:** `_buildMcpMonitorPrompt` (line 20460) iterates all sources in `cfg.sources` and includes every one in every prompt. There's no filtering by "is this source due for a check?"
+3. **Prompt builder:** `_buildMcpMonitorPrompt` (line 20552 — verified) iterates all sources in `cfg.sources` and includes every one in every prompt. There's no filtering by "is this source due for a check?" **NOTE (verified against current code):** the real preamble today is a FIXED string `"Check the following for anything new that needs my attention since your previous check. ..."` — there is currently NO `lastCheckAt`-derived boundary. The `lastCheckAt` timestamp boundary this plan's code block references is introduced by the sibling "first-prompt-after-startup" plan and does not yet exist on `main`. See Cross-Plan Conflicts.
 
-4. **UI:** The interval selector (kanban.html:7799-7817) is a single dropdown above the source checklist. It's global — no per-source control.
+4. **UI:** The interval selector (kanban.html:7626-7643 — verified; global interval `<div>` row) is a single dropdown above the source checklist. It's global — no per-source control. `saveMonitorConfig` is defined at lines 7732-7747, and the global dropdown's change listener is wired at line 7753.
+
+> **Anchor correction (2026-07-03 improve-plan pass):** The original draft cited `_startMcpMonitorLoop@20390`, `_mcpMonitorTick@20420`, `_buildMcpMonitorPrompt@20460`, in-flight guard@20438, debounce@20444, and kanban rows @7799-7817 / @7847-7875 / state @6139. All of these were stale. Verified current anchors: `_startMcpMonitorLoop@20482`, `_enqueueMcpMonitorTick@20502`, `_mcpMonitorTick@20512`, in-flight guard@20530, debounce@20536, `_buildMcpMonitorPrompt@20552`, `SOURCE_PRESETS@20475`; kanban global interval row @7626-7643, sources checklist @7673-7701, `saveMonitorConfig@7732`, state default `mcpMonitorConfig@6078`. Config service: `McpMonitorConfig` interface@39, `DEFAULT_MCP_MONITOR_CONFIG@47`, `getMcpMonitorConfigSync@221`, `getMcpMonitorConfig@233`, `setMcpMonitorConfig@245`, and the `GlobalConfig.mcpMonitor` inline type @15-21.
 
 **Design decision — single timer with due-source filtering (not multiple timers):**
 

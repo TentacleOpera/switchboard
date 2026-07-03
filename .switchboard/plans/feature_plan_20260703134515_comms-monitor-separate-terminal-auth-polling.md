@@ -13,15 +13,16 @@ This plan separates the flow into three distinct, user-controlled buttons:
 
 **Symptom:** The user clicks "Launch Monitor Terminal". A terminal opens, `claude` starts, and the polling loop immediately begins sending prompts. If the user hasn't authenticated Claude (no API key, expired session) or hasn't configured MCP servers (no Slack/Gmail/Calendar connectors), every prompt's tool calls fail silently in the terminal. The user sees the monitor "running" but getting errors, with no way to diagnose or control the flow.
 
-**Root cause (confirmed by code reading):** `launchMcpMonitorTerminal` (`TaskViewerProvider.ts:20512`) does everything in one shot:
-1. Creates the terminal (line 20539)
-2. Sends the `claude` startup command (line 20579)
-3. (Per companion plan: schedules a 30s one-shot first prompt)
-4. Calls `_startMcpMonitorLoop()` (per companion plan) which starts the `setInterval`
+**Root cause (confirmed by code reading against current `src/`):** `launchMcpMonitorTerminal` (`TaskViewerProvider.ts:20604`) creates and reveals the terminal, then sends the startup command:
+1. Creates the terminal via `vscode.window.createTerminal` (line 20631)
+2. Waits for shell readiness and sends the startup command via `terminal.sendText(cmd.trim(), true)` (line 20671)
+3. Pushes status to the kanban via `_postMcpMonitorConfig()` (line 20675)
 
-There is no separation between "terminal exists" and "polling is active." The `enabled` config flag (`McpMonitorConfig.enabled`, line 40) is the only control, and it's a single boolean that gates both the config panel visibility and the loop. Setting `enabled: true` starts the loop regardless of whether the terminal is live or authenticated.
+> **Accuracy correction (2026-07-03 improve-plan pass):** In the *current* checked-in code, `launchMcpMonitorTerminal` does **NOT** call `_startMcpMonitorLoop()` and does **NOT** schedule any first prompt — no `_scheduleMcpMonitorFirstPrompt` symbol exists in `TaskViewerProvider.ts` yet. Those are additions expected from companion plans ("first-prompt-after-startup", "apply-source-changes-immediately"). Today the loop is started in two places: (a) on activation at `TaskViewerProvider.ts:487` (`void this._startMcpMonitorLoop();`) and (b) in `setMcpMonitorConfigFromKanban` at `TaskViewerProvider.ts:20575` (called when the config panel saves). Both currently gate on `cfg.enabled`. So the "polling auto-starts on launch" symptom is only literally true once the companion plans land; without them, polling starts when the user toggles the on/off dropdown to "on" (which sets `enabled: true`). This plan still holds — it decouples the loop gate from `enabled` — but the "removes loop-start from launch" step is only meaningful in combination with the companion plans that add it.
 
-**The auth gap:** `_mcpMonitorTick` (line 20420) reads config, finds the terminal, builds the prompt, and calls `sendRobustText`. It never checks whether Claude is actually authenticated or whether MCP servers are configured. If Claude returns an auth error, the terminal shows it, but the extension has no visibility — it just keeps sending prompts every interval. The user has to manually look at the terminal, realize the errors, and figure out what's wrong. And because polling auto-started, the errors are already happening before the user has a chance to verify their setup.
+There is no separation between "terminal exists" and "polling is active." The `enabled` config flag (`McpMonitorConfig.enabled`, `GlobalIntegrationConfigService.ts:40`) is the only control, and it's a single boolean that gates both the config panel visibility (`kanban.html:7615`/`7623`) and the loop (`_startMcpMonitorLoop` at `TaskViewerProvider.ts:20482`, guard at line 20484). Setting `enabled: true` starts the loop regardless of whether the terminal is live or authenticated.
+
+**The auth gap:** `_mcpMonitorTick` (`TaskViewerProvider.ts:20512`, `enabled` guard at line 20514) reads config, finds the terminal, builds the prompt (`_buildMcpMonitorPrompt` at line 20552), and calls `sendRobustText`. It never checks whether Claude is actually authenticated or whether MCP servers are configured. If Claude returns an auth error, the terminal shows it, but the extension has no visibility — it just keeps sending prompts every interval. The user has to manually look at the terminal, realize the errors, and figure out what's wrong. And because polling auto-started, the errors are already happening before the user has a chance to verify their setup.
 
 ## Metadata
 

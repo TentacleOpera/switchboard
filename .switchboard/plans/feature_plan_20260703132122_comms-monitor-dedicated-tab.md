@@ -10,14 +10,18 @@ This plan creates a dedicated **COMMS** tab in the kanban panel's tab bar and mo
 
 **Symptom:** The user opens the AUTOMATION tab expecting to configure kanban column automation. Instead, they find the Comms Monitor config (sources, interval, launch button) mixed in with the autoban engine config. The two features are unrelated but visually interleaved, making both harder to understand.
 
-**Root cause (confirmed by code reading):** The Comms Monitor UI was added to `createAutobanPanel()` (`kanban.html:7690+`), the same JS function that renders the entire AUTOMATION tab content. The function builds:
-1. The "CONFIGURE AUTOMATION" header (line 7742)
-2. Mode selector (single-column / multi-column / antigravity-batch) (line 7749)
-3. Per-mode automation rules (batch size, complexity routing, watch mode) (lines 8226-8762)
-4. The MCP Monitor row + config panel (lines 7773-7954) — **this is the misplaced feature**
-5. Safety notes and mode descriptions
+**Root cause (confirmed by fresh code reading on 2026-07-03 — see "Verified Anchors" below; earlier draft line numbers were stale and have been corrected):** The Comms Monitor UI was added to `createAutobanPanel()` (`kanban.html:7511`), the same JS function that renders the entire AUTOMATION tab content. The function builds:
+1. Mode selector (single-column / multi-column / antigravity-batch) near the top of the function (`modeSelect`, guarded at line 7582)
+2. The MCP Monitor row + config panel — the **misplaced feature** — built at lines **7599-7754** (`mcpRow` at 7600, `mcpSelect` at ~7606, `mcpConfigPanel` at 7622, interval/sources/custom-instruction/launch/status/help children through ~7730, `saveMonitorConfig` at 7732, and its change/input listeners at 7749-7754)
+3. Mode descriptions + safety note (lines 7756-7770) — autoban content, interleaved **between** the monitor config panel and its description/appends
+4. The `mcpDesc` description text (lines 7772-7775) and the three monitor `container.appendChild()` calls (lines 7778-7780)
+5. The `modeSelect` change handler and all per-mode automation rules (batch size, complexity routing, watch mode, per-column trigger toggles) from ~7782 onward (e.g. `guardInteraction(columnSelect)` at 7924, batch/complexity/routing selects at 8075-8153, 8421-8547)
 
-The Comms Monitor is rendered as a subsection inside the autoban panel's `container` div, appended after the automation rules. It shares the same `guardInteraction` mechanism, the same re-render cycle (`renderAutobanPanel`), and the same "interaction guard" that blocks re-renders during user input. This coupling means a Comms Monitor config change can trigger an autoban panel re-render (and vice versa), and the interaction guard that's meant for automation rules also affects the monitor config.
+**Critical anchor correction:** the monitor code is **NOT a single contiguous 7773-7954 block** (the earlier draft's claim). It is split into three pieces (construction 7599-7754, `mcpDesc` 7772-7775, appends 7778-7780) and is **interleaved** with autoban code (the `safetyNote`/`modeHelpText` at 7756-7770 sit between them). The range 7773-7954 in the current file is mostly autoban automation-rules code — deleting it wholesale would destroy the AUTOMATION engine and orphan `mcpRow`/`mcpConfigPanel`. Extraction must pull the three monitor pieces out surgically, not by deleting a line range.
+
+The Comms Monitor is rendered as a subsection inside the autoban panel's `container` div. It shares the same `guardInteraction` mechanism (defined at line 7545, sets `isAutobanPanelInteracting`), the same re-render cycle (`renderAutobanPanel` at line 8865, which targets `#automation-panel-root`), and the same "interaction guard" that blocks re-renders during user input. This coupling means a Comms Monitor config change can trigger an autoban panel re-render (and vice versa), and the interaction guard that's meant for automation rules also affects the monitor config.
+
+**Note on current labels:** the code still says `MCP MONITOR:` (line 7603) and "The MCP Monitor periodically pings…" (line 7775). Renaming these to "COMMS MONITOR" is owned by the sibling **rename-display-labels** subtask — this move must PRESERVE the existing `MCP MONITOR:` text verbatim and not pre-apply the rename (see Dependencies).
 
 **Why a new tab (not a move to an existing tab):**
 - **AGENTS tab:** Wrong fit. The AGENTS tab is a simple list of agent visibility checkboxes + CLI commands. The Comms Monitor has a rich config UI (sources, interval, prompt preview, dependency notice, model indicator) that doesn't match the AGENTS tab's pattern.

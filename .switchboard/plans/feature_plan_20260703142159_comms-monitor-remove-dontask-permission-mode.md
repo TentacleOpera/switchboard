@@ -8,7 +8,7 @@ Remove `--permission-mode dontAsk` from the Comms Monitor's fallback startup com
 
 **Symptom:** The user configures the Google Calendar MCP server, enables the gcal source, and starts polling. Calendar events are never reported — Claude silently fails the calendar tool calls because `dontAsk` prevents it from asking the user to grant access.
 
-**Root cause (confirmed by code reading):** The fallback startup command at `TaskViewerProvider.ts:3892` is:
+**Root cause (confirmed by code reading):** The fallback startup command at `TaskViewerProvider.ts:3901` (inside `getAgentStartupCommand`, method starts at line 3889) is:
 
 ```
 claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"
@@ -24,18 +24,37 @@ Either way, the user never gets Calendar data and has no clear path to fix it.
 
 ## Metadata
 
-- **Tags:** comms-monitor, mcp-monitor, startup-command, permissions, calendar, bugfix
+- **Tags:** bugfix, backend, auth, cli
 - **Complexity:** 2
 - **Project:** switchboard
+- **Repo:** (root workspace — no sub-repo)
 - **Files touched:** `src/services/TaskViewerProvider.ts`
+- **Domain labels (informational, not schema tags):** comms-monitor, mcp-monitor, startup-command, permissions, calendar
+
+> Clarification: the original tag set (`comms-monitor, mcp-monitor, startup-command, permissions, calendar, bugfix`) mixed free-form domain labels with the controlled tag vocabulary. Per the improve-plan tag schema, the `## Metadata` **Tags:** line now carries only allowed-vocabulary tags (`bugfix, backend, auth, cli`); the domain labels are preserved above as an informational line so no context is lost.
+
+## User Review Required
+
+- **Behavioral shift is user-visible and intentional:** After this change, the Comms Monitor terminal may display interactive permission prompts (first-time MCP access, OAuth grant, token refresh). Confirm this is acceptable — it is the whole point of the fix, but the user should know the monitor is no longer fully "fire and forget" on first run.
+- **Fallback-only scope:** Confirm the intent is to change *only* the built-in fallback command. Users who already set a custom `mcp_monitor` startup command (possibly copied from docs that include `--permission-mode dontAsk`) keep their existing behavior and are unaffected. There is no migration to strip `dontAsk` from user-configured commands (see Adversarial Synthesis).
+- **Cross-plan coordination:** Confirm awareness that the sibling plan `comms-monitor-claude-dependency-haiku-highlight` reads and displays this exact fallback string in the UI and asserts its literal contents in its verification steps. See `## Dependencies` and the Edge-Case audit's Dependencies & Conflicts subsection.
 
 ## Complexity Audit
 
 **Routine.** This is a one-line change to the fallback command string. No schema changes, no UI changes, no migrations. The only consideration is the behavioral implication: without `dontAsk`, the terminal may show permission prompts that the user must respond to. This is the intended behavior — the user is managing the terminal and can respond.
 
+### Routine
+- Single-line edit to a hard-coded string literal in one method (`getAgentStartupCommand`, `TaskViewerProvider.ts:3901`).
+- Updating the adjacent comment (line 3899 currently reads "defaults to claude command with permission bypass flags") to explain why `dontAsk` is now omitted.
+- No new code paths, no branching logic, no new dependencies.
+
+### Complex / Risky
+- **Minor, not architectural:** removing `dontAsk` changes runtime behavior (prompts can now block the terminal). This is intended, but it is the one behavioral consideration that lifts this above a pure cosmetic change.
+- **Shared string with sibling plan:** the same literal is surfaced by the `haiku-highlight` sibling; a stale literal assertion there will break if that plan lands without updating its expected string (see Dependencies & Conflicts).
+
 ## Edge-Case & Dependency Audit
 
-- **Permission prompt blocks the terminal:** When Claude asks for permission, the terminal shows a prompt (y/n) and waits. The polling loop's in-flight guard (`_mcpMonitorInFlight`, line 20438) prevents the next tick from sending a new prompt while one is in-flight. So the polling loop naturally pauses while the user responds to the permission prompt. Once the user answers, Claude proceeds, the in-flight tick completes, and the next tick can fire. No race condition.
+- **Permission prompt blocks the terminal:** When Claude asks for permission, the terminal shows a prompt (y/n) and waits. The polling loop's in-flight guard (`_mcpMonitorInFlight`; field declared at `TaskViewerProvider.ts:361`, guard check at line 20530, set true at 20540, reset in the `finally` at 20548) prevents the next tick from sending a new prompt while one is in-flight. So the polling loop naturally pauses while the user responds to the permission prompt. Once the user answers, Claude proceeds, the in-flight tick completes, and the next tick can fire. No race condition. (Line-anchor corrected: earlier draft cited line 20438, which is stale.)
 - **User doesn't notice the prompt:** If the user isn't watching the terminal, a permission prompt will block indefinitely. This is inherent to interactive permission — there's no way around it without `dontAsk` (which is the broken behavior we're fixing). The companion plan's "Check Authentication" button helps here — the user can run the auth check, see the permission prompt, respond to it, and then start polling with permissions already granted.
 - **First-run vs. subsequent runs:** The first time Claude accesses an MCP server, it may ask for permission. On subsequent runs (same session), the permission is already granted. So the permission prompt is primarily a first-run experience — after the user approves once, polling runs unattended.
 - **OAuth token expiry:** If an OAuth token expires mid-polling, the next tool call may trigger a re-auth prompt. The user sees it in the terminal, re-authorizes, and polling resumes. This is the correct behavior — the alternative (`dontAsk`) silently fails.

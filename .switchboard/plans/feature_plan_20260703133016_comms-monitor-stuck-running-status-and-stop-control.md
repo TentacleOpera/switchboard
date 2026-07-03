@@ -13,45 +13,59 @@ This plan fixes three problems:
 
 **Symptom 1 — stuck "running" status:** The user kills the monitor terminal. The AUTOMATION/COMMS tab still shows "🟢 Monitor terminal: running". The status never changes to 🔴.
 
-**Root cause 1 (confirmed by code reading):** The status is pushed to the webview by `_postMcpMonitorConfig` (`TaskViewerProvider.ts:20487`), which calls `_isMcpMonitorTerminalRunning` (line 20592) to check if a live terminal with the name "MCP Monitor" exists. This method is correct — it checks `exitStatus === undefined`. The problem is **when `_postMcpMonitorConfig` is called**:
+**Root cause 1 (confirmed by code reading — anchors verified against current `src/` on 2026-07-03):** The status is pushed to the webview by `_postMcpMonitorConfig` (`TaskViewerProvider.ts:20579`), which calls `_isMcpMonitorTerminalRunning` (line 20684) to check if a live terminal with the name "MCP Monitor" exists. This method is correct — it checks `exitStatus === undefined`. Note: `_postMcpMonitorConfig` posts the message `{ type: 'updateMcpMonitorConfig', ..., isMonitorRunning }` to **both** the sidebar (`this._view`) and the kanban panel (`this._kanbanProvider`). The webview stores `msg.isMonitorRunning` into its local `isMcpMonitorTerminalRunning` flag (kanban.html:6734, in the `updateMcpMonitorConfig` case at 6732). The problem is **when `_postMcpMonitorConfig` is called**:
 
-- On launch (line 20583) — ✅ correct, pushes "running"
-- On config change (line 20484) — ✅ but only if the user changes config
-- On sidebar init (line 8921) — ✅ but only once
-- On `getMcpMonitorConfig` request (line 9990) — ✅ but only when explicitly requested
+- On launch (line 20675, end of `launchMcpMonitorTerminal`) — ✅ correct, pushes "running"
+- On config change (line 20576, `setMcpMonitorConfigFromKanban`) — ✅ but only if the user changes config
+- On sidebar init (line 9013) — ✅ but only once
+- On `getMcpMonitorConfig` request (line 10082) — ✅ but only when explicitly requested
 
-**It is NEVER called when the terminal closes.** The terminal-close handler (`handleTerminalClosed`, line 15914) is called by `onDidCloseTerminal` (`extension.ts:1712`). It cleans up state.json and calls `_refreshTerminalStatuses` (line 15953) — but `_refreshTerminalStatuses` (line 18561) only pushes terminal statuses to the sidebar, **not** the MCP monitor config to the kanban webview. There is no call to `_postMcpMonitorConfig` anywhere in the terminal-close path.
+**It is NEVER called when the terminal closes.** The terminal-close handler (`handleTerminalClosed`, line 16006) is called by `onDidCloseTerminal` (`extension.ts:1715`, which calls `taskViewerProvider.handleTerminalClosed(terminal)` at line 1727). It cleans up state.json and calls `_refreshTerminalStatuses` (the call is at line 16045) — but `_refreshTerminalStatuses` (definition at line 18653) only pushes terminal statuses to the sidebar, **not** the MCP monitor config to the kanban webview. There is no call to `_postMcpMonitorConfig` anywhere in the terminal-close path.
 
 So: terminal dies → `handleTerminalClosed` runs → state.json is cleaned → sidebar terminal list updates → but the kanban webview's `isMcpMonitorTerminalRunning` flag is never updated. The webview is stuck with the last-pushed value (`true`), and the status line shows 🟢 forever.
 
-**Symptom 2 — no stop button:** The status line (kanban.html:7883-7897) has two branches:
+**Symptom 2 — no stop button:** The status line (kanban.html:7706-7724) has two branches:
 - `isMcpMonitorTerminalRunning === true` → shows "🟢 running" text, **no button**
 - `isMcpMonitorTerminalRunning === false` → shows "🔴 No monitor terminal running" + a "Launch" button
 
 There is no "Stop" button in the running branch. The user cannot stop the monitor from the UI — they must manually kill the terminal in the VS Code terminal panel.
 
-**Symptom 3 — loop keeps running:** `_startMcpMonitorLoop` (line 20390) sets `setInterval` and is only stopped by `_stopMcpMonitorLoop` (line 20403), which is called from:
-- `setMcpMonitorConfigFromKanban` when `enabled === false` (line 20393)
-- `dispose()` (line 19076) — extension deactivation only
+**Symptom 3 — loop keeps running:** `_startMcpMonitorLoop` (line 20482) sets `setInterval` and is only stopped by `_stopMcpMonitorLoop` (line 20495), which is called from:
+- `_startMcpMonitorLoop` itself when `cfg.enabled === false` (line 20485); this is reached via `setMcpMonitorConfigFromKanban` → `_startMcpMonitorLoop` (line 20575)
+- `dispose()` (line 19168) — extension deactivation only
 
-It is **never called when the terminal dies**. So the interval keeps firing every 5 minutes, calling `_enqueueMcpMonitorTick` → `_mcpMonitorTick`, which hits the dead-terminal guard (line 20432: `if (!terminal || terminal.exitStatus !== undefined) return;`) and returns. The timer runs forever, doing nothing, until the extension is deactivated or the user disables the monitor.
+It is **never called when the terminal dies**. So the interval keeps firing at the configured interval, calling `_enqueueMcpMonitorTick` → `_mcpMonitorTick`, which hits the dead-terminal guard (line 20524: `if (!terminal || terminal.exitStatus !== undefined) return;`) and returns. The timer runs forever, doing nothing, until the extension is deactivated or the user disables the monitor.
 
 ## Metadata
 
-- **Tags:** comms-monitor, mcp-monitor, terminal, lifecycle, bugfix, ux, stop-button
-- **Complexity:** 4
+- **Tags:** bugfix, ui, ux, reliability, frontend
+- **Complexity:** 5
 - **Project:** switchboard
+- **Repo:** (root — single-repo extension)
 - **Files touched:** `src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`, `src/webview/kanban.html`, `src/extension.ts`
+- **Domain keywords (not schema tags):** comms-monitor, mcp-monitor, terminal-lifecycle, stop-button
+
+## User Review Required
+
+- **Stop button label + placement:** The plan places a red "Stop Monitor" button in the running branch of the COMMS-tab status line. This same status-line block is being restructured by sibling plans — see *Cross-plan conflicts* below. Confirm the button label ("Stop Monitor") and the destructive-red styling before merge, since the sibling **separate-terminal-auth-polling** adds its own controls to the same line.
+- **Immediate stop, no confirm:** Per project rules, "Stop Monitor" disposes the terminal immediately with no `confirm()` gate. Confirm this is the desired behavior (it is the mandated one).
+- **Terminal-name literal source of truth:** This plan hard-codes `'MCP Monitor'`. If the rename sibling (**rename-display-labels**) lands first, the reviewer must ensure a single shared constant/literal is used across all call sites (see below) rather than two plans hard-coding different strings.
 
 ## Complexity Audit
 
-**Moderate.** The fix spans four files but each change is small and follows existing patterns:
-- The terminal-close notification is a one-line addition to `handleTerminalClosed` (call `_postMcpMonitorConfig`).
-- The loop-stop-on-terminal-death is a targeted check in `handleTerminalClosed` (if the closed terminal was the monitor, stop the loop).
-- The Stop button is a UI addition to the running branch of the status line, plus a new message handler + backend method to kill the terminal and stop the loop.
-- The `onDidCloseTerminal` → `refresh()` call at `extension.ts:2883` already exists but doesn't push monitor config — we add the push in `handleTerminalClosed` where we have the terminal reference.
+**Moderate (5).** The fix spans four files but each change is small and follows existing patterns. The single non-trivial dimension is cross-plan coordination on the shared COMMS-tab status-line block and the shared `'MCP Monitor'` terminal-name literal (both touched by sibling plans in this epic), which is what keeps this above a pure Routine score.
 
-**Risk:** The `handleTerminalClosed` method uses `terminal.processId` (async, 1s timeout) to identify the terminal. The monitor terminal might not have a PID resolvable by name. We should also check by name — if the closed terminal's name matches "MCP Monitor" (or "Comms Monitor" after the rename), treat it as the monitor terminal regardless of PID resolution.
+### Routine
+- The terminal-close notification is a small addition to `handleTerminalClosed` (call `_stopMcpMonitorLoop` + `_postMcpMonitorConfig` when the closed terminal is the monitor).
+- The loop-stop-on-terminal-death is a targeted name-match check in `handleTerminalClosed`.
+- The Stop button is a UI addition to the running branch of the status line, plus a new message handler + backend method — a near-exact mirror of the existing `launchMcpMonitorTerminal` command → handler → method chain (command registered `extension.ts:1338`, handler `KanbanProvider.ts:6269`, method `TaskViewerProvider.ts:20604`).
+- The `onDidCloseTerminal` → `refresh()` call at `extension.ts:2915` already exists but doesn't push monitor config — we add the push in `handleTerminalClosed` where we have the terminal reference.
+
+### Complex / Risky
+- **Shared status-line surface.** The running/not-running branch in kanban.html (7706-7724) is simultaneously restructured by **dedicated-tab** (relocates the block) and **separate-terminal-auth-polling** (adds polling controls to the same line). Adding a Stop button here without coordinating risks a merge collision or a visually crowded status line. Keep the button additive and note the coordination rather than redesigning the block.
+- **Terminal-name literal drift.** `'MCP Monitor'` is hard-coded at four call sites (20518, 20605, 20686, plus the new lookups this plan adds). The **rename-display-labels** sibling renames it to "Comms Monitor". Name matching in `handleTerminalClosed` and `stopMcpMonitorTerminal` MUST use the exact same literal as `launchMcpMonitorTerminal`, or the Stop/auto-detect logic silently no-ops.
+- **`_stopMcpMonitorLoop` is a shared extension point.** Siblings **first-prompt-after-startup** and **apply-source-changes-immediately** also extend/call it. Calling it from a new path (terminal close, Stop button) must remain idempotent and must not fight those plans' timer additions.
+- **PID-vs-name identification risk (original note, preserved):** The `handleTerminalClosed` method uses `terminal.processId` (async, 1s timeout) to identify the terminal for state cleanup. The monitor terminal might not have a PID resolvable in time. Our monitor check does NOT rely on PID — it matches on the normalized terminal name directly (`terminal.name` is always available synchronously on the close event), so it is robust regardless of PID resolution.
 
 ## Edge-Case & Dependency Audit
 
