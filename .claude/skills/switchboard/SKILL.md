@@ -24,6 +24,8 @@ State which mode you detected in one line, then route.
 | Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) | ✅ |
 | Deepen / adversarially review **one** plan | **`improve-plan`** | ✅ (edits the plan file) |
 | Reconcile & restructure an **epic's** subtasks (merge/delete/rewrite/split) | **`improve-epic`** | ✅ (`git rm` + manifest) |
+| Split **one plan** into Complex/Risky + Routine tiers | **`switchboard-split`** | ✅ (file writes) |
+| Tier a whole **epic** by complexity (high/low) | **`improve-epic`** high/low mode | ✅ |
 | Create a new epic | **`create-epic`** | ✅ (writes the epic file) |
 | Improve a plan stored in **Linear** | **`improve-remote-plan`** | ⚠️ needs LocalApiServer |
 | Reply to a Notion/Linear **remote-control** card | **`notion-api`** / **`linear-api`** | ⚠️ needs LocalApiServer |
@@ -41,4 +43,4 @@ If a request maps to a ⚠️ skill but you are REMOTE, say the direct route nee
 - **Chain when natural**, e.g. remote planning (`sw-remote.md` playbook) → `create-epic` → `improve-epic`.
 - **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them.
 - **Only ask a question if genuinely ambiguous**, and then just one; otherwise pick the best fit and proceed.
-- **Remote gaps are honest gaps.** A few local-only capabilities (the splitter agent, `high-low` epic consolidation) have no remote skill yet — if the user asks for one remotely, say so rather than pretending.
+- **Remote gaps are honest gaps.** If a request has no remote-capable skill, say so rather than pretending. (The former gaps — splitting a plan and high/low epic tiering — are now covered by `switchboard-split` and `improve-epic` high/low mode.)

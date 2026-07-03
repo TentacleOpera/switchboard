@@ -52,6 +52,8 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'workflows/improve-plan.md', name: 'improve-plan', invocation: 'default' },
     // /improve-epic — epic reconciliation; authorised to restructure the subtask set.
     { source: 'workflows/improve-epic.md', name: 'improve-epic', invocation: 'default' },
+    // /switchboard-split — split one plan into Complex/Risky + Routine files (remote splitter).
+    { source: 'workflows/switchboard-split.md', name: 'switchboard-split', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
     // NOTE: `/sw` and `/sw-remote` were retired 2026-07-03 — superseded by the
     // `/switchboard` front door, which detects local vs remote and routes planning

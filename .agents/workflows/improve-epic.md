@@ -49,6 +49,21 @@ Restructuring is expected — but bounded:
 
 6. **Commit, push, and report.** Commit the improvements and the restructure (already committed before destructive ops per the guardrail). Report the before/after subtask set and the reconciliation outcome.
 
+## High/Low mode (complexity-tier consolidation)
+
+When the user asks to tier the epic by complexity — "high/low split", "split by complexity", "consolidate into tiers", or `/improve-epic --high-low` — run this variant of Step 4 instead of a free-form restructure. It is the remote, file-based equivalent of the local `high-low` epic worktree mode:
+
+1. Run Steps 1–3 as normal (improve every subtask; reconcile).
+2. Consolidate the subtasks into **exactly two** new plan files, carrying all their intent forward (preservation guardrail):
+   - **HIGH** — every subtask scoring **≥ 5**, merged into one plan.
+   - **LOW** — every subtask scoring **≤ 4**, merged into one plan.
+   - If a tier is empty, still write its file and state there is no work for that tier (so a downstream two-tier executor has both).
+3. Give each new file a `**Complexity:**` for its tier and a `**Consolidated From:** <planIds>` metadata line for traceability; embed a fresh `**Plan ID:**`.
+4. `git rm` the original subtask files (their intent now lives in the two tier files) and write a `.switchboard/plans/manifest.json` linking both new tier plans to the epic (`epicId` = the epic's Plan ID). Locally this is `assign-to-epic.js`.
+5. Report the two tier files, what merged into each, and the reconciled subtask list.
+
+Use this when the intent is parallel execution by complexity tier; use the default free-form Step 4 when the intent is just "make the set coherent".
+
 ## Recommendation
 
 End with a per-subtask complexity routing (Intern 1-3 / Coder 4-6 / Lead Coder 7-10) and, for the epic, whether it is ready to execute or still has open decisions for the user.
