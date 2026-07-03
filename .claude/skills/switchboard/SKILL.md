@@ -38,7 +38,7 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 | Create a new epic | **`create-epic`** |
 | Improve a plan stored in **Linear** | **`improve-remote-plan`** |
 | Reply to a Notion/Linear **remote-control** card | **`notion-api`** / **`linear-api`** |
-| Move a kanban card | **`kanban-operations`** locally; remotely via a `manifest.json` column change or Notion/Linear MCP |
+| Move a kanban card | **`kanban-operations`** locally; remotely via the git control-plane `**Column:**` line, a `manifest.json` change, or Notion/Linear MCP |
 | Query board state | **`query-switchboard-kanban`** locally; remotely read the git-exported `kanban-board.md` |
 | ClickUp tasks/docs | **`clickup-*`** family |
 | Score a change's complexity | **`complexity-scoring`** |
