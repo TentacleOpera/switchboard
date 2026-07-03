@@ -321,3 +321,7 @@ Add a case alongside the existing monitor cases (`setMcpMonitorConfig` at **6263
 9. **Manual — first-open config load:**
    - Reload the window. Click the COMMS tab for the first time. Confirm the config loads (from the `ready`-time push; or, if Step 7 adopted, from the `requestMcpMonitorConfig` message) and the panel populates with persisted config.
 10. **Regression:** The AUTOMATION tab's autoban engine functionality (start/stop, mode switching, column rules) is unaffected. All autoban config changes still save and apply correctly. The **7 existing tabs** (KANBAN, AGENTS, PROMPTS, AUTOMATION, WORKTREES, UAT, SETUP) all still render and switch correctly, and COMMS makes 8.
+
+---
+
+**Recommendation (complexity 6):** Send to Coder.
