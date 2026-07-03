@@ -497,3 +497,16 @@ No wizard gating — the buttons are shown conditionally based on terminal and p
    - Confirm the config panel is visible (enabled maps to panel visibility).
    - Confirm `pollingEnabled` is read as `true` (falls back to `enabled`), so polling shows as active if a terminal is running. Existing users aren't disrupted.
 9. **Regression:** The on/off dropdown still controls config panel visibility. Source checkboxes, interval, and custom instruction still save correctly. The `setMcpMonitorConfig` backend handler preserves `pollingEnabled` when it's not specified in the partial config.
+
+### Automated Tests
+- **`GlobalIntegrationConfigService` backward-compat mapping (unit):** given a stored `mcpMonitor` with `enabled: true` and no `pollingEnabled`, assert `getMcpMonitorConfig()` and `getMcpMonitorConfigSync()` return `pollingEnabled: true` (legacy fallback). Given `pollingEnabled: false` with `enabled: true`, assert `pollingEnabled: false` wins (explicit value not overridden by legacy). Given neither, assert `false`.
+- **`setMcpMonitorConfig` field preservation (unit):** call with a partial `{ enabled: true }` and assert a previously-stored `pollingEnabled: true` is preserved (via `?? current.pollingEnabled`); call with `{ pollingEnabled: true }` and assert `enabled` is untouched. Assert all pre-existing/unknown keys survive a partial write (per the migration rule — no dropping legacy keys).
+- **`DEFAULT_MCP_MONITOR_CONFIG` shape (unit/type):** assert the default object includes `pollingEnabled: false` so it satisfies the non-optional interface field (guards against a TS compile break).
+- **Loop gate (unit, if `_startMcpMonitorLoop` is testable via a seam):** with `pollingEnabled: false`, assert no `setInterval` is armed and `_stopMcpMonitorLoop` is invoked; with `pollingEnabled: true`, assert exactly one timer is armed and a second call clears the prior timer (no leak).
+- **Note:** the webview (`kanban.html`) and terminal-send paths are validated by the manual steps above; VS Code webview + terminal interaction is not unit-testable in this repo.
+
+---
+
+## Recommendation
+
+**Complexity: 5 → Send to Coder.** Mixed profile: the bulk is routine additive config + pattern-matched methods/handlers, but it carries genuine multi-file coordination risk concentrated in the shared `_startMcpMonitorLoop`/`_mcpMonitorTick` rewrite (overlaps "per-source-intervals"), the semantic repurposing of the shipped `enabled` flag, and the one-shot-ownership contradiction with "first-prompt-after-startup". These are epic-sequencing concerns rather than intrinsic difficulty, so Coder is appropriate provided the epic orchestrator resolves the cross-plan conflicts (documented in `## Dependencies`) before or during implementation.
