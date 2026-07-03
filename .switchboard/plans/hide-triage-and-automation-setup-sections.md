@@ -160,3 +160,11 @@ adds a structural node unnecessarily; inline-per-element is cleaner.)
 
 Complexity 2 → **Send to Intern.** Six inline `display:none` additions in one HTML file, all
 targets verified at exact line ranges. No logic, no JS, no backend.
+
+## Review Findings
+
+**Files changed:** `src/webview/setup.html` (10 insertions, 10 deletions — inline `display:none;` appended to 6 target elements' style attributes). All six pre-release surfaces are correctly hidden: ClickUp triage button/hint/result (L824-828), ClickUp "Kanban Board Mapping" section (L834), ClickUp "Kanban Automation" section (L901), Linear triage button/hint/result (L1021-1025), Linear "Kanban Board Mapping" section (L1031), Linear "Kanban Automation" section (L1098). Preserved surfaces verified: `#clickup-option-summary`, `#clickup-setup-error`, `#linear-option-summary`, `#linear-setup-error`, `.tickets-auto-sync-toggle`, `#notion-fields`, `#mappings-fields` — none carry `display:none`.
+
+**Validation:** Compilation and tests skipped per session directives. Static verification: all six target elements confirmed to carry `display:none` in their inline style. No new DOM nodes inserted (inline-per-element, not wrapper insertion). No `confirm()`/`window.confirm()` introduced. Triage event listeners (L3584/3593) use `?.addEventListener` — harmless on hidden buttons. `triagePipelineResult` handler guards with `if (btn)`/`if (resultEl)` — harmless writes to hidden DOM.
+
+**Remaining risks:** None material. The plan's original line numbers (L767-771, L777-841, etc.) are stale relative to the current source (shifted to L824-828, L834, etc.) due to the edit itself and prior commits, but the correct elements were targeted by ID/class. No backend, JS, or config schema changes — the gate is purely visual.

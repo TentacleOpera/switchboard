@@ -35,3 +35,11 @@ Surface sync health in the **Remote tab** (relocated into `project.html` per `pr
 **Complexity:** 4
 **Tags:** frontend, ui, ux, reliability, backend
 **Repo:** switchboard
+
+## Review Findings
+
+**Files changed:** `src/services/RemoteControlService.ts` (health state + `getHealth()` + `recordPushResult()`), `src/services/KanbanProvider.ts` (`remoteGetHealthPayload`), `src/services/PlanningPanelProvider.ts` (`getRemoteHealth` message handler), `src/webview/project.html` (health section UI), `src/webview/project.js` (`renderRemoteSyncHealth` + 15s health polling timer). The `RemoteSyncHealth` interface tracks lastPollAt/Ok/Error, consecutiveFailures, throttled/throttleUntil, lastPushAt/Ok/Error. The poll loop records success/failure and detects 429/529 rate-limit indicators via string matching. `recordPushResult` is called by both the auto-archive sweep and the project-context sync path. The UI shows/hides based on remote control active state and polls health every 15 seconds while active.
+
+**Validation:** TypeScript compilation skipped per session directives. Static verification: all health fields in `RemoteSyncHealth` are consumed by `renderRemoteSyncHealth` in project.js. The health section in project.html (lines 1957-1963) has matching element IDs for poll/push/throttle/failure divs. `recordPushResult` wiring confirmed in both `_getAutoArchive` (line 1711) and project-context sync (line 2101). The `getHealth()` method correctly clears the throttled flag when the backoff window expires.
+
+**Remaining risks:** (1) **NIT** — the persistent-failure threshold is hardcoded at `consecutiveFailures >= 3`; the plan says "N consecutive" without specifying N, so 3 is a reasonable default. (2) **NIT** — throttle detection uses string matching on error messages (`'429'`, `'529'`, `'rate limit'`, `'retry-after'`) rather than structured HTTP status codes; fragile but acceptable given the provider-agnostic design where errors surface as strings. (3) **NIT** — the 15-second health polling timer in project.js runs independently of the RemoteControlService poll cadence; if the poll frequency is 30s, health updates may show stale "last poll" timestamps between polls.

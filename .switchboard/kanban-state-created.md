@@ -1,6 +1,10 @@
 ## CREATED
 
 **Column:** CREATED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703121655_reset-status-filter-on-list-change.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703121655_reset-status-filter-on-list-change.md) — Reset ClickUp status filter when the source list changes <!-- planId:9a2c47e9-6f98-4266-a556-d14ab4054b67 -->
+**Column:** CREATED
+- [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703100715_project-panel-theme-live-update.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703100715_project-panel-theme-live-update.md) — Project panel does not receive live theme/animation updates from Setup tab <!-- planId:fc4dea72-f9ae-46f0-aaee-508cea766cae -->
+**Column:** CREATED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703094207_accuracy-stop-writing-artifacts.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703094207_accuracy-stop-writing-artifacts.md) — Accuracy Workflow — Stop Writing Out Artifacts <!-- planId:dadc1229-0686-41a0-ada8-5429b107f4b2 -->
 **Column:** CREATED
 - [/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md](/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md) — Kanban bottom-bar worktree indicator must reflect the active worktree (project/epic aware) <!-- planId:fba9999b-6521-4c45-85e7-9b91855f9075 -->

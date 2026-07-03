@@ -37,3 +37,11 @@ This is a cross-cutting guard, not a feature surface. It is consumed by:
 **Complexity:** 4
 **Tags:** backend, api, reliability, security
 **Repo:** switchboard
+
+## Review Findings
+
+**Files changed:** `src/services/remote/notionOverwriteGuard.ts` (new), `src/services/remote/NotionRemoteProvider.ts`, `src/services/NotionFetchService.ts`. The guard is wired into both existing Notion body-write paths: `NotionRemoteProvider.pushProjectContext` (line 242) and `NotionFetchService.updatePageContent` (line 659). The guard lists all children with a 500-block backstop, checks for protected types (`child_page`, `child_database`, `template`), appends with a divider if protected content exists, clears+writes if verified childless, and aborts on inconclusive checks. Mid-clear block deletion failure falls back to append. Rate limiting (350ms between requests) respects Notion's ~3 req/s constraint.
+
+**Validation:** TypeScript compilation skipped per session directives. Static verification: `httpRequest` signature confirmed compatible with guard calls. `PROTECTED_TYPES` set covers all Notion block types that would be destroyed/orphaned by a full overwrite. `MAX_PAGES = 5` backstop correctly returns null (→ abort) when the page exceeds 500 children. All three write paths (pushProjectContext, updatePageContent, and the guard's own append/delete operations) route through `notion.httpRequest` with appropriate timeouts.
+
+**Remaining risks:** (1) **NIT** — `NotionFetchService.updatePageContent` uses a dynamic `import('./remote/notionOverwriteGuard.js')` instead of a static import; functionally fine but slightly unusual for a same-package module. (2) **NIT** — the guard's block deletion loop deletes blocks sequentially with 350ms delays; a page with 100+ plain blocks takes 35+ seconds to clear, which could hit the 30s timeout on the final append. Low risk in practice (plan bodies rarely exceed 50 blocks). (3) The `/improve-remote-plan` write-back path noted in the plan header as a consumer is marked "future" — not yet wired, which is correct since that path doesn't exist in the codebase yet.
