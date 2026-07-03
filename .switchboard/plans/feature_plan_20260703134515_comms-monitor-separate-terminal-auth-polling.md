@@ -328,7 +328,7 @@ Sends a real MCP diagnostic prompt to the terminal so the user can see whether C
 
 ### 7. `src/services/KanbanProvider.ts` — add message handlers
 
-Near line 5752 (where `launchMcpMonitorTerminal` is handled):
+**Verified anchor:** the `case 'launchMcpMonitorTerminal':` handler is at **line 6269** (and `case 'setMcpMonitorConfig':` at 6263, which routes to `setMcpMonitorConfigFromKanban`). Add the new cases alongside line 6269.
 
 ```ts
             case 'checkMcpMonitorAuth': {
@@ -347,17 +347,19 @@ Near line 5752 (where `launchMcpMonitorTerminal` is handled):
 
 ### 8. `src/webview/kanban.html` — add `pollingEnabled` to webview state
 
-Near line 6139:
+**Verified anchor:** the webview state is declared at **line 6078** (`let mcpMonitorConfig = { enabled: false, ... }`) with `let isMcpMonitorTerminalRunning = false;` at **6079**.
 
 ```js
         let mcpMonitorConfig = { enabled: false, pollingEnabled: false, intervalMinutes: 5, targetRole: 'mcp_monitor', sources: ['slack'], customInstruction: '' };
 ```
 
-The `updateMcpMonitorConfig` handler (line 6803) already replaces config wholesale (`mcpMonitorConfig = msg.config`), so the new field flows through automatically.
+The `updateMcpMonitorConfig` handler is at **line 6732**: it sets `mcpMonitorConfig = msg.config || mcpMonitorConfig;` (line 6733) and `isMcpMonitorTerminalRunning = !!msg.isMonitorRunning;` (line 6734). Because config is replaced wholesale, the new `pollingEnabled` field flows through automatically. **Field-name check (verified):** the backend message posts `isMonitorRunning` (`TaskViewerProvider.ts:20585`) and the webview reads it into the local `isMcpMonitorTerminalRunning` — the plan's use of `isMcpMonitorTerminalRunning` in the UI snippets (section 9) is correct.
 
 ### 9. `src/webview/kanban.html` — replace the status line with three-button control panel
 
-Replace the status line (lines 7880-7898) with a three-button flow. No wizard gating — the buttons are shown conditionally based on terminal and polling state, but there's no auth-confirmation gate:
+**Verified anchor:** the current "Status Line" block is at **lines 7706-7724** (`const statusLine = ...` at 7707; the `if (isMcpMonitorTerminalRunning)` branch at 7709; the "Launch Monitor Terminal" button at 7713-7722; `mcpConfigPanel.appendChild(statusLine);` at 7724). Replace this block with the three-button flow below. **Shared-surface conflict:** "stuck-running-status-and-stop-control" adds a Stop button and running-status here, and "dedicated-tab" relocates the whole panel — coordinate; do not overwrite their edits.
+
+No wizard gating — the buttons are shown conditionally based on terminal and polling state, but there's no auth-confirmation gate:
 
 ```js
             // Status & Controls — three independent buttons

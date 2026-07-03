@@ -141,31 +141,37 @@ The automation tab content is `#automation-tab-content` at **2581-2583** (its ro
 
 ### 3. `src/webview/kanban.html` — extract the Comms Monitor rendering into `createCommsPanel()`
 
-Extract the MCP Monitor rendering code from `createAutobanPanel()` (lines 7773-7954 — the `mcpRow`, `mcpConfigPanel`, `mcpDesc`, and all their children) into a new function `createCommsPanel()`. This function builds and returns a container div with all the Comms Monitor UI:
+Extract the MCP Monitor rendering code from `createAutobanPanel()` into a new function `createCommsPanel()`. **The code to move is NON-CONTIGUOUS** (see "Verified Anchors"): (a) construction `mcpRow`/`mcpSelect` → `saveMonitorConfig` → listeners at **7599-7754**, (b) `mcpDesc` at **7772-7775**, (c) the three `container.appendChild(mcpRow/mcpDesc/mcpConfigPanel)` calls at **7778-7780**. Do **not** cut a line range — the autoban `safetyNote`/`modeHelpText` (7756-7770) is interleaved between (a) and (b) and must stay in `createAutobanPanel`. This function builds and returns a container div with all the Comms Monitor UI:
 
 ```js
         function createCommsPanel() {
             const container = document.createElement('div');
             container.style.cssText = 'padding:12px; overflow-y:auto; height:100%;';
 
-            // Comms header
+            // Comms header — KEEP the existing label text. The current code says
+            // 'MCP MONITOR:' (kanban.html:7603); renaming to 'COMMS MONITOR' is the
+            // rename-display-labels sibling subtask's job. Preserve 'MCP MONITOR:'
+            // here so the two subtasks don't collide / double-rename.
             const commsHeader = document.createElement('div');
             commsHeader.className = 'subsection-header';
             const commsHeaderSpan = document.createElement('span');
-            commsHeaderSpan.textContent = 'COMMS MONITOR';
+            commsHeaderSpan.textContent = 'MCP MONITOR';  // rename subtask changes this later
             commsHeader.appendChild(commsHeaderSpan);
             container.appendChild(commsHeader);
 
-            // Intro text
+            // Intro text — reuse the existing mcpDesc copy verbatim (it currently
+            // starts "The MCP Monitor periodically pings…", line 7775). Do NOT
+            // reword to "Comms Monitor" — that is the rename subtask.
             const introText = document.createElement('div');
             introText.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); line-height:1.5;';
-            introText.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
+            introText.textContent = 'The MCP Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
             container.appendChild(introText);
 
             // ─── Move all MCP Monitor UI here (mcpRow, mcpConfigPanel, etc.) ───
-            // (Lines 7773-7954 from createAutobanPanel, adapted to use container
-            //  instead of the autoban container, and isCommsPanelInteracting
-            //  instead of isAutobanPanelInteracting)
+            // (Pieces at 7599-7754 + mcpDesc 7772-7775 + appends 7778-7780,
+            //  adapted to use this container instead of the autoban container,
+            //  and guardCommsInteraction/isCommsPanelInteracting instead of
+            //  guardInteraction/isAutobanPanelInteracting)
 
             // ... [all the mcpRow, mcpSelect, mcpConfigPanel, intervalRow,
             //      sourcesList, customInstructionRow, statusLine, mcpHelp code] ...
@@ -177,9 +183,10 @@ Extract the MCP Monitor rendering code from `createAutobanPanel()` (lines 7773-7
 ```
 
 **Key extraction details:**
-- The shared style variables (`autobanSelectStyle`, `autobanNumberInputStyle`, etc., lines 7715-7718) are defined inside `createAutobanPanel`. Either move them to a shared scope (module-level) or duplicate them inside `createCommsPanel`. Recommended: move to a shared scope since both panels use them.
-- The `guardInteraction` function (line 7719) sets `isAutobanPanelInteracting`. Create a parallel `isCommsPanelInteracting` flag and a `guardCommsInteraction` function (same 2-second timeout pattern) for the Comms panel.
-- The `saveMonitorConfig` function (line 7906) and all event listeners stay with the Comms Monitor code — they move together.
+- **Shared style variables:** if the monitor fields reference any autoban-scoped style constants (e.g. an `autobanSelectStyle`-style helper) defined inside `createAutobanPanel`, hoist them to module scope so both panels use them; otherwise inline the styles the monitor already uses. Verify by grepping the moved snippet for any identifier defined only in `createAutobanPanel`'s body before the move — the earlier draft's "lines 7715-7718" is not a reliable anchor.
+- **Interaction guard:** `guardInteraction` (defn at **line 7545**) sets `isAutobanPanelInteracting` (declared **6068**). Create a parallel `isCommsPanelInteracting` flag + `guardCommsInteraction` function (same 2-second timeout pattern) and re-point every monitor field's guard call to it. Missing one silently couples the panels.
+- **`saveMonitorConfig`** (defn at **line 7732**, not 7906) and all monitor event listeners (7749-7754) move together with the monitor code into `createCommsPanel`.
+- **Module-level state** (`mcpMonitorConfig` 6078, `mcpMonitorPresets` 6080) stays module-level — only the rendering closure moves.
 
 ### 4. `src/webview/kanban.html` — remove the Comms Monitor code from `createAutobanPanel()`
 

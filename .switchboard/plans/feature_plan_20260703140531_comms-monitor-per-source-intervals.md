@@ -451,3 +451,7 @@ At line 6078 (verified — current: `let mcpMonitorConfig = { enabled: false, in
 9. **Manual — all sources unchecked:**
    - Uncheck all sources. Confirm the loop stops (no timer running, no ticks). The GCD is undefined when no sources are active.
 10. **Regression:** The on/off dropdown, custom instruction field, and source checkboxes still work. The `setMcpMonitorConfig` backend handler preserves `sourceLastCheckAt` when it's not specified in a partial config update.
+
+## Recommendation
+
+**Complexity 7 → Send to Lead Coder.** This replaces a shipped config field (migration-sensitive for ~4,000 installs), introduces a new GCD timer architecture, and is the highest-conflict plan on the config/timer surface — it co-edits `_startMcpMonitorLoop`, `_mcpMonitorTick`, and `_buildMcpMonitorPrompt` with 4+ sibling plans. It needs an experienced hand to sequence the merges and confirm the cross-plan end-state before coding.
