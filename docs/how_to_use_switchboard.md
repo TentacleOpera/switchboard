@@ -29,6 +29,9 @@ The Project Constitution is your spec-driven governance model. Instead of typing
 - **Use per-project PRDs for requirements.** Create a project on the Kanban board, write its requirements on the Project Panel's **PROJECTS** tab (saved to `.switchboard/projects/<project>/prd.md`), and flip the **PROJECT CONTEXT** toggle (on the Kanban board) on. The active project's PRD is then injected — under the header `PROJECT REQUIREMENTS (PRD):` — into *every* dispatched prompt (planner, lead, coder, reviewer, tester, orchestrator), not just the planner. This is the modern replacement for the legacy planner-only Design Doc setting.
 - Set up a Notion design doc integration to fetch and cache external PRDs directly.
 
+### Let the Architect guide you
+If you're not sure where to start with governance, open the **Project panel → ARCHITECT** tab and click **Open Architect Terminal**. It launches a guided session (through your Planner terminal) that walks you through writing and refining your PRD, Constitution, `CLAUDE.md`/`AGENTS.md` system files, and tuning insights, showing which of those docs already exist. Prefer to paste it into a chat agent instead? Use **Copy Architect Prompt**.
+
 ---
 
 ## 3. Quota-Saving and Optimization Tactics
@@ -63,11 +66,27 @@ Access unlimited Gemini Pro planning quota:
 
 ## 4. Automated Triage & Remote Control
 
-### One-Click Triage Pipeline
-In the Setup panel, click "ENABLE TRIAGE PIPELINE" under ClickUp or Linear to auto-create a Bug Triage board. Bugs are pulled in, routed to the Ticket Updater agent, and triage verdicts (severity, area, assessment, recommended action, routing — ≤120 words) are synced back as comments. The agent never overwrites the ticket description.
+### One-Click Triage Pipeline *(pre-release — currently hidden)*
+The triage setup, along with the ClickUp/Linear **Kanban Board Mapping** and **Kanban Automation** setup sections, is hidden in the current build while it's hardened; the underlying Ticket Updater flow still exists but isn't exposed in the UI. When available: in the Setup panel, click "ENABLE TRIAGE PIPELINE" under ClickUp or Linear to auto-create a Bug Triage board. Bugs are pulled in, routed to the Ticket Updater agent, and triage verdicts (severity, area, assessment, recommended action, routing — ≤120 words) are synced back as comments. The agent never overwrites the ticket description.
 
-### Linear Remote Control
-Drive your board from your phone via the Linear app. Configure in the Kanban REMOTE tab — select boards, set ping mode (manual/constant), and ping frequency (30-120s). Moving a Linear issue between states dispatches the corresponding Kanban column agent; comments are routed to the current column's agent. Toggle from the toolbar remote control button. Config stored in the Kanban DB, not `settings.json`.
+### Remote Control (Linear / Notion / ClickUp)
+Drive your board from your phone or browser via a remote provider. Configure it in the **Project panel → REMOTE tab** and toggle it on/off from the Kanban toolbar remote-control button:
+- **Provider** — Linear, Notion, or ClickUp (push-only mirror).
+- **Boards to sync** — which project boards participate.
+- **Remote mode** — *Ingest (pull only)* just mirrors remote state; *Full (pull + mirror + dispatch)* also dispatches the target column's agent.
+- **Poll comments from remote** / **Push status & content to remote** — independent toggles.
+- **Silent syncing** — keep mirroring even while pinging is off.
+- **Ping frequency** — 30–120s (default 60).
+
+Moving a remote issue between states dispatches the corresponding Kanban column agent (in Full mode); comments are routed to the current column's agent. A **Sync Health** panel shows last poll/push status, rate-limit backoff, and persistent-failure warnings. Config is stored in the Kanban DB (key `remote.config`), not `settings.json`.
+
+Separately, **Board State Export** (Setup panel) mirrors board state to git — `none`, `control-plane`, or `wiki` — via `switchboard.boardStateExport`.
+
+### MCP Monitor — watch your comms without leaving the board
+Turn on the **MCP Monitor** in the Kanban Automation panel to have Switchboard ping a dedicated Claude terminal on an interval (1–30 min) that checks your connected MCP sources — Slack, Gmail, Google Calendar, or a custom instruction — and reports anything needing attention in that terminal pane. Pick the sources to watch and the cadence; the status line shows whether the monitor terminal is running (launch it if not). Off by default, and read-only — it never dispatches work.
+
+### Auto-Archive — keep the board (and free-tier limits) tidy
+On the Kanban **Setup** tab, enable the **Auto-Archive Rule** to automatically complete + archive any plan that sits in a chosen column past a dwell threshold (default 2 hours). The archive rides your unified push out to Linear/Notion, which helps stay under Linear's free-tier active-issue cap. Off by default. Heads-up: the dwell clock uses the plan's last-updated time, so editing or commenting on a plan resets it — a busy plan may never auto-archive.
 
 ---
 

@@ -35,7 +35,7 @@
 27. [Webview Panels Reference](#27-webview-panels-reference)
 28. [Memo Capture Mode](#28-memo-capture-mode)
 29. [Automated Triage Pipeline](#29-automated-triage-pipeline)
-30. [Linear Remote Control](#30-linear-remote-control)
+30. [Remote Control (provider-agnostic)](#30-remote-control-provider-agnostic)
 31. [Troubleshooting / FAQ](#31-troubleshooting--faq)
 32. [Using Switchboard with claude.ai](#32-using-switchboard-with-claudeai)
 
@@ -97,6 +97,7 @@ Switchboard ships with the following built-in agent roles (defined in `agentConf
 | `gatherer` | Context Gatherer | Gathers code context before planning. |
 | `orchestrator` | Orchestrator | Runs an entire Epic end-to-end with native subagents. Off by default — enable in the Kanban Agents tab to dispatch epics directly (otherwise **Orchestrate** copies the prompt). Defaults to a subagent-per-subtask policy and can optionally use a git worktree per plan. See §8 (Epics). |
 | `claude_designer` | Claude Designer | Imports a design from claude.ai/design into a target folder using the repo's existing components and styles. Off by default. See §9 (Design Panel → CLAUDE tab). |
+| `mcp_monitor` | MCP Monitor | Monitor-only role. On an interval it pings a dedicated Claude terminal to check your connected MCP sources (Slack, Gmail, Google Calendar, custom) and report anything needing attention. Off by default; it is read-only and cannot receive execute dispatches. See §4 (MCP Monitor). |
 
 ### Custom Roles
 Add custom agents in the Setup panel. Each custom agent supports:
@@ -181,6 +182,15 @@ Additional AUTOBAN settings:
 - **Terminal pools** — Up to 5 terminals per role, rotated round-robin
 
 Commands: `switchboard.setAutobanEnabledFromKanban`, `switchboard.setAutobanPausedFromKanban`, `switchboard.resetAutobanTimersFromKanban`, `switchboard.addAutobanTerminalFromKanban`, `switchboard.removeAutobanTerminalFromKanban`, `switchboard.resetAutobanPoolsFromKanban`
+
+### MCP Monitor
+The **MCP Monitor** watches your connected MCP sources on a timer and surfaces anything that needs attention — without you having to open Slack/Gmail/Calendar yourself. It runs in the Kanban **Automation** panel:
+- **MCP MONITOR** on/off dropdown.
+- **Interval** — 1 / 2 / 5 / 10 / 15 / 30 minutes (one global cadence; default 5 min, off).
+- **Watched Sources** — checklist of **Slack**, **Gmail**, **Google Calendar**, and **Custom** (with a free-text custom-instruction box).
+- **Status line + Launch Monitor Terminal** — shows "🟢 Monitor terminal: running" or "🔴 No monitor terminal running", and launches the dedicated terminal.
+
+On each tick Switchboard sends a read-only prompt to the dedicated "MCP Monitor" Claude terminal, which checks the selected sources through your claude.ai MCP servers and reports back in that terminal pane. It requires the `mcp_monitor` role terminal (launch via `switchboard.launchMcpMonitorTerminal`). Config is stored machine-globally.
 
 ### Kanban Database
 The board state is persisted in a local SQLite database (`.switchboard/kanban.db`), using `sql.js` (WASM SQLite). When the DB is unavailable, the board falls back to file-derived state from run-sheet events in `.switchboard/sessions/*.json`.
@@ -390,6 +400,12 @@ Manage local research, design system files, and Antigravity Brain artifacts.
 - Update task: `switchboard.clickupUpdateTask`
 - Add comment: `switchboard.clickupAddComment`
 
+**Capabilities beyond import.** ClickUp is a **push-only mirror** — Switchboard pushes state and content *out* to ClickUp but does not poll ClickUp changes back (for two-way remote control, use Linear or Notion). What's supported:
+- **Content push** — local plan edits update the linked ClickUp task description.
+- **Move task between lists** — including status auto-mapping when the source status has no name-match in the target list, and reporting when a task lives in multiple/sprint lists.
+- **Epic round-trip** — importing a ClickUp parent-with-subtasks creates a Switchboard epic + subtasks, and local epics push out as native parent/child ClickUp tasks.
+- **Agent-driven surface** (via skills / LocalApiServer): create/modify tasks, comments, file attachments, and docs/doc-pages.
+
 ### Linear
 - Set API token: `switchboard.setLinearToken` — Token stored in `SecretStorage`
 - Import issues: `switchboard.importFromLinear`
@@ -398,6 +414,14 @@ Manage local research, design system files, and Antigravity Brain artifacts.
 - Update state: `switchboard.linearUpdateState`
 - Add comment: `switchboard.linearAddComment`
 - Update description: `switchboard.linearUpdateDescription`
+
+**Capabilities beyond import.** Unlike ClickUp, Linear is a full two-way provider:
+- **Bidirectional description sync** — editing an issue's description in Linear now flows back into the local plan file automatically (with hash-based loop prevention), not only on the both-sides-changed conflict path.
+- **Status/column sync both directions** via Remote Control polling (see §30).
+- **Move an issue to a different Linear project.**
+- **Epic round-trip** — import a parent-with-subtasks as an epic; push a local epic out as parent/child issues.
+- **Comments + attachments** on top-level issues are captured into the plan body on import.
+- **Archive / unarchive** via the idempotent `issueArchive` / `issueUnarchive` mutations — used by the Auto-Archive Rule (§14) to keep you under Linear's free-tier active-issue cap.
 
 ### Notion
 - Set API token: `switchboard.setNotionToken` — Token stored in `SecretStorage`
@@ -466,6 +490,14 @@ Settings:
 
 ### Searching Archives
 Use the `/archive` IDE chat command to search the DuckDB plan archive.
+
+### Auto-Archive Rule
+A provider-agnostic rule that automatically completes and archives a plan once it has sat in a designated board column past a dwell threshold — handy for keeping a board (and a free-tier Linear workspace) from filling up. Configure it on the Kanban **Setup** tab → *Auto-Archive Rule*:
+- **Enable auto-archive** — checkbox (**off by default**).
+- **Archive-trigger column** — dropdown populated from the live board columns.
+- **Dwell threshold (hours)** — number input (default 2).
+
+When a plan has been in the trigger column longer than the threshold it is moved to Completed, archived locally, and the archive rides the unified push out to Linear/Notion. **Caveat:** the dwell timer uses the plan's `updatedAt` as a proxy for time-in-column, so any edit or comment on the plan resets the clock — a frequently-touched plan may never trip the rule.
 
 ---
 
@@ -1203,7 +1235,7 @@ The board itself with drag-and-drop columns. Controls strip:
 - **PROJECT CONTEXT** — Toggle (off by default). When on, the active project's PRD (authored on the Project Panel's PROJECTS tab) is injected into every dispatched prompt across all roles.
 - **Scan Folders** — Force immediate plan scan (`switchboard.triggerPlanScan`).
 - **AUTOBAN** — Start/stop the automation engine.
-- **Remote Control** — Start/stop Linear remote control.
+- **Remote Control** — Start/stop remote control (Linear / Notion / ClickUp; configured in the Project panel → REMOTE tab).
 - **CLI Triggers** — Toggle between CLI terminal dispatch and clipboard prompt mode.
 - **Collapse Coders** — Toggle collapsed view for coder columns.
 - **Pair Programming Mode** dropdown — Select CLI Parallel / Hybrid / Full Clipboard.
@@ -1230,10 +1262,10 @@ Per-role prompt customization:
 - **Edit Prompt Template** — Live preview of the composed prompt, editable before dispatch.
 
 **AUTOMATION Tab**
-Automation panel for configuring AUTOBAN rules and timing per column. Includes batch size, complexity filter, routing mode, max sends per terminal, global session cap, and terminal pool management.
+Automation panel for configuring AUTOBAN rules and timing per column. Includes batch size, complexity filter, routing mode, max sends per terminal, global session cap, and terminal pool management. Also hosts the **MCP Monitor** controls (on/off, interval, watched sources, launch status — see §4).
 
-**REMOTE Tab**
-Configure Linear Remote Control — select boards, sync mode (manual/constant), and ping frequency. See §30.
+**REMOTE Tab** (Project panel)
+Configure Remote Control — provider (Linear / Notion / ClickUp), boards to sync, remote mode (Ingest / Full), comment-polling and push toggles, silent syncing, and ping frequency. Includes a Sync Health panel. See §30. (This config tab lives in the Project panel; the start/stop toggle is on the Kanban toolbar.)
 
 **WORKTREES Tab**
 Manage git worktrees for epic-based dispatch routing. Create, list, and delete worktrees associated with epics.
@@ -1250,7 +1282,7 @@ Board-level configuration:
 
 ### Project Panel (`project.html`)
 
-Hosted by `PlanningPanelProvider` (project mode). Six tabs: KANBAN PLANS, PROJECTS, EPICS, CONSTITUTION, SYSTEM, TUNING.
+Hosted by `PlanningPanelProvider` (project mode). Tabs: KANBAN PLANS, PROJECTS, EPICS, CONSTITUTION, SYSTEM, TUNING, **ARCHITECT**, and **REMOTE** (Remote Control config — see §30).
 
 > Note: Project *creation*, plan-to-project *assignment*, and the **PROJECT CONTEXT** toggle live on the **Kanban panel** (`kanban.html`) board control strip — see its KANBAN tab above — because they act on the board. The per-project **PRD editor** lives on this Project Panel's PROJECTS tab.
 
@@ -1297,6 +1329,15 @@ Adversarial insight extraction and governance tuning:
 - **Refresh** — Reload insight list.
 - **Insight filter** — Filter by status (All / Open / Resolved).
 - Insight list with status management.
+
+**ARCHITECT Tab**
+A guided "Architect Mode" for setting up project **governance** — your PRD, Constitution, System files (`CLAUDE.md` / `AGENTS.md`), and tuning insights. It doesn't add an agent role; it launches a guided session through your existing Planner terminal.
+- **Open Architect Terminal** — Dispatches the Switchboard Architect prompt to the Planner terminal (or spins up an ad-hoc "Switchboard Architect" terminal if no Planner terminal is registered).
+- **Copy Architect Prompt** — Copies the same guided-governance prompt to the clipboard.
+- **Governance-doc sidebar + preview** — Shows which of PRD / Constitution / `CLAUDE.md` / `AGENTS.md` / tuning insights exist, with a clickable preview pane.
+
+**REMOTE Tab**
+Remote Control configuration (provider, boards, mode, push/comment toggles, silent syncing, ping frequency, Sync Health). See §30.
 
 ### Design Panel (`design.html`)
 
@@ -1481,10 +1522,12 @@ The Memo sub-tab also supports direct capture without agent involvement — type
 
 ## 29. Automated Triage Pipeline
 
+> **Not currently exposed (pre-release).** The one-click triage setup — along with the ClickUp/Linear **Kanban Board Mapping** and **Kanban Automation** setup sections — is hidden in the current build while it's being hardened. The underlying functionality (the Ticket Updater agent and triage board) still exists in code, but there is no UI to enable it. The description below documents the intended behavior for when it returns.
+
 One-click setup for auto-pulling bugs from ClickUp or Linear and routing them to the triage agent.
 
 ### Setup
-Setup panel → ClickUp or Linear tab → **"⚡ ENABLE TRIAGE PIPELINE (ONE-CLICK)"**. This creates a "Bug Triage" board with sensible defaults (all editable afterward).
+Setup panel → ClickUp or Linear tab → **"⚡ ENABLE TRIAGE PIPELINE (ONE-CLICK)"**. This creates a "Bug Triage" board with sensible defaults (all editable afterward). *(This control is currently hidden — see the note above.)*
 
 ### Triage Verdict
 The Ticket Updater agent posts a structured verdict as a comment:
@@ -1498,21 +1541,43 @@ The verdict is posted via the `clickup_api` or `linear_api` skill — it **never
 
 ---
 
-## 30. Linear Remote Control
+## 30. Remote Control (provider-agnostic)
 
-Drive your Kanban board from the Linear mobile app.
+Drive your Kanban board from a remote surface — the **Linear** or **Notion** mobile/web app, or a push-only **ClickUp** mirror.
 
 ### How It Works
-Remote Control polls Linear on a timer (no webhooks), mirrors state changes to Kanban columns and dispatches the column's agent, and ingests comments — routing each to the current column's agent.
+Remote Control polls the active provider on a timer (no webhooks). In **Full** mode it mirrors remote state changes onto Kanban columns and dispatches the target column's agent; in either mode it ingests comments and routes each to the current column's agent. Delta polling asks the provider "what changed since my cursor?" — state and comments are two separate streams with two cursors.
+
+### Providers & capabilities
+Providers implement a common seam and declare capabilities (`pull`, `push`, `projectContextPush`, `archive`); the UI gates controls on capability, not on provider name.
+
+| Provider | Pull | Push | Notes |
+| :--- | :--- | :--- | :--- |
+| **Linear** | ✓ | ✓ | Full remote-control surface. |
+| **Notion** | ✓ | ✓ | Full; drive via the Notion app / MCP. |
+| **ClickUp** | — | ✓ | Push-only stakeholder-visibility mirror (no inbound dispatch). |
+
+(A separate **git-native** channel — control-plane / wiki — mirrors whole-board state via git; see *Board State Export* below and §on the Control Plane. It is configured by `switchboard.boardStateExport`, not by this tab.)
 
 ### Configuration
-Kanban **REMOTE** tab:
-- **Boards to sync** (multi-select)
-- **Silent sync** — keep mirroring while pinging is off
-- **Ping mode** — manual / constant
+Configure in the **Project panel → REMOTE** tab (the config tab moved here from the Kanban panel; only the start/stop toggle remains on the Kanban toolbar):
+- **Provider** — Linear / Notion / ClickUp (push-only)
+- **Workspace** and **Boards to sync** (multi-select)
+- **Silent syncing** — keep selected boards mirrored even while pinging is off
+- **Remote mode** — *Ingest (pull only)* or *Full (pull + mirror + dispatch)*. Full is disabled for providers without `pull`.
+- **Poll comments from remote** — comment-polling toggle
+- **Push status & content to remote** — push toggle; disabled for providers without `push`
 - **Ping frequency** — 30–120s (default 60)
+- **Start / Stop Remote Control** button (active state shows "Pinging…")
 
-Toggle remote control on/off from the toolbar remote control button.
+Toggle remote control on/off from the Kanban toolbar remote-control button as well.
+
+### Sync Health
+While remote control is active, a **Sync Health** panel (auto-refreshed ~every 15s) surfaces:
+- **Last poll** — ✓/✗ with timestamp and truncated error (red on failure)
+- **Last push** — ✓/✗ with timestamp and error
+- **Rate-limit backoff** — "⏳ Rate-limited — backing off…" when the provider returns 429/529 (60s window)
+- **Persistent failure** — "⚠ N consecutive failures — check token/connection" once failures reach 3
 
 ### Guards
 - **Self-comment marker** — skips its own outbound comments on ingest.
@@ -1522,7 +1587,15 @@ Toggle remote control on/off from the toolbar remote control button.
 - **Per-poll card cap** — 100 cards (most-recently-updated first; remainder deferred to the next cycle).
 
 ### Config Storage
-Stored in the Kanban DB `config` table (key `remote.config`), **not** in `settings.json`. The `RemoteConfig` fields: `boards` (string[]), `silentSync` (boolean), `pingFrequencySeconds` (30–120, default 60). The poll loop runs when the toolbar toggle is on and stops when it's off.
+Stored in the Kanban DB `config` table (key `remote.config`), **not** in `settings.json`. The `RemoteConfig` fields: `provider` (`linear`|`notion`|`clickup`), `boards` (string[]), `silentSync` (boolean), `pingFrequencySeconds` (30–120, default 60), `mode` (`ingest`|`full`), `push` (boolean), `comments` (boolean). The poll loop runs when the toolbar toggle is on and stops when it's off.
+
+### Board State Export (git-native mirror)
+Independently of the provider channel above, board state can be mirrored to git so it travels with the repo. Set the destination in the **Setup** panel → *Board State Export*:
+- `none` — no git footprint (default)
+- `control-plane` — push to the control-plane repo
+- `wiki` — push to `<remote>.wiki.git`
+
+Outbound pushes commit `.switchboard/kanban-board.md` and `.switchboard/kanban-state-*.md` ("switchboard: update board state mirror"); inbound state/comment deltas are read back from git with a commit-SHA cursor and an author trust gate (`switchboard.planAutoFetch.trustedAuthors`). Settings: `switchboard.boardStateExport`, `switchboard.boardStateExport.remoteUrl`.
 
 ---
 
