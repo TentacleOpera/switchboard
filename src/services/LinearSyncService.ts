@@ -2852,6 +2852,7 @@ export class LinearSyncService {
 
     const linked: string[] = [];
     const failed: string[] = [];
+    let epicIssueId: string | null = null;
 
     try {
       // 1. Create/update the epic issue first (await, bypass debounce).
@@ -2861,7 +2862,7 @@ export class LinearSyncService {
       );
 
       // 2. Look up the epic's issue ID. If still a creating_* temp marker, retry once.
-      let epicIssueId = await this.getIssueIdForPlan(params.epicPlanFile);
+      epicIssueId = await this.getIssueIdForPlan(params.epicPlanFile);
       if (epicIssueId && epicIssueId.startsWith('creating_')) {
         await new Promise(resolve => setTimeout(resolve, 200));
         epicIssueId = await this.getIssueIdForPlan(params.epicPlanFile);
@@ -2891,7 +2892,7 @@ export class LinearSyncService {
       return { linked: [], failed: params.subtasks.map(s => s.planFile) };
     }
 
-    return { epicIssueId, linked, failed };
+    return { epicIssueId: epicIssueId ?? undefined, linked, failed };
   }
 
   /**

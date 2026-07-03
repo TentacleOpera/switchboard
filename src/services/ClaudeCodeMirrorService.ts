@@ -38,6 +38,9 @@ interface MirrorEntry {
 }
 
 // --- Finalized manifest (post-cleanup, 2026-06-24): 4 workflows + 21 skills. ---
+// 2026-07-03: added `sw` alias + remote-session skills (improve-remote-plan,
+// create-epic) + move-task proxies (clickup-move-task, linear-move-issue) that
+// were previously advertised in AGENTS.md but never generated into workspaces.
 const MIRROR_MANIFEST: MirrorEntry[] = [
     // Workflows → user-invocable skills (default both-mode).
     { source: 'workflows/memo.md', name: 'memo', invocation: 'default' },
@@ -45,6 +48,13 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'workflows/improve-plan.md', name: 'improve-plan', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
     { source: 'workflows/sw-remote.md', name: 'sw-remote', invocation: 'default' },
+    // /sw — short alias generated from the same source as switchboard-chat.
+    { source: 'workflows/switchboard-chat.md', name: 'sw', invocation: 'default' },
+    // Remote-session skills — operate on Linear/epic files directly, used when the
+    // VS Code extension is off (claude.ai / Claude Code web). Both were previously
+    // authored only under .claude/ and so never shipped to user workspaces.
+    { source: 'skills/improve_remote_plan.md', name: 'improve-remote-plan', invocation: 'default', allowedTools: 'Bash' },
+    { source: 'skills/create_epic.md', name: 'create-epic', invocation: 'default' },
 
     // Side-effecting proxy skills → disable-model-invocation (explicit /name only).
     { source: 'skills/clickup_api.md', name: 'clickup-api', invocation: 'no-model', allowedTools: 'Bash' },
@@ -54,6 +64,10 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'skills/clickup_attach.md', name: 'clickup-attach', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/clickup_create_subpage.md', name: 'clickup-create-subpage', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/linear_api.md', name: 'linear-api', invocation: 'no-model', allowedTools: 'Bash' },
+    // Move-task proxy skills — sources existed under .agents/ but were missing from
+    // the manifest, so they never generated into user workspaces.
+    { source: 'skills/clickup_move_task.md', name: 'clickup-move-task', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/linear_move_issue.md', name: 'linear-move-issue', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/notion_api.md', name: 'notion-api', invocation: 'no-model', allowedTools: 'Bash' },
     {
         source: 'skills/get_tickets.md', name: 'get-tickets', invocation: 'no-model', allowedTools: 'Bash',

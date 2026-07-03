@@ -3486,6 +3486,8 @@
         vscode.postMessage({ type: 'getRemoteHealth', workspaceRoot: wsSel ? wsSel.value : undefined });
     }
 
+    // Consecutive failed polls before the Remote tab shows a persistent-failure warning.
+    const PERSISTENT_FAILURE_THRESHOLD = 3;
     function renderRemoteSyncHealth(health) {
         if (!health) return;
         const pollEl = document.getElementById('remote-health-poll');
@@ -3518,7 +3520,7 @@
             }
         }
         if (failEl) {
-            if (health.consecutiveFailures >= 3) {
+            if (health.consecutiveFailures >= PERSISTENT_FAILURE_THRESHOLD) {
                 failEl.textContent = `⚠ ${health.consecutiveFailures} consecutive failures — check token/connection`;
                 failEl.style.display = 'block';
                 failEl.style.color = '#e74c3c';

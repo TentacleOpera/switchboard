@@ -8297,7 +8297,7 @@ Each plan file must include:
 
         // Auto-export skill so it stays in sync with config.
         try {
-            const { AgentSkillExporter } = await import('./AgentSkillExporter');
+            const { AgentSkillExporter } = await import('./AgentSkillExporter.js');
             await AgentSkillExporter.exportCustomAgent(agent, resolvedRoot);
         } catch (e) {
             console.error('[TaskViewerProvider] Auto-export skill failed:', e);
@@ -8341,7 +8341,7 @@ Each plan file must include:
 
         if (deletedKey) {
             try {
-                const { AgentSkillExporter } = await import('./AgentSkillExporter');
+                const { AgentSkillExporter } = await import('./AgentSkillExporter.js');
                 await AgentSkillExporter.removeExportedSkill(deletedKey, resolvedRoot);
             } catch (e) {
                 // ignore

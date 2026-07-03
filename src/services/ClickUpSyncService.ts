@@ -2940,7 +2940,7 @@ export class ClickUpSyncService {
       let workspaceId = '';
       try {
         // AI NOTICE: DO NOT append .js to this import. tsc complains about Node16 module resolution, but Webpack requires it to be extensionless here to bundle correctly.
-        const kdbModule = await import('./KanbanDatabase');
+        const kdbModule = await import('./KanbanDatabase.js');
         const resolved = kdbModule.KanbanDatabase.forWorkspace(this._workspaceRoot);
         const ready = await resolved.ensureReady();
         db = resolved;
@@ -3265,6 +3265,7 @@ export class ClickUpSyncService {
 
     const linked: string[] = [];
     const failed: string[] = [];
+    let epicTaskId: string | null = null;
 
     try {
       // 1. Look up the epic's DB record for clickupTaskId and other fields.
@@ -3294,7 +3295,7 @@ export class ClickUpSyncService {
 
       // 3. Look up the epic's task ID from the DB record or by planId search.
       const refreshedEpic = await db.getPlanByPlanId(params.epicPlanId);
-      let epicTaskId = String(refreshedEpic?.clickupTaskId || '').trim()
+      epicTaskId = String(refreshedEpic?.clickupTaskId || '').trim()
         || await this._findTaskByPlanId(params.epicPlanId, config);
       if (!epicTaskId) {
         console.warn(`[ClickUpSync] syncEpicWithSubtasks: epic task ID not resolved for ${params.epicPlanFile} — all subtasks failed`);
@@ -3323,7 +3324,7 @@ export class ClickUpSyncService {
       return { linked: [], failed: params.subtasks.map(s => s.planFile) };
     }
 
-    return { epicTaskId, linked, failed };
+    return { epicTaskId: epicTaskId ?? undefined, linked, failed };
   }
 
   /**
