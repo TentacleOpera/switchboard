@@ -71,7 +71,7 @@ Emit a **plan-import manifest** ONLY when you group plans into an epic (or other
 
 **`**Plan ID:**` embedding (required for Trigger B):** each plan `.md` must embed `**Plan ID:** <uuid>`, and epics use the `epic-<uuid>.md` filename, so `epicId` links resolve and identity is stable across re-imports.
 
-**Stale-manifest guard:** the ingestor only overrides the column when the row is still at `CREATED`; manual board moves are never reverted. The manifest is deleted after all entries apply; idempotent if a delete is missed.
+**Stale-manifest guard:** the ingestor overrides the column only when the row is currently in the entry's `fromColumn` (default `CREATED`); manual board moves are never reverted. Set `fromColumn` to make a legitimate forward transition from a later stage (e.g. `PLAN REVIEWED` → `CODED`). The manifest is deleted after all entries apply; idempotent if a delete is missed.
 
 ## Epic Grouping
 

@@ -126,10 +126,11 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
   full path is preferred. No `..` or absolute paths.
 - `planId` (recommended): must match the `**Plan ID:** <uuid>` embedded in the `.md` so identity is stable and `epicId` references resolve.
 - `kanbanColumn`: validated against the board's column set. Invalid → skipped (plan stays `CREATED`).
+- `fromColumn` (optional): the column the plan must currently be in for the `kanbanColumn` move to apply. Defaults to `CREATED` (the import-upgrade case). Set it to make a **forward transition from a later stage** — e.g. a remote coding agent advancing a plan `"fromColumn": "PLAN REVIEWED", "kanbanColumn": "CODED"`. If the plan is no longer in `fromColumn` (a human/host already moved it), the move is skipped by the stale-manifest guard.
 - `status`: `active` | `archived` | `completed` | `deleted`.
 - `isEpic` / `epicId`: `epicId` references another entry's `planId` (in-batch) or an existing DB epic. Process epics before subtasks (the ingestor sorts automatically).
 - `project`: project name; resolved to `project_id` at ingest (unknown project → kept as denormalized string).
 
-**Stale-manifest guard:** the ingestor only overrides the column when the row is still at `CREATED`; if the user already moved the card, the column override is skipped (epic/project still applied). The manifest is deleted after all entries apply; idempotent if a delete is missed.
+**Stale-manifest guard:** the ingestor overrides the column only when the row is currently in the entry's `fromColumn` (default `CREATED`); if the card is anywhere else — because a human/host already moved it — the column override is skipped (epic/project still applied). This lets a fresh manifest make a legitimate forward transition (e.g. `PLAN REVIEWED` → `CODED`) while a stale one is ignored. The manifest is deleted after all entries apply; idempotent if a delete is missed.
 
 **`**Plan ID:**` embedding:** each plan `.md` must embed `**Plan ID:** <uuid>` (and epics use the `epic-<uuid>.md` filename) so `epicId` links resolve and identity is stable across re-imports. Required for Trigger B, recommended for Trigger A.
