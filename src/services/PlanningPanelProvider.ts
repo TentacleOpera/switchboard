@@ -5822,10 +5822,11 @@ Please format the updated output document strictly as follows:
                             // so the sidebar is never wrongly emptied.
                             // ClickUp scopes strictly by list id (the key written to each file's
                             // frontmatter from the live task's list.id, and the same id the webview
-                            // tracks as the selected list). Linear is left unscoped for now: its
-                            // project picker is name-based and per-project import is a known
-                            // pre-existing gap, so scoping it on a mismatched key would wrongly
-                            // empty the sidebar. (Linear per-project scoping = follow-up.)
+                            // tracks as the selected list). Linear scopes by project name (the
+                            // picker is name-based, and _buildLinearImportPlanContent writes
+                            // `projectName:` to each file's frontmatter from issue.project.name).
+                            // Legacy Linear files lacking `projectName:` are hidden until the
+                            // project is re-imported (which rewrites them with the key).
                             const scopeId = provider === 'clickup'
                                 ? String((msg.listId as string) || '').trim()
                                 : String((msg.projectId as string) || '').trim();

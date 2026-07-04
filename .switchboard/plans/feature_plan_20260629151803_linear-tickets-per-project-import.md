@@ -128,3 +128,7 @@ No automated tests run as part of this plan (session directive: skip tests). The
 > **Session directives:** No compilation step is run as part of verification (project assumed pre-compiled; `src/` is source of truth, `dist/` irrelevant). No automated tests run here.
 
 **Recommendation**: Complexity 6/10 → Send to Lead Coder. Cross-file change on a shipped provider with pagination, name resolution, and file-deletion (prune) safety requirements.
+
+## Review Findings
+
+All 6 steps verified as implemented. `queryIssues` has opt-in `projectScoped` with name→id resolution, full pagination (maxPages=40, 50/page, 200ms delay), and skips `_applyProjectNameFilters` for scoped queries (`LinearSyncService.ts:714-852`). Import fast path (`TaskViewerProvider.ts:19681-19685`) and slow path (`:19959`) both pass `projectScoped: true`. Frontmatter emits `projectName` (`:5347`). Sidebar scopes Linear by `msg.projectId` against `projectName:` frontmatter regex (`PlanningPanelProvider.ts:5830-5856`). Prune guard explicitly checks `!resolutionFailed` (`:19798`). All other `queryIssues` callers verified unaffected (no `projectScoped` passed). One fix applied: stale comment at `PlanningPanelProvider.ts:5823-5828` updated to reflect actual Linear scoping behavior. Verification: `node -c src/webview/planning.js` passed. Remaining risk: same-name project collision within a team (documented, accepted); legacy Linear files without `projectName` frontmatter hidden until re-import (no data loss).

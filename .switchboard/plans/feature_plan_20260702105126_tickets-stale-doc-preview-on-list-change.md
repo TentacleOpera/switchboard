@@ -179,3 +179,7 @@ No automated tests run as part of this plan (session directive: skip tests). The
 > **Session directives:** No compilation step is run as part of verification (project assumed pre-compiled; `src/` is source of truth, `dist/` irrelevant). No automated tests run here.
 
 **Recommendation**: Complexity 3/10 → Send to Intern. Small, localized state reset in existing event handlers, no new abstractions.
+
+## Review Findings
+
+All 4 handlers verified as implemented. Linear picker (`planning.js:8176-8179`): nulls `selectedLinearIssue`, calls `_resetSidebarDrillDown()`, calls `renderTicketsLinearTaskDetail()`. ClickUp list-select (`:9687-9688`): nulls `selectedClickUpIssue`, calls `_resetSidebarDrillDown()` before both branches. ClickUp space-select (`:9594-9595`) and folder-select (`:9637-9638`): same reset after state clears. Refresh button (`:8209-8235`) and `*ProjectLoaded` handlers (`:5207`, `:5398`) correctly untouched — selection preserved on refresh. No double-render bugs, no missed context-switch handlers. No code fixes needed. Verification: `node -c src/webview/planning.js` passed. No remaining risks.

@@ -215,3 +215,7 @@ No automated tests run as part of this plan (session directive: skip tests). The
 > **Session directives:** No compilation step is run as part of verification (project assumed pre-compiled; `src/` is source of truth, `dist/` irrelevant). No automated tests run here.
 
 **Recommendation**: Complexity 5/10 → Send to Coder. Two-file change with merge logic and a delay, well-bounded scope.
+
+## Review Findings
+
+All 3 steps verified as implemented. 1500ms delay added before refetch in `postTicketReply` (`TaskViewerProvider.ts:20307`). `ticketCommentsLoaded` handler calls `mergeOptimisticReplies` before the stale-refetch guard (`planning.js:4930`). `mergeOptimisticReplies` and `findMatchingRealEntry` helpers implemented at `planning.js:1017-1082` with correct body-matching, duplicate prevention, and optimistic preservation. Stale-refetch guard correctly placed after merge, before render (`:4935-4941`). `_optimistic` flag set by callers at `:940` (reply) and `:8141` (top-level). No code fixes needed. Verification: `node -c src/webview/planning.js` passed. Remaining risk: body-matching may fail if API normalizes content differently (documented limitation); redundant double-fetch of comments (backend `loadTicketComments` for JSON cache + frontend-triggered `loadTicketComments` for webview update) is wasteful but not a correctness bug.
