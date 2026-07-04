@@ -1851,6 +1851,38 @@
         });
     }
 
+    // Scroll a freshly-rendered plan item into view after layout settles.
+    // Re-queries the element by planId so a re-render between schedule and
+    // fire does not scroll a detached/stale node. Uses instant (non-smooth)
+    // scrolling because the destination is computed by us, not animated by
+    // the user, and smooth scrolling races with post-innerHTML layout shifts
+    // (scrollbar appearance, toggle-row settle).
+    function scrollPlanItemIntoView(planId) {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const el = kanbanListPane && kanbanListPane.querySelector(
+                    `.kanban-plan-item[data-plan-id="${planId}"]`
+                );
+                if (el) {
+                    el.scrollIntoView({ behavior: 'auto', block: 'center' });
+                }
+            });
+        });
+    }
+
+    function scrollEpicItemIntoView(planId) {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const el = epicsListPane && epicsListPane.querySelector(
+                    `.epic-plan-item[data-plan-id="${planId}"]`
+                );
+                if (el) {
+                    el.scrollIntoView({ behavior: 'auto', block: 'center' });
+                }
+            });
+        });
+    }
+
     function tryResolvePendingKanbanSelection() {
         if (!_pendingKanbanSelection) return;
         const sel = _pendingKanbanSelection;
@@ -1896,7 +1928,7 @@
             renderKanbanPlans();
             const revealed = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
             if (revealed) {
-                revealed.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                scrollPlanItemIntoView(match.planId);
                 document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
                 revealed.classList.add('selected');
                 loadKanbanPlanPreview(match);
@@ -1913,7 +1945,7 @@
             }
             return;
         }
-        itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        scrollPlanItemIntoView(match.planId);
         document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
         itemDiv.classList.add('selected');
         loadKanbanPlanPreview(match);
@@ -1933,7 +1965,7 @@
         const itemDiv = epicsListPane &&
             epicsListPane.querySelector(`.epic-plan-item[data-plan-id="${match.planId}"]`);
         if (!itemDiv) return;
-        itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        scrollEpicItemIntoView(match.planId);
         document.querySelectorAll('.epic-plan-item').forEach(el => el.classList.remove('selected'));
         itemDiv.classList.add('selected');
         selectEpic(match);
@@ -1986,6 +2018,8 @@
                 <select class="kanban-meta-dropdown" id="kanban-meta-complexity-select" style="display:none;" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">
                     ${['Unknown', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].map(v => `<option value="${v}" ${v === plan.complexity ? 'selected' : ''}>${v}</option>`).join('')}
                 </select>
+                ${plan.planFile ? `<button class="strip-btn" id="kanban-meta-copy-link-btn" title="Copy plan link to clipboard">Copy Link</button>` : ''}
+                ${plan.sessionId ? `<button class="strip-btn" id="kanban-meta-copy-prompt-btn" title="Copy dispatch prompt to clipboard">Copy Prompt</button>` : ''}
             </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
                 <button class="strip-btn" id="btn-save-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Save</button>
@@ -2004,6 +2038,31 @@
         // Dynamic buttons listeners
         const dynamicCancelBtn = document.getElementById('btn-cancel-kanban');
         const dynamicSaveBtn = document.getElementById('btn-save-kanban');
+
+        // Copy Link / Copy Prompt — promoted into the top bar so the user does not
+        // have to locate the plan in the sidebar to access these actions.
+        const metaCopyLinkBtn = document.getElementById('kanban-meta-copy-link-btn');
+        if (metaCopyLinkBtn) {
+            metaCopyLinkBtn.addEventListener('click', () => {
+                const path = plan.planFile;
+                navigator.clipboard.writeText(toAgentRef(path)).then(() => {
+                    const oldText = metaCopyLinkBtn.textContent;
+                    metaCopyLinkBtn.textContent = 'Copied';
+                    setTimeout(() => { metaCopyLinkBtn.textContent = oldText; }, 2000);
+                });
+            });
+        }
+        const metaCopyPromptBtn = document.getElementById('kanban-meta-copy-prompt-btn');
+        if (metaCopyPromptBtn) {
+            metaCopyPromptBtn.addEventListener('click', () => {
+                vscode.postMessage({
+                    type: 'copyKanbanPlanPrompt',
+                    sessionId: plan.sessionId,
+                    column: plan.column,
+                    workspaceRoot: plan.workspaceRoot
+                });
+            });
+        }
 
         // Edit button listener removed — btn-edit-kanban is now a static element in the controls strip
         if (dynamicCancelBtn) dynamicCancelBtn.addEventListener('click', () => exitEditMode('kanban'));
