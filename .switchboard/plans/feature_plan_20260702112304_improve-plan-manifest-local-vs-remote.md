@@ -165,3 +165,7 @@ No automated tests are required or applicable. This is a workflow-text-only chan
 ---
 
 **Routing Recommendation:** Complexity 2 → **Send to Intern**. This is a trivial workflow-text-only change (two `.md` files, no source code, no compilation, no tests). The edits are mechanical copy-paste with a clear before/after block. An intern can execute this with the diff-check as the quality gate.
+
+## Review Findings
+
+Reviewed both `.agents/workflows/improve-plan.md` and `.claude/skills/improve-plan/SKILL.md` — the local/remote manifest conditional is fully implemented and matches the plan's Proposed Changes verbatim (Local agents skip Trigger A manifest; Remote agents detect via `.switchboard/api-server-port.txt`; Trigger B applies to all agents with `kanbanColumn: "CREATED"` for local; "Pure plan creation → no manifest" bullet present at line 104). The two files' manifest sections are byte-identical (verified via diff). No source code changes were needed (confirmed — `PlanManifestService.ts` unchanged). No files changed during review; no remaining risks identified.
