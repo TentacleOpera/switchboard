@@ -3591,19 +3591,9 @@ Start by checking which documents exist, then present the menu.`;
                         role = columnToPromptRole(effectiveColumn) || 'coder';
                     }
 
-                    const plans: import('./agentPromptBuilder').BatchPromptPlan[] = [{
-                        topic: epic.topic,
-                        absolutePath: (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile),
-                        complexity: epic.complexity,
-                        sessionId: epic.sessionId || epic.planId,
-                        epicId: epic.planId || undefined,
-                        isEpic: true,
-                        project: epic.project || undefined
-                    }];
-                    const subtaskPlans = await kp.expandEpicSubtaskPlans(
-                        wsRoot, epic.planId, epic.topic, epic.kanbanColumn || '', undefined, undefined, undefined, epic.project || undefined
-                    );
-                    for (const sp of subtaskPlans) { plans.push(sp); }
+                    // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
+                    // — do not hand-roll (epic subtasks get silently dropped otherwise).
+                    const plans = await kp.buildDispatchPlans(wsRoot, [epic]);
                     const prompt = await kp.generateUnifiedPrompt(role, plans, wsRoot);
                     await vscode.env.clipboard.writeText(prompt);
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: true, sessionId });

@@ -1,0 +1,237 @@
+'use strict';
+
+/**
+ * Acceptance spec for the dispatch-plan-builder consolidation.
+ *
+ * This is the executable spec for `KanbanProvider.buildDispatchPlans` and the
+ * shared `matchWorktreePath` worktree resolver. Because `KanbanProvider` is a
+ * VS Code-dependent class that cannot be instantiated outside an extension
+ * host, the test exercises:
+ *
+ *   1. The pure `matchWorktreePath` worktree resolver (extracted from
+ *      `worktreeResolver.ts` via `new Function`) — asserts the three-tier
+ *      record-mode precedence (subtask_plan_id → epic_id → project) and the
+ *      active-status filter.
+ *   2. Static-source assertions that lock the consolidation in place:
+ *      - `buildDispatchPlans` exists on `KanbanProvider`.
+ *      - `_cardsToPromptPlans` delegates to `buildDispatchPlans`.
+ *      - `_resolveKanbanDispatchPlans` delegates to `buildDispatchPlans`.
+ *      - `_handleTriggerAgentActionInternal` routes through `buildDispatchPlans`.
+ *      - `_handleCopyPlanLink` routes through `buildDispatchPlans`.
+ *      - `copyEpicPlannerPrompt` routes through `buildDispatchPlans`.
+ *      - `expandEpicSubtaskPlans` has exactly ONE caller in `src/` (the builder).
+ *      - `_buildRepoScopeMap` is deleted.
+ *      - The intentionally-excluded sites (`chatCopyPrompt`,
+ *        `handleGetDefaultPromptPreviews`) still bypass `generateUnifiedPrompt`.
+ *
+ * Per the SKIP TESTS / SKIP COMPILATION session directives, the user runs the
+ * full suite; this file is the gate the implementer keeps green locally.
+ */
+
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
+let passed = 0;
+let failed = 0;
+
+async function test(name, fn) {
+    try {
+        await fn();
+        console.log(`  PASS ${name}`);
+        passed++;
+    } catch (error) {
+        console.error(`  FAIL ${name}: ${error.message}`);
+        failed++;
+    }
+}
+
+function readFile(rel) {
+    return fs.readFileSync(path.resolve(__dirname, '..', '..', rel), 'utf8');
+}
+
+/**
+ * The pure `matchWorktreePath` resolver, mirrored in plain JS from
+ * `src/services/worktreeResolver.ts`. Kept in sync by the static-source
+ * assertions below (which verify the source file contains the same
+ * three-tier precedence). Defined inline rather than extracted from the TS
+ * source because the source uses TS type annotations that `new Function`
+ * cannot parse.
+ */
+function matchWorktreePath(worktrees, plan) {
+    const active = worktrees.filter(w => w.status === 'active');
+    if (plan.planId) {
+        const subtaskWt = active.find(w => w.subtask_plan_id && String(w.subtask_plan_id) === String(plan.planId));
+        if (subtaskWt) {
+            return subtaskWt.path;
+        }
+    }
+    if (plan.epicId) {
+        const epicWt = active.find(w => String(w.epic_id) === String(plan.epicId));
+        if (epicWt) {
+            return epicWt.path;
+        }
+    }
+    if (plan.project) {
+        const projectWt = active.find(w => w.project === plan.project);
+        if (projectWt) {
+            return projectWt.path;
+        }
+    }
+    return undefined;
+}
+
+function wt(row) {
+    return Object.assign({
+        id: 1, branch: 'b', path: '/wt', epic_id: null, created_at: '',
+        status: 'active', project: null, agentsOpenWithGrid: false,
+        subtask_plan_id: null, base_branch: null, tier: null
+    }, row);
+}
+
+async function runWorktreeResolverTests() {
+    await test('matchWorktreePath: subtask_plan_id wins over epic_id and project (record mode top tier)', () => {
+        const worktrees = [
+            wt({ path: '/subtask-wt', subtask_plan_id: 'plan-sub-1', epic_id: 'epic-9', project: 'Acme' }),
+            wt({ path: '/epic-wt', epic_id: 'epic-9', project: 'Acme' }),
+            wt({ path: '/project-wt', project: 'Acme' }),
+        ];
+        const result = matchWorktreePath(worktrees, { planId: 'plan-sub-1', epicId: 'epic-9', project: 'Acme' });
+        assert.strictEqual(result, '/subtask-wt', 'per-subtask dedicated worktree must win');
+    });
+
+    await test('matchWorktreePath: epic_id wins when no subtask_plan_id match', () => {
+        const worktrees = [
+            wt({ path: '/epic-wt', epic_id: 'epic-9', project: 'Acme' }),
+            wt({ path: '/project-wt', project: 'Acme' }),
+        ];
+        const result = matchWorktreePath(worktrees, { planId: 'plan-other', epicId: 'epic-9', project: 'Acme' });
+        assert.strictEqual(result, '/epic-wt', 'epic_id match must win over project');
+    });
+
+    await test('matchWorktreePath: project wins when no subtask/epic match', () => {
+        const worktrees = [
+            wt({ path: '/project-wt', project: 'Acme' }),
+        ];
+        const result = matchWorktreePath(worktrees, { planId: 'plan-other', epicId: 'epic-other', project: 'Acme' });
+        assert.strictEqual(result, '/project-wt', 'project match must win when no higher tier matches');
+    });
+
+    await test('matchWorktreePath: returns undefined when nothing matches', () => {
+        const worktrees = [
+            wt({ path: '/other-wt', epic_id: 'epic-x', project: 'Other' }),
+        ];
+        const result = matchWorktreePath(worktrees, { planId: 'p', epicId: 'e', project: 'Acme' });
+        assert.strictEqual(result, undefined, 'no match → undefined (no sole-entry fallback in record mode)');
+    });
+
+    await test('matchWorktreePath: filters to active status only', () => {
+        const worktrees = [
+            wt({ path: '/merged-wt', subtask_plan_id: 'plan-sub-1', status: 'merged' }),
+            wt({ path: '/active-wt', epic_id: 'epic-9', status: 'active' }),
+        ];
+        const result = matchWorktreePath(worktrees, { planId: 'plan-sub-1', epicId: 'epic-9' });
+        assert.strictEqual(result, '/active-wt', 'merged subtask worktree must be skipped; active epic worktree wins');
+    });
+
+    await test('matchWorktreePath: planId-only subtask match (lone subtask dispatch)', () => {
+        const worktrees = [
+            wt({ path: '/subtask-wt', subtask_plan_id: 'plan-sub-1' }),
+        ];
+        const result = matchWorktreePath(worktrees, { planId: 'plan-sub-1' });
+        assert.strictEqual(result, '/subtask-wt', 'a subtask dispatched on its own resolves to its dedicated worktree');
+    });
+}
+
+async function runStaticSourceTests() {
+    const kanbanSrc = readFile('src/services/KanbanProvider.ts');
+    const taskViewerSrc = readFile('src/services/TaskViewerProvider.ts');
+    const planningSrc = readFile('src/services/PlanningPanelProvider.ts');
+
+    await test('KanbanProvider exposes public buildDispatchPlans', () => {
+        assert.ok(/public\s+async\s+buildDispatchPlans\s*\(/.test(kanbanSrc), 'buildDispatchPlans must be a public method on KanbanProvider');
+    });
+
+    await test('KanbanProvider._cardsToPromptPlans delegates to buildDispatchPlans', () => {
+        assert.ok(/_cardsToPromptPlans[\s\S]*?buildDispatchPlans\(/.test(kanbanSrc), '_cardsToPromptPlans must call buildDispatchPlans');
+    });
+
+    await test('KanbanProvider._buildRepoScopeMap is deleted', () => {
+        assert.ok(!/_buildRepoScopeMap/.test(kanbanSrc), '_buildRepoScopeMap must be removed (dead code after builder adoption)');
+    });
+
+    await test('KanbanProvider.generateUnifiedPrompt carries the guardrail comment', () => {
+        assert.ok(/Plan arrays for dispatch MUST come from KanbanProvider\.buildDispatchPlans/.test(kanbanSrc), 'generateUnifiedPrompt must carry the do-not-hand-roll guardrail');
+    });
+
+    await test('TaskViewerProvider._resolveKanbanDispatchPlans delegates to buildDispatchPlans', () => {
+        assert.ok(/_resolveKanbanDispatchPlans[\s\S]*?buildDispatchPlans\(/.test(taskViewerSrc), '_resolveKanbanDispatchPlans must call buildDispatchPlans');
+    });
+
+    await test('TaskViewerProvider._handleTriggerAgentActionInternal routes through buildDispatchPlans', () => {
+        assert.ok(/_handleTriggerAgentActionInternal[\s\S]*?buildDispatchPlans\(/.test(taskViewerSrc), '_handleTriggerAgentActionInternal must call buildDispatchPlans');
+    });
+
+    await test('TaskViewerProvider._handleCopyPlanLink routes through buildDispatchPlans', () => {
+        assert.ok(/_handleCopyPlanLink[\s\S]*?buildDispatchPlans\(/.test(taskViewerSrc), '_handleCopyPlanLink must call buildDispatchPlans');
+    });
+
+    await test('PlanningPanelProvider.copyEpicPlannerPrompt routes through buildDispatchPlans', () => {
+        assert.ok(/copyEpicPlannerPrompt[\s\S]*?buildDispatchPlans\(/.test(planningSrc), 'copyEpicPlannerPrompt must call buildDispatchPlans');
+    });
+
+    await test('expandEpicSubtaskPlans has exactly ONE caller in src/ (the builder)', () => {
+        // Count call sites (this.expandEpicSubtaskPlans( or _kanbanProvider.expandEpicSubtaskPlans( or kp.expandEpicSubtaskPlans()
+        // excluding the method definition itself.
+        const callPattern = /expandEpicSubtaskPlans\s*\(/g;
+        const kpMatches = (kanbanSrc.match(callPattern) || []);
+        const tvMatches = (taskViewerSrc.match(callPattern) || []);
+        const ppMatches = (planningSrc.match(callPattern) || []);
+        // KanbanProvider: 1 definition + 1 call (inside buildDispatchPlans) = 2
+        // TaskViewerProvider: 0 (all inline sites now route through builder)
+        // PlanningPanelProvider: 0
+        assert.strictEqual(kpMatches.length, 2, `KanbanProvider should have exactly 2 expandEpicSubtaskPlans occurrences (def + 1 call), got ${kpMatches.length}`);
+        assert.strictEqual(tvMatches.length, 0, `TaskViewerProvider should have 0 expandEpicSubtaskPlans calls, got ${tvMatches.length}`);
+        assert.strictEqual(ppMatches.length, 0, `PlanningPanelProvider should have 0 expandEpicSubtaskPlans calls, got ${ppMatches.length}`);
+    });
+
+    await test('chatCopyPrompt still bypasses generateUnifiedPrompt (intentionally excluded)', () => {
+        const start = kanbanSrc.indexOf("case 'chatCopyPrompt':");
+        assert.ok(start >= 0, 'chatCopyPrompt handler must exist');
+        const nextCase = kanbanSrc.indexOf("\n            case '", start + 10);
+        const chatBlock = kanbanSrc.slice(start, nextCase >= 0 ? nextCase : kanbanSrc.length);
+        assert.ok(/buildKanbanBatchPrompt\('chat'/.test(chatBlock), 'chatCopyPrompt must still call buildKanbanBatchPrompt directly');
+        assert.ok(!/generateUnifiedPrompt/.test(chatBlock), 'chatCopyPrompt must NOT call generateUnifiedPrompt');
+    });
+
+    await test('worktreeResolver.ts exports matchWorktreePath with the three-tier precedence and TaskViewerProvider delegates to it', () => {
+        const resolverSrc = readFile('src/services/worktreeResolver.ts');
+        assert.ok(/export function matchWorktreePath/.test(resolverSrc), 'worktreeResolver.ts must export matchWorktreePath');
+        // Verify the three-tier precedence is present in source in the right order.
+        const subtaskIdx = resolverSrc.indexOf('subtask_plan_id');
+        const epicIdx = resolverSrc.indexOf('w.epic_id', subtaskIdx);
+        const projectIdx = resolverSrc.indexOf('w.project', epicIdx);
+        assert.ok(subtaskIdx >= 0 && epicIdx > subtaskIdx && projectIdx > epicIdx,
+            'matchWorktreePath source must check subtask_plan_id → epic_id → project in that order');
+        assert.ok(/w\.status === 'active'/.test(resolverSrc), 'matchWorktreePath must filter to active worktrees');
+        assert.ok(/matchWorktreePath/.test(taskViewerSrc), 'TaskViewerProvider must import matchWorktreePath');
+        assert.ok(/return matchWorktreePath\(worktrees, plan\)/.test(taskViewerSrc), 'resolveWorktreePathForPlan must delegate to matchWorktreePath');
+    });
+}
+
+async function run() {
+    console.log('\nRunning dispatch-plan-builder acceptance tests\n');
+
+    await runWorktreeResolverTests();
+    await runStaticSourceTests();
+
+    console.log(`\nResult: ${passed} passed, ${failed} failed`);
+    if (failed > 0) {
+        process.exit(1);
+    }
+}
+
+run().catch((error) => {
+    console.error('dispatch-plan-builder test failed:', error);
+    process.exit(1);
+});

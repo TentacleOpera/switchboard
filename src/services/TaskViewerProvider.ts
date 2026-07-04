@@ -35,8 +35,6 @@ import {
     columnToPromptRole,
     resolveWorkingDir,
     normalizeNewlines,
-    resolvePlanPathForWorktree,
-    resolveWorkingDirForWorktree,
     PROJECT_LINE_DIRECTIVE
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
@@ -65,6 +63,7 @@ import { LocalApiServer } from './LocalApiServer';
 import { GlobalIntegrationConfigService, AgentGlobalKey, McpMonitorConfig } from './GlobalIntegrationConfigService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
+import { matchWorktreePath } from './worktreeResolver';
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
 import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
@@ -3110,109 +3109,16 @@ Each plan file must include:
         sessionIds: string[],
         workspaceRoot: string
     ): Promise<Array<BatchPromptPlan & { sessionId: string }>> {
-        const validPlans: Array<BatchPromptPlan & { sessionId: string }> = [];
+        // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
+        // — do not hand-roll (epic subtasks get silently dropped otherwise).
         const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) { return []; }
+        const records: KanbanPlanRecord[] = [];
         for (const sid of sessionIds) {
-            try {
-                let planFile: string | undefined;
-                let topic: string | undefined;
-                let workingDir = '';
-                let epicId: string | undefined;
-                let worktreePath: string | undefined;
-                let plan: KanbanPlanRecord | undefined;
-                if (db) {
-                    plan = (await db.getPlanBySessionId(sid)) ?? undefined;
-                    if (plan) {
-                        // Try plan_file first
-                        if (plan.planFile) {
-                            const absolutePath = path.resolve(workspaceRoot, plan.planFile);
-                            if (fs.existsSync(absolutePath)) {
-                                planFile = plan.planFile;
-                            } else {
-                                console.warn(`[TaskViewerProvider] plan_file not found: ${absolutePath}, trying fallbacks`);
-                            }
-                        }
-
-                        // Fallback to mirror_path
-                        if (!planFile && plan.mirrorPath) {
-                            const mirrorPath = path.join(workspaceRoot, '.switchboard', 'plans', plan.mirrorPath);
-                            if (fs.existsSync(mirrorPath)) {
-                                planFile = path.relative(workspaceRoot, mirrorPath).replace(/\\/g, '/');
-                                console.log(`[TaskViewerProvider] Using mirror_path fallback for session ${sid}`);
-                            }
-                        }
-
-                        // Fallback to brain_source_path
-                        if (!planFile && plan.brainSourcePath) {
-                            const brainPath = path.isAbsolute(plan.brainSourcePath)
-                                ? plan.brainSourcePath
-                                : path.resolve(workspaceRoot, plan.brainSourcePath);
-                            if (fs.existsSync(brainPath)) {
-                                planFile = path.relative(workspaceRoot, brainPath).replace(/\\/g, '/');
-                                console.log(`[TaskViewerProvider] Using brain_source_path fallback for session ${sid}`);
-                            }
-                        }
-
-                        topic = plan.topic;
-                        workingDir = resolveWorkingDir(workspaceRoot, plan.repoScope || '');
-                        epicId = plan.epicId ?? undefined;
-                        worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
-                            epicId: plan.epicId,
-                            project: plan.project,
-                            planId: plan.planId
-                        });
-                    }
-                }
-                if (!planFile) {
-                    console.error(`[TaskViewerProvider] No valid plan file found for session ${sid}`);
-                    continue;
-                }
-                const absolutePath = path.resolve(workspaceRoot, planFile);
-                if (!fs.existsSync(absolutePath)) {
-                    console.error(`[TaskViewerProvider] Plan file does not exist: ${absolutePath}`);
-                    continue;
-                }
-                const resolvedAbsolutePath = resolvePlanPathForWorktree(absolutePath, workspaceRoot, worktreePath);
-                const resolvedWorkingDir = resolveWorkingDirForWorktree(workingDir, worktreePath);
-                validPlans.push({
-                    sessionId: sid,
-                    topic: topic || planFile || 'Untitled',
-                    absolutePath: resolvedAbsolutePath,
-                    workingDir: resolvedWorkingDir,
-                    epicId,
-                    worktreePath,
-                    isEpic: !!plan?.isEpic,
-                    project: plan?.project || undefined
-                });
-
-                // Epic subtask bundling (parity with copy/board path). The CLI
-                // resolver previously dropped subtasks; expand them here via the
-                // shared KanbanProvider helper so CLI-dispatched epics carry the
-                // full subtask bundle into generateUnifiedPrompt.
-                if (plan && plan.isEpic && plan.planId && this._kanbanProvider) {
-                    try {
-                        const subtaskPlans = await this._kanbanProvider.expandEpicSubtaskPlans(
-                            workspaceRoot,
-                            plan.planId,
-                            plan.topic || topic || 'Untitled',
-                            plan.kanbanColumn || '',
-                            worktreePath,
-                            undefined,
-                            undefined,
-                            plan.project || undefined
-                        );
-                        for (const sp of subtaskPlans) {
-                            validPlans.push({ ...sp, sessionId: sp.sessionId || sid });
-                        }
-                    } catch (err) {
-                        console.warn(`[TaskViewerProvider] epic subtask expansion failed for ${sid}:`, err);
-                    }
-                }
-            } catch (err) {
-                console.error(`[TaskViewerProvider] Failed to resolve plan for session ${sid}:`, err);
-            }
+            const rec = await db.getPlanBySessionId(sid);
+            if (rec) { records.push({ ...rec, sessionId: rec.sessionId || sid }); }
         }
-        return validPlans;
+        return this._kanbanProvider!.buildDispatchPlans(workspaceRoot, records);
     }
 
     private async _dispatchConfiguredKanbanColumnPrompt(
@@ -7550,26 +7456,7 @@ Each plan file must include:
     /** Resolve the worktree path for a plan based on precedence: subtask worktree -> epic worktree -> project worktree -> undefined. */
     public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { epicId?: string | null; project?: string | null; planId?: string | null }): Promise<string | undefined> {
         const worktrees = await db.getWorktrees();
-        const activeWorktrees = worktrees.filter(w => w.status === 'active');
-        if (plan.planId) {
-            const subtaskWt = activeWorktrees.find(w => w.subtask_plan_id && String(w.subtask_plan_id) === String(plan.planId));
-            if (subtaskWt) {
-                return subtaskWt.path;
-            }
-        }
-        if (plan.epicId) {
-            const epicWt = activeWorktrees.find(w => String(w.epic_id) === String(plan.epicId));
-            if (epicWt) {
-                return epicWt.path;
-            }
-        }
-        if (plan.project) {
-            const projectWt = activeWorktrees.find(w => w.project === plan.project);
-            if (projectWt) {
-                return projectWt.path;
-            }
-        }
-        return undefined;
+        return matchWorktreePath(worktrees, plan);
     }
 
     /** Ensure terminals exist for each active agent in the worktree, create-if-missing and capped. */
@@ -14550,31 +14437,23 @@ What would you like to find?`;
                 role = columnToPromptRole(effectiveColumn) || 'coder';
             }
 
-            const workingDir = resolveWorkingDir(resolvedWorkspaceRoot, planRecord?.repoScope || '');
-            const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute, workingDir, isEpic: !!planRecord?.isEpic, project: planRecord?.project || undefined };
             const copyInstruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             const { baseInstruction: resolvedInstruction } = this._getPromptInstructionOptions(role, copyInstruction);
 
-            // Epic subtask bundling (parity with _cardsToPromptPlans / _resolveKanbanDispatchPlans).
-            // Without expanding subtasks here, copying an epic's prompt emits a lone plan and
-            // generateUnifiedPrompt never enters epic mode (no EPIC MODE directive, no subtask list).
-            const plans: BatchPromptPlan[] = [plan];
-            if (planRecord?.isEpic && planRecord.planId && this._kanbanProvider) {
-                try {
-                    const subtaskPlans = await this._kanbanProvider.expandEpicSubtaskPlans(
-                        resolvedWorkspaceRoot,
-                        planRecord.planId,
-                        topic,
-                        planRecord.kanbanColumn || '',
-                        undefined,
-                        undefined,
-                        undefined,
-                        planRecord.project || undefined
-                    );
-                    for (const sp of subtaskPlans) { plans.push(sp); }
-                } catch (err) {
-                    console.warn(`[TaskViewerProvider] epic subtask expansion failed for ${sessionId}:`, err);
-                }
+            // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
+            // — do not hand-roll (epic subtasks get silently dropped otherwise).
+            // When a DB record is available, route through the builder so epic
+            // subtask bundling, worktree resolution, and plan-file fallbacks all
+            // live in the single choke point. The record-less fallback (rare:
+            // _resolvePlanContextForSession succeeded but the DB lookup did not)
+            // preserves the previous single-plan behavior — no subtasks to expand
+            // without a record anyway.
+            let plans: BatchPromptPlan[];
+            if (planRecord && this._kanbanProvider) {
+                plans = await this._kanbanProvider.buildDispatchPlans(resolvedWorkspaceRoot, [planRecord]);
+            } else {
+                const workingDir = resolveWorkingDir(resolvedWorkspaceRoot, planRecord?.repoScope || '');
+                plans = [{ topic, absolutePath: planFileAbsolute, workingDir, isEpic: !!planRecord?.isEpic, project: planRecord?.project || undefined }];
             }
 
             // Use standard prompt generation
@@ -16490,12 +16369,7 @@ What would you like to find?`;
 
         // 1. Get Plan File Path — DB-first, filesystem fallback
         let planFileRelative: string | undefined;
-        let sessionTopic: string | undefined;
-        let workingDir = '';
-        let epicId: string | undefined;
         let worktreePath: string | undefined;
-        let isEpicPlan = false;
-        let epicPlanId: string | undefined;
         let planRecord: any = undefined;
 
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
@@ -16505,12 +16379,7 @@ What would you like to find?`;
             planRecord = plan;
             if (plan && plan.planFile) {
                 planFileRelative = plan.planFile;
-                sessionTopic = plan.topic || plan.planFile || 'Untitled';
-                workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
                 previousColumn = plan.kanbanColumn;
-                epicId = plan.epicId ?? undefined;
-                isEpicPlan = !!plan.isEpic;
-                epicPlanId = plan.planId;
                 worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
                     epicId: plan.epicId,
                     project: plan.project,
@@ -16523,9 +16392,6 @@ What would you like to find?`;
             clearDispatchLock();
             vscode.window.showErrorMessage(`Plan not found in database for session: ${sessionId}`);
             return false;
-        }
-        if (!sessionTopic) {
-            sessionTopic = planFileRelative || 'Untitled';
         }
 
         const planFileAbsolute = path.resolve(resolvedWorkspaceRoot, planFileRelative);
@@ -16639,37 +16505,28 @@ What would you like to find?`;
         }
 
         const effectiveWorkspaceRoot = options?.workingDirectory ?? resolvedWorkspaceRoot;
-        const effectiveWorkingDir = options?.workingDirectory ?? workingDir;
 
-        const resolvedPlanFileAbsolute = resolvePlanPathForWorktree(planFileAbsolute, resolvedWorkspaceRoot, worktreePath);
-        const resolvedWorkingDir = resolveWorkingDirForWorktree(effectiveWorkingDir, worktreePath);
-
-        // Canonical plan object for shared builder
-        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: resolvedPlanFileAbsolute, workingDir: resolvedWorkingDir, epicId, worktreePath, isEpic: isEpicPlan, project: planRecord?.project || undefined };
-
-        // Epic subtask bundling (parity with the copy/board path `_cardsToPromptPlans` and
-        // the configured-dispatch path `_resolveKanbanDispatchPlans`). When an epic card is
-        // dragged to a column it dispatches through here as a single card; without expanding
-        // its subtasks, generateUnifiedPrompt sees no `isSubtask` entries, never enters epic
-        // mode, and the epic is dispatched as a lone plan — losing its EPIC MODE directive and
-        // subtask list. Expand via the shared helper so the full bundle reaches the builder.
-        const dispatchPlans: BatchPromptPlan[] = [dispatchPlan];
-        if (isEpicPlan && epicPlanId && this._kanbanProvider) {
-            try {
-                const subtaskPlans = await this._kanbanProvider.expandEpicSubtaskPlans(
-                    resolvedWorkspaceRoot,
-                    epicPlanId,
-                    sessionTopic,
-                    previousColumn || '',
-                    worktreePath,
-                    undefined,
-                    undefined,
-                    planRecord?.project || undefined
-                );
-                for (const sp of subtaskPlans) { dispatchPlans.push(sp); }
-            } catch (err) {
-                console.warn(`[TaskViewerProvider] epic subtask expansion failed for ${sessionId}:`, err);
-            }
+        // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
+        // — do not hand-roll (epic subtasks get silently dropped otherwise).
+        // The builder resolves plan-file path (with mirror/brain fallbacks),
+        // working dir (repoScope), worktree path (three-tier record heuristic,
+        // matching the previous resolveWorktreePathForPlan call), isEpic,
+        // project, and expands epic subtasks in one place. The
+        // options.workingDirectory override (rare path) is applied to the
+        // primary plan's workingDir AFTER the builder returns so path
+        // resolution inside the builder uses the real resolvedWorkspaceRoot;
+        // generateUnifiedPrompt is then called with effectiveWorkspaceRoot,
+        // matching the previous flow.
+        const dispatchPlans: BatchPromptPlan[] = planRecord
+            ? await this._kanbanProvider.buildDispatchPlans(resolvedWorkspaceRoot, [planRecord])
+            : [];
+        if (dispatchPlans.length === 0) {
+            clearDispatchLock();
+            vscode.window.showErrorMessage(`Plan file could not be resolved for session: ${sessionId}`);
+            return false;
+        }
+        if (options?.workingDirectory && dispatchPlans[0]) {
+            dispatchPlans[0].workingDir = options.workingDirectory;
         }
 
         if (role === 'planner') {

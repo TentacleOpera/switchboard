@@ -37,24 +37,28 @@ function run() {
         'Expected detectWorkspaceType to be exported from agentPromptBuilder.'
     );
 
-    // --- _cardsToPromptPlans uses repoScopeMap + resolveWorkingDir ---
+    // --- _cardsToPromptPlans delegates to buildDispatchPlans (consolidated builder) ---
+    // The repoScopeMap parameter was retained as a deprecated `_legacyRepoScopeMap`
+    // (ignored); workingDir is now sourced from the DB record inside the single
+    // canonical builder. Assert the delegation + that the builder resolves
+    // workingDir via resolveWorkingDir.
     assert.match(
         kanbanProviderSource,
-        /private _cardsToPromptPlans\([\s\S]*repoScopeMap\?/,
-        'Expected _cardsToPromptPlans to accept repoScopeMap parameter.'
+        /private async _cardsToPromptPlans\([\s\S]*?buildDispatchPlans\(/,
+        'Expected _cardsToPromptPlans to delegate to buildDispatchPlans.'
     );
     assert.match(
         kanbanProviderSource,
-        /resolveWorkingDir\(workspaceRoot, repoScope\)/,
-        'Expected _cardsToPromptPlans to resolve workingDir via resolveWorkingDir.'
+        /public async buildDispatchPlans\([\s\S]*?resolveWorkingDir\(workspaceRoot, rec\.repoScope/,
+        'Expected buildDispatchPlans to resolve workingDir via resolveWorkingDir(rec.repoScope).'
     );
 
-    // --- KanbanProvider callers pre-fetch repoScopeMap ---
-    const repoScopeMapPattern = /const repoScopeMap = new Map<string, string>\(\);[\s\S]*?repoScopeMap\.set\(card\.sessionId, plan\.repoScope\)/g;
-    const callerMatches = kanbanProviderSource.match(repoScopeMapPattern);
+    // --- The inline repoScopeMap pre-fetch callers are gone (consolidated) ---
+    // Previously every caller hand-built a repoScopeMap; now the builder sources
+    // repoScope from the record. _buildRepoScopeMap is deleted.
     assert.ok(
-        callerMatches && callerMatches.length >= 5,
-        `Expected at least 5 callers to pre-fetch repoScopeMap, found ${callerMatches ? callerMatches.length : 0}.`
+        !/_buildRepoScopeMap/.test(kanbanProviderSource),
+        'Expected _buildRepoScopeMap to be deleted after consolidation.'
     );
 
     // --- KanbanProvider passes workspaceRoot to buildKanbanBatchPrompt ---
@@ -64,16 +68,19 @@ function run() {
         'Expected KanbanProvider to pass workspaceRoot in buildKanbanBatchPrompt options.'
     );
 
-    // --- TaskViewerProvider uses resolveWorkingDir ---
+    // --- TaskViewerProvider delegates dispatch-plan building to KanbanProvider.buildDispatchPlans ---
+    // _resolveKanbanDispatchPlans no longer resolves workingDir inline; it
+    // resolves records and hands them to the consolidated builder, which
+    // resolves workingDir via resolveWorkingDir(rec.repoScope) in one place.
     assert.match(
         taskViewerSource,
-        /resolveWorkingDir\(workspaceRoot, plan\.repoScope/,
-        'Expected TaskViewerProvider to resolve workingDir via resolveWorkingDir (plan.repoScope).'
+        /_resolveKanbanDispatchPlans[\s\S]*?buildDispatchPlans\(/,
+        'Expected _resolveKanbanDispatchPlans to delegate to buildDispatchPlans.'
     );
     assert.match(
         taskViewerSource,
         /resolveWorkingDir\(resolvedWorkspaceRoot, planRecord\?\.repoScope/,
-        'Expected TaskViewerProvider to resolve workingDir via resolveWorkingDir (planRecord.repoScope).'
+        'Expected TaskViewerProvider _handleCopyPlanLink fallback to resolve workingDir via resolveWorkingDir (planRecord.repoScope).'
     );
 
     // --- TaskViewerProvider passes workspaceRoot to buildKanbanBatchPrompt ---

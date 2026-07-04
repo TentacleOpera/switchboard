@@ -49,6 +49,7 @@ import type { LiveSyncState } from '../models/LiveSyncTypes';
 import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { importPlanFiles } from './PlanFileImporter';
+import { matchWorktreePath } from './worktreeResolver';
 
 /**
  * Epic workflow mode directives, prepended at position-zero of an epic prompt
@@ -3302,83 +3303,19 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     private async _cardsToPromptPlans(
         cards: KanbanCard[],
         workspaceRoot: string,
-        repoScopeMap?: Map<string, string>  // sessionId → repoScope
+        _legacyRepoScopeMap?: Map<string, string>  // ignored — repoScope now sourced from the DB record inside buildDispatchPlans
     ): Promise<BatchPromptPlan[]> {
         const db = this._getKanbanDb(workspaceRoot);
-        const hasDb = db && await db.ensureReady();
-
-        // Build epic -> worktree path map from active worktrees (replaces deleted meta keys)
-        const worktreePathMap = new Map<string, string>();
-        // subtask_plan_id -> worktree path (per-subtask mode); checked before the epic map
-        // in expandEpicSubtaskPlans so each subtask routes to its own isolated worktree.
-        const subtaskWorktreePathMap = new Map<string, string>();
-        if (hasDb) {
-            const wts = await db.getWorktrees();
-            for (const wt of wts) {
-                if (wt.epic_id) {
-                    worktreePathMap.set(String(wt.epic_id), wt.path);
-                }
-                if (wt.subtask_plan_id) {
-                    subtaskWorktreePathMap.set(String(wt.subtask_plan_id), wt.path);
-                }
-            }
-        }
-
-        const promptPlans: BatchPromptPlan[] = [];
+        if (!(db && await db.ensureReady())) { return []; }
+        // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
+        // — do not hand-roll (epic subtasks get silently dropped otherwise).
+        const { worktreePathMap, subtaskWorktreePathMap } = await this._buildActiveWorktreePathMap(workspaceRoot);
+        const records: KanbanPlanRecord[] = [];
         for (const card of cards) {
-            const cardKey = this._cardId(card);
-            const repoScope = repoScopeMap?.get(cardKey) || '';
-            const workingDir = repoScope
-                ? resolveWorkingDir(workspaceRoot, repoScope)
-                : '';
-
-            let epicId: string | undefined = undefined;
-            if (hasDb) {
-                const planRecord = await db.getPlanBySessionId(cardKey);
-                if (planRecord && planRecord.epicId) {
-                    epicId = planRecord.epicId;
-                }
-            }
-
-            // Resolve worktree path: prefer epic-linked, fall back to sole active worktree
-            let worktreePath: string | undefined;
-            if (card.isEpic && card.planId) {
-                worktreePath = worktreePathMap.get(card.planId);
-            }
-            if (!worktreePath && card.epicId) {
-                worktreePath = worktreePathMap.get(String(card.epicId));
-            }
-            if (!worktreePath && worktreePathMap.size === 1) {
-                worktreePath = worktreePathMap.values().next().value;
-            }
-
-            const resolvedAbsolutePath = resolvePlanPathForWorktree(
-                this._resolvePlanFilePath(workspaceRoot, card.planFile),
-                workspaceRoot,
-                worktreePath
-            );
-            const resolvedWorkingDir = resolveWorkingDirForWorktree(workingDir, worktreePath);
-
-            promptPlans.push({
-                topic: card.topic,
-                absolutePath: resolvedAbsolutePath,
-                complexity: card.complexity,
-                workingDir: resolvedWorkingDir,
-                sessionId: cardKey,
-                worktreePath,
-                epicId,
-                isEpic: !!card.isEpic,
-                project: card.project || undefined
-            });
-
-            if (card.isEpic && hasDb && card.planId) {
-                const subtaskPlans = await this.expandEpicSubtaskPlans(
-                    workspaceRoot, card.planId, card.topic, card.column, worktreePath, worktreePathMap, subtaskWorktreePathMap, card.project || undefined
-                );
-                for (const sp of subtaskPlans) { promptPlans.push(sp); }
-            }
+            const rec = await db.getPlanBySessionId(this._cardId(card));
+            if (rec) { records.push(rec); }
         }
-        return promptPlans;
+        return this.buildDispatchPlans(workspaceRoot, records, { worktreePathMap, subtaskWorktreePathMap });
     }
 
     /**
@@ -3448,8 +3385,193 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
-     * Read the epic workflow toggle state (epic_ultracode_enabled /
-     * epic_goal_enabled) from the per-workspace DB config table and push
+     * THE single place that turns plan records into the `BatchPromptPlan[]`
+     * array passed to `generateUnifiedPrompt`. Resolves plan-file path (with
+     * mirror/brain fallbacks), working dir (repoScope), worktree path,
+     * `isEpic`, `project`, and — for epics — appends the full active-subtask
+     * bundle so `generateUnifiedPrompt` enters epic mode.
+     *
+     * Every dispatch/copy entry point MUST funnel through this. Do not build a
+     * `BatchPromptPlan` array anywhere else (epic subtasks get silently
+     * dropped otherwise). The two intentionally-excluded sites
+     * (`chatCopyPrompt`, `handleGetDefaultPromptPreviews`) bypass
+     * `generateUnifiedPrompt` entirely and are documented in the plan.
+     *
+     * Worktree resolution is mode-selected to preserve each path exactly:
+     *   - `worktreePathMap` provided (board adapter) → map heuristic
+     *     (`planId` → `epicId` → sole-entry, no `project` match). Byte-identical
+     *     to today's board path. The `subtaskWorktreePathMap` is threaded
+     *     through to `expandEpicSubtaskPlans` for per-subtask dedicated-worktree
+     *     resolution (handled inside the expander, not here).
+     *   - `worktreePathMap` absent (CLI / batch / single-card-trigger / copy) →
+     *     record heuristic via `matchWorktreePath`: `planId` vs
+     *     `subtask_plan_id` → `epicId` → `project`. No sole-entry fallback.
+     *     Byte-identical to today's `resolveWorktreePathForPlan` consumers.
+     */
+    public async buildDispatchPlans(
+        workspaceRoot: string,
+        records: KanbanPlanRecord[],
+        opts?: { worktreePathMap?: Map<string, string>; subtaskWorktreePathMap?: Map<string, string> }
+    ): Promise<Array<BatchPromptPlan & { sessionId: string }>> {
+        const out: Array<BatchPromptPlan & { sessionId: string }> = [];
+        const db = this._getKanbanDb(workspaceRoot);
+        const hasDb = !!db && await db.ensureReady();
+        for (const rec of records) {
+            const planFileRel = this._resolveDispatchPlanFile(workspaceRoot, rec);
+            if (!planFileRel) {
+                console.warn(`[KanbanProvider] buildDispatchPlans: no plan file for ${rec.planId}`);
+                continue;
+            }
+            const absolutePath = this._resolvePlanFilePath(workspaceRoot, planFileRel);
+            const worktreePath = await this._resolveWorktreeForRecord(workspaceRoot, rec, opts?.worktreePathMap);
+            const isEpic = !!rec.isEpic;
+            const resolvedAbsolutePath = resolvePlanPathForWorktree(absolutePath, workspaceRoot, worktreePath);
+            const resolvedWorkingDir = resolveWorkingDirForWorktree(
+                resolveWorkingDir(workspaceRoot, rec.repoScope || ''),
+                worktreePath
+            );
+            out.push({
+                sessionId: rec.sessionId || rec.planId,
+                topic: rec.topic || planFileRel || 'Untitled',
+                absolutePath: resolvedAbsolutePath,
+                complexity: rec.complexity,
+                workingDir: resolvedWorkingDir,
+                worktreePath,
+                epicId: rec.epicId ?? undefined,
+                isEpic,
+                project: rec.project || undefined,   // REQUIRED — drives per-project PRD injection in generateUnifiedPrompt
+                ...(isEpic ? { epicTopic: rec.topic || 'Untitled' } : {}),   // primary epic gets [EPIC: …] label
+            });
+            if (isEpic && hasDb && rec.planId) {
+                try {
+                    const subs = await this.expandEpicSubtaskPlans(
+                        workspaceRoot, rec.planId, rec.topic || 'Untitled', rec.kanbanColumn || '',
+                        worktreePath, opts?.worktreePathMap, opts?.subtaskWorktreePathMap, rec.project || undefined
+                    );
+                    for (const sp of subs) {
+                        out.push({ ...sp, sessionId: sp.sessionId || rec.sessionId || rec.planId });
+                    }
+                } catch (err) {
+                    console.warn(`[KanbanProvider] epic subtask expansion failed for ${rec.planId}:`, err);
+                    // keep primary + any already-pushed subtasks; do not abort
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Resolve the workspace-relative plan-file path for a record, with the
+     * universal fallback chain: `planFile` → `mirrorPath` (under
+     * `.switchboard/plans/`) → `brainSourcePath`. Returns the first that
+     * exists on disk, as a workspace-relative path, or `undefined` if none.
+     * This is the logic that previously lived inline only in
+     * `_resolveKanbanDispatchPlans`; centralizing it gives every dispatch
+     * path the same resilience.
+     */
+    private _resolveDispatchPlanFile(workspaceRoot: string, rec: KanbanPlanRecord): string | undefined {
+        if (rec.planFile) {
+            const absolutePath = path.resolve(workspaceRoot, rec.planFile);
+            if (fs.existsSync(absolutePath)) {
+                return rec.planFile;
+            }
+            console.warn(`[KanbanProvider] plan_file not found: ${absolutePath}, trying fallbacks`);
+        }
+        if (rec.mirrorPath) {
+            const mirrorPath = path.join(workspaceRoot, '.switchboard', 'plans', rec.mirrorPath);
+            if (fs.existsSync(mirrorPath)) {
+                return path.relative(workspaceRoot, mirrorPath).replace(/\\/g, '/');
+            }
+        }
+        if (rec.brainSourcePath) {
+            const brainPath = path.isAbsolute(rec.brainSourcePath)
+                ? rec.brainSourcePath
+                : path.resolve(workspaceRoot, rec.brainSourcePath);
+            if (fs.existsSync(brainPath)) {
+                return path.relative(workspaceRoot, brainPath).replace(/\\/g, '/');
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Resolve the worktree path for a primary (non-subtask) record, selecting
+     * mode by the presence of `map`:
+     *   - map provided (board) → map heuristic: `planId` → `epicId` →
+     *     sole-entry. No `project` match. Byte-identical to today's board path.
+     *   - map absent (CLI/batch/trigger/copy) → record heuristic via
+     *     `matchWorktreePath` (`planId` vs `subtask_plan_id` → `epicId` →
+     *     `project`). No sole-entry fallback.
+     *
+     * Subtask entries' own dedicated-worktree resolution happens inside
+     * `expandEpicSubtaskPlans` via the separately-threaded
+     * `subtaskWorktreePathMap`, not here — this function is only ever called
+     * for the primary/non-subtask entry.
+     */
+    private async _resolveWorktreeForRecord(
+        workspaceRoot: string,
+        rec: KanbanPlanRecord,
+        map?: Map<string, string>
+    ): Promise<string | undefined> {
+        if (map) {
+            // Map mode (board): preserve the board's exact heuristic.
+            if (rec.planId) {
+                const byPlanId = map.get(rec.planId);
+                if (byPlanId) { return byPlanId; }
+            }
+            if (rec.epicId) {
+                const byEpicId = map.get(String(rec.epicId));
+                if (byEpicId) { return byEpicId; }
+            }
+            if (map.size === 1) {
+                return map.values().next().value;
+            }
+            return undefined;
+        }
+        // Record mode (CLI/batch/trigger/copy): three-tier via the shared
+        // pure resolver. Reads active worktrees from the DB (already
+        // status='active'-filtered in SQL).
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) { return undefined; }
+        const worktrees = await db.getWorktrees();
+        return matchWorktreePath(worktrees, {
+            epicId: rec.epicId,
+            project: rec.project,
+            planId: rec.planId
+        });
+    }
+
+    /**
+     * Build the two worktree maps over active worktrees for the board adapter:
+     *   - `worktreePathMap`: `epic_id` → path (used for the primary card's own
+     *     resolution in map mode).
+     *   - `subtaskWorktreePathMap`: `subtask_plan_id` → path (threaded into
+     *     `expandEpicSubtaskPlans` so each subtask can resolve to its own
+     *     dedicated worktree ahead of the shared epic fallback).
+     *
+     * Straight extraction of the inline map-building that previously lived in
+     * `_cardsToPromptPlans`. No filter change (already active-only in SQL).
+     */
+    private async _buildActiveWorktreePathMap(
+        workspaceRoot: string
+    ): Promise<{ worktreePathMap: Map<string, string>; subtaskWorktreePathMap: Map<string, string> }> {
+        const worktreePathMap = new Map<string, string>();
+        const subtaskWorktreePathMap = new Map<string, string>();
+        const db = this._getKanbanDb(workspaceRoot);
+        if (db && await db.ensureReady()) {
+            const wts = await db.getWorktrees();
+            for (const wt of wts) {
+                if (wt.epic_id) {
+                    worktreePathMap.set(String(wt.epic_id), wt.path);
+                }
+                if (wt.subtask_plan_id) {
+                    subtaskWorktreePathMap.set(String(wt.subtask_plan_id), wt.path);
+                }
+            }
+        }
+        return { worktreePathMap, subtaskWorktreePathMap };
+    }
+
      * the current state to the webview so the sticky toggle buttons reflect
      * the persisted booleans on board load/refresh. On first load (or after a
      * partial-migration crash) the legacy epic_workflow_mode tri-state key is
@@ -3540,23 +3662,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         }
     }
 
-    private async _buildRepoScopeMap(
-        cards: KanbanCard[],
-        workspaceRoot: string
-    ): Promise<Map<string, string>> {
-        const repoScopeMap = new Map<string, string>();
-        const db = this._getKanbanDb(workspaceRoot);
-        if (await db.ensureReady()) {
-            for (const card of cards) {
-                const cardKey = this._cardId(card);
-                const plan = await db.getPlanBySessionId(cardKey);
-                if (plan?.repoScope) {
-                    repoScopeMap.set(cardKey, plan.repoScope);
-                }
-            }
-        }
-        return repoScopeMap;
-    }
 
     /**
      * Derive the source column display label for a role, matching the labels
@@ -3614,8 +3719,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 });
 
                 if (cards.length > 0) {
-                    const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
-                    plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                    plans = await this._cardsToPromptPlans(cards, workspaceRoot);
                 }
 
                 // Delegate to generateUnifiedPrompt for config resolution + prompt building
@@ -3843,6 +3947,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
     public async generateUnifiedPrompt(
         role: string,
+        // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
+        // — do not hand-roll (epic subtasks get silently dropped otherwise).
         plans: BatchPromptPlan[],
         workspaceRoot: string,
         overrides?: Partial<PromptBuilderOptions>
@@ -4462,22 +4568,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const mode = this._autobanState?.pairProgrammingMode ?? 'off';
         if (mode === 'off') { return; }
 
-        const repoScopeMap = new Map<string, string>();
-        const db = this._getKanbanDb(workspaceRoot);
-        if (await db.ensureReady()) {
-            for (const card of cards) {
-                const cardKey = this._cardId(card);
-                const plan = await db.getPlanBySessionId(cardKey);
-                if (plan?.repoScope) {
-                    repoScopeMap.set(cardKey, plan.repoScope);
-                }
-            }
-        }
-        
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
         const coderUsesIde = mode === 'cli-ide' || mode === 'ide-ide';
         const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
-        const plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+        const plans = await this._cardsToPromptPlans(cards, workspaceRoot);
         const coderPrompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, {
             pairProgrammingEnabled: true,
             accurateCodingEnabled
@@ -4787,18 +4881,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             targetRole = hasHighComplexity ? 'lead' : 'coder';
         }
 
-        const repoScopeMap = new Map<string, string>();
-        const db = this._getKanbanDb(workspaceRoot);
-        if (await db.ensureReady()) {
-            for (const card of cards) {
-                const cardKey = this._cardId(card);
-                const plan = await db.getPlanBySessionId(cardKey);
-                if (plan?.repoScope) {
-                    repoScopeMap.set(cardKey, plan.repoScope);
-                }
-            }
-        }
-        const plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+        const plans = await this._cardsToPromptPlans(cards, workspaceRoot);
         return this.generateUnifiedPrompt(targetRole, plans, workspaceRoot, { sourceColumnLabel });
     }
 
@@ -6488,7 +6571,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         // IDE Lead mode: copy lead prompt to clipboard instead of CLI dispatch
                         const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                         if (card && workspaceRoot) {
-                            const plans = await this._cardsToPromptPlans([card], workspaceRoot, new Map());
+                            const plans = await this._cardsToPromptPlans([card], workspaceRoot);
                             const leadPrompt = await this.generateUnifiedPrompt('lead', plans, workspaceRoot);
                             await vscode.env.clipboard.writeText(leadPrompt);
                             vscode.window.showInformationMessage('Lead prompt copied to clipboard (IDE mode).');
@@ -7066,7 +7149,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     vscode.window.showInformationMessage('No CREATED plans available for batch planner prompt.');
                     break;
                 }
-                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, new Map());
+                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot);
                 const prompt = await this.generateUnifiedPrompt('planner', plans, workspaceRoot, { instruction: 'improve-plan' });
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'CREATED', 'improve-plan', workspaceRoot);
@@ -7095,8 +7178,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 // Explicit low-complexity button always uses coder role, bypassing the toggle
-                const repoScopeMap = await this._buildRepoScopeMap(sourceCards, workspaceRoot);
-                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, repoScopeMap);
+                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot);
                 const prompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, { instruction: 'low-complexity' });
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', undefined, workspaceRoot);
@@ -8213,8 +8295,7 @@ ${FOCUS_DIRECTIVE}`;
                         const cards = this._lastCards.filter(c =>
                             c.workspaceRoot === workspaceRoot && this._cardMatchesIds(c, sessionIds)
                         );
-                        const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
-                        plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                        plans = await this._cardsToPromptPlans(cards, workspaceRoot);
                         planCount = plans.length;
                     } else {
                         const cards = this._lastCards.filter(c => {
@@ -8247,8 +8328,7 @@ ${FOCUS_DIRECTIVE}`;
                         });
 
                         if (cards.length > 0) {
-                            const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
-                            plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                            plans = await this._cardsToPromptPlans(cards, workspaceRoot);
                             planCount = plans.length;
                         }
                     }
