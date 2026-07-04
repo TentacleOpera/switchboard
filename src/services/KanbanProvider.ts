@@ -6391,6 +6391,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 const canDispatch = workspaceRoot ? await this._canAssignRole(workspaceRoot, role) : false;
+                // Capture the source column BEFORE moveCardToColumn mutates the DB.
+                // A concurrent board refresh (scheduled by _handleTriggerAgentActionInternal
+                // during the dispatch await) can update _lastCards with the new column,
+                // making card.column stale by the time the prompt-fallback fires.
+                const sourceCard = workspaceRoot
+                    ? this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot)
+                    : undefined;
+                const sourceColumnForPrompt = sourceCard?.column;
                 // Persist the column move FIRST — decouples the card position from
                 // dispatch success. The card stays where the user dropped it regardless
                 // of whether the agent dispatch succeeds. If dispatch fails, the
@@ -6442,8 +6450,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             // clipboard, and signal the webview to glow the copy-prompt button
                             // orange so the user can paste manually.
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
-                            if (card && workspaceRoot) {
-                                const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                            if (card && workspaceRoot && sourceColumnForPrompt) {
+                                const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
                                 await vscode.env.clipboard.writeText(prompt);
                                 this._panel?.webview.postMessage({
                                     type: 'dispatchFailedPromptReady',
@@ -6452,6 +6460,22 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                     targetColumn
                                 });
                             }
+                        }
+                    } else {
+                        // canRunConfiguredDispatch is false — custom-user column with CLI
+                        // mode but no agent available. Card is already persisted via
+                        // moveCardToColumn above. Generate the prompt, copy it to the
+                        // clipboard, and signal the webview to glow the copy-prompt button.
+                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
+                        if (card && sourceColumnForPrompt) {
+                            const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
+                            await vscode.env.clipboard.writeText(prompt);
+                            this._panel?.webview.postMessage({
+                                type: 'dispatchFailedPromptReady',
+                                planId: card.planId || sessionId,
+                                sessionId: card.sessionId,
+                                targetColumn
+                            });
                         }
                     }
                     this._scheduleBoardRefresh(workspaceRoot);
@@ -6517,8 +6541,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             // via moveCardToColumn above. Generate the prompt, copy it to the
                             // clipboard, and signal the webview to glow the copy-prompt button.
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
-                            if (card) {
-                                const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                            if (card && sourceColumnForPrompt) {
+                                const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
                                 await vscode.env.clipboard.writeText(prompt);
                                 this._panel?.webview.postMessage({
                                     type: 'dispatchFailedPromptReady',
@@ -6535,8 +6559,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // column via moveCardToColumn above. Generate the prompt, copy it to the
                     // clipboard, and signal the webview to glow the copy-prompt button.
                     const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
-                    if (card) {
-                        const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, targetColumn);
+                    if (card && sourceColumnForPrompt) {
+                        const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
                         await vscode.env.clipboard.writeText(prompt);
                         this._panel?.webview.postMessage({
                             type: 'dispatchFailedPromptReady',

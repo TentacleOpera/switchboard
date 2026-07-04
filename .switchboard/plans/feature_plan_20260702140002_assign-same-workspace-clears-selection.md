@@ -152,3 +152,7 @@ No automated test suite changes required (webview JS harness availability unknow
 ## Recommendation
 
 Complexity 2 → **Send to Intern**.
+
+## Review Findings
+
+**Reviewed:** `src/webview/kanban.html` lines 6993-7004. The implementation is an exact match to the plan — the `!hasAnyProjectAssignment` no-op branch now clears the selection (full 4-call pattern: `selectedCards.clear()`, `updateReassignButtonVisibility()`, `updateEpicActionButton()`, `querySelectorAll('.kanban-card.selected').forEach`) instead of showing a toast. No orphaned references to the removed toast string. The genuine clear-project fall-through is untouched. No fixes applied — zero CRITICAL/MAJOR/NIT findings. TypeScript typecheck: no new errors (5 pre-existing TS2835 errors in unrelated files). Remaining risk: none identified.
