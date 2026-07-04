@@ -169,3 +169,16 @@ Skipped per session directive. No unit/integration tests will be run as part of 
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**. Routine single-file bugfix reusing existing helpers; one deferred non-blocking follow-up (activation-time sweep) recorded above.
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome to the review. I came looking for blood and found... a clean kill. All three changes (stop/close/reset paths) match the plan verbatim. The double-trigger from `stopMcpMonitorTerminal → live.dispose() → handleTerminalClosed` is idempotent as the plan predicted — both paths write `mcp_monitor: false` and `Map.delete` is a no-op on missing keys. The `if (cleanedTerminalName)` guard at line 15920 prevents the spurious `clearTerminalAgentInfo(undefined)` call I was ready to flag. The `this.refresh()` addition is debounced (200ms) and doesn't double-trigger with `handleTerminalClosed`'s `_refreshTerminalStatuses()`. No orphaned references to removed identifiers. The `_deregisterAllTerminals` reset is correctly scoped to `mcp_monitor` only — built-in agent visibility persists by design. The extension-restart stale-flag case (Edge-Case #4) remains a known deferred limitation, not a regression.
+
+- **NIT** `TaskViewerProvider.ts:15940` — `_registeredTerminals?.delete(...)` in `handleTerminalClosed` only fires for the MCP monitor branch; the generic close path never cleans `_registeredTerminals` for other terminal types, meaning non-MCP terminals may also leak stale in-memory references until a rebuild from state.json. Pre-existing, out of scope for this plan, but worth a future ticket.
+- **NIT** `TaskViewerProvider.ts:20784` — `this.refresh()` is a new addition not in the original method; harmless (debounced) but technically redundant since `handleTerminalClosed` will fire and refresh anyway. Keep it — belt-and-suspenders matches the plan's philosophy.
+
+**Stage 2 (Balanced):** No CRITICAL or MAJOR findings. Both NITs are pre-existing or cosmetic — no code fixes applied. The implementation is plan-compliant and regression-safe across all traced call paths (`launchMcpMonitorTerminal` → `stopMcpMonitorTerminal` → `handleTerminalClosed` → `_deregisterAllTerminals` → `createAgentGrid`).
+
+**Files changed:** `src/services/TaskViewerProvider.ts` (3 edits: lines 15937-15940, 16005-16011, 20762-20784).
+**Validation:** Compilation and automated tests skipped per session directive. Manual verification per plan's 7-step checklist (VSIX-based, not run in this review). Typecheck not run (skipped per directive).
+**Remaining risks:** (1) Edge-Case #4 — extension restart leaves `visibleAgents.mcp_monitor = true` in global state with no close event to reset it; deferred activation-time sweep follow-up. (2) Generic `handleTerminalClosed` does not clean `_registeredTerminals` for non-MCP terminals — pre-existing leak, out of scope.
