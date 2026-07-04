@@ -62,6 +62,12 @@ Two workstreams under one theme (agent → extension signaling via plan-file fro
 - `column-transition-frontmatter-retire-manifest.md` — teach the watcher to honor a
   `**Column:**` transition-intent line on existing rows (guarded exactly like the
   manifest's `fromColumn`), then deprecate `manifest.json`. Independent of the light work.
+- `manifest-redelivery-idempotency-and-reaping.md` — fix an observed correctness bug: a
+  git-tracked, already-consumed manifest resurrects on every fresh clone and re-asserts stale
+  `status`/`project`/`epicId` (only the column field is re-delivery-safe today). Add a
+  consumed-manifest ledger so re-application is a provable no-op. Hardens the manifest for the
+  retirement's one-release compat window — and makes this epic's own subtask-link entries safe
+  on re-clone.
 
 **Workstream B — Agent activity light** (build in this order; 2 is the foundation)
 - `working-state-model-and-dispatch-on.md` — add the `dispatched_at` column + migration,

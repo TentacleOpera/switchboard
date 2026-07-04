@@ -32,6 +32,10 @@
     {
       "planFile": "card-working-light-ui.md",
       "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "manifest-redelivery-idempotency-and-reaping.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
     }
   ]
 }
