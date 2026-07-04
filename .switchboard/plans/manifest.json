@@ -2,12 +2,40 @@
   "version": 1,
   "plans": [
     {
-      "planFile": ".switchboard/plans/feature_plan_20260703160000_comms-monitor-lifecycle-polling-consolidated.md",
-      "planId": "eca1c367-7b28-48ef-b107-5795bad66707",
-      "status": "active",
-      "isEpic": false,
-      "epicId": "643b487f-15a9-457f-b625-d1db2f2e434a",
-      "project": "Switchboard"
+      "planFile": "github-issues-remote-provider.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "retire-file-based-git-control-plane.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "plan-authoring-frontmatter-facts.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "delete-epic-file-resurrect-fix.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "working-state-model-and-dispatch-on.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "stage-complete-marker-clears-working-state.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "stage-complete-prompt-directive.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "working-state-timeout-sweep.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "card-working-light-ui.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
     }
   ]
 }
