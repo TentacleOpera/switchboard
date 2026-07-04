@@ -452,6 +452,14 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
 
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
+            // DIAGNOSTIC (is_epic clobber investigation): log which sql.js instance the watcher
+            // operates on when it handles an epic file. Compare against the provider=… /
+            // watcher=… line from createEpicFromPlanIds. Same instanceId ⇒ candidate ❷ is dead;
+            // different ⇒ this handler may persist a stale snapshot over the epic's is_epic=1.
+            // See docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is fixed.
+            if (relativePath.startsWith('.switchboard/epics/')) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] epic-file handle: instance ${db.instanceId} (dbPath=${db.dbPath}) for ${relativePath}`);
+            }
             if (isRuntimeMirrorPlanFile(path.basename(relativePath))) {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipped brain mirror file: ${relativePath}`);
                 return;

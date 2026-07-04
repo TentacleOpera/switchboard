@@ -719,6 +719,12 @@ export class KanbanDatabase {
     private static _instancesByDbPath = new Map<string, KanbanDatabase>();
     private static _warnedUnmappedRoots = new Set<string>();
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
+    // DIAGNOSTIC (is_epic clobber investigation): monotonic id so we can tell whether the
+    // KanbanProvider and the GlobalPlanWatcherService are operating on the SAME in-memory
+    // sql.js instance. If they differ for the same on-disk DB, a stale-snapshot _persist()
+    // can silently overwrite an is_epic=1 write (clobber candidate ❷). See
+    // docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is identified.
+    private static _nextInstanceId = 1;
 
     /**
      * Expand ~ to home directory. Shared by _redirectToParentIfMapped and forWorkspace.
@@ -1219,8 +1225,14 @@ export class KanbanDatabase {
         return path.join(this._workspaceRoot, '.switchboard', 'kanban-board.md');
     }
 
+    // DIAGNOSTIC (is_epic clobber): stable per-instance tag, e.g. "#3(kanban.db)". Logged by
+    // the demotion guard and at the createEpicFromPlanIds fork so a mismatch between the
+    // Provider's instance and the watcher's instance is visible in one repro run.
+    public readonly instanceId: string;
+
     private constructor(private readonly _workspaceRoot: string, resolvedDbPath: string) {
         this._dbPath = resolvedDbPath;
+        this.instanceId = `#${KanbanDatabase._nextInstanceId++}(${path.basename(resolvedDbPath)})`;
     }
 
     public dispose(): void {
@@ -1630,6 +1642,19 @@ export class KanbanDatabase {
     public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
+        // DIAGNOSTIC (is_epic clobber investigation): catch an explicit demotion of a live
+        // epic in the act. Fires only when this instance currently sees the plan as an epic
+        // (is_epic=1) and the incoming write would clear it (is_epic=0). The stack trace names
+        // the exact caller (subtask-linking loop, PlanningPanel, remote sync, …). A HIT is a
+        // smoking gun for the "explicit demotion" family (candidates ❶/❸/❺). SILENCE does not
+        // clear candidate ❷ (lost-write via a stale instance) — pair with the instanceId logs.
+        // See docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is fixed.
+        if (plan.isEpic === 1 && isEpic === 0) {
+            console.error(
+                `[KanbanDatabase] ⚠️ EPIC CLOBBER on instance ${this.instanceId}: updateEpicStatus(${planId}, 0, '${epicId}') would clear is_epic on epic "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
+                new Error().stack
+            );
+        }
         const oldEpicId = plan.epicId;
         const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
         let affected = 0;
