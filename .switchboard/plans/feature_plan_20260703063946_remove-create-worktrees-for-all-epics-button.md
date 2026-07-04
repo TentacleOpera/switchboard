@@ -90,3 +90,7 @@ case 'createWorktreesForAllEpics': {
 5. Confirm the auto-mode radios (None / Per Subtask / High-Low) still persist their selection.
 6. Confirm the active worktrees list still renders existing worktrees (including any previously created via the batch button).
 7. Run `npm run compile` to confirm no TypeScript errors from the removed handler.
+
+## Review Findings
+
+**CRITICAL fix applied:** The implementer wrote the new reorganized `createWorktreesPanel` (Plan 2) but forgot to delete the old one — the old function (kanban.html line 9745) never closed its braces, nesting the new function and `renderWorktreeRow` inside it and causing a `SyntaxError: Unexpected end of input` that broke the ENTIRE kanban webview script. The old function body also still contained the batch button UI (posting `createWorktreesForAllEpics` to the already-removed backend handler). Fix: deleted the orphaned old function body (306 lines, kanban.html 9745-10050), freeing `renderWorktreeRow` to outer scope and making the new `createWorktreesPanel` the sole definition. The backend handler removal in `KanbanProvider.ts` was already clean (switch statement intact, no orphaned references). **Files changed:** `src/webview/kanban.html`. **Validation:** `node --check` on extracted script passes clean; brace balance 1632/1632; zero references to `createWorktreesForAllEpics` in source. **Remaining risks:** None — the batch button UI and backend handler are both fully removed.

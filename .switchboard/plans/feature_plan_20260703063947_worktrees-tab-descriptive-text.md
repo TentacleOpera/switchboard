@@ -91,3 +91,7 @@ Note: the `padding-left: 24px` aligns the description text with the label text (
 4. Confirm the description text is readable (font size, color, alignment) and does not overflow or break the layout.
 5. Confirm no CSP violations in the webview developer console.
 6. Toggle the suppress checkbox on/off and verify the backend still receives the `setSuppressMainTerminals` message correctly (the description is purely visual — no behavior change).
+
+## Review Findings
+
+**CRITICAL fix applied (shared root cause):** The descriptive text changes (expanded routing-order description with "automatically opens agent terminals inside the worktree", and the suppress checkbox description referencing the "Agent terminals" UI label) were correctly written into the new reorganized `createWorktreesPanel`. However, the new function was nested inside the old undeleted `createWorktreesPanel` which had no closing brace — a `SyntaxError: Unexpected end of input` that broke the entire kanban webview script, making all descriptive text (and the entire board) inaccessible. Fix: deleted the orphaned old function body (306 lines, kanban.html 9745-10050), making the new function with the descriptive text the sole `createWorktreesPanel` definition. **Files changed:** `src/webview/kanban.html`. **Validation:** `node --check` passes clean; routing-order description confirmed at line 9911; suppress description confirmed at line 9943; both use CSP-safe `innerHTML` with only `<strong>`/`<br>`/`<em>` tags. **Remaining risks:** None — pure text content, no behavior or state impact.
