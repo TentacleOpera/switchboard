@@ -825,8 +825,9 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
      * targeted UPDATE methods on KanbanDatabase (NOT upsertPlans, which cannot
      * override kanban_column on existing rows), then deletes the manifest once
      * all entries are applied. Stale-manifest guard: only overrides the column
-     * when the row is still at CREATED, so a manual board move between
-     * manifest-write and consume is never reverted. Staleness guard drops a
+     * when the row is still in the entry's `fromColumn` (default CREATED), so a
+     * manual board move between manifest-write and consume is never reverted.
+     * Staleness guard drops a
      * manifest that can never resolve (referenced .md never appears) so the scan
      * loop can't wedge. All validation failures are logged + skipped, never thrown.
      */

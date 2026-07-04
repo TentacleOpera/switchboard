@@ -42,7 +42,7 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 | Query board state | **`query-switchboard-kanban`** locally; remotely read the git-exported `kanban-board.md` |
 | ClickUp tasks/docs | **`clickup-*`** family |
 | Score a change's complexity | **`complexity-scoring`** |
-| Research a topic with sources | **`web-research`** / **`deep-research`** |
+| Research a topic with sources | **`web-research`** |
 | Search old plans / conversations | **`archive`** / **`query-archive`** |
 
 ## How to respond

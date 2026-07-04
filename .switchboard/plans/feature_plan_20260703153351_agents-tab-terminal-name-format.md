@@ -73,21 +73,44 @@ The desired format is `Role - Name - worktree` — i.e. the worktree marker is a
 
 ## Metadata
 
-- **Tags:** `bug`, `ui`, `agents-tab`, `webview`, `implementation.html`
+- **Plan ID:** 6b204a4a-aac6-4e5d-8d8c-178f26868018
+- **Tags:** `bugfix`, `ui`
 - **Complexity:** 3
 - **Files touched:** `src/webview/implementation.html`
 - **Risk:** Low — display-only change in a single webview HTML file; no state, persistence, or backend changes.
 
+## User Review Required
+
+No — this is a display-only bugfix with a verified root cause and no product-scope or migration implications. Safe to proceed to coding without user sign-off.
+
 ## Complexity Audit
 
-**Routine.** This is a localized string-formatting fix in one file with two cooperating defects:
+### Routine
+- Localized string-formatting fix in a single webview HTML file (`src/webview/implementation.html`).
+- Two cooperating defects: (1) a dead variable (`lastTerminalAgentNames`) read but never written, causing the Name segment to vanish for the common case; (2) a format-string shape mismatch (parenthetical suffix vs. dash segment) for the worktree marker.
+- The fix re-routes the Name source to the already-computed `resolvedTermName` (no new data flow) and reshapes the worktree marker into a separate dash segment.
+- `findTerminalByRole` helper and `resolvedTermName` already exist and are correct — no new helpers needed.
+- HTML-escaping helper (`esc`) is a 1-line pure function added inline.
 
-1. A dead variable (`lastTerminalAgentNames`) that is read but never written, causing the Name segment to vanish for the common case.
-2. A format-string shape mismatch (parenthetical suffix vs. dash segment) for the worktree marker.
-
-Both are addressable by re-routing the Name source to the already-computed `resolvedTermName` and re-shaping the worktree marker into a separate dash segment. No new data flows, no backend changes, no migrations. The `findTerminalByRole` helper and `resolvedTermName` already exist and are correct.
+### Complex / Risky
+- None — no backend, state, persistence, or migration changes. The only residual gap (createAnalystRow cannot see `dispatchInfo`, so its worktree detection is structurally weaker) is pre-existing and unchanged by this plan.
 
 ## Edge-Case & Dependency Audit
+
+### Race Conditions
+- `createAgentRow` / `createAnalystRow` read module-level state (`lastTerminals`, `lastDispatchReadiness`, `lastStartupCommands`, `lastPlannerTarget`) mid-render. A `terminalsUpdated` or `dispatchReadiness` message arriving between the start of a full re-render pass and individual row construction could produce a torn view (some rows reflecting the old snapshot, some the new). This is **pre-existing** (the rendering loop already reads these globals synchronously on the JS thread) and is **not introduced or worsened** by this change. No fix required here.
+
+### Security
+- **XSS gate via `esc(label)` is load-bearing, not defensive.** `label` for custom agents is sourced from `lastCustomAgents` — **user-defined agent names** flowing into `innerHTML`. The proposed `esc()` call on `label` is the actual injection guard for custom-agent rows, not a nicety. Role labels for built-in agents (PLANNER, CODER, etc.) are hardcoded constants and inherently safe, but `esc(label)` must be retained because the same code path serves custom agents. Do not remove it in a future "cleanup" on the assumption that label is always a constant.
+- Terminal names (`resolvedTermName`, `dispatchInfo.terminalName`) are extension-controlled (set by the backend from registered terminal metadata), but `esc(displayName)` is retained as defense-in-depth.
+- The worktree segment `' - <span style="...">worktree</span>'` is the only literal HTML in the composed string; all variable segments are escaped.
+
+### Side Effects
+- Display-only: no state mutations, no messages posted to the extension, no persistence writes.
+- The `locate` / `clear` button handlers use `resolvedTermName` / `termName` and are unchanged — they continue to resolve the correct terminal after the name-display change.
+- Removing the dead `lastTerminalAgentNames` declaration (Change 3) has no behavioral effect; it only removes misleading dead state.
+
+### Dependencies & Conflicts
 
 | Edge case | Handling |
 | :--- | :--- |
@@ -97,11 +120,19 @@ Both are addressable by re-routing the Name source to the already-computed `reso
 | Non-worktree terminal | No ` - worktree` segment appended; render as `Role - Name`. |
 | ANALYST row (`createAnalystRow`) has its own parallel name logic | Must be fixed consistently — it also reads the dead `lastTerminalAgentNames['analyst']` and lacks the worktree segment. |
 | Jules row | Unchanged — uses `name.innerText = label` (no terminal name segment by design). |
-| Custom agents | Use `createAgentRow` with `customAgent.role`; fix flows through automatically. |
-| `name.innerHTML` vs `name.innerText` | The worktree segment uses a `<span>` for styling, so `innerHTML` must be retained for the styled segment. The Name and Role segments are plain text and must be HTML-escaped if sourced from terminal names (terminal names are extension-controlled, but escape defensively). |
+| Custom agents | Use `createAgentRow` with `customAgent.role`; fix flows through automatically. **`label` is user-defined → `esc(label)` is the XSS gate (see Security).** |
+| `name.innerHTML` vs `name.innerText` | The worktree segment uses a `<span>` for styling, so `innerHTML` must be retained for the styled segment. The Name and Role segments are plain text and are HTML-escaped before composition. |
 | Terminals sub-tab | Out of scope — user reported the **Agents tab** specifically. The terminals sub-tab is static HTML and unaffected. |
+| Bare-label-with-worktree branch (`esc(label) + wtSegment`) | Logically unreachable: a worktree route implies `dispatchInfo.terminalName` is set → `worktreeRouteName` set → `displayName` set. Retained as defensive dead code; does not affect behavior. |
+| `createAnalystRow` worktree detection gap | `createAnalystRow` does not receive `dispatchInfo`, so it detects worktrees only via `lastTerminals[termName]?.worktreePath`. If an analyst is dispatched to a worktree terminal whose `lastTerminals` entry lacks `worktreePath` (stale snapshot), the ` - worktree` segment silently drops. **Known residual gap, pre-existing architecture limitation — not fixed by this plan.** |
 
-**Dependencies:** None. `findTerminalByRole`, `lastTerminals`, `lastDispatchReadiness`, `lastStartupCommands`, and `lastPlannerTarget` are all already in scope of `createAgentRow`/`createAnalystRow`.
+## Dependencies
+
+None. `findTerminalByRole`, `lastTerminals`, `lastDispatchReadiness`, `lastStartupCommands`, and `lastPlannerTarget` are all already in scope of `createAgentRow`/`createAnalystRow`. No other plans or sessions need to complete first.
+
+## Adversarial Synthesis
+
+**Key risks:** (1) `esc(label)` is the actual XSS gate for user-defined custom-agent names flowing into `innerHTML` — it must not be removed in a future cleanup on the false assumption that `label` is always a hardcoded constant; (2) `createAnalystRow` cannot see `dispatchInfo`, so its worktree detection is structurally weaker than `createAgentRow`'s — a known residual gap, pre-existing, not fixed here; (3) `resolvedTermName` is a composite value (worktree-route name OR `findTerminalByRole` result OR routed name), not purely the `findTerminalByRole` output — the plan's prose should not mislead future readers. **Mitigations:** retain `esc(label)` permanently; document the analyst worktree gap as known; the composite-`resolvedTermName` behavior is correct for display purposes and requires no code change. No blockers — display-only fix, verified root cause, no new data flows.
 
 ## Proposed Changes
 
@@ -245,6 +276,12 @@ This is a safe deletion — a grep confirms the variable has no remaining refere
 
 ## Verification Plan
 
+### Automated Tests
+
+Skipped per session directive — no automated tests will be run as part of this verification plan. Verification is manual (see below). Compilation is also skipped per session directive; the extension reads `src/webview/implementation.html` directly during dev.
+
+### Manual Verification
+
 1. **Build / load:** Reload the Switchboard webview in VS Code (the extension reads `src/webview/implementation.html` directly during dev — no `npm run compile` needed per project convention; `dist/` is not used for testing).
 
 2. **Manual matrix — Agents tab:** With at least one terminal connected per role, confirm the rendered row label for each:
@@ -262,3 +299,9 @@ This is a safe deletion — a grep confirms the variable has no remaining refere
 4. **No regressions in row controls:** For each row, the `locate` and `clear` buttons still fire `focusTerminal` / `sendToTerminal` with the correct `resolvedTermName` (these handlers are unchanged, but verify they still resolve the right terminal after the name-display change).
 
 5. **Grep verification:** After edits, run a grep for `lastTerminalAgentNames` in `src/webview/implementation.html` and confirm zero matches (Change 3) — this proves the dead variable is fully removed and no stale reads remain.
+
+---
+
+## Recommendation
+
+**Complexity: 3 → Send to Coder.** Display-only bugfix, single file, verified root cause, no new data flows. The two changes (re-route Name source to `resolvedTermName`; reshape worktree marker as dash segment) plus the optional dead-variable cleanup are well-scoped for a coder-level execution pass.
