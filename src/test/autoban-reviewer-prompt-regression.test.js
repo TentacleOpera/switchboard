@@ -13,10 +13,6 @@ async function run() {
         'Expected shared reviewer execution intro helper.'
     );
     assert.ok(
-        builderSource.includes('function buildReviewerExecutionModeLine(expectation: string): string'),
-        'Expected shared reviewer execution mode helper.'
-    );
-    assert.ok(
         builderSource.includes('The implementation for each of the following ${planCount} plans is complete. Execute a direct reviewer pass in-place for each plan.'),
         'Expected reviewer batch intro to describe implementation review rather than plan review.'
     );

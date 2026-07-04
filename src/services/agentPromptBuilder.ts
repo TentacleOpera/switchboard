@@ -306,14 +306,6 @@ function buildReviewerExecutionIntro(planCount: number): string {
     return `The implementation for each of the following ${planCount} plans is complete. Execute a direct reviewer pass in-place for each plan.`;
 }
 
-function buildReviewerExecutionModeLine(expectation: string): string {
-    return `Mode:
-- You are the reviewer-executor for this task.
-- Do not start any auxiliary workflow; execute this task directly.
-- Treat adversarial review as inline analysis in this same prompt.
-- ${expectation}`;
-}
-
 /** Build a plan-count-aware intro sentence. Fixes "1 plans" → "1 plan". */
 function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], epicMode?: boolean): string {
     if (epicMode) {

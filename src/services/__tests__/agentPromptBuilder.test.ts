@@ -245,4 +245,46 @@ suite('agentPromptBuilder', () => {
             assert.strictEqual(columnToPromptRole('UNKNOWN_COLUMN'), null);
         });
     });
+
+    suite('§9 regression — lean dispatch prompts', () => {
+        const makeEpicPlans = () => [
+            { topic: 'Test Epic', absolutePath: '/workspace/.switchboard/epics/test-epic.md', isEpic: true, sessionId: 'epic-1' },
+            { topic: 'Subtask A', absolutePath: '/workspace/.switchboard/plans/sub-a.md', isSubtask: true, epicTopic: 'Test Epic', epicId: 'epic-1', sessionId: 'st-1' },
+            { topic: 'Subtask B', absolutePath: '/workspace/.switchboard/plans/sub-b.md', isSubtask: true, epicTopic: 'Test Epic', epicId: 'epic-1', sessionId: 'st-2' },
+        ];
+
+        test('no [SUBTASK] [SUBTASK] double-labelling in epic-mode planner prompt', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
+            assert.ok(!prompt.includes('[SUBTASK] [SUBTASK]'), 'Epic prompt must not contain double [SUBTASK] labelling');
+        });
+
+        test('no [SUBTASK] [SUBTASK] double-labelling in epic-mode coder prompt', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
+            assert.ok(!prompt.includes('[SUBTASK] [SUBTASK]'), 'Epic coder prompt must not contain double [SUBTASK] labelling');
+        });
+
+        test('no batchExecutionRules in single-plan coder prompt', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {});
+            assert.ok(!prompt.includes('CRITICAL INSTRUCTIONS:'), 'Single-plan prompt must not include batch execution rules');
+        });
+
+        test('no batchExecutionRules in epic-mode coder prompt', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
+            assert.ok(!prompt.includes('CRITICAL INSTRUCTIONS:'), 'Epic-mode coder prompt must not include batch execution rules');
+        });
+
+        test('epic-mode coder prompt contains EPIC FILE reference and no per-subtask plan lines', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
+            assert.ok(prompt.includes('EPIC FILE:'), 'Epic-mode coder prompt should contain EPIC FILE reference');
+            assert.ok(!prompt.includes('Subtask A Plan File:'), 'Epic-mode coder prompt should not enumerate per-subtask plan lines');
+            assert.ok(!prompt.includes('Subtask B Plan File:'), 'Epic-mode coder prompt should not enumerate per-subtask plan lines');
+        });
+
+        test('single worktree path appears exactly once in worktree dispatch', () => {
+            const plans = [{ topic: 'Plan A', absolutePath: '/workspace/plan-a.md', worktreePath: '/workspace/wt-a' }];
+            const prompt = buildKanbanBatchPrompt('coder', plans, { gitProhibitionEnabled: false });
+            const occurrences = (prompt.match(/\/workspace\/wt-a/g) || []).length;
+            assert.strictEqual(occurrences, 1, `Worktree path should appear exactly once, found ${occurrences}`);
+        });
+    });
 });

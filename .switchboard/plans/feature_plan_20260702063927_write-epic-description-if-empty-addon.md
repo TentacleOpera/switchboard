@@ -224,3 +224,7 @@ Change to:
 ## Recommendation
 
 **Complexity: 4 → Send to Coder.** Sequenced after the sibling redundancy-cleanup plan lands.
+
+## Review Findings
+
+Review found 2 CRITICAL and 2 MAJOR issues, all fixed. (1) The `writeEpicDescriptionIfEmpty` directive injection at `agentPromptBuilder.ts:864` was missing the required `options?.epicMode` gate — it fired on every planner dispatch, not just epic-mode ones; fixed by adding `&& options?.epicMode`. (2) The kanban.html checkbox, load line, and listener entry for `plannerAddonWriteEpicDescriptionIfEmpty` were entirely absent — users had no UI toggle; fixed by adding the HTML checkbox after `plannerAddonAdviseResearch`, the load line after the adviseResearch load, and the ID to the listener forEach array. (3) The directive text was ~80 words of vague guidance instead of the plan's ~200-word detailed spec with format templates, edge-case rules, and BEGIN SUBTASKS preservation; replaced with the full `EPIC DESCRIPTION BACKFILL` directive. (4) Tests did not pass `epicMode: true` and encoded the un-gated bug; updated to test all four gate combinations. Files changed: `src/services/agentPromptBuilder.ts`, `src/webview/kanban.html`, `src/services/__tests__/agentPromptBuilder.test.ts`. No compilation or tests run per review overrides. Remaining risk: the SKILL.md EXECUTE step places `## Dependencies & sequencing` after the SUBTASKS block rather than before it (defensible deviation — both locations are preserved by `_regenerateEpicFile`).
