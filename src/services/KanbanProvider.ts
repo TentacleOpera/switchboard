@@ -23,6 +23,7 @@ import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
+import { appendEpicClobberDiag } from './epicClobberDiag'; // DIAGNOSTIC (is_epic clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
@@ -10024,6 +10025,18 @@ ${FOCUS_DIRECTIVE}`;
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban database not available.' };
         }
+        // DIAGNOSTIC (is_epic clobber investigation): is the Provider writing is_epic=1 to the
+        // SAME in-memory sql.js instance the GlobalPlanWatcherService reads/persists? The watcher
+        // resolves its DB via KanbanDatabase.forWorkspace(workspaceRoot) (GlobalPlanWatcherService.ts:451).
+        // If these two are NOT ===, the watcher can flush a stale snapshot over this write —
+        // clobber candidate ❷. If they ARE ===, ❷ is dead and the clobber is an explicit demotion
+        // (watch for the EPIC CLOBBER log). See docs/investigation-epic-is_epic-clobber.md.
+        const watcherDb = KanbanDatabase.forWorkspace(workspaceRoot);
+        const instanceCheck =
+            `createEpicFromPlanIds DB-instance check: provider=${db.instanceId} (dbPath=${db.dbPath}), ` +
+            `watcher=${watcherDb.instanceId} (dbPath=${watcherDb.dbPath}), sameInstance=${db === watcherDb}`;
+        console.log(`[KanbanProvider] ${instanceCheck}`);
+        appendEpicClobberDiag(workspaceRoot, instanceCheck);
         const workspaceId = await db.getWorkspaceId();
         if (!workspaceId) {
             return { success: false, error: 'Workspace ID not found. Cannot create epic.' };

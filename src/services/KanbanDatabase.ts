@@ -6,6 +6,7 @@ import * as path from 'path';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
+import { appendEpicClobberDiag } from './epicClobberDiag'; // DIAGNOSTIC (is_epic clobber) — remove with the probes
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -719,6 +720,12 @@ export class KanbanDatabase {
     private static _instancesByDbPath = new Map<string, KanbanDatabase>();
     private static _warnedUnmappedRoots = new Set<string>();
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
+    // DIAGNOSTIC (is_epic clobber investigation): monotonic id so we can tell whether the
+    // KanbanProvider and the GlobalPlanWatcherService are operating on the SAME in-memory
+    // sql.js instance. If they differ for the same on-disk DB, a stale-snapshot _persist()
+    // can silently overwrite an is_epic=1 write (clobber candidate ❷). See
+    // docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is identified.
+    private static _nextInstanceId = 1;
 
     /**
      * Expand ~ to home directory. Shared by _redirectToParentIfMapped and forWorkspace.
@@ -1219,8 +1226,14 @@ export class KanbanDatabase {
         return path.join(this._workspaceRoot, '.switchboard', 'kanban-board.md');
     }
 
+    // DIAGNOSTIC (is_epic clobber): stable per-instance tag, e.g. "#3(kanban.db)". Logged by
+    // the demotion guard and at the createEpicFromPlanIds fork so a mismatch between the
+    // Provider's instance and the watcher's instance is visible in one repro run.
+    public readonly instanceId: string;
+
     private constructor(private readonly _workspaceRoot: string, resolvedDbPath: string) {
         this._dbPath = resolvedDbPath;
+        this.instanceId = `#${KanbanDatabase._nextInstanceId++}(${path.basename(resolvedDbPath)})`;
     }
 
     public dispose(): void {
@@ -1630,6 +1643,22 @@ export class KanbanDatabase {
     public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
+        // DIAGNOSTIC (is_epic clobber investigation): catch an explicit demotion of a live
+        // epic in the act. Fires only when this instance currently sees the plan as an epic
+        // (is_epic=1) and the incoming write would clear it (is_epic=0). The stack trace names
+        // the exact caller (subtask-linking loop, PlanningPanel, remote sync, …). A HIT is a
+        // smoking gun for the "explicit demotion" family (candidates ❶/❸/❺). SILENCE does not
+        // clear candidate ❷ (lost-write via a stale instance) — pair with the instanceId logs.
+        // See docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is fixed.
+        if (plan.isEpic === 1 && isEpic === 0) {
+            const stack = new Error().stack;
+            console.error(
+                `[KanbanDatabase] ⚠️ EPIC CLOBBER on instance ${this.instanceId}: updateEpicStatus(${planId}, 0, '${epicId}') would clear is_epic on epic "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
+                stack
+            );
+            appendEpicClobberDiag(this._workspaceRoot,
+                `EPIC-CLOBBER instance=${this.instanceId} updateEpicStatus(planId=${planId}, isEpic=0, epicId='${epicId}') on epic "${plan.topic}" (plan_file=${plan.planFile})\n${stack}`);
+        }
         const oldEpicId = plan.epicId;
         const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
         let affected = 0;
@@ -4397,6 +4426,7 @@ export class KanbanDatabase {
             // migrations, post rollback-guard) so a rolled-back reload failure
             // never produces a false-positive bump.
             this._dataVersion++;
+            this._diagEpicSnapshot('reload'); // DIAGNOSTIC (is_epic clobber) — what this instance just loaded from disk
         } catch (error) {
             console.error('[KanbanDatabase] Failed to reload from disk:', error);
             // Keep using stale in-memory copy — better than crashing
@@ -6197,8 +6227,30 @@ FROM plans
         return this._workspaceRoot;
     }
 
+    /**
+     * DIAGNOSTIC (is_epic clobber investigation) — TEMPORARY. Snapshot the is_epic state of
+     * every .switchboard/epics/ row THIS instance currently holds, tagged with the instance id
+     * and a context label ("persist" = about to flush to disk, "reload" = just loaded from disk).
+     *
+     * This is the fallback that makes candidate ❷ visible without a second test run: if a stale
+     * instance flushes is_epic=0 for an epic the Provider just set to 1, the "persist" line names
+     * the offending instance and the exact moment. Logs nothing when the workspace has no epic
+     * rows, to keep the file focused. Remove with the other probes.
+     */
+    private _diagEpicSnapshot(context: 'persist' | 'reload'): void {
+        try {
+            if (!this._db) return;
+            const res = this._db.exec("SELECT plan_file, is_epic, epic_id FROM plans WHERE plan_file LIKE '.switchboard/epics/%'");
+            const rows = res[0]?.values ?? [];
+            if (rows.length === 0) return;
+            const summary = rows.map(r => `${r[0]}=is_epic:${r[1]},epic_id:${r[2] ?? ''}`).join(' | ');
+            appendEpicClobberDiag(this._workspaceRoot, `${context} instance=${this.instanceId} epics=[ ${summary} ]`);
+        } catch { /* diagnostic only */ }
+    }
+
     private async _persist(): Promise<boolean> {
         if (!this._db) return false;
+        this._diagEpicSnapshot('persist');
         // Bump the board-data version counter. Every board-data write funnels
         // through _persist(), so this is the single choke point that lets
         // KanbanProvider short-circuit a no-op refresh in O(1). Non-board-data

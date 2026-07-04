@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
+import { appendEpicClobberDiag } from './epicClobberDiag'; // DIAGNOSTIC (is_epic clobber) — remove with the probes
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import { PlanManifestService } from './PlanManifestService';
@@ -452,6 +453,15 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
 
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
+            // DIAGNOSTIC (is_epic clobber investigation): log which sql.js instance the watcher
+            // operates on when it handles an epic file. Compare against the provider=… /
+            // watcher=… line from createEpicFromPlanIds. Same instanceId ⇒ candidate ❷ is dead;
+            // different ⇒ this handler may persist a stale snapshot over the epic's is_epic=1.
+            // See docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is fixed.
+            if (relativePath.startsWith('.switchboard/epics/')) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] epic-file handle: instance ${db.instanceId} (dbPath=${db.dbPath}) for ${relativePath}`);
+                appendEpicClobberDiag(workspaceRoot, `watcher._handlePlanFile: instance=${db.instanceId} handling epic file ${relativePath}`);
+            }
             if (isRuntimeMirrorPlanFile(path.basename(relativePath))) {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipped brain mirror file: ${relativePath}`);
                 return;
