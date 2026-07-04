@@ -6759,7 +6759,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 
                 // Import ArchiveManager and archive the selected plans
                 // AI NOTICE: DO NOT append .js to this import. tsc complains about Node16 module resolution, but Webpack requires it to be extensionless here to bundle correctly.
-                const { ArchiveManager } = await import('./ArchiveManager.js');
+                const { ArchiveManager } = await import('./ArchiveManager');
                 const archiveMgr = new ArchiveManager(workspaceRoot);
                 
                 // Check if archive is configured

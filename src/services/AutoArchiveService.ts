@@ -297,7 +297,7 @@ export class AutoArchiveService {
     }
 
     /** Map a KanbanPlanRecord to the ArchiveManager's PlanRecord shape. */
-    private _toArchiveRecord(plan: KanbanPlanRecord): import('./ArchiveManager.js').PlanRecord {
+    private _toArchiveRecord(plan: KanbanPlanRecord): import('./ArchiveManager').PlanRecord {
         return {
             planId: plan.planId,
             sessionId: plan.sessionId,

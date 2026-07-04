@@ -2940,7 +2940,7 @@ export class ClickUpSyncService {
       let workspaceId = '';
       try {
         // AI NOTICE: DO NOT append .js to this import. tsc complains about Node16 module resolution, but Webpack requires it to be extensionless here to bundle correctly.
-        const kdbModule = await import('./KanbanDatabase.js');
+        const kdbModule = await import('./KanbanDatabase');
         const resolved = kdbModule.KanbanDatabase.forWorkspace(this._workspaceRoot);
         const ready = await resolved.ensureReady();
         db = resolved;

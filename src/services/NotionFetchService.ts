@@ -642,7 +642,7 @@ export class NotionFetchService {
 
       // Build content as chunked paragraph blocks (≤2000 chars each) to match
       // createPage behaviour, then route through the centralized overwrite guard.
-      const { guardedWritePageBody } = await import('./remote/notionOverwriteGuard.js');
+      const { guardedWritePageBody } = await import('./remote/notionOverwriteGuard');
       const MAX_BLOCK_TEXT = 2000;
       const chunks: string[] = [];
       for (let i = 0; i < content.length; i += MAX_BLOCK_TEXT) {
