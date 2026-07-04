@@ -6,14 +6,24 @@ Remove the "Create Worktrees for All Epics" button from the kanban.html Worktree
 
 ### Problem Analysis & Root Cause
 
-The button lives in `createWorktreesPanel()` inside `src/webview/kanban.html` (lines 9298–9311). It posts a `createWorktreesForAllEpics` message to the extension backend. The backend handler in `src/services/KanbanProvider.ts` (lines 8142–8188) loops over every epic plan, calls `_createSafetyWorktree`, and calls `ensureWorktreeTerminals` for each — a heavy operation that can take a long time and hit the `MAX_AUTOBAN_TERMINALS_PER_ROLE = 5` ceiling silently.
+The button lives in `createWorktreesPanel()` inside `src/webview/kanban.html` (lines 9827–9840, inside the function that starts at line 9613). It posts a `createWorktreesForAllEpics` message to the extension backend. The backend handler in `src/services/KanbanProvider.ts` (lines 8738–8783) loops over every epic plan, calls `_createSafetyWorktree`, and calls `ensureWorktreeTerminals` for each — a heavy operation that can take a long time and hit the `MAX_AUTOBAN_TERMINALS_PER_ROLE = 5` ceiling silently.
 
 The button is purely additive UI — removing it does not affect the per-epic dropdown, the project dropdown, the auto-mode radios, or the active worktrees list. The backend handler can be left in place (harmless dead code) or removed; this plan removes both the UI and the handler for cleanliness.
+
+**Bonus cleanup:** The batch button never forwarded `repoName` in its message (kanban.html line 9836), so in explicit control-plane mode with no scope filter it failed to target the right repo — a pre-existing bug noted in the `fix-worktree-creation-in-control-plane-directories` plan. Removing the button eliminates this dead-end code path entirely.
 
 ## Metadata
 
 - **Tags:** frontend, backend, ui, cleanup
 - **Complexity:** 2
+
+## User Review Required
+
+No — removing dead UI and its self-contained handler. No user data impact, no migration (unreleased feature).
+
+## Dependencies
+
+- None. This plan should land **first** in the epic (per epic sequencing: `77844254` → `7b858061` → `3a59baf3`) so the reorganization plan's target structure — which already omits the batch button — does not need to account for a transient dead button.
 
 ## Complexity Audit
 
@@ -31,11 +41,15 @@ The button is purely additive UI — removing it does not affect the per-epic dr
 - **No user data impact:** Existing worktrees created via the batch button remain in the database and render normally in the active worktrees list.
 - **No migration needed:** This feature only ever existed in unreleased dev work; clean break is acceptable per project rules.
 
+## Adversarial Synthesis
+
+Key risks: orphaned message handler if only UI removed (mitigated by removing both); line anchors must be re-verified since sibling plans rewrite the same function. Mitigations: handler is self-contained with no other posters (verified — single UI reference at kanban.html line 9835); plan lands first per epic sequencing.
+
 ## Proposed Changes
 
 ### 1. `src/webview/kanban.html` — Remove the batch button block
 
-Delete lines 9298–9311 (the `// 2. Create worktrees for all epics` block):
+Delete lines 9827–9840 (the `// 2. Create worktrees for all epics` block):
 
 ```javascript
 // REMOVE THIS ENTIRE BLOCK:
@@ -57,7 +71,7 @@ actionSection.appendChild(batchEpicsBtn);
 
 ### 2. `src/services/KanbanProvider.ts` — Remove the backend handler
 
-Delete the `case 'createWorktreesForAllEpics'` block (lines 8142–8188):
+Delete the `case 'createWorktreesForAllEpics'` block (lines 8738–8783):
 
 ```typescript
 // REMOVE THIS ENTIRE CASE BLOCK:

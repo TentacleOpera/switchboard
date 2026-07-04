@@ -23,13 +23,13 @@ UNBOUND (ad-hoc unbound worktree button + any unbound active worktrees)
 
 ### Problem Analysis & Root Cause
 
-The current `createWorktreesPanel()` function (kanban.html lines 9084–9580) builds the panel as a flat sequence of sections:
+The current `createWorktreesPanel()` function (kanban.html lines 9613–10110) builds the panel as a flat sequence of sections:
 
-1. A config section with the routing-order description (lines 9088–9104).
-2. A settings section with the suppress checkbox (lines 9107–9125).
-3. An "EPICS" section containing ONLY the auto-mode radios (lines 9128–9187).
-4. A single "CREATE NEW WORKTREE" action section containing the project dropdown, the (to-be-removed) batch-all-epics button, the single-epic dropdown, and the unbound button all mixed together (lines 9190–9388).
-5. A single "ACTIVE WORKTREES" list that renders ALL worktrees (project, epic, unbound) in one flat list with epic worktrees nested under their parent project (lines 9390–9577).
+1. A config section with the routing-order description (lines 9618–9633).
+2. A settings section with the suppress checkbox (lines 9636–9654).
+3. An "EPICS" section containing ONLY the auto-mode radios (lines 9657–9716).
+4. A single "CREATE NEW WORKTREE" action section containing the repo-select dropdown, the project dropdown, the (to-be-removed) batch-all-epics button, the single-epic dropdown, and the unbound button all mixed together (lines 9719–9917).
+5. A single "ACTIVE WORKTREES" list that renders ALL worktrees (project, epic, unbound) in one flat list with epic worktrees nested under their parent project (lines 9919–10107).
 
 The problem: epic controls and project controls are interleaved in the same action section, and the active worktrees list mixes epic and project worktrees without clear grouping. Users cannot quickly find "where do I create an epic worktree" vs "where do I create a project worktree."
 
@@ -40,6 +40,16 @@ The fix is structural reorganization of the DOM-building code — no backend cha
 - **Tags:** frontend, ui, ux, refactor
 - **Complexity:** 4
 
+## User Review Required
+
+Yes — the reorganization deliberately removes the epic→project nesting visual (the `↳` arrow and indented rows). Confirm that clean separation into Epics/Projects active-worktrees lists is preferred over the current nested view before implementing.
+
+## Dependencies
+
+- **Hard dependency:** Plan `feature_plan_20260703063946` (remove batch button) should land first — this plan's target structure omits the batch button, and landing removal first avoids a transient dead button in the new layout.
+- **Soft dependency:** Plan `feature_plan_20260703063947` (descriptive text) should land after this one so the text anchors into the final section layout.
+- Line numbers in this plan are anchored against the **current HEAD with the batch button still present**. If the batch-button removal lands first, subtract ~14 lines from the action-section anchors (the batch block is kanban.html lines 9827–9840).
+
 ## Complexity Audit
 
 ### Routine
@@ -48,15 +58,20 @@ The fix is structural reorganization of the DOM-building code — no backend cha
 - The repo-select dropdown (control plane mode) needs to appear once, shared by both manual-creation subsections. Move it above the Epics/Projects split, inside the existing config area.
 
 ### Complex / Risky
-- **Epic→project nesting removal:** The current list nests epic worktrees under their parent project worktree (lines 9549–9556). After reorganization, epic worktrees live in the Epics → Active Worktrees subsection and project worktrees live in Projects → Active Worktrees. The nesting visual (`isNested = true`, the `↳` arrow) is no longer applicable in separate lists. This is a deliberate UX change — the user asked for clean separation, not nesting.
-- **Unbound worktrees:** The current code has an "Unbound" creation button and renders unbound worktrees at the end of the list. The target structure does not explicitly mention unbound worktrees. Keep the unbound creation button and unbound active worktrees in a small separate "UNBOUND" section at the bottom, preserving existing behavior.
+- **Epic→project nesting removal:** The current list nests epic worktrees under their parent project worktree (lines 10079–10086). After reorganization, epic worktrees live in the Epics → Active Worktrees subsection and project worktrees live in Projects → Active Worktrees. The nesting visual (`isNested = true`, the `↳` arrow at lines 9957–9962) is no longer applicable in separate lists. This is a deliberate UX change — the user asked for clean separation, not nesting.
+- **Unbound worktrees:** The current code has an "Unbound" creation button (lines 9895–9915) and renders unbound worktrees at the end of the list (lines 10096–10099). The target structure does not explicitly mention unbound worktrees. Keep the unbound creation button and unbound active worktrees in a small separate "UNBOUND" section at the bottom, preserving existing behavior.
 
 ## Edge-Case & Dependency Audit
 
-- **Worktree filtering logic:** Currently `projectWTs = worktrees.filter(w => w.project)` and `epicWTs = worktrees.filter(w => w.epicTopic)`. A worktree can have BOTH `epicTopic` and `epicProject` set (epic worktrees that belong to a project). The epic filter takes precedence — epic worktrees go in the Epics section, not the Projects section. The existing filter logic already does this correctly (`epicTopic` is checked first in the chip mapping at line 9450). Preserve this: filter epic worktrees by `w.epicTopic`, project worktrees by `w.project && !w.epicTopic`.
-- **Empty state:** Each Active Worktrees subsection must show "No active epic worktrees." / "No active project worktrees." when empty, mirroring the current empty-state message.
-- **Status badges:** The `getWorktreeStatuses` message (line 9572) currently sends ALL worktree IDs. After splitting, both subsections still need status badges. Keep sending all worktree IDs in one message — the status response handler updates badges by `data-wt-id` attribute, which works regardless of DOM location.
+- **Worktree filtering logic (latent double-render bug):** Currently `projectWTs = worktrees.filter(w => w.project)` (line 10075) and `epicWTs = worktrees.filter(w => w.epicTopic)` (line 10076). A worktree can have BOTH `epicTopic` and `epicProject` set (epic worktrees that belong to a project). If an epic worktree object also carries a `project` field, the current `w.project` filter would include it in `projectWTs` AND `epicWTs`, causing a double render (once as a project row, once nested as an epic child). The current nesting logic masks this because the project-row render and the nested-epic render are visually distinct, but it is a latent bug. The reorganization MUST use the safe filter: epic worktrees by `w.epicTopic`, project worktrees by `w.project && !w.epicTopic`. This both fixes the latent double-render and enforces the epic-takes-precedence rule (chip mapping at line 9979 checks `epicTopic` first).
+- **Empty state:** Each Active Worktrees subsection must show "No active epic worktrees." / "No active project worktrees." when empty, mirroring the current empty-state message (line 9943).
+- **Status badges:** The `getWorktreeStatuses` message (lines 10102–10106) currently sends ALL worktree IDs. After splitting, both subsections still need status badges. Keep sending all worktree IDs in one message — the status response handler updates badges by `data-wt-id` attribute (line 9966), which works regardless of DOM location.
+- **setTimeout / DOM mounting:** The current list rendering wraps everything in `setTimeout(() => { ... }, 0)` (line 9939) and re-queries the list via `document.getElementById('worktree-list')` (line 9940) because `listDiv` is created at line 9930 but the rows are appended inside the timeout. In the reorganized version, build the list DOM elements directly against the `listDiv` reference (no `getElementById`, no `setTimeout`) since we are constructing elements, not querying a mounted tree. Hoist `renderWorktreeRow` (currently defined inside the setTimeout at line 9949) to function scope so the subsection helpers can call it during panel construction.
 - **No backend changes:** All message types and handlers remain unchanged. This is pure frontend DOM reorganization.
+
+## Adversarial Synthesis
+
+Key risks: latent double-render bug if project filter is not tightened to `w.project && !w.epicTopic`; setTimeout/getElementById pattern must be replaced with direct listDiv reference or rows will not mount; nesting removal is a deliberate UX change requiring user sign-off; line anchors shift if the batch-button removal lands first. Mitigations: safe filter documented with rationale; hoist renderWorktreeRow and build DOM directly; User Review Required flag set; line-shift note added to Dependencies.
 
 ## Proposed Changes
 
@@ -70,8 +85,8 @@ function createWorktreesPanel(config) {
     container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
 
     // 1. Header section: WORKTREES title + routing description + suppress checkbox
-    //    (keep existing code for lines 9088–9125, including the repo-select dropdown
-    //     if controlPlaneMode === 'explicit' — move it here from the old action section)
+    //    (keep existing code for lines 9618–9654, including the repo-select dropdown
+    //     if controlPlaneMode === 'explicit' — move it here from the old action section at lines 9731–9775)
 
     // 2. EPICS section
     const epicsSection = document.createElement('div');
@@ -79,10 +94,10 @@ function createWorktreesPanel(config) {
     // Header: "EPICS"
 
     // 2a. Auto subsection (the three radio buttons)
-    //     Move existing autoModeGroup code (lines 9143–9186) here.
+    //     Move existing autoModeGroup code (lines 9672–9715) here.
 
     // 2b. Manual Creation subsection
-    //     Move existing single-epic dropdown + "Create Epic Worktree" button (lines 9313–9363) here.
+    //     Move existing single-epic dropdown + "Create Epic Worktree" button (lines 9843–9892) here.
 
     // 2c. Active Worktrees subsection (epic worktrees only)
     //     Filter: worktrees.filter(w => w.epicTopic)
@@ -94,14 +109,14 @@ function createWorktreesPanel(config) {
     // Header: "PROJECTS"
 
     // 3a. Manual Creation subsection
-    //     Move existing project dropdown + "Create Project Worktree" button (lines 9248–9296) here.
+    //     Move existing project dropdown + "Create Project Worktree" button (lines 9778–9825) here.
 
     // 3b. Active Worktrees subsection (project worktrees only)
     //     Filter: worktrees.filter(w => w.project && !w.epicTopic)
     //     Render each with renderWorktreeRow(w, false) — no nesting.
 
     // 4. UNBOUND section (keep small, at bottom)
-    //     Move existing "Create Worktree (Unbound)" button (lines 9365–9386) here.
+    //     Move existing "Create Worktree (Unbound)" button (lines 9895–9915) here.
     //     Active unbound worktrees: worktrees.filter(w => !w.project && !w.epicTopic)
 
     // 5. Status request (keep existing getWorktreeStatuses call, send ALL worktree IDs)
@@ -143,9 +158,9 @@ function renderWorktreeList(worktreeSubset, emptyMessage) {
 }
 ```
 
-Note: `renderWorktreeRow` must be hoisted or defined before it's called by the subsection helpers. Currently it's defined inside the `setTimeout` callback (line 9420). Move it outside the setTimeout so it's available during panel construction. The `setTimeout(() => { ... }, 0)` pattern was used to wait for DOM mounting; with the new structure, render the lists directly (no setTimeout needed) since we're building DOM elements, not querying by ID.
+Note: `renderWorktreeRow` must be hoisted or defined before it's called by the subsection helpers. Currently it's defined inside the `setTimeout` callback (line 9949). Move it to function scope so it's available during panel construction. The `setTimeout(() => { ... }, 0)` pattern (line 9939) was used to wait for DOM mounting because the code re-queried the list via `document.getElementById('worktree-list')` (line 9940); with the new structure, render the lists directly against the `listDiv` reference (created at line 9930) — no setTimeout, no getElementById — since we're building DOM elements, not querying a mounted tree.
 
-**Repo-select dropdown** — move the control-plane repo-select (lines 9202–9246) into the header section, below the suppress checkbox description. It's shared by both the Epics and Projects manual-creation subsections.
+**Repo-select dropdown** — move the control-plane repo-select (lines 9731–9775) into the header section, below the suppress checkbox description. It's shared by both the Epics and Projects manual-creation subsections.
 
 ## Verification Plan
 

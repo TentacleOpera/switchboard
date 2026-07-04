@@ -260,4 +260,13 @@ manual via installed VSIX.
    - With both a main-workspace lead terminal and a worktree lead terminal alive → clicking the LEAD CODED subline focuses the **worktree** terminal (matches implementation.html `findTerminalByRole` preference).
 8. **No regressions:**
    - Confirm column drag-and-drop, card selection, and the existing autoban-panel FOCUS buttons still work (the subline click uses `stopPropagation` and is a nested element, so it must not interfere with header/column interactions).
-   - Confirm `updateAllColumnAgents` still runs on `updateAgentNames` and `terminals` messages (link activates as soon as a terminal appears).
+   - Confirm `updateAllColumnAgents` runs on `updateAgentNames`, `visibleAgents`, and `terminalStatuses` messages (link activates as soon as a terminal appears — verified by Step 5 fix).
+9. **Terminal start/stop refresh (Step 5 fix):**
+   - With no terminal running for a role → subline shows plain text (e.g. "DEVIN CLI").
+   - Start a terminal for that role → subline immediately becomes a clickable locate link
+     (driven by the `terminalStatuses` → `updateAllColumnAgents()` call added in Step 5).
+   - Kill the terminal → subline reverts to plain text on the next `terminalStatuses` broadcast.
+
+---
+
+**Recommendation:** Complexity 4 → **Send to Coder**.

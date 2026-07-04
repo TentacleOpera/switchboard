@@ -13,8 +13,8 @@ Make the kanban board's peripheral chrome (column headers and the bottom-bar wor
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban bottom-bar worktree indicator must reflect the active worktree (project/epic aware)](../plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md) — **PLAN REVIEWED**
-- [ ] [Kanban Column Header Terminal Names → Locate Links](../plans/feature_plan_20260703130223_kanban-column-header-terminal-locate-links.md) — **PLAN REVIEWED**
+- [ ] [Kanban bottom-bar worktree indicator must reflect the active worktree (project/epic aware)](../plans/feature_plan_20260703065346_kanban-worktree-indicator-context-aware.md) — **INTERN CODED**
+- [ ] [Kanban Column Header Terminal Names → Locate Links](../plans/feature_plan_20260703130223_kanban-column-header-terminal-locate-links.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

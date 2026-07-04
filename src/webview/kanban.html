@@ -720,6 +720,16 @@
             height: 13px;
         }
 
+        .column-agent .column-agent-link {
+            color: inherit;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .column-agent .column-agent-link:hover {
+            text-decoration: underline;
+            opacity: 1;
+        }
+
         .column-subline-spacer {
             height: 13px;
             margin-top: 2px;
@@ -5024,31 +5034,107 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return isColumnAgentVisible(col) && isColumnAgentAssigned(col);
         }
 
+        /** Resolve a role to a live terminal name, preferring worktree terminals (mirrors implementation.html). */
+        function findTerminalByRole(role) {
+            if (!role || !lastTerminals) return null;
+            const entries = Object.entries(lastTerminals);
+            const worktreeMatch = entries.find(([, info]) =>
+                info && info.role === role && info.worktreePath
+            );
+            if (worktreeMatch) return worktreeMatch[0];
+            const anyMatch = entries.find(([, info]) => info && info.role === role);
+            return anyMatch ? anyMatch[0] : null;
+        }
+
+        /** True if a terminal name corresponds to a chat-only (non-local) agent. */
+        function isChatOnlyTerminal(termName) {
+            const info = termName ? lastTerminals[termName] : null;
+            return !!(info && info._isChat && !info._isLocal);
+        }
+
+        /** For CODED_AUTO (dynamic routing): resolve the most senior alive terminal. Order: lead → coder → intern. */
+        function findMostSeniorRoutedTerminal() {
+            const SENIORITY = ['lead', 'coder', 'intern'];
+            for (const role of SENIORITY) {
+                const entries = Object.entries(lastTerminals || {});
+                // Prefer worktree, then any alive terminal of this role.
+                const worktree = entries.find(([, info]) =>
+                    info && info.role === role && info.worktreePath && isTerminalAlive(info));
+                if (worktree) return worktree[0];
+                const any = entries.find(([, info]) =>
+                    info && info.role === role && isTerminalAlive(info));
+                if (any) return any[0];
+            }
+            return null;
+        }
+
+        function isTerminalAlive(info) {
+            if (!info) return false;
+            const HEARTBEAT_MS = 60_000;
+            const lastSeenMs = Date.parse(info.lastSeen || '');
+            const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_MS;
+            return info.alive !== undefined ? !!info.alive : (info._isLocal || heartbeatAlive);
+        }
+
         function updateAllColumnAgents() {
             if (!lastAgentNames) return;
 
             columns.forEach(col => {
                 const el = document.getElementById('agent-' + col);
-                if (el) {
-                    const role = columnToRole(col);
-                    const name = lastAgentNames[role];
-                    if (role && (lastVisibleAgents[role] === false || name === 'No agent assigned')) {
-                        el.textContent = 'No agent assigned';
-                        el.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
-                        el.style.fontStyle = 'italic';
-                    } else {
-                        el.textContent = name || '';
-                        el.style.color = '';
-                        el.style.fontStyle = '';
-                    }
+                if (!el) return;
+                const role = columnToRole(col);
+                const name = lastAgentNames[role];
+
+                if (role && (lastVisibleAgents[role] === false || name === 'No agent assigned')) {
+                    renderAgentSubline(el, 'No agent assigned', null, { italic: true, warning: true });
+                    return;
                 }
+
+                const termName = findTerminalByRole(role);
+                const chatOnly = isChatOnlyTerminal(termName);
+                const focusable = termName && !chatOnly;
+                renderAgentSubline(el, name || '', focusable ? termName : null);
             });
 
-            // Update synthetic CODED_AUTO agent subline when collapsed
+            // Synthetic CODED_AUTO column — dynamic routing to most senior alive terminal.
             const autoRouteEl = document.getElementById('agent-CODED_AUTO');
             if (autoRouteEl) {
-                autoRouteEl.textContent = 'Dynamic routing';
-                autoRouteEl.style.color = '';
+                const routed = findMostSeniorRoutedTerminal();
+                renderAgentSubline(autoRouteEl, 'Dynamic routing', routed, { dim: true });
+            }
+        }
+
+        /** Render the column-agent subline. If `focusTermName` is non-null, make it a clickable locate link. */
+        function renderAgentSubline(el, label, focusTermName, opts = {}) {
+            el.innerHTML = '';
+            el.style.color = '';
+            el.style.fontStyle = '';
+            el.classList.remove('column-agent-link');
+
+            if (!label) { el.textContent = ''; return; }
+
+            if (opts.warning) {
+                el.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+            }
+            if (opts.italic) {
+                el.style.fontStyle = 'italic';
+            }
+
+            if (focusTermName) {
+                const link = document.createElement('a');
+                link.className = 'column-agent-link';
+                link.href = '#';
+                link.textContent = label;
+                link.title = `Locate terminal: ${focusTermName}`;
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    postKanbanMessage({ type: 'focusTerminal', terminalName: focusTermName });
+                });
+                el.appendChild(link);
+            } else {
+                el.textContent = label;
+                if (opts.dim) el.style.opacity = '0.8';
             }
         }
 
@@ -5145,6 +5231,46 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const branch = worktreePath.split(/[\\/]/).pop() ?? worktreePath;
             branchEl.textContent = branch;
             el.style.display = 'flex';
+        }
+
+        // Resolves the "active worktree" — the one prompts would reference given the current UI
+        // context — and updates the bottom-bar indicator. Routing: selected epic worktree → active
+        // project worktree → none. Does NOT use the prompt path's "sole active worktree" fallback,
+        // because the indicator is a persistent status display and must stay project/epic-scoped
+        // (an epic's worktree must not show when that epic isn't selected).
+        function recomputeWorktreeIndicator() {
+            const worktrees = (lastWorktreeConfig && lastWorktreeConfig.worktrees) || [];
+
+            // 1. Selected epic(s) with a worktree.
+            const selectedEpics = Array.from(selectedCards.entries())
+                .filter(([, v]) => v && v.isEpic)
+                .map(([id]) => id);
+            if (selectedEpics.length > 0) {
+                const paths = new Set();
+                for (const epicPlanId of selectedEpics) {
+                    const fromMap = currentEpicWorktrees[epicPlanId];
+                    if (fromMap && fromMap.path) { paths.add(fromMap.path); continue; }
+                    const fromList = worktrees.find(w => String(w.epicId) === String(epicPlanId));
+                    if (fromList && fromList.path) paths.add(fromList.path);
+                }
+                if (paths.size === 1) {
+                    updateWorktreeIndicator(paths.values().next().value);
+                    return;
+                }
+                // 0 matches, or ambiguous (multiple distinct worktrees) → fall through to hide.
+            }
+
+            // 2. Active project filter with a project-scoped worktree.
+            if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
+                const projWt = worktrees.find(w => w.project && w.project === activeProjectFilter);
+                if (projWt && projWt.path) {
+                    updateWorktreeIndicator(projWt.path);
+                    return;
+                }
+            }
+
+            // 3. Nothing applicable — hide.
+            updateWorktreeIndicator(null);
         }
 
 
@@ -5303,6 +5429,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     updateReassignButtonVisibility();
                     updateEpicActionButton();
+                    recomputeWorktreeIndicator();
                 });
 
                 // Re-apply selection state after re-render
@@ -6224,6 +6351,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             loadWorktreeConfig();
                         }
                     }
+                    recomputeWorktreeIndicator();
                     break;
                 }
                 case 'moveCards': {
@@ -6282,6 +6410,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const nextEpicWorktrees = msg.epicWorktrees || {};
                     const epicWorktreesChanged = JSON.stringify(currentEpicWorktrees) !== JSON.stringify(nextEpicWorktrees);
                     currentEpicWorktrees = nextEpicWorktrees;
+                    recomputeWorktreeIndicator();
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
                     const nextBoardSignature = buildBoardSignature(nextCards);
                     const dbWarningBanner = document.getElementById('db-warning-banner');
@@ -6345,12 +6474,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'worktreeConfig': {
                     lastWorktreeConfig = msg;
                     renderWorktreesTab();
-                    const activeWorktrees = msg.worktrees || [];
-                    if (activeWorktrees.length === 1) {
-                        updateWorktreeIndicator(activeWorktrees[0].path);
-                    } else {
-                        updateWorktreeIndicator(null);
-                    }
+                    recomputeWorktreeIndicator();
                     break;
                 }
                 case 'worktreeStatuses': {
@@ -6934,6 +7058,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         function updateEpicActionButton() {
+            recomputeWorktreeIndicator();
             const btn = document.getElementById('btn-epic-action');
             if (!btn) return;
             const selected = Array.from(selectedCards.values());
@@ -9216,6 +9341,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (!msg || typeof msg !== 'object') return;
             if (msg.type === 'terminalStatuses') {
                 lastTerminals = msg.terminals || {};
+                updateAllColumnAgents();
                 renderAutobanPanel();
             } else if (msg.type === 'customAgents') {
                 lastCustomAgents = Array.isArray(msg.customAgents) ? msg.customAgents : [];
