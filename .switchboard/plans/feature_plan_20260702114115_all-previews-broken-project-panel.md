@@ -283,3 +283,7 @@ Skipped per session directive. The test suite will be run separately by the user
 ## Recommendation
 
 **Complexity: 5 → Send to Coder.**
+
+## Review Findings
+
+Reviewed implementation against plan requirements. Change #1 (shared `dispose()` re-registration) correctly implemented at `PlanningPanelProvider.ts:9401-9435`. Change #2 (`path.resolve` against workspace roots with `isAllowed` on final resolved path) correctly implemented at `PlanningPanelProvider.ts:1462-1494`. Change #3 (CSP `file:` in `img-src`) confirmed at `project.html:6`. Change #4 (kanban branch `msg.error` check) confirmed at `project.js:651-655`. Change #5 (preview responses through ready-queue) confirmed for `_handleFetchKanbanPlanPreview` (via `sendResponse` helper), `_postToBothPanels`, `constitutionFileRead`, and `projectPrdContent`. Two MAJOR findings fixed during review: (1) deserialize path `onDidDispose` at `_hydratePanel` (`PlanningPanelProvider.ts:702-711`) was truncated — upgraded to full cleanup; (2) tuning/insights preview responses (`insightsLoaded`, `insightContent`, `tuningExtractComplete` — 6 calls) bypassed the ready-queue — routed through `postMessageToProjectWebview`. Files changed: `src/services/PlanningPanelProvider.ts`. Validation: compilation and tests skipped per session directive; edits verified by re-reading. Remaining risk: `architectDocContent` (System tab preview, line ~4468) and ~50 action-acknowledgement messages still use direct `postMessage` — out of plan scope but same cold-start class.

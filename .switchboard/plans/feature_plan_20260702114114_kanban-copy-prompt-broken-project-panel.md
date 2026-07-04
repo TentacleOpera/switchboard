@@ -220,3 +220,7 @@ Skipped per session directive. The test suite will be run separately by the user
 ## Recommendation
 
 **Complexity: 5 → Send to Coder.**
+
+## Review Findings
+
+Reviewed implementation against plan requirements. Change #1 (shared `dispose()` re-registration of `onDidReceiveMessage` + full-cleanup `onDidDispose`) is correctly implemented at `PlanningPanelProvider.ts:9401-9435`. Change #2 (route `kanbanPlanPromptCopied` through `postMessageToProjectWebview`) is correctly applied — all 7 calls in `copyKanbanPlanPrompt` and `copyEpicPlannerPrompt` use the queue helper. Change #3 (list-refresh guard widening in `project.js:866`) confirmed already present. Two MAJOR findings fixed during review: (1) the deserialize path's `onDidDispose` at `_hydratePanel` (`PlanningPanelProvider.ts:702-711`) was a truncated copy missing ready-state cleanup — upgraded to mirror `openProject()`'s full handler; (2) `insightsLoaded`/`insightContent`/`tuningExtractComplete` responses (6 calls) bypassed the ready-queue — routed through `postMessageToProjectWebview`. Validation: compilation and tests skipped per session directive; edits verified by re-reading affected sections. Remaining risk: ~50 other direct `this._projectPanel?.webview.postMessage` calls for action-acknowledgement messages (e.g. `kanbanPlanDeleted`, `epicError`) still bypass the queue — these are not preview responses and are out of plan scope, but could drop during cold-start.

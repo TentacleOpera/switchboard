@@ -693,10 +693,21 @@ export class PlanningPanelProvider {
         );
 
         // Use the same dispose semantics as open(): for the planning panel,
-        // dispose all shared resources; for project panel, just null the ref.
+        // dispose all shared resources; for project panel, full cleanup mirroring
+        // openProject()'s onDidDispose (line 382-394) — null the ref, reset ready
+        // state, clear pending messages, and kill the ready timer. The previous
+        // version only nulled _projectPanel, leaving stale ready state that caused
+        // postMessageToProjectWebview to silently drop messages (no-op via optional
+        // chaining) instead of queueing them during the close→reopen window.
         if (isProject) {
             panel.onDidDispose(() => {
                 this._projectPanel = undefined;
+                this._projectPanelReady = false;
+                this._pendingProjectMessages = [];
+                if (this._projectPanelReadyTimer) {
+                    clearTimeout(this._projectPanelReadyTimer);
+                    this._projectPanelReadyTimer = undefined;
+                }
             }, null, this._disposables);
         } else {
             panel.onDidDispose(() => {
@@ -7055,7 +7066,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 const wsRoot = String(msg.workspaceRoot || '');
                 if (wsRoot) {
                     const insights = InsightManager.listInsights(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights });
+                    this.postMessageToProjectWebview({ type: 'insightsLoaded', insights });
                 } else {
                     const workspaceItems = buildWorkspaceItems(allRoots);
                     const allInsights: any[] = [];
@@ -7067,7 +7078,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                             console.warn('[PlanningPanel] Failed to list insights for', ws.workspaceRoot, err);
                         }
                     }
-                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights: allInsights });
+                    this.postMessageToProjectWebview({ type: 'insightsLoaded', insights: allInsights });
                 }
                 break;
             }
@@ -7079,7 +7090,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                     const content = InsightManager.readInsight(wsRoot, filename);
                     if (content) {
                         const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
-                        this._projectPanel?.webview.postMessage({
+                        this.postMessageToProjectWebview({
                             type: 'insightContent',
                             filename,
                             workspaceRoot: wsRoot,
@@ -7097,7 +7108,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 const planFiles = await this._resolveTuningPlanFiles(wsRoot, allRoots);
                 if (planFiles.length === 0) {
                     showTemporaryNotification('No plans with adversarial review sections found.');
-                    this._projectPanel?.webview.postMessage({ type: 'tuningExtractComplete', planCount: 0 });
+                    this.postMessageToProjectWebview({ type: 'tuningExtractComplete', planCount: 0 });
                     break;
                 }
                 const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
@@ -7126,7 +7137,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 const extractPrompt = `Run the tuning skill in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
                 await vscode.env.clipboard.writeText(extractPrompt);
                 showTemporaryNotification('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
-                this._projectPanel?.webview.postMessage({ type: 'tuningExtractComplete', planCount: planFiles.length });
+                this.postMessageToProjectWebview({ type: 'tuningExtractComplete', planCount: planFiles.length });
                 break;
             }
             case 'runTuningGovernance': {
@@ -7146,7 +7157,7 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 try {
                     InsightManager.updateInsightStatus(wsRoot, filename, newStatus);
                     const insights = InsightManager.listInsights(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights });
+                    this.postMessageToProjectWebview({ type: 'insightsLoaded', insights });
                 } catch (err) {
                     console.error('[PlanningPanel] Failed to update insight status:', err);
                 }
@@ -7159,8 +7170,8 @@ Read the current content above. Determine what's missing. Produce a complete epi
                 try {
                     InsightManager.deleteInsight(wsRoot, filename);
                     const insights = InsightManager.listInsights(wsRoot);
-                    this._projectPanel?.webview.postMessage({ type: 'insightsLoaded', insights });
-                    this._projectPanel?.webview.postMessage({ type: 'insightContent', filename: '', workspaceRoot: wsRoot, content: '' });
+                    this.postMessageToProjectWebview({ type: 'insightsLoaded', insights });
+                    this.postMessageToProjectWebview({ type: 'insightContent', filename: '', workspaceRoot: wsRoot, content: '' });
                 } catch (err) {
                     console.error('[PlanningPanel] Failed to delete insight:', err);
                 }
