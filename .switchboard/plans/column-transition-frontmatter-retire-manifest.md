@@ -27,7 +27,7 @@ manifest does today but through the file the agent is already editing.
 
 ## Metadata
 
-- **Project:** switchboard
+- **Project:** Switchboard
 - **Tags:** kanban, watcher, frontmatter, manifest, cleanup
 - **Complexity:** 6
 

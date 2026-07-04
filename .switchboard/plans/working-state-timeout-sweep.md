@@ -23,7 +23,7 @@ after the folder loop (~`line 165`).
 
 ## Metadata
 
-- **Project:** switchboard
+- **Project:** Switchboard
 - **Tags:** kanban, watcher, backend, reliability
 - **Complexity:** 3
 

@@ -16,7 +16,7 @@ flag produced by the backend subtasks has no on-screen surface until this subtas
 
 ## Metadata
 
-- **Project:** switchboard
+- **Project:** Switchboard
 - **Tags:** UI, frontend, kanban, webview
 - **Complexity:** 4
 

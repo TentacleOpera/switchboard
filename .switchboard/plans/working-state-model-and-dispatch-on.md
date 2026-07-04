@@ -34,7 +34,7 @@ here (cheap) and enforced authoritatively by the B-5 sweep.
 
 ## Metadata
 
-- **Project:** switchboard
+- **Project:** Switchboard
 - **Tags:** kanban, backend, migration, dispatch
 - **Complexity:** 5
 

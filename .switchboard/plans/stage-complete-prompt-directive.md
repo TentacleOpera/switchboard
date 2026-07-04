@@ -16,7 +16,7 @@ the exact target column and plan file so the agent writes a correct, matchable m
 
 ## Metadata
 
-- **Project:** switchboard
+- **Project:** Switchboard
 - **Tags:** prompts, dispatch, agent-instructions
 - **Complexity:** 4
 

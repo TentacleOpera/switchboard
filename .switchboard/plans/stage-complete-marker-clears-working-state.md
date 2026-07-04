@@ -23,7 +23,7 @@ plan doesn't clear a fresh light), and (b) aid debugging — it is never used to
 
 ## Metadata
 
-- **Project:** switchboard
+- **Project:** Switchboard
 - **Tags:** kanban, watcher, frontmatter, parsing
 - **Complexity:** 5
 
