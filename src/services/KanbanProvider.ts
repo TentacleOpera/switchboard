@@ -3572,6 +3572,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return { worktreePathMap, subtaskWorktreePathMap };
     }
 
+    /**
+     * Read the epic workflow toggle state (epic_ultracode_enabled /
+     * epic_goal_enabled) from the per-workspace DB config table and push
      * the current state to the webview so the sticky toggle buttons reflect
      * the persisted booleans on board load/refresh. On first load (or after a
      * partial-migration crash) the legacy epic_workflow_mode tri-state key is
