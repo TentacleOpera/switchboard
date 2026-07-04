@@ -3852,64 +3852,33 @@ Start by checking which documents exist, then present the menu.`;
                         this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Epic name is required.' });
                         break;
                     }
-                    const description = msg.description ? String(msg.description).trim() : '';
-                    const epicContent = `# ${name}\n\n${description}\n`;
+                    const description = msg.description ? String(msg.description).trim() : undefined;
 
-                    // Add to kanban board: create a DB plan record + file in epics/
-                    const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const workspaceId = await db.getWorkspaceId();
-                    if (!workspaceId) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Workspace ID not found. Cannot create epic.' });
+                    // Delegate to the shared, hardened entry point so the Epics-tab path runs
+                    // IDENTICAL logic to the Kanban board webview path and the LocalApiServer/
+                    // agent path. This is the single choke point that: inherits project/
+                    // project_id, embeds the full planId UUID in the filename, re-asserts
+                    // is_epic=1 as the final DB write, and calls _refreshBoard() so the Kanban
+                    // board panel actually updates. The previous duplicated body here omitted all
+                    // three, which is why an Epics-tab epic never appeared on the board (and
+                    // showed up as a plain plan once a later refresh ran).
+                    if (!this._kanbanProvider) {
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Kanban provider not available.' });
                         break;
                     }
-                    const planId = crypto.randomUUID();
-                    const sessionId = crypto.randomUUID();
-
-                    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
-                    let uniqueSlug = slug;
-                    const epicDir = path.join(wsRoot, '.switchboard', 'epics');
-                    await fs.promises.mkdir(epicDir, { recursive: true });
-                    if (fs.existsSync(path.join(epicDir, `${slug}.md`))) {
-                        uniqueSlug = `${slug}-${planId.slice(0, 8)}`;
-                    }
-                    const epicPlanFile = path.join('.switchboard', 'epics', `${uniqueSlug}.md`);
-                    const epicPath = path.join(wsRoot, epicPlanFile);
-
-                    const now = new Date().toISOString();
-                    const upsertOk = await db.upsertPlan({
-                        planId,
-                        sessionId,
-                        topic: name,
-                        planFile: epicPlanFile,
-                        kanbanColumn: 'CREATED',
-                        status: 'active',
-                        complexity: 'Unknown',
-                        tags: '',
-                        repoScope: '',
-                        workspaceId,
-                        createdAt: now,
-                        updatedAt: now,
-                        lastAction: '',
-                        sourceType: 'local',
-                        brainSourcePath: '',
-                        mirrorPath: '',
-                        routedTo: '',
-                        dispatchedAgent: '',
-                        dispatchedIde: '',
-                        isEpic: 1,
-                        epicId: ''
-                    });
-
-                    if (!upsertOk) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Failed to create epic: DB upsert failed.' });
+                    const result = await this._kanbanProvider.createEpicFromPlanIds(
+                        wsRoot,
+                        name,
+                        [],            // blank epic from the "+ New Epic" modal
+                        description
+                    );
+                    if (!result.success) {
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: result.error || 'Failed to create epic.' });
                         break;
                     }
 
-                    await db.updateEpicStatus(planId, 1, '');
-                    GlobalPlanWatcherService.registerPendingCreation(epicPath);
-                    await fs.promises.writeFile(epicPath, epicContent, 'utf8');
-                    // Trigger a full fetchKanbanPlans so the webview receives a complete
-                    // kanbanPlansReady message (with workspaceItems, columns, etc.).
+                    // createEpicFromPlanIds refreshed the Kanban board panel; still refresh the
+                    // Epics tab list (it reads from kanbanPlansReady, not the board push).
                     this._handleMessage({
                         type: 'fetchKanbanPlans',
                         requestId: Date.now()
