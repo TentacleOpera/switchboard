@@ -273,3 +273,23 @@ manual via installed VSIX.
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**.
+
+## Review Findings
+
+Implementation matches the plan: `recomputeWorktreeIndicator()` (kanban.html:5241) replaces the
+stale `activeWorktrees[0]` heuristic, routing selected-epic → project-worktree → hide; the
+recompute is wired into `updateEpicActionButton()` (kanban.html:7061), the `worktreeConfig`,
+`updateBoard`, and `updateWorkspaceSelection` handlers, and the card-click toggle. Two MAJOR
+gaps found and fixed: (1) `handleDrop` onto an epic-only column cleared `selectedCards` and
+returned with no recompute — indicator stayed stale indefinitely (no `updateBoard` follows a
+UI-only no-op drop); added `recomputeWorktreeIndicator()` before the return (kanban.html:5880).
+(2) Nine action-handler switch cases (`moveSelected`/`promptSelected`/`completeSelected`/etc.)
+called `selectedCards.delete(id)` with no recompute after the switch; added a single
+`recomputeWorktreeIndicator()` after the switch close (kanban.html:5004) so a deselected
+epic's worktree hides immediately rather than waiting for the next `updateBoard`. NIT: the
+card-click toggle (kanban.html:5437) double-triggers recompute via both `updateEpicActionButton()`
+and an explicit call — harmless redundancy, left as-is for grep-ability per plan preference.
+No typecheck/tests run (per review prompt); changes are pure webview JS in an HTML file outside
+tsconfig scope. Remaining risk: the `renderBoard` prune-loop `selectedCards.delete`
+(kanban.html:5311) is intentionally not covered (covered by the `updateBoard` recompute) —
+correct per plan.

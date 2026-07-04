@@ -4997,6 +4997,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             break;
                         }
                     }
+                    // Any case above that broke out of the switch may have mutated
+                    // selectedCards (delete/clear after dispatch/move/complete). Recompute
+                    // the worktree indicator so a deselected epic's worktree hides at once,
+                    // without waiting for the next updateBoard broadcast.
+                    recomputeWorktreeIndicator();
                 });
             });
 
@@ -5877,6 +5882,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (targetDef && targetDef.epicOnly) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
+                recomputeWorktreeIndicator();
                 return;
             }
 

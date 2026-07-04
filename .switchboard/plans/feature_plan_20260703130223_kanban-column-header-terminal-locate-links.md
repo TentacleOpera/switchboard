@@ -270,3 +270,24 @@ manual via installed VSIX.
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**.
+
+## Review Findings
+
+Implementation matches the plan: `findTerminalByRole`/`isChatOnlyTerminal`/
+`findMostSeniorRoutedTerminal`/`isTerminalAlive` helpers (kanban.html:5038–5077) mirror
+implementation.html; `updateAllColumnAgents` (kanban.html:5079) now renders clickable locate
+links via `renderAgentSubline` (kanban.html:5108) with `stopPropagation`+`preventDefault`;
+CSS `.column-agent-link` affordance added (kanban.html:723); the critical Step 5 fix is applied
+— `terminalStatuses` handler calls `updateAllColumnAgents()` (kanban.html:9344) so links
+activate on terminal start/stop. Backend `focusTerminal` handler (KanbanProvider.ts:8174) and
+`terminalStatuses` payload fields (`role`, `worktreePath`, `_isChat`, `_isLocal`, `alive`,
+`lastSeen`) verified present. No CRITICAL/MAJOR findings — no code fixes required. NIT:
+`findTerminalByRole` does not filter by liveness, so a dead terminal with a `role` could render
+as a clickable link (clicking focuses a disposed terminal → silent no-op); this faithfully
+mirrors implementation.html's `findTerminalByRole` (implementation.html:2696) and the plan
+explicitly chose to mirror it, so left as-is. NIT: `updateAllColumnAgents()` on every
+`terminalStatuses` broadcast rebuilds all column-agent subline DOM, but `renderAutobanPanel()`
+(heavier) already runs on the same broadcast, so acceptable. No typecheck/tests run (per review
+prompt); changes are pure webview JS in an HTML file outside tsconfig scope. Remaining risk: a
+stale-but-present dead terminal entry in `lastTerminals` could show a locate link that no-ops on
+click — low impact, matches reference implementation behaviour.
