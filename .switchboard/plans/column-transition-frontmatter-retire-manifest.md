@@ -33,10 +33,24 @@ manifest does today but through the file the agent is already editing.
 
 ## Implementation
 
-1. **Parse `**Column:**`.** Add a `columnIntent?: string` field to `PlanMetadata`
-   (`planMetadataUtils.ts:47-54`), parsed via the existing `extractEmbeddedMetadata(content,
-   'Column')` helper (`planMetadataUtils.ts:27`). Keep this distinct from the legacy
-   `kanbanColumn:` token so behavior is explicit and opt-in.
+> ⚠️ **`**Column:**` is ALREADY an owned token — do not reuse it in plan frontmatter.**
+> `GitStateProvider._parseColumnDeltasFromDiff` (`src/services/remote/GitStateProvider.ts:397`,
+> `COLUMN_LINE_RE = /^\*\*Column:\*\*\s*(.+)$/m`) parses `**Column:**` from **any** `.switchboard/`
+> git diff (remoteId = file basename) and applies a column move **plus an agent dispatch**. It
+> normally reads the exported mirror (`kanban-state-*.md`), but a `**Column:**` line committed into
+> a *plan* `.md` would be double-consumed (this subtask's GlobalPlanWatcher path *and*
+> GitStateProvider) and fire a spurious dispatch in control-plane mode. So: use a **distinct key**
+> (e.g. `**Move To:**`) for the plan-frontmatter transition intent, OR route column moves through
+> the existing GitStateProvider mirror channel instead of adding a second consumer.
+>
+> Also: on a stock install (`boardStateExport: 'none'`) the manifest is the **only** git-inbound
+> channel, so retiring the manifest for column is deferred until either the `**Move To:**` intent
+> or the mirror channel fully covers stock installs. Epic/project retirement (via their carriers)
+> is not blocked by this.
+
+1. **Parse the intent key.** Add a `columnIntent?: string` field to `PlanMetadata`
+   (`planMetadataUtils.ts:47-54`), parsed via `extractEmbeddedMetadata(content, 'Move To')` (NOT
+   `'Column'` — see the warning above). Keep this distinct from the legacy `kanbanColumn:` token.
 
 2. **Apply as a guarded move in the watcher.** In `GlobalPlanWatcherService._handlePlanFile`
    update branch (`GlobalPlanWatcherService.ts:617-697`), after `parsePlanMetadata` (`line

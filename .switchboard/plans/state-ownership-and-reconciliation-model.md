@@ -89,6 +89,40 @@ hundreds of files (huge diff, migration risk on ~4,000 installs). Instead **seed
 moved, re-linked), and treat "no base yet" as first-import semantics (positive-payload set, no
 clobber). Optionally offer a one-time explicit backfill command the user can run deliberately.
 
+## Git control-plane integration (mandatory constraints)
+
+The remote-control subsystem is DB-centric with two git-inbound channels (`manifest.json` →
+`PlanManifestService`, quiet; `**Column:**` lines in the exported mirror → `GitStateProvider`,
+with agent dispatch), one API channel (`RemoteControlService` polling Notion/Linear/ClickUp), and
+a DB→file mirror export (`exportStateToFile` on every `_persist`, default `boardStateExport:
+'none'`). Model C must fit this, not fight it:
+
+1. **Writeback MUST commit its own plan-file edits — HARD REQUIREMENT.** `PlanAutoFetchService`
+   ff-merges only when the working tree is clean *ignoring mirror files* (`MIRROR_FILE_RE`,
+   `PlanAutoFetchService.ts:227/327`). DB→file writeback edits **plan/epic files** (not mirror
+   files), so an uncommitted writeback leaves the tree dirty and **blocks inbound auto-pull
+   entirely**. The existing `pushExportedState` auto-commit stages only `kanban-board.md`/
+   `kanban-state-*.md`, never plan files. So writeback must commit its edits itself (a dedicated
+   `switchboard: sync plan metadata` commit, reconciled fetch+ff like `GitStateProvider.pushExportedState`),
+   respecting the control-plane-root resolution and default-branch-only semantics.
+2. **Subsumes manifest for epic_id/project; leaves column to the manifest.** Model C's carriers
+   replace the manifest's `epicId`/`project` fields (with the ledger providing the idempotency the
+   manifest lacked), and work even when `boardStateExport: 'none'` because `GlobalPlanWatcher`
+   always scans plan files. Column is NOT subsumed: the manifest is the *only* git-inbound channel
+   on a stock install, so column retirement is deferred (see the column subtask).
+3. **Echo-safe by construction — do not break it.** `GitStateProvider` only diffs `**Column:**`,
+   never `**Epic:**`/`**Project:**`, so epic/project writeback is never re-ingested as a phantom
+   remote move. This holds *only* while column has no writeback — never add a `**Column:**`
+   writeback to plan files.
+4. **API providers as DB-side writers.** Notion/Linear/ClickUp changes apply to the DB via the
+   same path as a manual drag; they mostly move columns/comments (not epic/project), so
+   epic/project reconciliation is effectively two-master. Guard: any API path that ever sets
+   `project`/`epic_id` must route through the writeback-triggering mutator, or it becomes a hidden
+   third writer the base/CAS model can't see.
+5. **Per-branch / control-plane-root aware.** Writeback and reconciliation must use the resolved
+   control-plane root (`resolveEffectiveWorkspaceRoot`) and honor default-branch-only pull
+   semantics, matching `exportStateToFile._resolveExportRoot` and `PlanAutoFetchService`.
+
 ## User Review Required
 
 - Confirm base storage: columns on `plans` (`base_epic_id`, `base_project`) vs a `sync_base` table.
