@@ -1910,7 +1910,6 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
-        let lastTerminalAgentNames = {}; // Terminal-derived agent names; workspace-agnostic
         let lastPlannerTarget = null;  // current rotation-cursor target terminal name, from terminalStatuses
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
@@ -2770,26 +2769,34 @@
             const name = document.createElement('div');
             name.className = 'agent-name';
             if (roleId !== 'jules') {
-                let suffix = '';
                 const isWtTerm = (dispatchInfo && dispatchInfo.isWorktreeTerminal) ||
                     (resolvedTermName && lastTerminals[resolvedTermName]?.worktreePath);
-                if (isWtTerm) {
-                    suffix = ' <span style="font-size:9px; opacity:0.6;">(worktree)</span>';
-                }
 
-                const displayName = explicitTermName
-                    || (dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName ? dispatchInfo.terminalName : lastTerminalAgentNames[roleId]);
+                // Name segment resolution order:
+                //   1. explicitTermName (PLANNER's user-selected target)
+                //   2. worktree-routed terminal name (dispatchInfo.terminalName when isWorktreeTerminal)
+                //   3. the terminal name key resolved by findTerminalByRole (resolvedTermName)
+                //   4. fallback to startup command -> "<CMD> CLI"
+                //   5. bare role label
+                const worktreeRouteName = (dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName)
+                    ? dispatchInfo.terminalName : null;
+                const displayName = explicitTermName || worktreeRouteName || resolvedTermName || null;
+                const fallbackCmdName = lastStartupCommands[roleId]
+                    ? `${lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase()} CLI`
+                    : null;
+
+                // Escape plain-text segments before joining into innerHTML (the worktree span is the only literal HTML).
+                const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const wtSegment = isWtTerm
+                    ? ' - <span style="font-size:9px; opacity:0.6;">worktree</span>'
+                    : '';
 
                 if (displayName) {
-                    name.innerHTML = `${label} - ${displayName}${suffix}`;
-                } else if (lastStartupCommands[roleId]) {
-                    const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
-                    const termNameDisplay = dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName
-                        ? dispatchInfo.terminalName
-                        : `${cmd} CLI`;
-                    name.innerHTML = `${label} - ${termNameDisplay}${suffix}`;
+                    name.innerHTML = `${esc(label)} - ${esc(displayName)}${wtSegment}`;
+                } else if (fallbackCmdName) {
+                    name.innerHTML = `${esc(label)} - ${esc(fallbackCmdName)}${wtSegment}`;
                 } else {
-                    name.innerHTML = label + suffix;
+                    name.innerHTML = esc(label) + wtSegment;
                 }
             } else {
                 name.innerText = label;
@@ -3375,13 +3382,21 @@ Work through all plans in the list, using the marker format above.`;
 
             const name = document.createElement('div');
             name.className = 'agent-name';
-            if (lastTerminalAgentNames['analyst']) {
-                name.innerText = `ANALYST - ${lastTerminalAgentNames['analyst']}`;
-            } else if (lastStartupCommands['analyst']) {
-                const cmd = lastStartupCommands['analyst'].trim().split(/\s+/)[0].toUpperCase();
-                name.innerText = `ANALYST - ${cmd} CLI`;
+            const isWtTermAnalyst = !!(termName && lastTerminals[termName]?.worktreePath);
+            const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const wtSegmentAnalyst = isWtTermAnalyst
+                ? ' - <span style="font-size:9px; opacity:0.6;">worktree</span>'
+                : '';
+            const analystDisplayName = termName || null;
+            const analystFallbackName = lastStartupCommands['analyst']
+                ? `${lastStartupCommands['analyst'].trim().split(/\s+/)[0].toUpperCase()} CLI`
+                : null;
+            if (analystDisplayName) {
+                name.innerHTML = `ANALYST - ${esc(analystDisplayName)}${wtSegmentAnalyst}`;
+            } else if (analystFallbackName) {
+                name.innerHTML = `ANALYST - ${esc(analystFallbackName)}${wtSegmentAnalyst}`;
             } else {
-                name.innerText = 'ANALYST';
+                name.innerHTML = `ANALYST${wtSegmentAnalyst}`;
             }
 
             identity.appendChild(dot);

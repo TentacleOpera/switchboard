@@ -10,24 +10,32 @@ For the synthetic **AUTOCODE / CODED_AUTO** column (dynamic routing), there is n
 
 **Symptom:** The kanban column header renders the agent/terminal name as inert plain text. Users cannot jump to the terminal from the board; they must open the Implementation tab and click a per-row `locate` button, or open the Autoban panel and click `FOCUS`.
 
-**Root cause:** In `src/webview/kanban.html`, `updateAllColumnAgents()` (line ~5075) writes the agent name via `el.textContent = name`. The element is a passive `<div class="column-agent">` with no click handler and no cursor styling. The `focusTerminal` message path already exists in the webview (`postKanbanMessage({ type: 'focusTerminal', terminalName })`) and is already handled by `KanbanProvider.ts` (line ~7570) which forwards to `switchboard.focusTerminalByName`. So the backend wiring is complete — only the webview click binding is missing.
+**Root cause:** In `src/webview/kanban.html`, `updateAllColumnAgents()` (line 5027) writes the agent name via `el.textContent = name` (line 5040). The element is a passive `<div class="column-agent">` (line 4690) with no click handler and no cursor styling. The `focusTerminal` message path already exists in the webview (`postKanbanMessage({ type: 'focusTerminal', terminalName })`, lines 8182 and 8538) and is already handled by `KanbanProvider.ts` (line 8174) which forwards to `switchboard.focusTerminalByName`. So the backend wiring is complete — only the webview click binding is missing.
 
-**Complication — display name vs terminal name:** `lastAgentNames[role]` is a *display* name. For configured-only agents it is `${BINARY} CLI` (e.g. "DEVIN CLI") produced in `KanbanProvider._getAgentNames` (line ~4567). For live terminals it is `info.displayName` from `TaskViewerProvider.getActualTerminalAgentNames()` (line ~597), which is **not** the same as the VS Code terminal name that `focusTerminalByName` needs. Therefore the subline cannot simply forward `lastAgentNames[role]` as the `terminalName`. It must resolve the role to a real terminal name from `lastTerminals` (keyed by terminal name, each entry carrying `.role` and `.worktreePath`), exactly as implementation.html's `findTerminalByRole` does (line ~2697).
+**Complication — display name vs terminal name:** `lastAgentNames[role]` is a *display* name. For configured-only agents it is `${BINARY} CLI` (e.g. "DEVIN CLI") produced in `KanbanProvider._getAgentNames` (line 5142, format at line 5181). For live terminals it is `info.displayName` from `TaskViewerProvider.getActualTerminalAgentNames()` (line 577, returns `info.displayName` at line 598), which is **not** the same as the VS Code terminal name that `focusTerminalByName` needs. Therefore the subline cannot simply forward `lastAgentNames[role]` as the `terminalName`. It must resolve the role to a real terminal name from `lastTerminals` (keyed by terminal name, each entry carrying `.role` and `.worktreePath` — these fields come from the backend `terminalStatuses` payload, where `enrichedTerminals` spreads `terminalsMap[key]` which includes `role` and `worktreePath` set at TaskViewerProvider line 7025 and 7035), exactly as implementation.html's `findTerminalByRole` does (line 2697).
 
-**Dynamic-routing column:** `CODED_AUTO` is synthetic (no `role` in its column definition). `updateAllColumnAgents` hard-codes its subline to the literal string "Dynamic routing" (line ~5098). To make it a locate link we must, on click, scan `lastTerminals` for an alive entry whose `role` is `lead`, then `coder`, then `intern`, and focus the first match — mirroring the seniority order already encoded in `routingMapConfig` (line ~3904: `lead` > `coder` > `intern`).
+**Dynamic-routing column:** `CODED_AUTO` is synthetic (no `role` in its column definition, line 4635). `updateAllColumnAgents` hard-codes its subline to the literal string "Dynamic routing" (line 5050). To make it a locate link we must, on click, scan `lastTerminals` for an alive entry whose `role` is `lead`, then `coder`, then `intern`, and focus the first match — mirroring the seniority order already encoded in `routingMapConfig` (line 3860: `lead` > `coder` > `intern`).
 
 ## Metadata
 
-- **Tags:** kanban, webview, ux, terminal-focus, dynamic-routing
+- **Tags:** frontend, ui, ux
 - **Complexity:** 4
 - **Files touched:** `src/webview/kanban.html`
 - **Project:** switchboard
+
+## User Review Required
+
+No user review required for the click-binding logic — the `focusTerminal` backend handler
+already exists and the seniority routing order matches `routingMapConfig`. Review the
+`terminalStatuses` handler change (Step 5 below) — adding `updateAllColumnAgents()` there
+increases its call frequency on every terminal status broadcast, which is acceptable but
+should be confirmed as not causing performance issues on large terminal sets.
 
 ## Complexity Audit
 
 **Routine.** The change is confined to a single webview file and a single rendering function (`updateAllColumnAgents`), plus a small CSS addition for the clickable affordance. No backend, state, persistence, or migration changes — the `focusTerminal` message handler already exists in `KanbanProvider.ts` and `TaskViewerProvider._focusTerminalByName`. No new dependencies.
 
-The only non-trivial logic is the seniority resolution for `CODED_AUTO`, which is a straightforward ordered scan of `lastTerminals` reusing the liveness pattern already present in `resolveTerminalLiveness` (line ~8017).
+The only non-trivial logic is the seniority resolution for `CODED_AUTO`, which is a straightforward ordered scan of `lastTerminals` reusing the liveness pattern already present in `resolveTerminalLiveness` (line 7703, inside the `createAutobanPanel` closure starting at line 7538).
 
 ## Edge-Case & Dependency Audit
 
@@ -38,20 +46,42 @@ The only non-trivial logic is the seniority resolution for `CODED_AUTO`, which i
 | `CODED_AUTO` with no alive lead/coder/intern terminal | Subline stays as "Dynamic routing" plain text; click is a no-op (or disabled). |
 | Worktree terminals should be preferred | Reuse `findTerminalByRole` semantics: prefer entries with `worktreePath` set, fall back to any matching role. |
 | Chat-only agents (`_isChat && !_isLocal`) | Mirror implementation.html: do not bind a locate action for chat-only terminals (no local terminal to focus). |
-| `lastTerminals` not yet populated (early load before `terminals` message) | `findTerminalByRole` returns `null` → subline is plain text. `updateAllColumnAgents` is re-run on `terminals` message (existing flow calls it via `updateAllColumnAgents` after terminal state changes), so the link activates once terminals arrive. |
+| `lastTerminals` not yet populated (early load before `terminalStatuses` message) | `findTerminalByRole` returns `null` → subline is plain text. Once `terminalStatuses` arrives (line 9217), `updateAllColumnAgents()` (added in Step 5) re-runs and the link activates. |
 | Clicking should not trigger column drag/select handlers | Use `event.stopPropagation()` on the click handler and render the subline as a nested `<a>`/`<span>` rather than replacing the whole header cell. |
-| `agentNames` refresh after terminal starts/stops | `updateAllColumnAgents` already re-runs on `updateAgentNames` and `terminals` messages; the click binding is recomputed each render, so staleness is not a concern. |
+| `agentNames` refresh after terminal starts/stops | `updateAllColumnAgents` re-runs on `updateAgentNames` (line 6452) and `visibleAgents` (lines 6565, 6744) messages. **However**, the `terminalStatuses` handler (line 9217) does NOT currently call `updateAllColumnAgents` — it only calls `renderAutobanPanel()`. This means the locate link would NOT activate when a terminal starts unless an `updateAgentNames` message also fires. **Fix: add `updateAllColumnAgents()` to the `terminalStatuses` handler (see Step 5 below).** |
 | VS Code webview `confirm()` ban (project rule) | No confirm dialogs are introduced. |
 
 **Dependencies:** None new. Relies on existing `lastTerminals`, `lastAgentNames`, `lastVisibleAgents`, `columnToRole`, `postKanbanMessage`, and the `focusTerminal` message handler.
+
+## Dependencies
+
+None — this plan is self-contained. It relies only on existing webview state
+(`lastTerminals`, `lastAgentNames`, `lastVisibleAgents`), the existing `columnToRole`
+helper (line 5003), the existing `focusTerminal` message handler in `KanbanProvider.ts`
+(line 8174), and the existing `terminalStatuses` message handler (line 9217). No backend
+changes, no DB changes, no migration.
+
+## Adversarial Synthesis
+
+Key risks: (1) **Showstopper — stale locate links:** the `terminalStatuses` handler (line
+9217) does NOT call `updateAllColumnAgents`, so locate links would not activate when
+terminals start/stop. Mitigated by adding `updateAllColumnAgents()` to that handler (Step
+5). (2) The `isTerminalAlive` helper uses a 60s heartbeat threshold matching kanban.html's
+`resolveTerminalLiveness` (line 7708), but the backend uses 120s — this is intentional
+consistency with the webview's own convention; do not "fix" the threshold without also
+updating `resolveTerminalLiveness`. (3) The `worktreePath` and `_isChat` fields on
+`lastTerminals` entries come from the backend `terminalStatuses` payload (not from any
+kanban.html code) — they are present but not currently referenced; the plan's helpers are
+the first consumers. (4) Line numbers are verified as of the current branch but will drift
+— agents must grep by function name.
 
 ## Proposed Changes
 
 ### File: `src/webview/kanban.html`
 
-#### 1. Add a `findTerminalByRole` helper (mirror of implementation.html line ~2697)
+#### 1. Add a `findTerminalByRole` helper (mirror of implementation.html line 2697)
 
-Place near `columnToRole` (around line ~5054):
+Place near `columnToRole` (line 5003):
 
 ```js
 /** Resolve a role to a live terminal name, preferring worktree terminals (mirrors implementation.html). */
@@ -101,11 +131,11 @@ function isTerminalAlive(info) {
 }
 ```
 
-> Note: `resolveTerminalLiveness` (line ~8017) is scoped inside the autoban panel render closure, so it cannot be reused directly. `isTerminalAlive` is a small top-level helper that replicates its liveness rule. If preferred, `resolveTerminalLiveness` can be hoisted to top-level instead — either approach is acceptable; hoisting is cleaner but touches the autoban panel code path. The plan keeps the new helper to minimise blast radius.
+> Note: `resolveTerminalLiveness` (line 7703) is scoped inside the `createAutobanPanel` closure (line 7538), so it cannot be reused directly. `isTerminalAlive` is a small top-level helper that replicates its liveness rule (using the same 60s heartbeat threshold as `resolveTerminalLiveness` at line 7708 — the backend uses 120s but the webview convention is 60s; keep them in sync). If preferred, `resolveTerminalLiveness` can be hoisted to top-level instead — either approach is acceptable; hoisting is cleaner but touches the autoban panel code path. The plan keeps the new helper to minimise blast radius.
 
 #### 3. Rewrite `updateAllColumnAgents` to render a clickable subline when a terminal is resolvable
 
-Replace the body of `updateAllColumnAgents` (lines ~5075–5101):
+Replace the body of `updateAllColumnAgents` (lines 5027–5055):
 
 ```js
 function updateAllColumnAgents() {
@@ -173,7 +203,7 @@ function renderAgentSubline(el, label, focusTermName, opts = {}) {
 
 #### 4. Add CSS for the locate-link affordance
 
-Add inside the existing `.column-agent` rule block (around line ~712):
+Add inside the existing `.column-agent` rule block (line 712):
 
 ```css
 .column-agent .column-agent-link {
@@ -187,9 +217,30 @@ Add inside the existing `.column-agent` rule block (around line ~712):
 }
 ```
 
+#### 5. Add `updateAllColumnAgents()` to the `terminalStatuses` handler
+
+The `terminalStatuses` handler (line 9217) currently only calls `renderAutobanPanel()`.
+Without this fix, locate links would NOT activate when terminals start/stop — the column
+header sublines would stay stale until an unrelated `updateAgentNames` message fires.
+
+```js
+if (msg.type === 'terminalStatuses') {
+    lastTerminals = msg.terminals || {};
+    updateAllColumnAgents();   // <-- ADD: refresh locate links on terminal state change
+    renderAutobanPanel();
+}
+```
+
 ## Verification Plan
 
-1. **Build / load:** Reload the Switchboard extension webview (no `npm run compile` needed for dev — `src/` is the source of truth). Open the Kanban tab.
+### Automated Tests
+
+None — this plan is pure webview UI logic with no backend or DB changes. Verification is
+manual via installed VSIX.
+
+### Manual Verification
+
+1. **Load:** Reload the Switchboard extension webview. Open the Kanban tab.
 2. **Regular column — live terminal:**
    - Start a lead coder terminal (e.g. dispatch a plan or open the configured CLI).
    - Confirm the LEAD CODED column subline shows the terminal display name **underlined on hover** with a pointer cursor.

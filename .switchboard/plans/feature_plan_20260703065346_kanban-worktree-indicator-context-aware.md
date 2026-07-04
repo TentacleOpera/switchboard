@@ -15,8 +15,8 @@ active project has no project-scoped worktree.
 
 The indicator is driven by a single webview function, `updateWorktreeIndicator(worktreePath)`
 (`<ref_file file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html" />`,
-~line 5184), which is called from exactly one place: the `worktreeConfig` message handler
-(~line 6389):
+line 5136), which is called from exactly one place: the `worktreeConfig` message handler
+(line 6345):
 
 ```js
 case 'worktreeConfig': {
@@ -35,14 +35,15 @@ case 'worktreeConfig': {
 The bug: the handler picks `activeWorktrees[0].path` whenever there is **exactly one** active
 worktree in the whole workspace, with zero awareness of:
 
-- the active project filter (`activeProjectFilter`, ~line 3851),
-- the currently selected epic card (`selectedCards` entries with `isEpic: true`, ~line 5340),
+- the active project filter (`activeProjectFilter`, line 3807),
+- the currently selected epic card (`selectedCards` entries with `isEpic: true`, declared
+  line 3816, isEpic set at line 5295),
 - the epic→worktree map already shipped to the webview (`currentEpicWorktrees`, updated on
-  every `updateBoard` at ~line 6326), or
+  every `updateBoard` at line 6284), or
 - the per-worktree `project` / `epicId` / `epicProject` fields that `_sendWorktreeConfig`
   already populates on the backend (`KanbanProvider._sendWorktreeConfig`,
   `<ref_file file="/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts" />`
-  ~line 9165).
+  line 9775).
 
 So a lone epic worktree (e.g. `remote-sync-2` for epic/project "Remote sync") is shown
 globally no matter what project is filtered or whether its epic is selected.
@@ -50,7 +51,7 @@ globally no matter what project is filtered or whether its epic is selected.
 ### Desired routing (matches prompt behaviour)
 
 The codebase documents the worktree routing order as
-"epic worktree → project worktree → main repo" (kanban.html ~line 9416). The indicator must
+"epic worktree → project worktree → main repo" (kanban.html line 9630). The indicator must
 follow the same precedence, scoped to the current UI context:
 
 1. **Selected epic with a worktree** → show that epic's worktree.
@@ -60,7 +61,7 @@ follow the same precedence, scoped to the current UI context:
    should not show an epic's worktree.")
 3. Otherwise → hide the indicator.
 
-Note: the prompt-building path (`KanbanProvider._cardsToPromptPlans`, ~line 2836) has a
+Note: the prompt-building path (`KanbanProvider._cardsToPromptPlans`, line 3303) has a
 separate "sole active worktree" fallback that applies a single global worktree to every
 dispatched card. That is prompt-dispatch behaviour for selected cards and is out of scope for
 this indicator fix; the indicator is a persistent status display and must be context-aware,
@@ -69,9 +70,18 @@ an epic's worktree when no epic is selected.
 
 ## Metadata
 
-**Tags:** kanban, webview, worktree, indicator, ux, bug
+**Tags:** frontend, ui, ux, bugfix
 **Complexity:** 4
 **Project:** switchboard
+
+## User Review Required
+
+No user review required for the routing logic — the desired routing order is already
+documented in the codebase (kanban.html line 9630) and confirmed by the user. The
+ambiguous-epics hide rule and the project-filter exclusion of unselected epic worktrees are
+explicit user requirements. Review only if the recompute trigger list (the
+`selectedCards.clear()` sites) is incomplete — grep `selectedCards.clear` in kanban.html to
+verify no site was missed.
 
 ## Complexity Audit
 
@@ -115,13 +125,30 @@ an epic's worktree when no epic is selected.
   The new recompute must also run on first hydration so a reload shows the correct label.
 - **No confirm dialogs:** per project rules, none are added.
 
+## Dependencies
+
+None — this plan is self-contained. It relies only on existing webview state
+(`lastWorktreeConfig`, `currentEpicWorktrees`, `activeProjectFilter`, `selectedCards`) and
+the existing `updateWorktreeIndicator` function. No backend changes, no DB changes, no
+migration.
+
+## Adversarial Synthesis
+
+Key risks: (1) the `selectedCards.clear()` recompute trigger list may be incomplete if new
+clear sites are added to kanban.html before implementation — mitigated by grep-verification
+at implementation time. (2) Multiple selected epics with different worktrees correctly hide
+the indicator (ambiguous), but a user selecting two epics sharing a worktree expects the
+label — the `Set`-based path comparison handles this. (3) Line numbers in this plan are
+verified as of the current branch but will drift if the file is edited before implementation
+— agents must grep by function name, not jump to line numbers.
+
 ## Proposed Changes
 
 ### File: `src/webview/kanban.html`
 
 #### 1. Replace the bare `updateWorktreeIndicator` call site with a context-aware recompute
 
-At the `worktreeConfig` handler (~line 6389), stop picking `activeWorktrees[0]` and instead
+At the `worktreeConfig` handler (line 6345), stop picking `activeWorktrees[0]` and instead
 call a new recompute function:
 
 ```js
@@ -133,7 +160,7 @@ case 'worktreeConfig': {
 }
 ```
 
-#### 2. Add `recomputeWorktreeIndicator()` (place it next to `updateWorktreeIndicator`, ~line 5184)
+#### 2. Add `recomputeWorktreeIndicator()` (place it next to `updateWorktreeIndicator`, line 5136)
 
 ```js
 // Resolves the "active worktree" — the one prompts would reference given the current UI
@@ -185,23 +212,23 @@ the last path segment otherwise).
 Add a `recomputeWorktreeIndicator();` call immediately after each of these existing lines
 (keep the surrounding logic intact):
 
-- **`updateBoard` handler** — after `currentEpicWorktrees = nextEpicWorktrees;` (~line 6328),
+- **`updateBoard` handler** — after `currentEpicWorktrees = nextEpicWorktrees;` (line 6284),
   so an epic-worktree provisioning change refreshes the label even when the board signature
   is unchanged.
 - **`updateWorkspaceSelection` handler** — after
-  `activeProjectFilter = msg.projectFilter ?? null;` (~line 6238), so a project/workspace
+  `activeProjectFilter = msg.projectFilter ?? null;` (line 6194), so a project/workspace
   switch re-evaluates the label.
-- **Card click toggle** — at the end of the click handler (~line 5352, alongside
+- **Card click toggle** — at the end of the click handler (lines 5304-5305, alongside
   `updateReassignButtonVisibility(); updateEpicActionButton();`), so selecting/deselecting an
   epic updates the label live.
 - **Every `selectedCards.clear()` site that affects board selection** — the clear-after-
-  dispatch / reassign / epic-action clears (lines 5800, 5818, 6093, 7036, 7091, 7609, 9950,
-  9984). Add `recomputeWorktreeIndicator();` next to the existing
+  dispatch / reassign / epic-action clears (lines 4960, 5285, 5752, 5770, 6045, 6997, 7052,
+  7462, 10164, 10198). Add `recomputeWorktreeIndicator();` next to the existing
   `updateReassignButtonVisibility(); updateEpicActionButton();` calls where present; for
   clears that don't already call those, add the recompute call right after the clear. (The
-  `renderBoard` prune-clear at ~line 5228 is inside `renderBoard` and is followed by a full
-  re-render — no extra call needed there; `recomputeWorktreeIndicator` will run from the
-  `updateBoard` handler's `currentEpicWorktrees` update.)
+  `renderBoard` prune-clear inside `renderBoard` is followed by a full re-render — no extra
+  call needed there; `recomputeWorktreeIndicator` will run from the `updateBoard` handler's
+  `currentEpicWorktrees` update.)
 
 To avoid duplicating the recompute in ~10 spots, the cleanest pattern is to add the call to
 the existing `updateEpicActionButton()` helper's call sites (it already runs at most of these
@@ -219,9 +246,14 @@ when `worktreeConfig` lands (which calls recompute). No extra guard required.
 
 ## Verification Plan
 
-1. **Build:** `npm run compile` (webpack) — confirm no JS errors in `dist/`. (Per project
-   rules, `dist/` is not used during dev testing; this is just a syntax/bundle check.)
-2. **Manual repro (installed VSIX):**
+### Automated Tests
+
+None — this plan is pure webview UI logic with no backend or DB changes. Verification is
+manual via installed VSIX.
+
+### Manual Verification
+
+1. **Manual repro (installed VSIX):**
    - Provision a worktree for one project (e.g. "Remote sync" → `remote-sync-2`).
    - With that project selected as the active filter → indicator shows `remote-sync-2`.
    - Switch the project dropdown to a different project (or "Unassigned") → indicator
@@ -237,3 +269,7 @@ when `worktreeConfig` lands (which calls recompute). No extra guard required.
 4. **No-regression for the WORKTREES tab:** `renderWorktreesTab()` is still called in the
    `worktreeConfig` handler; the active-worktrees list there is unchanged.
 5. **No confirm dialogs introduced** (project rule).
+
+---
+
+**Recommendation:** Complexity 4 → **Send to Coder**.

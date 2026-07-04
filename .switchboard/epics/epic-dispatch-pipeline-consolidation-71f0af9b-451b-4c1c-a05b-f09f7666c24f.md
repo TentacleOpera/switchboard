@@ -13,8 +13,8 @@ Eliminate the duplicated, divergent code paths in the backend that cause the rec
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Consolidate the Five Prompt-Dispatch Plan Builders into One](../plans/feature_plan_20260630055827_consolidate-dispatch-plan-builders.md) — **CODER CODED**
-- [ ] [Epic created as plan — no Kanban board refresh on epic creation (Epics tab path)](../plans/feature_plan_20260703152146_epic-created-as-plan-no-board-refresh.md) — **CODER CODED**
+- [ ] [Consolidate the Five Prompt-Dispatch Plan Builders into One](../plans/feature_plan_20260630055827_consolidate-dispatch-plan-builders.md) — **CODE REVIEWED**
+- [ ] [Epic created as plan — no Kanban board refresh on epic creation (Epics tab path)](../plans/feature_plan_20260703152146_epic-created-as-plan-no-board-refresh.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
