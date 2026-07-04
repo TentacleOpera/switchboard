@@ -28,6 +28,22 @@
     {
       "planFile": "manifest-redelivery-idempotency-and-reaping.md",
       "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "state-ownership-and-reconciliation-model.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "epic-membership-carrier-bidirectional-sync.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "project-carrier-hardening.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
+    },
+    {
+      "planFile": "delete-epic-file-resurrect-fix.md",
+      "epicId": "1d073b2c-d2b8-4cdd-9b6e-56f700bbc8c4"
     }
   ]
 }

@@ -59,13 +59,21 @@ manifest does today but through the file the agent is already editing.
    line will not re-move the card after the first application (current no longer equals
    fromColumn) — matching the manifest's consume-then-idempotent behavior without a delete.
 
-4. **Deprecate manifest.json.** Once the frontmatter path is proven:
+4. **Deprecate manifest.json.** Retirement is only complete once *every* manifest field has a
+   frontmatter replacement — this subtask covers `**Column:**`; `epic_id`/`project` are covered by
+   `epic-membership-carrier-bidirectional-sync.md` and `project-carrier-hardening.md`; `status`
+   needs a `**Status:**` carrier (fold into whichever lands last). Do NOT retire the manifest
+   until all four exist, or remote agents lose those capabilities. Then:
    - Update the skill docs that instruct agents to write `manifest.json`
      (`improve-plan`, `improve-epic`, `switchboard-chat`, `switchboard-split`, and the two
-     workflow mirrors) to write a `**Column:**` line instead.
+     workflow mirrors) to write the frontmatter carriers instead.
    - Keep `PlanManifestService` **reading** manifests for one release (migration safety — remote
      agents on older skill docs may still emit them), but log a deprecation notice. Do not delete
      the service in the same change that ships the replacement.
+
+Note: this plan predates the `state-ownership-and-reconciliation-model.md` foundation — the
+`**Column:**` guard here (`fromColumn` compare-and-swap) is the same CAS the model formalizes;
+column stays DB-owned (no writeback), unlike epic_id/project.
 
 ## User Review Required
 

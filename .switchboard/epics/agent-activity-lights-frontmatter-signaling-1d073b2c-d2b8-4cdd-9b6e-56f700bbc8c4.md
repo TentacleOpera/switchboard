@@ -56,20 +56,35 @@ frontmatter" convention plus the DB/UI plumbing to surface it.
 
 ## How the Subtasks Achieve This
 
-Two workstreams under one theme (agent → extension signaling via plan-file frontmatter):
+Three layers under one theme (agent ↔ extension state signaling via plan-file frontmatter).
+Workstream A grew once we mapped the full epic/project/column mutation surface: making files
+able to *write* state is a two-master problem, so it sits on a foundational ownership &
+reconciliation model (model C — bidirectional sync with 3-way conflict resolution).
 
-**Workstream A — Frontmatter-driven column transitions (retire manifest.json)**
-- `column-transition-frontmatter-retire-manifest.md` — teach the watcher to honor a
-  `**Column:**` transition-intent line on existing rows (guarded exactly like the
-  manifest's `fromColumn`), then deprecate `manifest.json`. Independent of the light work.
-- `manifest-redelivery-idempotency-and-reaping.md` — fix an observed correctness bug: a
-  git-tracked, already-consumed manifest resurrects on every fresh clone and re-asserts stale
-  `status`/`project`/`epicId` (only the column field is re-delivery-safe today). Add a
-  consumed-manifest ledger so re-application is a provable no-op. Hardens the manifest for the
-  retirement's one-release compat window — and makes this epic's own subtask-link entries safe
-  on re-clone.
+**Foundation (build first — everything in A depends on it)**
+- `state-ownership-and-reconciliation-model.md` — the per-field ownership matrix (is_epic =
+  folder; project = file; epic_id = bidirectional; column = DB) plus the reconciliation
+  mechanism: a per-plan common-ancestor "base", compare-and-swap, a consumed-fingerprint ledger
+  that defeats state resurrection, DB→file writeback with loop prevention, explicit unlink
+  sentinels, and lazy (no mass-rewrite) rollout.
 
-**Workstream B — Agent activity light** (build in this order; 2 is the foundation)
+**Workstream A — Frontmatter-driven state (retire manifest.json)**
+- `manifest-redelivery-idempotency-and-reaping.md` — the **ledger** (generalized): fixes the
+  observed bug where a git-tracked, already-consumed manifest resurrects on clone and re-asserts
+  stale `status`/`project`/`epicId`. This ledger underpins *all* file→DB application below.
+- `epic-membership-carrier-bidirectional-sync.md` — the model-C core: `**Epic:** <id>` carrier
+  with file↔DB reconciliation, writeback on UI link/unlink, explicit unlink sentinel. Restores
+  remote epic grouping/re-grouping without the manifest.
+- `project-carrier-hardening.md` — make `**Project:**` fully robust: auto-create the `projects`
+  row so `project_id` resolves (else the card drops off its board), writeback on UI reassign,
+  explicit clear.
+- `column-transition-frontmatter-retire-manifest.md` — `**Column:**` compare-and-swap transition
+  intent (column stays DB-owned), then deprecate `manifest.json`.
+- `delete-epic-file-resurrect-fix.md` — close the twin resurrect bug: `deleteEpic` tombstones the
+  DB row but leaves the `.md`, so the watcher re-imports the "deleted" epic. Reap/neutralize the
+  file (ledger-backed).
+
+**Workstream B — Agent activity light** (independent of A; build in this order; B-1 is its foundation)
 - `working-state-model-and-dispatch-on.md` — add the `dispatched_at` column + migration,
   thread a `working` flag through the `KanbanCard` payload and the board re-render
   signature, and set the flag ON at every dispatch site (centralized in
@@ -83,8 +98,10 @@ Two workstreams under one theme (agent → extension signaling via plan-file fro
 - `card-working-light-ui.md` — render the light on the card and ensure it re-renders on
   state change.
 
-Subtask B-2 depends on B-1 (the flag/column). B-3, B-5, B-6 all depend on B-1. B-4 is
-independent code but defines the marker B-3 parses. Workstream A is independent of all of B.
+Ordering — **A**: the foundation model → the ledger → then the carriers (epic-membership and
+delete-resurrect both consume the ledger; project and column can proceed in parallel once the
+foundation lands). **B**: B-2 depends on B-1; B-3/B-5/B-6 depend on B-1; B-4 defines the marker
+B-3 parses. Workstream A and Workstream B are independent of each other.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
