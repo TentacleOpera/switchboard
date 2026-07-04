@@ -9593,6 +9593,9 @@ Instructions:
             clickUpProjectIssues = [];
             selectedClickUpIssue = null;
             _resetSidebarDrillDown();
+            clickUpProjectStatusFilterValue = '';
+            availableClickUpStatuses = [];
+            _lastTicketsClickUpStateFilterHtml = '';
             if (spaceId) {
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
@@ -9636,6 +9639,9 @@ Instructions:
             clickUpProjectIssues = [];
             selectedClickUpIssue = null;
             _resetSidebarDrillDown();
+            clickUpProjectStatusFilterValue = '';
+            availableClickUpStatuses = [];
+            _lastTicketsClickUpStateFilterHtml = '';
             if (folderId) {
                 clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
                 clickUpHierarchyLoading = true;
@@ -9686,6 +9692,9 @@ Instructions:
             clickUpProjectIssues = [];
             selectedClickUpIssue = null;
             _resetSidebarDrillDown();
+            clickUpProjectStatusFilterValue = '';
+            availableClickUpStatuses = [];
+            _lastTicketsClickUpStateFilterHtml = '';
             saveTicketsState();
             if (listId) {
                 const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';

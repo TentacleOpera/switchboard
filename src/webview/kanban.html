@@ -10048,195 +10048,513 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             container.appendChild(actionSection);
 
-            // Active worktrees list section
-            const listSection = document.createElement('div');
-            listSection.className = 'db-subsection';
-            
-            const listHeader = document.createElement('div');
-            listHeader.className = 'subsection-header';
-            const listHeaderSpan = document.createElement('span');
-            listHeaderSpan.textContent = 'ACTIVE WORKTREES';
-            listHeader.appendChild(listHeaderSpan);
-            listSection.appendChild(listHeader);
+        function renderWorktreeRow(w, isNested = false) {
+            const row = document.createElement('div');
+            row.className = 'worktree-row';
+            row.style.cssText = `display:flex; flex-direction:column; gap:4px; padding:8px; border:1px solid var(--border-subtle); border-radius:4px; margin-bottom:4px; background:var(--card-bg, #252526);${isNested ? ' margin-left: 20px; border-left: 2px solid var(--button-primary-bg, #007acc);' : ''}`;
 
-            const listDiv = document.createElement('div');
-            listDiv.id = 'worktree-list';
-            listDiv.style.cssText = 'margin-top:8px; display:flex; flex-direction:column; gap:8px;';
-            listSection.appendChild(listDiv);
-            container.appendChild(listSection);
+            const mainLine = document.createElement('div');
+            mainLine.style.cssText = 'display:flex; align-items:center; gap:8px;';
+
+            if (isNested) {
+                const arrow = document.createElement('span');
+                arrow.style.cssText = 'color: var(--text-muted); font-weight: bold;';
+                arrow.textContent = '↳';
+                mainLine.appendChild(arrow);
+            }
+
+            const statusBadge = document.createElement('span');
+            statusBadge.className = 'wt-status-badge';
+            statusBadge.setAttribute('data-wt-id', w.id);
+            statusBadge.style.cssText = 'font-size:10px; color:var(--text-secondary); min-width: 60px;';
+            statusBadge.textContent = '⋯';
+            mainLine.appendChild(statusBadge);
+
+            const branchSpan = document.createElement('span');
+            branchSpan.style.cssText = 'flex:1; font-size:11px; font-family:monospace; word-break:break-all; font-weight:bold;';
+            branchSpan.textContent = w.branch;
+            mainLine.appendChild(branchSpan);
+
+            // Chip mapping
+            let chipText = '';
+            let chipTitle = '';
+            if (w.epicTopic) {
+                chipText = `Epic: ${w.epicTopic}`;
+                chipTitle = w.epicProject ? `Project: ${w.epicProject}` : '';
+            } else if (w.project) {
+                chipText = `Project: ${w.project}`;
+                chipTitle = `Bound to project ${w.project}`;
+            } else {
+                chipText = 'Unbound';
+            }
+            const chip = document.createElement('span');
+            chip.style.cssText = 'font-size:10px; padding:2px 6px; background:var(--badge-bg, #333); border-radius:10px; color:var(--text-muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+            chip.textContent = chipText;
+            if (chipTitle) chip.title = chipTitle;
+            mainLine.appendChild(chip);
+
+            const dateSpan = document.createElement('span');
+            dateSpan.style.cssText = 'font-size:10px; color:var(--text-secondary); white-space:nowrap; margin-right:8px;';
+            dateSpan.textContent = w.createdAt ? w.createdAt.slice(0, 10) : '';
+            mainLine.appendChild(dateSpan);
+
+            // Actions
+            const openBtn = document.createElement('button');
+            openBtn.className = 'btn-secondary';
+            openBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
+            openBtn.textContent = 'Open terminals';
+            openBtn.addEventListener('click', () => {
+                postKanbanMessage({
+                    type: 'openWorktreeTerminals',
+                    worktreeId: w.id,
+                    workspaceRoot: currentWorkspaceRoot
+                });
+            });
+            mainLine.appendChild(openBtn);
+
+            const mergeBtn = document.createElement('button');
+            mergeBtn.className = 'btn-secondary';
+            mergeBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
+            mergeBtn.textContent = 'Merge';
+            mergeBtn.addEventListener('click', () => {
+                mergeWorktree(w.id, w.branch, w.path);
+            });
+            mainLine.appendChild(mergeBtn);
+
+            const abandonBtn = document.createElement('button');
+            abandonBtn.className = 'btn-danger';
+            abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:8px;';
+            abandonBtn.textContent = 'Abandon';
+            abandonBtn.addEventListener('click', () => {
+                abandonWorktree(w.id, w.branch, w.path);
+            });
+            mainLine.appendChild(abandonBtn);
+
+            const gridChk = document.createElement('input');
+            gridChk.type = 'checkbox';
+            gridChk.checked = !!w.agentsOpenWithGrid;
+            gridChk.id = `wt-grid-${w.id}`;
+            gridChk.style.cssText = 'margin-left:6px; cursor:pointer; vertical-align:middle;';
+            gridChk.title = 'When you click the main AGENTS button, open a dedicated set of agent terminals inside this worktree (Planner/Coder/Reviewer/…), in addition to the main repo terminals — or instead of them when "Suppress main repo agent terminals" is on.';
+            gridChk.addEventListener('change', () => {
+                postKanbanMessage({
+                    type: 'toggleWorktreeAgentsOpenWithGrid',
+                    worktreeId: w.id,
+                    enabled: gridChk.checked,
+                    workspaceRoot: currentWorkspaceRoot
+                });
+            });
+            mainLine.appendChild(gridChk);
+            const gridLabel = document.createElement('label');
+            gridLabel.htmlFor = `wt-grid-${w.id}`;
+            gridLabel.textContent = 'Agent terminals';
+            gridLabel.style.cssText = 'font-size:10px; color:var(--text-muted); cursor:pointer; margin-right:4px; vertical-align:middle;';
+            gridLabel.title = gridChk.title;
+            mainLine.appendChild(gridLabel);
+
+            row.appendChild(mainLine);
+
+            // Scope line and terminal toggle checkbox
+            const detailsLine = document.createElement('div');
+            detailsLine.style.cssText = 'display:flex; justify-content:space-between; align-items:center; font-size:10px; color:var(--text-muted); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;';
+
+            const scopeSpan = document.createElement('span');
+            if (w.epicTopic) {
+                scopeSpan.textContent = `Scope: Catches plans in epic '${w.epicTopic}' — overrides project worktree.`;
+            } else if (w.project) {
+                scopeSpan.textContent = `Scope: Catches '${w.project}' plans not claimed by an epic worktree.`;
+            } else {
+                scopeSpan.textContent = 'Scope: No automatic routing — work manually.';
+            }
+            detailsLine.appendChild(scopeSpan);
+
+            row.appendChild(detailsLine);
+            return row;
+        }
+
+        function createWorktreesPanel(config) {
+            const container = document.createElement('div');
+            container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
+
+            // Helper for sub-sections
+            function createSubsection(titleText) {
+                const section = document.createElement('div');
+                section.className = 'db-subsection';
+                const header = document.createElement('div');
+                header.className = 'subsection-header';
+                const span = document.createElement('span');
+                span.textContent = titleText;
+                header.appendChild(span);
+                section.appendChild(header);
+                return section;
+            }
+
+            function renderWorktreeList(worktreeSubset, emptyMessage) {
+                const listDiv = document.createElement('div');
+                listDiv.style.cssText = 'margin-top:8px; display:flex; flex-direction:column; gap:8px;';
+                if (!worktreeSubset.length) {
+                    listDiv.innerHTML = `<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">${emptyMessage}</div>`;
+                    return listDiv;
+                }
+                worktreeSubset.forEach(w => listDiv.appendChild(renderWorktreeRow(w, false)));
+                return listDiv;
+            }
+
+            // Description / Overview Header
+            const configSection = document.createElement('div');
+            configSection.className = 'db-subsection';
+
+            const configHeader = document.createElement('div');
+            configHeader.className = 'subsection-header';
+            const configSpan = document.createElement('span');
+            configSpan.textContent = 'WORKTREES';
+            configHeader.appendChild(configSpan);
+            configSection.appendChild(configHeader);
+
+            const descriptionDiv = document.createElement('div');
+            descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
+            descriptionDiv.innerHTML = '<strong>Routing order:</strong> epic worktree → project worktree → main repo.<br><br>' +
+                'When a worktree is active, Switchboard automatically opens agent terminals inside the worktree and routes work in epics or projects to the relevant worktree. ' +
+                'Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root. ' +
+                'If no worktree matches a plan, the plan runs in the main repo terminals as usual.';
+            configSection.appendChild(descriptionDiv);
+            container.appendChild(configSection);
+
+            // Tab-level settings
+            const settingsSection = document.createElement('div');
+            settingsSection.style.cssText = 'display: flex; flex-direction: column; gap: 4px; font-size: 11px; padding: 4px 8px;';
+            
+            const checkboxRow = document.createElement('div');
+            checkboxRow.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+            const suppressCheckbox = document.createElement('input');
+            suppressCheckbox.type = 'checkbox';
+            suppressCheckbox.id = 'suppress-main-terminals-chk';
+            suppressCheckbox.checked = !!(config && config.suppressMainTerminals);
+            suppressCheckbox.addEventListener('change', () => {
+                postKanbanMessage({
+                    type: 'setSuppressMainTerminals',
+                    enabled: suppressCheckbox.checked,
+                    workspaceRoot: currentWorkspaceRoot
+                });
+            });
+            const suppressLabel = document.createElement('label');
+            suppressLabel.htmlFor = 'suppress-main-terminals-chk';
+            suppressLabel.textContent = 'Suppress main repo agent terminals';
+            checkboxRow.appendChild(suppressCheckbox);
+            checkboxRow.appendChild(suppressLabel);
+            settingsSection.appendChild(checkboxRow);
+
+            const suppressDesc = document.createElement('div');
+            suppressDesc.style.cssText = 'font-size:10px; color:var(--text-secondary); line-height:1.4; padding:2px 0 0 24px; margin-top:2px;';
+            suppressDesc.innerHTML = 'When checked, the main <strong>Agents</strong> button will NOT open terminals in the workspace root. ' +
+                'Instead, terminals are opened only for worktrees that have the per-row <em>Agent terminals</em> checkbox enabled. ' +
+                'Use this when all agent work should happen inside worktrees, never in the main repo.';
+            settingsSection.appendChild(suppressDesc);
+            container.appendChild(settingsSection);
+
+            // Target Repo configuration (moved here to top of controls)
+            const repos = (config && config.availableRepos) || [];
+            if (config && config.controlPlaneMode === 'explicit') {
+                const repoForm = document.createElement('div');
+                repoForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px; margin-bottom: 8px;';
+                const repoLabel = document.createElement('span');
+                repoLabel.style.fontSize = '11px';
+                repoLabel.textContent = 'Target Repo:';
+                
+                const repoSelect = document.createElement('select');
+                repoSelect.id = 'worktree-repo-select';
+                repoSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+                
+                if (repos.length === 0) {
+                    const noRepoOpt = document.createElement('option');
+                    noRepoOpt.value = '';
+                    noRepoOpt.textContent = 'No git repositories detected';
+                    repoSelect.appendChild(noRepoOpt);
+                    repoSelect.disabled = true;
+                    selectedWorktreeRepo = '';
+                } else {
+                    repos.forEach(repo => {
+                        const opt = document.createElement('option');
+                        opt.value = repo;
+                        opt.textContent = repo;
+                        repoSelect.appendChild(opt);
+                    });
+                    
+                    const defaultRepo = (config.activeRepoFilter && repos.includes(config.activeRepoFilter))
+                        ? config.activeRepoFilter
+                        : repos[0];
+                    repoSelect.value = defaultRepo;
+                    selectedWorktreeRepo = defaultRepo;
+                    
+                    repoSelect.addEventListener('change', () => {
+                        selectedWorktreeRepo = repoSelect.value;
+                    });
+                }
+                
+                repoForm.appendChild(repoLabel);
+                repoForm.appendChild(repoSelect);
+                container.appendChild(repoForm);
+            } else {
+                selectedWorktreeRepo = '';
+            }
 
             const worktrees = (config && config.worktrees) || [];
-            
-            // Render list (using micro-timeout to wait for mounting)
-            setTimeout(() => {
-                const list = document.getElementById('worktree-list');
-                if (!list) return;
-                if (!worktrees.length) {
-                    list.innerHTML = '<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">No active worktrees.</div>';
+            const epicWTs = worktrees.filter(w => w.epicTopic);
+            const projectWTs = worktrees.filter(w => w.project && !w.epicTopic);
+            const unboundWTs = worktrees.filter(w => !w.project && !w.epicTopic);
+
+            // ==========================================
+            // EPICS SECTION
+            // ==========================================
+            const epicsSection = createSubsection('EPICS');
+
+            // EPICS -> Auto Mode
+            const autoModeHeader = document.createElement('div');
+            autoModeHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0;';
+            autoModeHeader.textContent = 'Auto Mode';
+            epicsSection.appendChild(autoModeHeader);
+
+            const epicsDesc = document.createElement('div');
+            epicsDesc.style.cssText = 'padding:4px 8px 0; font-size:10px; color:var(--text-secondary); line-height:1.4;';
+            epicsDesc.textContent = 'Auto Mode controls whether worktrees are provisioned automatically as epics and subtasks are created. This never affects the manual "Create Epic Worktree" button below.';
+            epicsSection.appendChild(epicsDesc);
+
+            const autoModeGroup = document.createElement('div');
+            autoModeGroup.className = 'radio-group';
+            autoModeGroup.style.cssText = 'padding:8px; margin-top:0;';
+
+            const currentEpicWorktreeMode = (config && config.epicWorktreeMode) || 'none';
+            const AUTO_MODE_OPTIONS = [
+                { value: 'none', label: 'None', desc: 'No automatic worktrees — use the manual button below.' },
+                { value: 'per-subtask', label: 'Per Subtask', desc: 'Provision a dedicated worktree for every subtask added to an epic.' },
+                { value: 'high-low', label: 'High/Low Complexity Split', desc: 'Provision two tier worktrees (high & low complexity) off the epic integration branch; the planner consolidates subtasks into two plans run in parallel.' }
+            ];
+            AUTO_MODE_OPTIONS.forEach(opt => {
+                const label = document.createElement('label');
+                label.className = 'radio-option';
+                label.style.alignItems = 'flex-start';
+
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'epicWorktreeAutoMode';
+                radio.value = opt.value;
+                radio.checked = currentEpicWorktreeMode === opt.value;
+                radio.addEventListener('change', () => {
+                    if (!radio.checked) return;
+                    postKanbanMessage({
+                        type: 'setEpicWorktreeMode',
+                        mode: opt.value,
+                        workspaceRoot: currentWorkspaceRoot
+                    });
+                });
+
+                const textWrap = document.createElement('span');
+                textWrap.style.cssText = 'display:flex; flex-direction:column; gap:2px;';
+                const titleSpan = document.createElement('span');
+                titleSpan.textContent = opt.label;
+                const descSpan = document.createElement('span');
+                descSpan.style.cssText = 'font-size:10px; color:var(--text-secondary); font-weight:normal;';
+                descSpan.textContent = opt.desc;
+                textWrap.appendChild(titleSpan);
+                textWrap.appendChild(descSpan);
+
+                label.appendChild(radio);
+                label.appendChild(textWrap);
+                autoModeGroup.appendChild(label);
+            });
+            epicsSection.appendChild(autoModeGroup);
+
+            // EPICS -> Manual Creation
+            const manualEpicHeader = document.createElement('div');
+            manualEpicHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px; border-top: 1px solid var(--border-subtle);';
+            manualEpicHeader.textContent = 'Manual Creation';
+            epicsSection.appendChild(manualEpicHeader);
+
+            const epicForm = document.createElement('div');
+            epicForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px 8px;';
+            const epicLabel = document.createElement('span');
+            epicLabel.style.fontSize = '11px';
+            epicLabel.textContent = 'Epic:';
+            const epicSelect = document.createElement('select');
+            epicSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+            const epicDefaultOpt = document.createElement('option');
+            epicDefaultOpt.value = '';
+            epicDefaultOpt.textContent = '-- Choose an Epic --';
+            epicSelect.appendChild(epicDefaultOpt);
+            const epicCards = (Array.isArray(currentCards) ? currentCards : []).filter(c => c.isEpic);
+            epicCards.forEach(epic => {
+                if (currentEpicWorktrees[epic.planId]) return; // exclude epics that already have a worktree
+                const opt = document.createElement('option');
+                opt.value = epic.planId;
+                opt.textContent = epic.topic;
+                epicSelect.appendChild(opt);
+            });
+            const createEpicBtn = document.createElement('button');
+            createEpicBtn.className = 'worktree-primary-btn';
+            createEpicBtn.style.padding = '4px 8px';
+            createEpicBtn.style.fontSize = '10px';
+            createEpicBtn.textContent = 'Create Epic Worktree';
+            if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
+                createEpicBtn.disabled = true;
+                createEpicBtn.title = 'No git repositories detected in control plane';
+            }
+            createEpicBtn.addEventListener('click', () => {
+                const selectedEpicId = epicSelect.value;
+                if (!selectedEpicId) {
+                    postKanbanMessage({ type: 'showWarning', message: 'Please select an epic first.' });
                     return;
                 }
-                list.innerHTML = '';
+                const epic = epicCards.find(e => e.planId === selectedEpicId);
+                if (!epic) return;
+                createEpicBtn.disabled = true;
+                postKanbanMessage({
+                    type: 'createWorktreeForEpic',
+                    epicId: selectedEpicId,
+                    epicTopic: epic.topic,
+                    workspaceRoot: currentWorkspaceRoot,
+                    repoName: selectedWorktreeRepo || undefined
+                });
+                setTimeout(() => { createEpicBtn.disabled = false; }, 5000);
+            });
+            epicForm.appendChild(epicLabel);
+            epicForm.appendChild(epicSelect);
+            epicForm.appendChild(createEpicBtn);
+            epicsSection.appendChild(epicForm);
 
-                // Helper to render a worktree row (as DOM element so we can bind events cleanly, avoiding inline onclick/CSP bugs)
-                function renderWorktreeRow(w, isNested = false) {
-                    const row = document.createElement('div');
-                    row.className = 'worktree-row';
-                    row.style.cssText = `display:flex; flex-direction:column; gap:4px; padding:8px; border:1px solid var(--border-subtle); border-radius:4px; margin-bottom:4px; background:var(--card-bg, #252526);${isNested ? ' margin-left: 20px; border-left: 2px solid var(--button-primary-bg, #007acc);' : ''}`;
+            // EPICS -> Active Worktrees
+            const activeEpicHeader = document.createElement('div');
+            activeEpicHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle);';
+            activeEpicHeader.textContent = 'Active Epic Worktrees';
+            epicsSection.appendChild(activeEpicHeader);
 
-                    const mainLine = document.createElement('div');
-                    mainLine.style.cssText = 'display:flex; align-items:center; gap:8px;';
+            const activeEpicListContainer = document.createElement('div');
+            activeEpicListContainer.style.cssText = 'padding: 0 8px 8px;';
+            activeEpicListContainer.appendChild(renderWorktreeList(epicWTs, 'No active epic worktrees.'));
+            epicsSection.appendChild(activeEpicListContainer);
 
-                    if (isNested) {
-                        const arrow = document.createElement('span');
-                        arrow.style.cssText = 'color: var(--text-muted); font-weight: bold;';
-                        arrow.textContent = '↳';
-                        mainLine.appendChild(arrow);
-                    }
+            container.appendChild(epicsSection);
 
-                    const statusBadge = document.createElement('span');
-                    statusBadge.className = 'wt-status-badge';
-                    statusBadge.setAttribute('data-wt-id', w.id);
-                    statusBadge.style.cssText = 'font-size:10px; color:var(--text-secondary); min-width: 60px;';
-                    statusBadge.textContent = '⋯';
-                    mainLine.appendChild(statusBadge);
+            // ==========================================
+            // PROJECTS SECTION
+            // ==========================================
+            const projectsSection = createSubsection('PROJECTS');
 
-                    const branchSpan = document.createElement('span');
-                    branchSpan.style.cssText = 'flex:1; font-size:11px; font-family:monospace; word-break:break-all; font-weight:bold;';
-                    branchSpan.textContent = w.branch;
-                    mainLine.appendChild(branchSpan);
+            // PROJECTS -> Manual Creation
+            const manualProjHeader = document.createElement('div');
+            manualProjHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px;';
+            manualProjHeader.textContent = 'Manual Creation';
+            projectsSection.appendChild(manualProjHeader);
 
-                    // Chip mapping
-                    let chipText = '';
-                    let chipTitle = '';
-                    if (w.epicTopic) {
-                        chipText = `Epic: ${w.epicTopic}`;
-                        chipTitle = w.epicProject ? `Project: ${w.epicProject}` : '';
-                    } else if (w.project) {
-                        chipText = `Project: ${w.project}`;
-                        chipTitle = `Bound to project ${w.project}`;
-                    } else {
-                        chipText = 'Unbound';
-                    }
-                    const chip = document.createElement('span');
-                    chip.style.cssText = 'font-size:10px; padding:2px 6px; background:var(--badge-bg, #333); border-radius:10px; color:var(--text-muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-                    chip.textContent = chipText;
-                    if (chipTitle) chip.title = chipTitle;
-                    mainLine.appendChild(chip);
+            const projForm = document.createElement('div');
+            projForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px 8px;';
+            const projLabel = document.createElement('span');
+            projLabel.style.fontSize = '11px';
+            projLabel.textContent = 'Project:';
+            const projSelect = document.createElement('select');
+            projSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value = '';
+            defaultOpt.textContent = '-- Choose a Project --';
+            projSelect.appendChild(defaultOpt);
+            
+            const projects = (config && config.projects) || [];
+            projects.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                projSelect.appendChild(opt);
+            });
 
-                    const dateSpan = document.createElement('span');
-                    dateSpan.style.cssText = 'font-size:10px; color:var(--text-secondary); white-space:nowrap; margin-right:8px;';
-                    dateSpan.textContent = w.createdAt ? w.createdAt.slice(0, 10) : '';
-                    mainLine.appendChild(dateSpan);
-
-                    // Actions
-                    const openBtn = document.createElement('button');
-                    openBtn.className = 'btn-secondary';
-                    openBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
-                    openBtn.textContent = 'Open terminals';
-                    openBtn.addEventListener('click', () => {
-                        postKanbanMessage({
-                            type: 'openWorktreeTerminals',
-                            worktreeId: w.id,
-                            workspaceRoot: currentWorkspaceRoot
-                        });
-                    });
-                    mainLine.appendChild(openBtn);
-
-                    const mergeBtn = document.createElement('button');
-                    mergeBtn.className = 'btn-secondary';
-                    mergeBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
-                    mergeBtn.textContent = 'Merge';
-                    mergeBtn.addEventListener('click', () => {
-                        mergeWorktree(w.id, w.branch, w.path);
-                    });
-                    mainLine.appendChild(mergeBtn);
-
-                    const abandonBtn = document.createElement('button');
-                    abandonBtn.className = 'btn-danger';
-                    abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:8px;';
-                    abandonBtn.textContent = 'Abandon';
-                    abandonBtn.addEventListener('click', () => {
-                        abandonWorktree(w.id, w.branch, w.path);
-                    });
-                    mainLine.appendChild(abandonBtn);
-
-                    const gridChk = document.createElement('input');
-                    gridChk.type = 'checkbox';
-                    gridChk.checked = !!w.agentsOpenWithGrid;
-                    gridChk.id = `wt-grid-${w.id}`;
-                    gridChk.style.cssText = 'margin-left:6px; cursor:pointer; vertical-align:middle;';
-                    gridChk.title = 'When you click the main AGENTS button, open a dedicated set of agent terminals inside this worktree (Planner/Coder/Reviewer/…), in addition to the main repo terminals — or instead of them when "Suppress main repo agent terminals" is on.';
-                    gridChk.addEventListener('change', () => {
-                        postKanbanMessage({
-                            type: 'toggleWorktreeAgentsOpenWithGrid',
-                            worktreeId: w.id,
-                            enabled: gridChk.checked,
-                            workspaceRoot: currentWorkspaceRoot
-                        });
-                    });
-                    mainLine.appendChild(gridChk);
-                    const gridLabel = document.createElement('label');
-                    gridLabel.htmlFor = `wt-grid-${w.id}`;
-                    gridLabel.textContent = 'Agent terminals';
-                    gridLabel.style.cssText = 'font-size:10px; color:var(--text-muted); cursor:pointer; margin-right:4px; vertical-align:middle;';
-                    gridLabel.title = gridChk.title;
-                    mainLine.appendChild(gridLabel);
-
-                    row.appendChild(mainLine);
-
-                    // Scope line and terminal toggle checkbox
-                    const detailsLine = document.createElement('div');
-                    detailsLine.style.cssText = 'display:flex; justify-content:space-between; align-items:center; font-size:10px; color:var(--text-muted); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;';
-
-                    const scopeSpan = document.createElement('span');
-                    if (w.epicTopic) {
-                        scopeSpan.textContent = `Scope: Catches plans in epic '${w.epicTopic}' — overrides project worktree.`;
-                    } else if (w.project) {
-                        scopeSpan.textContent = `Scope: Catches '${w.project}' plans not claimed by an epic worktree.`;
-                    } else {
-                        scopeSpan.textContent = 'Scope: No automatic routing — work manually.';
-                    }
-                    detailsLine.appendChild(scopeSpan);
-
-                    row.appendChild(detailsLine);
-                    return row;
+            const createProjBtn = document.createElement('button');
+            createProjBtn.className = 'worktree-primary-btn';
+            createProjBtn.style.padding = '4px 8px';
+            createProjBtn.style.fontSize = '10px';
+            createProjBtn.textContent = 'Create Project Worktree';
+            if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
+                createProjBtn.disabled = true;
+                createProjBtn.title = 'No git repositories detected in control plane';
+            }
+            createProjBtn.addEventListener('click', () => {
+                const selectedProj = projSelect.value;
+                if (!selectedProj) {
+                    postKanbanMessage({ type: 'showWarning', message: 'Please select a project first.' });
+                    return;
                 }
-
-                // Render structure:
-                // First group project worktrees.
-                const projectWTs = worktrees.filter(w => w.project);
-                const epicWTs = worktrees.filter(w => w.epicTopic);
-                const unboundWTs = worktrees.filter(w => !w.project && !w.epicTopic);
-
-                projectWTs.forEach(pWt => {
-                    list.appendChild(renderWorktreeRow(pWt, false));
-                    // Find nested epic WTs for this project
-                    const children = epicWTs.filter(eWt => eWt.epicProject === pWt.project);
-                    children.forEach(c => {
-                        list.appendChild(renderWorktreeRow(c, true));
-                    });
+                createProjBtn.disabled = true;
+                postKanbanMessage({
+                    type: 'createWorktreeForProject',
+                    project: selectedProj,
+                    workspaceRoot: currentWorkspaceRoot,
+                    repoName: selectedWorktreeRepo || undefined
                 });
+                setTimeout(() => { createProjBtn.disabled = false; }, 5000);
+            });
+            projForm.appendChild(projLabel);
+            projForm.appendChild(projSelect);
+            projForm.appendChild(createProjBtn);
+            projectsSection.appendChild(projForm);
 
-                // Render top-level epics (not nested)
-                epicWTs.forEach(eWt => {
-                    const hasParent = projectWTs.some(pWt => pWt.project === eWt.epicProject);
-                    if (!hasParent) {
-                        list.appendChild(renderWorktreeRow(eWt, false));
-                    }
+            // PROJECTS -> Active Worktrees
+            const activeProjHeader = document.createElement('div');
+            activeProjHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle);';
+            activeProjHeader.textContent = 'Active Project Worktrees';
+            projectsSection.appendChild(activeProjHeader);
+
+            const activeProjListContainer = document.createElement('div');
+            activeProjListContainer.style.cssText = 'padding: 0 8px 8px;';
+            activeProjListContainer.appendChild(renderWorktreeList(projectWTs, 'No active project worktrees.'));
+            projectsSection.appendChild(activeProjListContainer);
+
+            container.appendChild(projectsSection);
+
+            // ==========================================
+            // UNBOUND SECTION
+            // ==========================================
+            const unboundSection = createSubsection('UNBOUND');
+
+            const unboundCreationContainer = document.createElement('div');
+            unboundCreationContainer.style.cssText = 'padding: 8px 8px 0; display: flex; justify-content: flex-end;';
+            
+            const createUnboundBtn = document.createElement('button');
+            createUnboundBtn.className = 'btn-secondary';
+            createUnboundBtn.style.fontSize = '10px';
+            createUnboundBtn.textContent = 'Create Worktree (Unbound)';
+            if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
+                createUnboundBtn.disabled = true;
+                createUnboundBtn.title = 'No git repositories detected in control plane';
+            }
+            createUnboundBtn.addEventListener('click', () => {
+                createUnboundBtn.disabled = true;
+                postKanbanMessage({
+                    type: 'createWorktree',
+                    workspaceRoot: currentWorkspaceRoot,
+                    repoName: selectedWorktreeRepo || undefined
                 });
+                setTimeout(() => { createUnboundBtn.disabled = false; }, 5000);
+            });
+            unboundCreationContainer.appendChild(createUnboundBtn);
+            unboundSection.appendChild(unboundCreationContainer);
 
-                // Render unbound WTs
-                unboundWTs.forEach(u => {
-                    list.appendChild(renderWorktreeRow(u, false));
-                });
+            const activeUnboundHeader = document.createElement('div');
+            activeUnboundHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle); margin-top: 8px;';
+            activeUnboundHeader.textContent = 'Active Unbound Worktrees';
+            unboundSection.appendChild(activeUnboundHeader);
 
-                // Send request for statuses
+            const activeUnboundListContainer = document.createElement('div');
+            activeUnboundListContainer.style.cssText = 'padding: 0 8px 8px;';
+            activeUnboundListContainer.appendChild(renderWorktreeList(unboundWTs, 'No active unbound worktrees.'));
+            unboundSection.appendChild(activeUnboundListContainer);
+
+            container.appendChild(unboundSection);
+
+            // Send request for statuses
+            if (worktrees.length > 0) {
                 postKanbanMessage({
                     type: 'getWorktreeStatuses',
                     workspaceRoot: currentWorkspaceRoot,
                     worktrees: worktrees.map(w => ({ id: w.id, path: w.path }))
                 });
-            }, 0);
+            }
 
             return container;
         }

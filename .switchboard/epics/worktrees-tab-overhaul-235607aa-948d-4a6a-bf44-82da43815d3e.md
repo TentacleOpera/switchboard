@@ -14,9 +14,9 @@ Clean up and reorganize the kanban.html Worktrees tab so users can quickly find 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Worktrees Tab: Add Descriptive Text for Suppress Main Terminals & Routing Order](../plans/feature_plan_20260703063947_worktrees-tab-descriptive-text.md) — **PLAN REVIEWED**
-- [ ] [Worktrees Tab: Reorganize UI into Epics and Projects Subsections](../plans/feature_plan_20260703063948_worktrees-tab-epics-projects-subsections.md) — **PLAN REVIEWED**
-- [ ] [Remove "Create Worktrees for All Epics" Button from Worktrees Tab](../plans/feature_plan_20260703063946_remove-create-worktrees-for-all-epics-button.md) — **PLAN REVIEWED**
+- [ ] [Worktrees Tab: Add Descriptive Text for Suppress Main Terminals & Routing Order](../plans/feature_plan_20260703063947_worktrees-tab-descriptive-text.md) — **INTERN CODED**
+- [ ] [Worktrees Tab: Reorganize UI into Epics and Projects Subsections](../plans/feature_plan_20260703063948_worktrees-tab-epics-projects-subsections.md) — **INTERN CODED**
+- [ ] [Remove "Create Worktrees for All Epics" Button from Worktrees Tab](../plans/feature_plan_20260703063946_remove-create-worktrees-for-all-epics-button.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -8735,53 +8735,7 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 break;
             }
-            case 'createWorktreesForAllEpics': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !await db.ensureReady()) break;
 
-                try {
-                    const workspaceId = await db.getWorkspaceId() || '';
-                    const epics = await db.getEpicPlans(workspaceId);
-                    const allWorktrees = await db.getWorktrees();
-                    
-                    let createdCount = 0;
-                    let skippedCount = 0;
-                    
-                    for (const epic of epics) {
-                        const existing = allWorktrees.find(w => String(w.epic_id) === epic.planId && w.status === 'active');
-                        if (existing) {
-                            skippedCount++;
-                            continue;
-                        }
-
-                        try {
-                            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, epic.topic);
-                            await db.addWorktree(branch, wtPath, epic.planId);
-
-                            if (this._taskViewerProvider) {
-                                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                                const activeAgents = Object.entries(visibleAgents)
-                                    .filter(([_, enabled]) => enabled)
-                                    .map(([role]) => role);
-                                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
-                            }
-                            createdCount++;
-                        } catch (e: any) {
-                            console.error(`Failed to create worktree for epic ${epic.topic}:`, e);
-                            skippedCount++;
-                        }
-                    }
-
-                    vscode.window.showInformationMessage(`Created ${createdCount} worktree(s); skipped ${skippedCount} already-linked or failed.`);
-                    await this._refreshBoard(workspaceRoot);
-                    await this._sendWorktreeConfig(workspaceRoot);
-                } catch (e: any) {
-                    vscode.window.showErrorMessage(`Failed to batch create worktrees: ${e.message}`);
-                }
-                break;
-            }
             case 'toggleWorktreeAgentsOpenWithGrid': {
                 const { worktreeId, enabled, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
