@@ -6245,7 +6245,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
                     await this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
                     await this._refreshBoard(workspaceRoot);
-                    this._taskViewerProvider?.refreshUI(workspaceRoot);
                 }
                 break;
             }

@@ -207,3 +207,7 @@ test('existing plan with empty project is NOT reassigned to active project on up
 ## Uncertain Assumptions
 
 None — all code paths, line numbers, SQL clauses, and method existence were verified by reading the source files directly. No web research is needed.
+
+## Review Findings
+
+Reviewed commit `246484d` (implementation) against plan requirements. The core fix — removing branch (B) from the `else` path in `GlobalPlanWatcherService.ts:617-637` — is correct: only `metadata.project` (branch A) is honored for existing plans, `resolvedProject` defaults to `plan.project`, and the `insertFileDerivedPlan` COALESCE clause now preserves the existing DB value. Grep confirmed only one `kanban.activeProjectFilter` reference remains in the watcher (line 525, the `!plan` first-import branch). The new regression test correctly stubs `insertFileDerivedPlan` and asserts `project === ''`. **NIT (deferred)**: the test's `dbStub.getConfig` stub (line 441) is now dead code since the `else` path no longer reads config — harmless but misleading. **NIT (deferred, pre-existing)**: the `setCurrentProject` test suite (lines 460-547) references a non-existent method. No code changes needed for this subtask. Verification: grep confirmed no orphaned config reads in the else branch; compilation and tests skipped per session directives. Remaining risk: none for this subtask's changes.

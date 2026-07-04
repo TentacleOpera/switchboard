@@ -13,6 +13,6 @@ Fix two race conditions in the plan project-assignment pipeline where stale kanb
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Create plan always assigns to a project even with base workspace board selected](../plans/feature_plan_20260702083644_create-plan-always-assigns-to-project.md) — **CODER CODED**
-- [ ] [Auto-Assign to Current Project Must Only Fire on First Import, Not on Save/Update](../plans/feature_plan_20260702114923_auto-assign-project-only-on-first-import.md) — **CODER CODED**
+- [ ] [Create plan always assigns to a project even with base workspace board selected](../plans/feature_plan_20260702083644_create-plan-always-assigns-to-project.md) — **CODE REVIEWED**
+- [ ] [Auto-Assign to Current Project Must Only Fire on First Import, Not on Save/Update](../plans/feature_plan_20260702114923_auto-assign-project-only-on-first-import.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->

@@ -191,3 +191,7 @@ Both tests assert `getProjectFilter()` which reads the in-memory value (set sync
 ## Uncertain Assumptions
 
 None — all code paths, line numbers, and SQL clauses were verified by reading the source files directly. No web research is needed.
+
+## Review Findings
+
+Reviewed commit `7b6e790` (implementation) against plan requirements. The core fix — `setProjectFilter` async conversion with awaited config write — is correct: all 5 production callers and 2 test callers are properly awaited, in-memory `_projectFilter` remains synchronous, and try/catch prevents unhandled rejections. **MAJOR fix applied**: removed an unplanned double-trigger `this._taskViewerProvider?.refreshUI(workspaceRoot)` at `KanbanProvider.ts:6248` — `_refreshBoard` at line 6247 already calls `refreshUI` via the `switchboard.refreshUI` command, so the direct call was redundant, fire-and-forget, and introduced an unhandled-rejection vector. **NIT (deferred)**: the commit bundled an unrelated `activatePlanInProjectPanel` signature change (added optional `sessionId` param) — safe but outside plan scope. File changed: `src/services/KanbanProvider.ts` (line 6248 removed). Verification: grep confirmed no orphaned references to the removed call; compilation and tests skipped per session directives. Remaining risk: the `activatePlanInProjectPanel` scope creep is harmless but should be noted for commit hygiene.
