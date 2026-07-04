@@ -207,3 +207,7 @@ The `strip-btn` class (lines 177-194) does NOT apply `text-transform: uppercase`
 ## Recommendation
 
 Complexity 4 → **Send to Coder**. Single-file-pair layout fix with clear before/after states. The only moderate risk is the always-visible Edit button state management, which is handled by the null guard.
+
+## Review Findings
+
+Reviewed implementation against all 7 plan requirements in `src/webview/project.html` and `src/webview/project.js`. All requirements met: Edit button moved to static controls strip with `disabled` attribute (`project.html:1700`); AutoFetch removed from controls strip and added to dynamic meta bar template (`project.js:1998`); "CHAT PROMPT" → "Chat Prompt" (`project.html:1701`); `btn-edit-kanban` line removed from meta bar template (no ID collision); null guard `if (!_kanbanSelectedPlan) return` present in Edit click handler (`project.js:2111`); dynamic AutoFetch listener attached after meta bar render (`project.js:2085`); static `btn-kanban-autofetch` listener fully removed with zero orphaned references. `enterEditMode`/`exitEditMode` correctly find the static Edit button via `getElementById`. No bugs found; no code changes needed. No typecheck errors introduced (frontend JS/HTML only).

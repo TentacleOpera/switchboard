@@ -231,3 +231,7 @@ if (epicsProjectFilter) epicsProjectFilter.value = '';
 ## Recommendation
 
 Complexity 3 → **Send to Coder**. UI parity fix replicating a proven pattern. All changes confined to two files with clear before/after states.
+
+## Review Findings
+
+Reviewed implementation against all 7 plan requirements in `src/webview/project.html` and `src/webview/project.js`. All requirements met: `epics-project-filter` select added between workspace and column filters (`project.html:1764`); element ref and `project` key in `epicsFilters` state (`project.js:256,434`); `updateEpicsProjectFilter` correctly scoped to epic plans with `__none__` option and stale-selection reset (`project.js:1462-1490`); `populateKanbanFilters` calls the populator (`project.js:1422`); `renderEpicsList` applies project filter with `__none__` handling and uses `normalizeRoot` for workspace filter (`project.js:2221-2232`); change listener wired with workspace-change reset (`project.js:2710-2728`); deep-link path clears project filter (`project.js:686-691`). No state bleed between kanban and epics filters. No bugs found; no code changes needed. No typecheck errors introduced (frontend JS/HTML only). Minor pre-existing inconsistency: `updateKanbanProjectFilter` at `project.js:1442` uses direct `===` instead of `normalizeRoot` — out of scope for this plan.

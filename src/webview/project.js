@@ -2170,6 +2170,12 @@
         });
     }
 
+    if (architectWorkspaceFilter) {
+        architectWorkspaceFilter.addEventListener('change', () => {
+            vscode.postMessage({ type: 'loadArchitectDocStatus', workspaceRoot: architectWorkspaceFilter.value });
+        });
+    }
+
     if (kanbanColumnFilter) {
         kanbanColumnFilter.addEventListener('change', () => {
             kanbanFilters.column = kanbanColumnFilter.value;

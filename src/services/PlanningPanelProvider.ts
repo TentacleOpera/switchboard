@@ -4389,8 +4389,8 @@ Please format the updated output document strictly as follows:
                 break;
             }
             case 'openArchitectTerminal': {
-                const wsRoot = msg.workspaceRoot;
-                if (!allRoots.includes(wsRoot)) {
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!wsRoot || !allRoots.includes(wsRoot)) {
                     break;
                 }
                 const promptText = this.buildArchitectPrompt(wsRoot);
@@ -4413,8 +4413,8 @@ Please format the updated output document strictly as follows:
             }
 
             case 'copyArchitectPrompt': {
-                const wsRoot = msg.workspaceRoot;
-                if (!allRoots.includes(wsRoot)) {
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!wsRoot || !allRoots.includes(wsRoot)) {
                     break;
                 }
                 const promptText = this.buildArchitectPrompt(wsRoot);
@@ -4424,8 +4424,8 @@ Please format the updated output document strictly as follows:
             }
 
             case 'loadArchitectDocStatus': {
-                const wsRoot = msg.workspaceRoot;
-                if (!allRoots.includes(wsRoot)) {
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!wsRoot || !allRoots.includes(wsRoot)) {
                     break;
                 }
                 const docs = await this.gatherArchitectDocStatus(wsRoot);
@@ -4434,10 +4434,10 @@ Please format the updated output document strictly as follows:
             }
 
             case 'readArchitectDoc': {
-                const wsRoot = msg.workspaceRoot;
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const docPath = msg.path;
                 const docType = msg.docType;
-                if (!allRoots.includes(wsRoot)) {
+                if (!wsRoot || !allRoots.includes(wsRoot)) {
                     break;
                 }
                 try {
