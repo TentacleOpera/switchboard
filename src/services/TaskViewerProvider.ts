@@ -356,6 +356,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Safety-net sweep: checks every 60s whether source columns are empty and stops autoban if so.
     private _autobanEmptyColumnSweepTimer?: NodeJS.Timeout;
     private _mcpMonitorTimer?: NodeJS.Timeout;
+    private _mcpMonitorFirstPromptTimer?: NodeJS.Timeout;
+    private _mcpMonitorConfigChangeTimer?: NodeJS.Timeout;
     private _mcpMonitorTickQueue: Promise<void> = Promise.resolve();
     private _mcpMonitorLastSendAt = 0;
     private _mcpMonitorInFlight = false;
@@ -16045,6 +16047,19 @@ What would you like to find?`;
 
             await this._removeAutobanTerminalReferences(cleanedTerminalName || terminal.name);
 
+            // If the closed terminal was the Comms Monitor, stop the polling
+            // loop and push the updated status to the kanban webview so the
+            // status line flips from 🟢 to 🔴. Match by NAME (available
+            // synchronously on the close event) rather than PID, so detection
+            // is robust even when terminal.processId does not resolve within
+            // the 1s timeout.
+            const monitorStripped = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
+            const closedStripped = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name));
+            if (closedStripped === monitorStripped) {
+                this._stopMcpMonitorLoop();
+                await this._postMcpMonitorConfig();
+            }
+
             this._refreshTerminalStatuses();
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to handle terminal closure:', e);
@@ -20493,16 +20508,27 @@ What would you like to find?`;
         custom: "Custom Instruction"
     };
 
+    private _gcd(numbers: number[]): number {
+        const gcd2 = (a: number, b: number): number => b === 0 ? a : gcd2(b, a % b);
+        return numbers.reduce((acc, n) => gcd2(acc, n), 0);
+    }
+
     private async _startMcpMonitorLoop() {
         const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
-        if (!cfg.enabled) {
+        if (!cfg.pollingEnabled) {
+            this._stopMcpMonitorLoop();
+            return;
+        }
+        const activeSources = (cfg.sources || []).filter(src => cfg.sourceIntervals[src] && cfg.sourceIntervals[src] > 0);
+        if (activeSources.length === 0) {
             this._stopMcpMonitorLoop();
             return;
         }
         if (this._mcpMonitorTimer) {
             clearInterval(this._mcpMonitorTimer);
         }
-        const intervalMs = Math.max(cfg.intervalMinutes, 1) * 60 * 1000;
+        const periodMinutes = this._gcd(activeSources.map(src => cfg.sourceIntervals[src]));
+        const intervalMs = Math.max(periodMinutes, 1) * 60 * 1000;
         this._mcpMonitorTimer = setInterval(() => this._enqueueMcpMonitorTick(), intervalMs);
     }
 
@@ -20510,6 +20536,14 @@ What would you like to find?`;
         if (this._mcpMonitorTimer) {
             clearInterval(this._mcpMonitorTimer);
             this._mcpMonitorTimer = undefined;
+        }
+        if (this._mcpMonitorFirstPromptTimer) {
+            clearTimeout(this._mcpMonitorFirstPromptTimer);
+            this._mcpMonitorFirstPromptTimer = undefined;
+        }
+        if (this._mcpMonitorConfigChangeTimer) {
+            clearTimeout(this._mcpMonitorConfigChangeTimer);
+            this._mcpMonitorConfigChangeTimer = undefined;
         }
     }
 
@@ -20525,7 +20559,7 @@ What would you like to find?`;
 
     private async _mcpMonitorTick() {
         const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
-        if (!cfg.enabled) return;
+        if (!cfg.pollingEnabled) return;
 
         // Singleton guard: resolve the target terminal in this window
         const openTerminals = vscode.window.terminals || [];
@@ -20545,33 +20579,67 @@ What would you like to find?`;
             return;
         }
 
-        const intervalMs = Math.max(cfg.intervalMinutes, 1) * 60 * 1000;
-        // Secondary debounce
-        if (Date.now() - this._mcpMonitorLastSendAt < intervalMs * 0.5) {
-            return;
-        }
+        // Compute due sources (those whose per-source interval has elapsed).
+        // A source with no recorded baseline is always due (first check).
+        const now = Date.now();
+        const dueSources = (cfg.sources || []).filter(src => {
+            const intervalMin = cfg.sourceIntervals[src];
+            if (!intervalMin || intervalMin <= 0) return false;
+            const last = cfg.sourceLastCheckAt[src];
+            if (!last) return true;
+            const elapsed = now - new Date(last).getTime();
+            return elapsed >= intervalMin * 60 * 1000;
+        });
+        if (dueSources.length === 0) return;
 
         this._mcpMonitorInFlight = true;
         try {
-            const prompt = this._buildMcpMonitorPrompt(cfg);
+            const prompt = this._buildMcpMonitorPrompt(cfg, { dueSources });
             if (prompt) {
                 await sendRobustText(terminal, prompt, true);
                 this._mcpMonitorLastSendAt = Date.now();
+                // Persist sourceLastCheckAt for the sent sources only (successful send).
+                const nowIso = new Date().toISOString();
+                const updatedBaselines: Record<string, string> = {};
+                for (const src of dueSources) {
+                    updatedBaselines[src] = nowIso;
+                }
+                await GlobalIntegrationConfigService.setMcpMonitorConfig({ sourceLastCheckAt: updatedBaselines });
             }
         } finally {
             this._mcpMonitorInFlight = false;
         }
     }
 
-    private _buildMcpMonitorPrompt(cfg: McpMonitorConfig): string {
-        const preamble = "Check the following for anything new that needs my attention since your previous check. Report only what is new and noteworthy as a short bullet list. If nothing needs attention, reply 'All clear'. This is read-only — do NOT take any actions, send any messages, or modify anything.";
+    private _buildMcpMonitorPrompt(cfg: McpMonitorConfig, opts?: { dueSources?: string[] }): string {
+        // If the user has an override, use it verbatim.
+        if (cfg.promptOverride && cfg.promptOverride.trim()) {
+            return normalizeNewlines(cfg.promptOverride.trim());
+        }
+
+        const sources = opts?.dueSources ?? cfg.sources ?? [];
+        // Boundary from the earliest relevant sourceLastCheckAt (fallback "past 24 hours").
+        const baselines = sources
+            .map(src => cfg.sourceLastCheckAt[src])
+            .filter(Boolean)
+            .map(s => new Date(s as string).getTime());
+        const boundary = baselines.length > 0
+            ? `since ${new Date(Math.min(...baselines)).toUTCString()}`
+            : 'in the past 24 hours';
+        const preamble = `Check the following for anything new that needs my attention ${boundary}. Report only what is new and noteworthy as a short bullet list. If nothing needs attention, reply 'All clear'. This is read-only — do NOT take any actions, send any messages, or modify anything.`;
+
         const lines: string[] = [];
-        const sources = cfg.sources || [];
         for (const src of sources) {
             if (src === 'custom') {
                 if (cfg.customInstruction && cfg.customInstruction.trim()) {
                     lines.push(cfg.customInstruction.trim());
                 }
+            } else if (src === 'slack') {
+                lines.push(this._buildSlackPromptLine(cfg));
+            } else if (src === 'gmail') {
+                lines.push(this._buildGmailPromptLine(cfg));
+            } else if (src === 'gcal') {
+                lines.push('Google Calendar: events starting in the next 24 hours.');
             } else {
                 const text = TaskViewerProvider.SOURCE_PRESETS[src];
                 if (text) {
@@ -20584,20 +20652,90 @@ What would you like to find?`;
         return normalizeNewlines(body);
     }
 
+    private _buildSlackPromptLine(cfg: McpMonitorConfig): string {
+        const channels = (cfg.slackChannels || '').split(',').map(s => s.trim()).filter(Boolean);
+        const scopeParts: string[] = [];
+        if (!cfg.slackDmOnly) {
+            if (channels.length > 0) {
+                scopeParts.push(`messages in channels: ${channels.join(', ')}`);
+            } else {
+                scopeParts.push('messages in channels (all)');
+            }
+        }
+        if (!cfg.slackChannelOnly) {
+            scopeParts.push('direct messages (DMs)');
+        }
+        const scope = scopeParts.join(' and ');
+        const boundary = this._slackGmailBoundary(cfg);
+        return `Slack: unread ${scope} and @-mentions ${boundary}. Clearly label each item as [DM] or [channel: #name].`;
+    }
+
+    private _buildGmailPromptLine(cfg: McpMonitorConfig): string {
+        const label = cfg.gmailLabel && cfg.gmailLabel.trim() ? cfg.gmailLabel.trim() : 'INBOX';
+        const boundary = this._slackGmailBoundary(cfg);
+        return `Gmail: unread or important emails in label "${label}" ${boundary}. Include sender and subject for each.`;
+    }
+
+    private _slackGmailBoundary(cfg: McpMonitorConfig): string {
+        const slackLast = cfg.sourceLastCheckAt['slack'];
+        const gmailLast = cfg.sourceLastCheckAt['gmail'];
+        const candidates = [slackLast, gmailLast].filter(Boolean).map(s => new Date(s as string).getTime());
+        if (candidates.length === 0) return 'in the past 24 hours';
+        return `since ${new Date(Math.min(...candidates)).toUTCString()}`;
+    }
+
+    /**
+     * Public preview builder — renders the generated template (promptOverride
+     * is forced to '' so the preview always shows the template, not the
+     * override). Used by the webview's "renderMcpMonitorPreview" message.
+     */
+    public buildMcpMonitorPreview(cfg: Partial<McpMonitorConfig>): string {
+        const full: McpMonitorConfig = {
+            enabled: cfg.enabled ?? false,
+            pollingEnabled: cfg.pollingEnabled ?? false,
+            targetRole: cfg.targetRole ?? 'mcp_monitor',
+            sources: cfg.sources ?? [],
+            customInstruction: cfg.customInstruction ?? '',
+            sourceIntervals: cfg.sourceIntervals ?? { slack: 5, gmail: 5, gcal: 5, custom: 5 },
+            sourceLastCheckAt: cfg.sourceLastCheckAt ?? {},
+            promptOverride: '',
+            slackChannels: cfg.slackChannels,
+            slackDmOnly: cfg.slackDmOnly,
+            slackChannelOnly: cfg.slackChannelOnly,
+            gmailLabel: cfg.gmailLabel,
+        };
+        return this._buildMcpMonitorPrompt(full);
+    }
+
     public async setMcpMonitorConfigFromKanban(config: Partial<McpMonitorConfig>) {
         await GlobalIntegrationConfigService.setMcpMonitorConfig(config);
+        // Restart the loop so the GCD timer picks up new per-source intervals.
         await this._startMcpMonitorLoop();
+        // Coalesced (500ms) config-change tick so source toggles apply on the
+        // next tick without a terminal restart. Reset the secondary debounce on
+        // this path only so the immediate prompt isn't eaten.
+        if (this._mcpMonitorConfigChangeTimer) {
+            clearTimeout(this._mcpMonitorConfigChangeTimer);
+        }
+        this._mcpMonitorConfigChangeTimer = setTimeout(() => {
+            this._mcpMonitorConfigChangeTimer = undefined;
+            this._mcpMonitorLastSendAt = 0;
+            this._enqueueMcpMonitorTick();
+        }, 500);
         this._postMcpMonitorConfig();
     }
 
     private async _postMcpMonitorConfig() {
         const config = await GlobalIntegrationConfigService.getMcpMonitorConfig();
         const isMonitorRunning = this._isMcpMonitorTerminalRunning(config.targetRole);
+        const resolvedStartupCommand = await this.getAgentStartupCommand('mcp_monitor');
         const message = {
             type: 'updateMcpMonitorConfig',
             config,
             isMonitorRunning,
-            presets: TaskViewerProvider.SOURCE_PRESETS
+            isPolling: config.pollingEnabled,
+            presets: TaskViewerProvider.SOURCE_PRESETS,
+            resolvedStartupCommand
         };
         this._view?.webview.postMessage(message);
         this._kanbanProvider?.postMessage(message);
@@ -20615,6 +20753,12 @@ What would you like to find?`;
         void this._postMcpMonitorConfig();
     }
 
+    /**
+     * Step 1 of the three-step launch: create the Comms Monitor terminal and
+     * send the startup command only. Does NOT start the polling loop or
+     * schedule a first prompt — use checkMcpMonitorAuth() then
+     * startMcpMonitorPolling() for that.
+     */
     public async launchMcpMonitorTerminal(): Promise<void> {
         const targetName = TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
@@ -20635,6 +20779,7 @@ What would you like to find?`;
         });
         if (live) {
             live.show();
+            await this._postMcpMonitorConfig();
             return;
         }
 
@@ -20647,7 +20792,7 @@ What would you like to find?`;
             location: vscode.TerminalLocation.Panel,
             cwd: this._resolveWorkspaceRoot() ?? undefined
         });
-        
+
         if (!this._registeredTerminals) this._registeredTerminals = new Map();
         this._registeredTerminals.set(this._suffixedName(targetName), terminal);
 
@@ -20685,7 +20830,78 @@ What would you like to find?`;
             terminal.sendText(cmd.trim(), true);
         }
 
-        // Push updated status to kanban
+        // Push updated status to kanban. No loop start, no first-prompt one-shot —
+        // the user runs checkMcpMonitorAuth() then startMcpMonitorPolling().
+        await this._postMcpMonitorConfig();
+    }
+
+    /**
+     * Step 2 of the three-step launch: send a read-only diagnostic prompt to
+     * the monitor terminal listing the configured sources, so the user can
+     * verify Claude auth / MCP servers respond before starting polling.
+     * Non-blocking, no confirm gate.
+     */
+    public async checkMcpMonitorAuth(): Promise<void> {
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
+        const terminal = (vscode.window.terminals || []).find(t => {
+            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
+            return tName === strippedTarget && t.exitStatus === undefined;
+        });
+        if (!terminal) {
+            vscode.window.showWarningMessage('No Comms Monitor terminal running. Start the terminal first.');
+            return;
+        }
+        const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
+        const sources = (cfg.sources || []).filter(s => s !== 'custom');
+        const sourceList = sources.length > 0 ? sources.join(', ') : 'no sources configured';
+        const prompt = `Diagnostic check: confirm you can access the following MCP sources and report their status (connected / unauthorized / not configured): ${sourceList}. Do NOT take any actions — this is a read-only connectivity check.`;
+        await sendRobustText(terminal, normalizeNewlines(prompt), true);
+    }
+
+    /**
+     * Step 3 of the three-step launch: enable polling, start the GCD timer,
+     * and schedule the 30s first-prompt one-shot so the first check arrives
+     * quickly without waiting a full interval.
+     */
+    public async startMcpMonitorPolling(): Promise<void> {
+        await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: true });
+        await this._startMcpMonitorLoop();
+        // 30s first-prompt one-shot — lives here, not in launchMcpMonitorTerminal.
+        if (this._mcpMonitorFirstPromptTimer) {
+            clearTimeout(this._mcpMonitorFirstPromptTimer);
+        }
+        this._mcpMonitorFirstPromptTimer = setTimeout(() => {
+            this._mcpMonitorFirstPromptTimer = undefined;
+            this._enqueueMcpMonitorTick();
+        }, 30 * 1000);
+        await this._postMcpMonitorConfig();
+    }
+
+    /**
+     * Stop polling but leave the terminal alive. Sets pollingEnabled false and
+     * cancels the interval + first-prompt + config-change timers.
+     */
+    public async stopMcpMonitorPolling(): Promise<void> {
+        await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
+        this._stopMcpMonitorLoop();
+        await this._postMcpMonitorConfig();
+    }
+
+    /**
+     * Kill the Comms Monitor terminal and stop the polling loop. Called by the
+     * "Stop" button in the COMMS tab. Also called from handleTerminalClosed
+     * when the monitor terminal dies so the loop stops and the status flips.
+     */
+    public async stopMcpMonitorTerminal(): Promise<void> {
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
+        const live = (vscode.window.terminals || []).find(t => {
+            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
+            return tName === strippedTarget && t.exitStatus === undefined;
+        });
+        if (live) {
+            live.dispose();
+        }
+        this._stopMcpMonitorLoop();
         await this._postMcpMonitorConfig();
     }
 

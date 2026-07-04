@@ -1340,6 +1340,26 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(launchMcpMonitorTerminalDisposable);
 
+    const stopMcpMonitorTerminalDisposable = vscode.commands.registerCommand('switchboard.stopMcpMonitorTerminal', async () => {
+        await taskViewerProvider.stopMcpMonitorTerminal();
+    });
+    context.subscriptions.push(stopMcpMonitorTerminalDisposable);
+
+    const checkMcpMonitorAuthDisposable = vscode.commands.registerCommand('switchboard.checkMcpMonitorAuth', async () => {
+        await taskViewerProvider.checkMcpMonitorAuth();
+    });
+    context.subscriptions.push(checkMcpMonitorAuthDisposable);
+
+    const startMcpMonitorPollingDisposable = vscode.commands.registerCommand('switchboard.startMcpMonitorPolling', async () => {
+        await taskViewerProvider.startMcpMonitorPolling();
+    });
+    context.subscriptions.push(startMcpMonitorPollingDisposable);
+
+    const stopMcpMonitorPollingDisposable = vscode.commands.registerCommand('switchboard.stopMcpMonitorPolling', async () => {
+        await taskViewerProvider.stopMcpMonitorPolling();
+    });
+    context.subscriptions.push(stopMcpMonitorPollingDisposable);
+
     const resetAutobanPoolsDisposable = vscode.commands.registerCommand('switchboard.resetAutobanPoolsFromKanban', async () => {
         await taskViewerProvider.resetAutobanPoolsFromKanban();
     });

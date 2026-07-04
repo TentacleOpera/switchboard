@@ -14,10 +14,17 @@ export interface GlobalConfig {
      */
     mcpMonitor?: {
         enabled?: boolean;
-        intervalMinutes?: number;
+        pollingEnabled?: boolean;
         targetRole?: string;
         sources?: string[];
         customInstruction?: string;
+        sourceIntervals?: Record<string, number>;
+        sourceLastCheckAt?: Record<string, string>;
+        promptOverride?: string;
+        slackChannels?: string;
+        slackDmOnly?: boolean;
+        slackChannelOnly?: boolean;
+        gmailLabel?: string;
     };
     /**
      * Agent settings that are global to the MACHINE — shared across every
@@ -37,19 +44,28 @@ export interface GlobalConfig {
 export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents';
 
 export interface McpMonitorConfig {
-    enabled: boolean;
-    intervalMinutes: number;
+    enabled: boolean;                 // config-panel visibility only
+    pollingEnabled: boolean;          // the loop gate
     targetRole: string;
     sources: string[];
     customInstruction: string;
+    sourceIntervals: Record<string, number>;    // per-source minutes, e.g. { slack: 2, gmail: 30 }
+    sourceLastCheckAt: Record<string, string>;   // per-source ISO UTC baseline
+    promptOverride?: string;
+    slackChannels?: string;
+    slackDmOnly?: boolean;
+    slackChannelOnly?: boolean;
+    gmailLabel?: string;
 }
 
 export const DEFAULT_MCP_MONITOR_CONFIG: McpMonitorConfig = {
     enabled: false,
-    intervalMinutes: 5,
+    pollingEnabled: false,
     targetRole: 'mcp_monitor',
     sources: ['slack'],
     customInstruction: '',
+    sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 },
+    sourceLastCheckAt: {},
 };
 
 export class GlobalIntegrationConfigService {
@@ -223,10 +239,17 @@ export class GlobalIntegrationConfigService {
         const cfg = globalConfig.mcpMonitor || {};
         return {
             enabled: cfg.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
-            intervalMinutes: Math.max(cfg.intervalMinutes ?? DEFAULT_MCP_MONITOR_CONFIG.intervalMinutes, 1),
+            pollingEnabled: cfg.pollingEnabled ?? DEFAULT_MCP_MONITOR_CONFIG.pollingEnabled,
             targetRole: cfg.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
             sources: cfg.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
             customInstruction: cfg.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+            sourceIntervals: { ...DEFAULT_MCP_MONITOR_CONFIG.sourceIntervals, ...(cfg.sourceIntervals || {}) },
+            sourceLastCheckAt: { ...(cfg.sourceLastCheckAt || {}) },
+            promptOverride: cfg.promptOverride,
+            slackChannels: cfg.slackChannels,
+            slackDmOnly: cfg.slackDmOnly,
+            slackChannelOnly: cfg.slackChannelOnly,
+            gmailLabel: cfg.gmailLabel,
         };
     }
 
@@ -235,10 +258,17 @@ export class GlobalIntegrationConfigService {
         const cfg = globalConfig.mcpMonitor || {};
         return {
             enabled: cfg.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
-            intervalMinutes: Math.max(cfg.intervalMinutes ?? DEFAULT_MCP_MONITOR_CONFIG.intervalMinutes, 1),
+            pollingEnabled: cfg.pollingEnabled ?? DEFAULT_MCP_MONITOR_CONFIG.pollingEnabled,
             targetRole: cfg.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
             sources: cfg.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
             customInstruction: cfg.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+            sourceIntervals: { ...DEFAULT_MCP_MONITOR_CONFIG.sourceIntervals, ...(cfg.sourceIntervals || {}) },
+            sourceLastCheckAt: { ...(cfg.sourceLastCheckAt || {}) },
+            promptOverride: cfg.promptOverride,
+            slackChannels: cfg.slackChannels,
+            slackDmOnly: cfg.slackDmOnly,
+            slackChannelOnly: cfg.slackChannelOnly,
+            gmailLabel: cfg.gmailLabel,
         };
     }
 
@@ -247,10 +277,17 @@ export class GlobalIntegrationConfigService {
         const current = globalConfig.mcpMonitor || {};
         globalConfig.mcpMonitor = {
             enabled: config.enabled ?? current.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
-            intervalMinutes: Math.max(config.intervalMinutes ?? current.intervalMinutes ?? DEFAULT_MCP_MONITOR_CONFIG.intervalMinutes, 1),
+            pollingEnabled: config.pollingEnabled ?? current.pollingEnabled ?? DEFAULT_MCP_MONITOR_CONFIG.pollingEnabled,
             targetRole: config.targetRole ?? current.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
             sources: config.sources ?? current.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
             customInstruction: config.customInstruction ?? current.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+            sourceIntervals: { ...DEFAULT_MCP_MONITOR_CONFIG.sourceIntervals, ...(current.sourceIntervals || {}), ...(config.sourceIntervals || {}) },
+            sourceLastCheckAt: { ...(current.sourceLastCheckAt || {}), ...(config.sourceLastCheckAt || {}) },
+            promptOverride: config.promptOverride ?? current.promptOverride,
+            slackChannels: config.slackChannels ?? current.slackChannels,
+            slackDmOnly: config.slackDmOnly ?? current.slackDmOnly,
+            slackChannelOnly: config.slackChannelOnly ?? current.slackChannelOnly,
+            gmailLabel: config.gmailLabel ?? current.gmailLabel,
         };
         await this.saveGlobal(globalConfig);
     }

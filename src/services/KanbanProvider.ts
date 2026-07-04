@@ -21,7 +21,7 @@ import {
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { KanbanMigration } from './KanbanMigration';
@@ -4032,6 +4032,19 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
         }
 
+        // §10 — REQUIRED pre-dispatch step for epic-mode coder dispatch: regenerate
+        // the epic file so its SUBTASKS/WORKTREES blocks reflect the current subtask
+        // set before the coder reads it. Without this, a stale block would make the
+        // coder execute a wrong plan list — a silent data-integrity bug. The call is
+        // cheap and idempotent. Only needed for the coder role (which uses the
+        // single-epic-file-reference path); other roles enumerate subtasks directly.
+        if (role === 'coder' && resolvedOptions.epicMode && resolvedOptions.epicPlanId) {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && await db.ensureReady()) {
+                await this._regenerateEpicFile(workspaceRoot, resolvedOptions.epicPlanId, db);
+            }
+        }
+
         const mergedOptions = {
             ...resolvedOptions,
             ...overrides,
@@ -6270,6 +6283,29 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.commands.executeCommand('switchboard.launchMcpMonitorTerminal');
                 break;
             }
+            case 'stopMcpMonitorTerminal': {
+                await vscode.commands.executeCommand('switchboard.stopMcpMonitorTerminal');
+                break;
+            }
+            case 'checkMcpMonitorAuth': {
+                await vscode.commands.executeCommand('switchboard.checkMcpMonitorAuth');
+                break;
+            }
+            case 'startMcpMonitorPolling': {
+                await vscode.commands.executeCommand('switchboard.startMcpMonitorPolling');
+                break;
+            }
+            case 'stopMcpMonitorPolling': {
+                await vscode.commands.executeCommand('switchboard.stopMcpMonitorPolling');
+                break;
+            }
+            case 'renderMcpMonitorPreview': {
+                if (this._taskViewerProvider && msg.config) {
+                    const preview = this._taskViewerProvider.buildMcpMonitorPreview(msg.config);
+                    this._panel?.webview.postMessage({ type: 'mcpMonitorPreview', preview });
+                }
+                break;
+            }
             case 'updateAutobanConfig': {
                 if (this._taskViewerProvider && msg.state) {
                     await this._taskViewerProvider.updateAutobanConfigFromKanban(msg.state);
@@ -7963,7 +7999,7 @@ ${planDetails}
 4. Verify your fixes address the specific feedback provided.
 5. Do not introduce scope changes beyond what's needed to fix the reported issues.
 
-FOCUS: Each plan file path above is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
+${FOCUS_DIRECTIVE}`;
 
                 if (msg.action === 'copyPrompt' || msg.action === 'sendToLead') {
                     await vscode.env.clipboard.writeText(prompt);

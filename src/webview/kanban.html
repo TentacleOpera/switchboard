@@ -2499,6 +2499,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
         <button class="shared-tab-btn" data-tab="uat">UAT</button>
+        <button class="shared-tab-btn" data-tab="comms">COMMS</button>
         <button class="shared-tab-btn" data-tab="setup">SETUP</button>
     </div>
 
@@ -2580,6 +2581,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <!-- Automation Tab Content -->
     <div id="automation-tab-content" class="shared-tab-content">
         <div id="automation-panel-root" class="automation-panel"></div>
+    </div>
+
+    <!-- Comms Tab Content -->
+    <div id="comms-tab-content" class="shared-tab-content">
+        <div id="comms-panel-root" class="automation-panel"></div>
     </div>
 
     <!-- The Remote tab (§10) moved to project.html (Project panel). The toolbar
@@ -6074,6 +6080,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastCustomAgents = [];
         let isAutobanPanelInteracting = false;
         let autobanPanelInteractionTimer = null;
+        let isCommsPanelInteracting = false;
+        let commsPanelInteractionTimer = null;
         let lastAntigravityAgent = '';
         let lastAntigravityColumn = '';
         let lastSafetySession = null;
@@ -6082,9 +6090,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let currentAutomationMode = 'single-column';
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
-        let mcpMonitorConfig = { enabled: false, intervalMinutes: 5, targetRole: 'mcp_monitor', sources: ['slack'], customInstruction: '' };
+        let mcpMonitorConfig = { enabled: false, pollingEnabled: false, targetRole: 'mcp_monitor', sources: ['slack'], customInstruction: '', sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 }, sourceLastCheckAt: {} };
         let isMcpMonitorTerminalRunning = false;
+        let isMcpMonitorPolling = false;
         let mcpMonitorPresets = {};
+        let mcpMonitorResolvedCmd = '';
 
         // Listen for messages from the extension
         window.addEventListener('message', (event) => {
@@ -6739,9 +6749,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'updateMcpMonitorConfig': {
                   mcpMonitorConfig = msg.config || mcpMonitorConfig;
                   isMcpMonitorTerminalRunning = !!msg.isMonitorRunning;
+                  isMcpMonitorPolling = !!msg.isPolling;
                   mcpMonitorPresets = msg.presets || mcpMonitorPresets;
-                  if (!isAutobanPanelInteracting) {
-                      renderAutobanPanel();
+                  mcpMonitorResolvedCmd = msg.resolvedStartupCommand || '';
+                  if (!isCommsPanelInteracting) {
+                      renderCommsPanel();
+                  }
+                  break;
+                }
+                case 'mcpMonitorPreview': {
+                  // Backend-rendered preview (response to renderMcpMonitorPreview).
+                  // Only update the textarea if the user has not manually overridden.
+                  if (typeof msg.preview === 'string' && window.__commsPreviewUpdate) {
+                      window.__commsPreviewUpdate(msg.preview);
                   }
                   break;
                 }
@@ -7603,163 +7623,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             modeRow.appendChild(modeSelect);
             container.appendChild(modeRow);
 
-            // Comms Monitor Row
-            const mcpRow = document.createElement('div');
-            mcpRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-            const mcpLabel = document.createElement('span');
-            mcpLabel.textContent = 'COMMS MONITOR:';
-            const mcpSelect = document.createElement('select');
-            mcpSelect.style.cssText = autobanSelectStyle + ' flex:1;';
-            guardInteraction(mcpSelect);
-
-            [
-                { value: 'off', label: 'Off' },
-                { value: 'on', label: 'On' }
-            ].forEach(optInfo => {
-                const opt = document.createElement('option');
-                opt.value = optInfo.value;
-                opt.textContent = optInfo.label;
-                if ((optInfo.value === 'on') === mcpMonitorConfig.enabled) opt.selected = true;
-                mcpSelect.appendChild(opt);
-            });
-            mcpRow.appendChild(mcpLabel);
-            mcpRow.appendChild(mcpSelect);
-
-            // Comms Monitor Config Panel (Collapsible)
-            const mcpConfigPanel = document.createElement('div');
-            mcpConfigPanel.style.cssText = 'padding:8px; margin:0 8px 8px 8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); display:' + (mcpMonitorConfig.enabled ? 'block' : 'none') + '; font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
-
-            // Interval select row
-            const intervalRow = document.createElement('div');
-            intervalRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px;';
-            const intervalLabel = document.createElement('span');
-            intervalLabel.textContent = 'Interval:';
-            const intervalSelect = document.createElement('select');
-            intervalSelect.style.cssText = autobanSelectStyle + ' flex:1;';
-            guardInteraction(intervalSelect);
-
-            [1, 2, 5, 10, 15, 30].forEach(minutes => {
-                const opt = document.createElement('option');
-                opt.value = String(minutes);
-                opt.textContent = `${minutes} minute${minutes === 1 ? '' : 's'}`;
-                if (mcpMonitorConfig.intervalMinutes === minutes) opt.selected = true;
-                intervalSelect.appendChild(opt);
-            });
-            intervalRow.appendChild(intervalLabel);
-            intervalRow.appendChild(intervalSelect);
-            mcpConfigPanel.appendChild(intervalRow);
-
-            // Sources checklist
-            const sourcesHeader = document.createElement('div');
-            sourcesHeader.style.cssText = 'font-weight:bold; color:var(--text-secondary); margin-bottom:4px;';
-            sourcesHeader.textContent = 'Watched Sources:';
-            mcpConfigPanel.appendChild(sourcesHeader);
-
-            const sourcesList = document.createElement('div');
-            sourcesList.style.cssText = 'display:flex; flex-direction:column; gap:4px; margin-bottom:8px; padding-left:4px;';
-
-            const activeSources = new Set(mcpMonitorConfig.sources || []);
-            
-            // Build checklists based on mcpMonitorPresets sent by backend (fallback to default presets keys if empty)
-            const presetsToRender = Object.keys(mcpMonitorPresets).length > 0 ? mcpMonitorPresets : {
-                slack: "Slack: unread direct messages and @-mentions across my channels.",
-                gmail: "Gmail: unread or important emails in my inbox.",
-                gcal: "Google Calendar: events starting in the next 24 hours.",
-                custom: "Custom Instruction"
-            };
-
-            const customInstructionRow = document.createElement('div');
-            customInstructionRow.style.cssText = 'margin-top:6px; display:' + (activeSources.has('custom') ? 'block' : 'none') + ';';
-            const customInstructionTextarea = document.createElement('textarea');
-            customInstructionTextarea.placeholder = 'Enter custom instructions for monitor (e.g. check a specific HTTP endpoint)...';
-            customInstructionTextarea.style.cssText = 'width:100%; height:48px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:4px; border-radius:3px; resize:vertical; box-sizing:border-box;';
-            customInstructionTextarea.value = mcpMonitorConfig.customInstruction || '';
-            guardInteraction(customInstructionTextarea);
-            customInstructionRow.appendChild(customInstructionTextarea);
-
-            Object.entries(presetsToRender).forEach(([key, label]) => {
-                const labelWrapper = document.createElement('label');
-                labelWrapper.style.cssText = 'display:flex; align-items:flex-start; gap:6px; cursor:pointer; font-size:9px; color:var(--text-secondary); line-height:1.2;';
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.value = key;
-                checkbox.checked = activeSources.has(key);
-                checkbox.style.cssText = 'margin:1px 0 0 0; cursor:pointer; flex-shrink:0;';
-                guardInteraction(checkbox);
-
-                const span = document.createElement('span');
-                span.textContent = label;
-
-                labelWrapper.appendChild(checkbox);
-                labelWrapper.appendChild(span);
-                sourcesList.appendChild(labelWrapper);
-
-                checkbox.addEventListener('change', () => {
-                    if (checkbox.checked) {
-                        activeSources.add(key);
-                    } else {
-                        activeSources.delete(key);
-                    }
-                    if (key === 'custom') {
-                        customInstructionRow.style.display = checkbox.checked ? 'block' : 'none';
-                    }
-                    saveMonitorConfig();
-                });
-            });
-
-            mcpConfigPanel.appendChild(sourcesList);
-            mcpConfigPanel.appendChild(customInstructionRow);
-
-            // Status Line
-            const statusLine = document.createElement('div');
-            statusLine.style.cssText = 'margin-top:8px; padding-top:6px; border-top:1px dashed var(--border-color); font-size:9px; line-height:1.3;';
-            if (isMcpMonitorTerminalRunning) {
-                statusLine.innerHTML = '🟢 <strong>Comms Monitor terminal:</strong> running';
-            } else {
-                statusLine.innerHTML = '🔴 <strong>No Comms Monitor terminal running.</strong>';
-                const launchBtn = document.createElement('button');
-                launchBtn.textContent = 'Launch Comms Monitor Terminal';
-                launchBtn.style.cssText = 'display:block; margin-top:6px; padding:4px 10px; font-family:var(--font-mono); font-size:10px; cursor:pointer; background:var(--accent-teal); color:var(--bg-primary); border:none; border-radius:3px;';
-                guardInteraction(launchBtn);
-                launchBtn.addEventListener('click', () => {
-                    launchBtn.disabled = true;
-                    launchBtn.textContent = 'Launching…';
-                    postKanbanMessage({ type: 'launchMcpMonitorTerminal' });
-                });
-                statusLine.appendChild(launchBtn);
-            }
-            mcpConfigPanel.appendChild(statusLine);
-
-            // Help text
-            const mcpHelp = document.createElement('div');
-            mcpHelp.style.cssText = 'margin-top:8px; font-size:9px; color:var(--text-secondary); line-height:1.3; border-top:1px solid var(--border-color); padding-top:6px;';
-            mcpHelp.textContent = 'How it works: every selected interval, Switchboard sends a prompt to your monitor terminal asking it to check the selected sources (Slack, Gmail, Google Calendar, or a custom instruction) via your claude.ai MCP servers. The terminal reports what\'s new in its pane.';
-            mcpConfigPanel.appendChild(mcpHelp);
-
-            const saveMonitorConfig = () => {
-                const enabled = mcpSelect.value === 'on';
-                const intervalMinutes = parseInt(intervalSelect.value, 10);
-                const customInstruction = customInstructionTextarea.value;
-                const sources = Array.from(activeSources);
-                mcpMonitorConfig = { ...mcpMonitorConfig, enabled, intervalMinutes, sources, customInstruction };
-                postKanbanMessage({
-                    type: 'setMcpMonitorConfig',
-                    config: {
-                        enabled,
-                        intervalMinutes,
-                        sources,
-                        customInstruction
-                    }
-                });
-            };
-
-            mcpSelect.addEventListener('change', () => {
-                mcpConfigPanel.style.display = mcpSelect.value === 'on' ? 'block' : 'none';
-                saveMonitorConfig();
-            });
-            intervalSelect.addEventListener('change', saveMonitorConfig);
-            customInstructionTextarea.addEventListener('input', saveMonitorConfig);
-
             const modeDescriptions = {
                 'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
                 'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
@@ -7775,16 +7638,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             safetyNote.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4; display:' + (isContinuousMode ? 'block' : 'none') + ';';
             safetyNote.innerHTML = '💡 <strong>Safe Planning:</strong> Automation pulls plans from <strong>oldest to newest</strong>. You can safely run automation while planning, as recently created plans are processed last.';
             container.appendChild(safetyNote);
-
-            // MCP description text always visible below dropdown
-            const mcpDesc = document.createElement('div');
-            mcpDesc.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            mcpDesc.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
-
-            // Append MCP Monitor components after safety note
-            container.appendChild(mcpRow);
-            container.appendChild(mcpDesc);
-            container.appendChild(mcpConfigPanel);
 
             modeSelect.addEventListener('change', () => {
                 const newMode = modeSelect.value;
@@ -8884,6 +8737,473 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
+        // ─── Comms Monitor Panel (dedicated COMMS tab) ─────────────────────────────
+        // Extracted from createAutobanPanel so the monitor has its own first-class
+        // home separate from the kanban automation engine. Uses an independent
+        // interaction guard (isCommsPanelInteracting) so typing in one panel does
+        // not block re-renders in the other.
+
+        const guardCommsInteraction = (el) => {
+            const setInteracting = () => {
+                isCommsPanelInteracting = true;
+                if (commsPanelInteractionTimer) {
+                    clearTimeout(commsPanelInteractionTimer);
+                }
+                commsPanelInteractionTimer = setTimeout(() => {
+                    isCommsPanelInteracting = false;
+                    commsPanelInteractionTimer = null;
+                }, 2000);
+            };
+            el.addEventListener('focus', setInteracting);
+            el.addEventListener('change', setInteracting);
+            el.addEventListener('input', setInteracting);
+        };
+
+        const commsSelectStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+
+        function createCommsPanel() {
+            const container = document.createElement('div');
+            container.style.cssText = 'padding:8px; display:flex; flex-direction:column; gap:12px;';
+
+            // Header
+            const commsHeader = document.createElement('div');
+            commsHeader.className = 'subsection-header';
+            const commsHeaderSpan = document.createElement('span');
+            commsHeaderSpan.textContent = 'COMMS MONITOR';
+            commsHeader.appendChild(commsHeaderSpan);
+            container.appendChild(commsHeader);
+
+            // Intro text
+            const introText = document.createElement('div');
+            introText.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
+            introText.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
+            container.appendChild(introText);
+
+            // ─── Dependency Notice (claude + MCP servers prerequisite) ───
+            const depNotice = document.createElement('div');
+            depNotice.style.cssText = 'padding:6px 8px; margin:0 8px 8px 8px; border:1px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 6%, transparent); font-size:9px; line-height:1.4; color:var(--text-primary);';
+            depNotice.innerHTML = `
+                <strong>📋 Prerequisites:</strong><br>
+                This monitor requires the <code style="color:var(--accent-teal);">claude</code> CLI with MCP servers configured for the sources you want to watch.<br>
+                <span style="color:var(--text-secondary);">• Install Claude: <code>npm i -g @anthropic-ai/claude-code</code></span><br>
+                <span style="color:var(--text-secondary);">• Add MCP servers (Slack, Gmail, Calendar) via Claude's MCP config</span><br>
+                <span style="color:var(--text-secondary);">• The monitor runs in a dedicated terminal using these servers</span>
+            `;
+            container.appendChild(depNotice);
+
+            // ─── Model Indicator (Haiku cost highlight) ───
+            const detectModel = (cmd) => {
+                if (!cmd || !cmd.trim()) return { name: 'Unknown', isHaiku: false, isCustom: false };
+                const lower = cmd.toLowerCase();
+                if (!lower.includes('claude')) return { name: 'Custom command', isHaiku: false, isCustom: true };
+                if (lower.includes('haiku')) return { name: 'Haiku', isHaiku: true, isCustom: false };
+                if (lower.includes('sonnet')) return { name: 'Sonnet', isHaiku: false, isCustom: false };
+                if (lower.includes('opus')) return { name: 'Opus', isHaiku: false, isCustom: false };
+                return { name: 'Default (not Haiku)', isHaiku: false, isCustom: false };
+            };
+            const modelInfo = detectModel(mcpMonitorResolvedCmd);
+            const modelIcon = modelInfo.isHaiku ? '💰' : '⚠️';
+            const modelColor = modelInfo.isHaiku ? 'var(--accent-teal)' : 'var(--text-secondary)';
+            const modelNote = modelInfo.isHaiku
+                ? 'Using Haiku to minimize token costs. Each check is a short read-only query — Haiku is ideal.'
+                : modelInfo.isCustom
+                    ? 'Custom command detected. Model unknown — verify it uses Haiku for cost efficiency.'
+                    : 'Not using Haiku. This monitor runs frequently — consider --model claude-haiku-4-5 to reduce costs.';
+            const modelRow = document.createElement('div');
+            modelRow.style.cssText = 'padding:6px 8px; margin:0 8px 8px 8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); font-size:9px; line-height:1.4;';
+            modelRow.innerHTML = `
+                <span style="color:${modelColor};">${modelIcon}</span>
+                <strong style="color:var(--text-primary);">Model: ${modelInfo.name}</strong><br>
+                <span style="color:var(--text-secondary);">${modelNote}</span>
+            `;
+            container.appendChild(modelRow);
+
+            // Resolved startup command (collapsible)
+            const cmdDetails = document.createElement('details');
+            cmdDetails.style.cssText = 'margin:0 8px 8px 8px; font-size:9px; color:var(--text-secondary);';
+            const cmdSummary = document.createElement('summary');
+            cmdSummary.textContent = 'Startup command (resolved)';
+            cmdSummary.style.cssText = 'cursor:pointer; color:var(--text-secondary);';
+            const cmdPre = document.createElement('pre');
+            cmdPre.style.cssText = 'margin-top:4px; padding:4px; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:3px; font-size:9px; color:var(--text-primary); white-space:pre-wrap; word-break:break-all;';
+            cmdPre.textContent = mcpMonitorResolvedCmd || '(not resolved)';
+            cmdDetails.appendChild(cmdSummary);
+            cmdDetails.appendChild(cmdPre);
+            container.appendChild(cmdDetails);
+
+            // ─── On/Off dropdown (config-panel visibility) ───
+            const mcpRow = document.createElement('div');
+            mcpRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
+            const mcpLabel = document.createElement('span');
+            mcpLabel.textContent = 'COMMS MONITOR:';
+            const mcpSelect = document.createElement('select');
+            mcpSelect.style.cssText = commsSelectStyle + ' flex:1;';
+            guardCommsInteraction(mcpSelect);
+            [
+                { value: 'off', label: 'Off' },
+                { value: 'on', label: 'On' }
+            ].forEach(optInfo => {
+                const opt = document.createElement('option');
+                opt.value = optInfo.value;
+                opt.textContent = optInfo.label;
+                if ((optInfo.value === 'on') === mcpMonitorConfig.enabled) opt.selected = true;
+                mcpSelect.appendChild(opt);
+            });
+            mcpRow.appendChild(mcpLabel);
+            mcpRow.appendChild(mcpSelect);
+            container.appendChild(mcpRow);
+
+            // ─── Config Panel (collapsible, shown when enabled) ───
+            const mcpConfigPanel = document.createElement('div');
+            mcpConfigPanel.style.cssText = 'padding:8px; margin:0 8px 8px 8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); display:' + (mcpMonitorConfig.enabled ? 'block' : 'none') + '; font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+
+            // Sources checklist with per-source interval dropdowns
+            const sourcesHeader = document.createElement('div');
+            sourcesHeader.style.cssText = 'font-weight:bold; color:var(--text-secondary); margin-bottom:4px;';
+            sourcesHeader.textContent = 'Watched Sources:';
+            mcpConfigPanel.appendChild(sourcesHeader);
+
+            const sourcesList = document.createElement('div');
+            sourcesList.style.cssText = 'display:flex; flex-direction:column; gap:6px; margin-bottom:8px; padding-left:4px;';
+
+            const activeSources = new Set(mcpMonitorConfig.sources || []);
+            const presetsToRender = Object.keys(mcpMonitorPresets).length > 0 ? mcpMonitorPresets : {
+                slack: "Slack: unread direct messages and @-mentions across my channels.",
+                gmail: "Gmail: unread or important emails in my inbox.",
+                gcal: "Google Calendar: events starting in the next 24 hours.",
+                custom: "Custom Instruction"
+            };
+
+            const customInstructionRow = document.createElement('div');
+            customInstructionRow.style.cssText = 'margin-top:6px; display:' + (activeSources.has('custom') ? 'block' : 'none') + ';';
+            const customInstructionTextarea = document.createElement('textarea');
+            customInstructionTextarea.placeholder = 'Enter custom instructions for monitor (e.g. check a specific HTTP endpoint)...';
+            customInstructionTextarea.style.cssText = 'width:100%; height:48px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:4px; border-radius:3px; resize:vertical; box-sizing:border-box;';
+            customInstructionTextarea.value = mcpMonitorConfig.customInstruction || '';
+            guardCommsInteraction(customInstructionTextarea);
+            customInstructionRow.appendChild(customInstructionTextarea);
+
+            // Source detail containers (shown when the source is checked)
+            const slackDetails = document.createElement('div');
+            slackDetails.style.cssText = 'display:' + (activeSources.has('slack') ? 'block' : 'none') + '; margin-bottom:6px; padding-left:18px;';
+            const slackChanLabel = document.createElement('div');
+            slackChanLabel.textContent = 'Slack channels (comma-separated, blank = all):';
+            slackChanLabel.style.cssText = 'font-size:9px; color:var(--text-secondary); margin-bottom:2px;';
+            const slackChanInput = document.createElement('input');
+            slackChanInput.type = 'text';
+            slackChanInput.value = mcpMonitorConfig.slackChannels || '';
+            slackChanInput.placeholder = 'e.g. general, engineering, #proj-x';
+            slackChanInput.style.cssText = 'width:100%; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:9px; padding:3px; border-radius:3px; box-sizing:border-box;';
+            guardCommsInteraction(slackChanInput);
+            const slackScopeRow = document.createElement('div');
+            slackScopeRow.style.cssText = 'display:flex; gap:8px; margin-top:4px; font-size:9px; color:var(--text-secondary);';
+            const dmOnlyCb = document.createElement('input'); dmOnlyCb.type = 'checkbox'; dmOnlyCb.id = 'mcp-slack-dm-only';
+            dmOnlyCb.checked = !!mcpMonitorConfig.slackDmOnly; guardCommsInteraction(dmOnlyCb);
+            const dmOnlyLabel = document.createElement('label'); dmOnlyLabel.textContent = 'DMs only';
+            dmOnlyLabel.htmlFor = 'mcp-slack-dm-only'; dmOnlyLabel.style.cssText = 'cursor:pointer;';
+            const chanOnlyCb = document.createElement('input'); chanOnlyCb.type = 'checkbox'; chanOnlyCb.id = 'mcp-slack-chan-only';
+            chanOnlyCb.checked = !!mcpMonitorConfig.slackChannelOnly; guardCommsInteraction(chanOnlyCb);
+            const chanOnlyLabel = document.createElement('label'); chanOnlyLabel.textContent = 'Channels only';
+            chanOnlyLabel.htmlFor = 'mcp-slack-chan-only'; chanOnlyLabel.style.cssText = 'cursor:pointer;';
+            slackScopeRow.appendChild(dmOnlyCb); slackScopeRow.appendChild(dmOnlyLabel);
+            slackScopeRow.appendChild(chanOnlyCb); slackScopeRow.appendChild(chanOnlyLabel);
+            slackDetails.appendChild(slackChanLabel);
+            slackDetails.appendChild(slackChanInput);
+            slackDetails.appendChild(slackScopeRow);
+
+            const gmailDetails = document.createElement('div');
+            gmailDetails.style.cssText = 'display:' + (activeSources.has('gmail') ? 'block' : 'none') + '; margin-bottom:6px; padding-left:18px;';
+            const gmailLabelLabel = document.createElement('div');
+            gmailLabelLabel.textContent = 'Gmail label/inbox (blank = INBOX):';
+            gmailLabelLabel.style.cssText = 'font-size:9px; color:var(--text-secondary); margin-bottom:2px;';
+            const gmailLabelInput = document.createElement('input');
+            gmailLabelInput.type = 'text';
+            gmailLabelInput.value = mcpMonitorConfig.gmailLabel || '';
+            gmailLabelInput.placeholder = 'e.g. INBOX, Important, Work';
+            gmailLabelInput.style.cssText = 'width:100%; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:9px; padding:3px; border-radius:3px; box-sizing:border-box;';
+            guardCommsInteraction(gmailLabelInput);
+            gmailDetails.appendChild(gmailLabelLabel);
+            gmailDetails.appendChild(gmailLabelInput);
+
+            const sourceDetailMap = { slack: slackDetails, gmail: gmailDetails };
+
+            Object.entries(presetsToRender).forEach(([key, label]) => {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:9px; color:var(--text-secondary); line-height:1.2;';
+                const labelWrapper = document.createElement('label');
+                labelWrapper.style.cssText = 'display:flex; align-items:flex-start; gap:6px; cursor:pointer; flex:1;';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = key;
+                checkbox.checked = activeSources.has(key);
+                checkbox.style.cssText = 'margin:1px 0 0 0; cursor:pointer; flex-shrink:0;';
+                guardCommsInteraction(checkbox);
+                const span = document.createElement('span');
+                span.textContent = label;
+                labelWrapper.appendChild(checkbox);
+                labelWrapper.appendChild(span);
+
+                // Per-source interval dropdown
+                const intervalSelect = document.createElement('select');
+                intervalSelect.style.cssText = commsSelectStyle + ' width:70px;';
+                guardCommsInteraction(intervalSelect);
+                [1, 2, 5, 10, 15, 30].forEach(minutes => {
+                    const opt = document.createElement('option');
+                    opt.value = String(minutes);
+                    opt.textContent = `${minutes}m`;
+                    const currentInterval = mcpMonitorConfig.sourceIntervals ? mcpMonitorConfig.sourceIntervals[key] : undefined;
+                    if (currentInterval === minutes) opt.selected = true;
+                    intervalSelect.appendChild(opt);
+                });
+                intervalSelect.addEventListener('change', () => {
+                    const intervals = { ...(mcpMonitorConfig.sourceIntervals || {}), [key]: parseInt(intervalSelect.value, 10) };
+                    mcpMonitorConfig = { ...mcpMonitorConfig, sourceIntervals: intervals };
+                    saveMonitorConfig();
+                });
+
+                row.appendChild(labelWrapper);
+                row.appendChild(intervalSelect);
+                sourcesList.appendChild(row);
+
+                // Append the source's detail container (if any) right after its row
+                if (sourceDetailMap[key]) {
+                    sourcesList.appendChild(sourceDetailMap[key]);
+                }
+
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) {
+                        activeSources.add(key);
+                    } else {
+                        activeSources.delete(key);
+                    }
+                    if (key === 'custom') {
+                        customInstructionRow.style.display = checkbox.checked ? 'block' : 'none';
+                    }
+                    if (sourceDetailMap[key]) {
+                        sourceDetailMap[key].style.display = checkbox.checked ? 'block' : 'none';
+                    }
+                    saveMonitorConfig();
+                });
+            });
+
+            mcpConfigPanel.appendChild(sourcesList);
+            mcpConfigPanel.appendChild(customInstructionRow);
+
+            // ─── Editable Prompt Preview ───
+            const previewHeader = document.createElement('div');
+            previewHeader.style.cssText = 'font-weight:bold; color:var(--text-secondary); margin-top:8px; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;';
+            const previewHeaderText = document.createElement('span');
+            previewHeaderText.textContent = 'Prompt Preview (editable):';
+            previewHeader.appendChild(previewHeaderText);
+            const resetBtn = document.createElement('button');
+            resetBtn.textContent = 'Reset to template';
+            resetBtn.style.cssText = 'font-size:9px; padding:2px 6px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-secondary); border-radius:3px; cursor:pointer;';
+            guardCommsInteraction(resetBtn);
+            previewHeader.appendChild(resetBtn);
+
+            const previewTextarea = document.createElement('textarea');
+            previewTextarea.style.cssText = 'width:100%; height:120px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:9px; padding:6px; border-radius:3px; resize:vertical; box-sizing:border-box; line-height:1.4;';
+            guardCommsInteraction(previewTextarea);
+
+            let previewIsOverride = !!(mcpMonitorConfig.promptOverride && mcpMonitorConfig.promptOverride.trim());
+
+            // Client-side prompt builder mirror (must match _buildMcpMonitorPrompt in backend)
+            const buildPreviewPrompt = (cfg) => {
+                if (cfg.promptOverride && cfg.promptOverride.trim()) return cfg.promptOverride.trim();
+                const sources = cfg.sources || [];
+                const baselines = sources.map(s => cfg.sourceLastCheckAt && cfg.sourceLastCheckAt[s]).filter(Boolean).map(s => new Date(s).getTime());
+                const boundary = baselines.length > 0 ? `since ${new Date(Math.min(...baselines)).toUTCString()}` : 'in the past 24 hours';
+                const preamble = `Check the following for anything new that needs my attention ${boundary}. Report only what is new and noteworthy as a short bullet list. If nothing needs attention, reply 'All clear'. This is read-only — do NOT take any actions, send any messages, or modify anything.`;
+                const lines = [];
+                for (const src of sources) {
+                    if (src === 'custom') {
+                        if (cfg.customInstruction && cfg.customInstruction.trim()) lines.push(cfg.customInstruction.trim());
+                    } else if (src === 'slack') {
+                        const channels = (cfg.slackChannels || '').split(',').map(s => s.trim()).filter(Boolean);
+                        const scopeParts = [];
+                        if (!cfg.slackDmOnly) scopeParts.push(channels.length > 0 ? `messages in channels: ${channels.join(', ')}` : 'messages in channels (all)');
+                        if (!cfg.slackChannelOnly) scopeParts.push('direct messages (DMs)');
+                        lines.push(`Slack: unread ${scopeParts.join(' and ')} and @-mentions ${boundary}. Clearly label each item as [DM] or [channel: #name].`);
+                    } else if (src === 'gmail') {
+                        const label = cfg.gmailLabel && cfg.gmailLabel.trim() ? cfg.gmailLabel.trim() : 'INBOX';
+                        lines.push(`Gmail: unread or important emails in label "${label}" ${boundary}. Include sender and subject for each.`);
+                    } else if (src === 'gcal') {
+                        lines.push('Google Calendar: events starting in the next 24 hours.');
+                    }
+                }
+                if (lines.length === 0) return '';
+                return preamble + "\n\n" + lines.map(l => `- ${l}`).join('\n');
+            };
+
+            const renderPreview = () => {
+                if (!previewIsOverride) {
+                    previewTextarea.value = buildPreviewPrompt({ ...mcpMonitorConfig, promptOverride: '' });
+                } else if (mcpMonitorConfig.promptOverride) {
+                    previewTextarea.value = mcpMonitorConfig.promptOverride;
+                }
+            };
+            renderPreview();
+
+            // Allow the backend-rendered preview (mcpMonitorPreview message) to
+            // update the textarea only when the user has not manually overridden.
+            window.__commsPreviewUpdate = (preview) => {
+                if (!previewIsOverride && typeof preview === 'string') {
+                    previewTextarea.value = preview;
+                }
+            };
+
+            previewTextarea.addEventListener('input', () => {
+                previewIsOverride = true;
+            });
+            resetBtn.addEventListener('click', () => {
+                previewIsOverride = false;
+                mcpMonitorConfig = { ...mcpMonitorConfig, promptOverride: '' };
+                renderPreview();
+                saveMonitorConfig();
+            });
+
+            mcpConfigPanel.appendChild(previewHeader);
+            mcpConfigPanel.appendChild(previewTextarea);
+
+            // ─── Lifecycle controls (three-step launch + stop) ───
+            const lifecycleRow = document.createElement('div');
+            lifecycleRow.style.cssText = 'margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;';
+            const btnBaseStyle = 'padding:4px 10px; font-family:var(--font-mono); font-size:10px; cursor:pointer; border:none; border-radius:3px;';
+
+            const startTermBtn = document.createElement('button');
+            startTermBtn.textContent = 'Start Terminal';
+            startTermBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
+            guardCommsInteraction(startTermBtn);
+            startTermBtn.addEventListener('click', () => {
+                startTermBtn.disabled = true;
+                startTermBtn.textContent = 'Starting…';
+                postKanbanMessage({ type: 'launchMcpMonitorTerminal' });
+            });
+
+            const checkAuthBtn = document.createElement('button');
+            checkAuthBtn.textContent = 'Check Auth';
+            checkAuthBtn.style.cssText = btnBaseStyle + ' background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary);';
+            guardCommsInteraction(checkAuthBtn);
+            checkAuthBtn.addEventListener('click', () => {
+                checkAuthBtn.disabled = true;
+                checkAuthBtn.textContent = 'Checking…';
+                postKanbanMessage({ type: 'checkMcpMonitorAuth' });
+                setTimeout(() => { checkAuthBtn.disabled = false; checkAuthBtn.textContent = 'Check Auth'; }, 3000);
+            });
+
+            const startPollBtn = document.createElement('button');
+            startPollBtn.textContent = 'Start Polling';
+            startPollBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
+            guardCommsInteraction(startPollBtn);
+            startPollBtn.addEventListener('click', () => {
+                postKanbanMessage({ type: 'startMcpMonitorPolling' });
+            });
+
+            const stopPollBtn = document.createElement('button');
+            stopPollBtn.textContent = 'Stop Polling';
+            stopPollBtn.style.cssText = btnBaseStyle + ' background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary);';
+            guardCommsInteraction(stopPollBtn);
+            stopPollBtn.addEventListener('click', () => {
+                postKanbanMessage({ type: 'stopMcpMonitorPolling' });
+            });
+
+            const stopTermBtn = document.createElement('button');
+            stopTermBtn.textContent = 'Stop Monitor';
+            stopTermBtn.style.cssText = btnBaseStyle + ' background:var(--accent-red, #c0392b); color:var(--bg-primary);';
+            guardCommsInteraction(stopTermBtn);
+            stopTermBtn.addEventListener('click', () => {
+                stopTermBtn.disabled = true;
+                stopTermBtn.textContent = 'Stopping…';
+                postKanbanMessage({ type: 'stopMcpMonitorTerminal' });
+            });
+
+            // Show controls conditionally on terminal + polling state
+            lifecycleRow.appendChild(startTermBtn);
+            if (isMcpMonitorTerminalRunning) {
+                lifecycleRow.appendChild(checkAuthBtn);
+                if (isMcpMonitorPolling) {
+                    lifecycleRow.appendChild(stopPollBtn);
+                } else {
+                    lifecycleRow.appendChild(startPollBtn);
+                }
+                lifecycleRow.appendChild(stopTermBtn);
+            }
+            mcpConfigPanel.appendChild(lifecycleRow);
+
+            // ─── Status Line ───
+            const statusLine = document.createElement('div');
+            statusLine.style.cssText = 'margin-top:8px; padding-top:6px; border-top:1px dashed var(--border-color); font-size:9px; line-height:1.3;';
+            if (isMcpMonitorTerminalRunning) {
+                const pollTag = isMcpMonitorPolling ? ' (polling)' : ' (idle)';
+                statusLine.innerHTML = '🟢 <strong>Comms Monitor terminal:</strong> running' + pollTag;
+            } else {
+                statusLine.innerHTML = '🔴 <strong>No Comms Monitor terminal running.</strong>';
+            }
+            mcpConfigPanel.appendChild(statusLine);
+
+            // ─── Help text ───
+            const mcpHelp = document.createElement('div');
+            mcpHelp.style.cssText = 'margin-top:8px; font-size:9px; color:var(--text-secondary); line-height:1.3; border-top:1px solid var(--border-color); padding-top:6px;';
+            mcpHelp.textContent = 'How it works: Start the terminal, check auth, then start polling. Each source is polled on its own interval. Switchboard sends a read-only prompt to your monitor terminal asking it to check the selected sources (Slack, Gmail, Google Calendar, or a custom instruction) via your claude.ai MCP servers. The terminal reports what\'s new in its pane.';
+            mcpConfigPanel.appendChild(mcpHelp);
+
+            container.appendChild(mcpConfigPanel);
+
+            // ─── saveMonitorConfig (sends the new schema fields) ───
+            const saveMonitorConfig = () => {
+                const enabled = mcpSelect.value === 'on';
+                const customInstruction = customInstructionTextarea.value;
+                const sources = Array.from(activeSources);
+                const slackChannels = slackChanInput.value;
+                const slackDmOnly = dmOnlyCb.checked;
+                const slackChannelOnly = chanOnlyCb.checked;
+                const gmailLabel = gmailLabelInput.value;
+                const promptOverride = previewIsOverride ? previewTextarea.value : '';
+                mcpMonitorConfig = { ...mcpMonitorConfig, enabled, sources, customInstruction, slackChannels, slackDmOnly, slackChannelOnly, gmailLabel, promptOverride };
+                postKanbanMessage({
+                    type: 'setMcpMonitorConfig',
+                    config: {
+                        enabled,
+                        sources,
+                        customInstruction,
+                        slackChannels,
+                        slackDmOnly,
+                        slackChannelOnly,
+                        gmailLabel,
+                        promptOverride
+                    }
+                });
+                if (!previewIsOverride) renderPreview();
+            };
+
+            mcpSelect.addEventListener('change', () => {
+                mcpConfigPanel.style.display = mcpSelect.value === 'on' ? 'block' : 'none';
+                saveMonitorConfig();
+            });
+            customInstructionTextarea.addEventListener('input', saveMonitorConfig);
+            slackChanInput.addEventListener('input', saveMonitorConfig);
+            gmailLabelInput.addEventListener('input', saveMonitorConfig);
+            dmOnlyCb.addEventListener('change', saveMonitorConfig);
+            chanOnlyCb.addEventListener('change', saveMonitorConfig);
+
+            return container;
+        }
+
+        function renderCommsPanel() {
+            try {
+                const root = document.getElementById('comms-panel-root');
+                if (!root) return;
+                if (isCommsPanelInteracting) {
+                    console.log('[kanban] Skipping comms panel re-render: user interaction guard active');
+                    return;
+                }
+                root.innerHTML = '';
+                root.appendChild(createCommsPanel());
+            } catch (err) {
+                console.error('[kanban webview] error rendering comms panel:', err);
+            }
+        }
+
         // Terminals and custom agents feed the terminal pool UI. Kanban webview
         // does not own this state; it receives broadcasts from the host.
         window.addEventListener('message', event => {
@@ -8908,6 +9228,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         postKanbanMessage({ type: 'getAutobanConfig' });
                     }
                     renderAutobanPanel();
+                } else if (btn.dataset.tab === 'comms') {
+                    // Config already arrives on webview 'ready' (KanbanProvider ready
+                    // handler calls postMcpMonitorConfig), so render from current state.
+                    renderCommsPanel();
                 }
             });
         });
