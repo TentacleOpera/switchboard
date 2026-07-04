@@ -305,3 +305,7 @@ Skipped per session directive — no automated tests will be run as part of this
 ## Recommendation
 
 **Complexity: 3 → Send to Coder.** Display-only bugfix, single file, verified root cause, no new data flows. The two changes (re-route Name source to `resolvedTermName`; reshape worktree marker as dash segment) plus the optional dead-variable cleanup are well-scoped for a coder-level execution pass.
+
+## Review Findings
+
+Reviewed the implemented changes in `src/webview/implementation.html` (commit `ab9d146`): all three plan changes (createAgentRow name-resolution re-route, createAnalystRow consistent fix, dead `lastTerminalAgentNames` removal) match the plan spec exactly. Grep confirms zero remaining references to `lastTerminalAgentNames` across `src/`. The XSS gate via `esc(label)` is correctly retained for user-defined custom-agent names flowing into `innerHTML`. Regression audit (caller tracing, double-trigger, race, orphaned-reference check) is clean — locate/clear handlers consume `resolvedTermName`/`termName` unchanged, no signatures changed, no new async state. Three NITs only (duplicated `esc()` helper, no quote-escaping in `esc`, unreachable bare-label-with-worktree branch) — all plan-compliant, none warranting a fix. No CRITICAL or MAJOR findings; no code fixes applied. Compilation and tests skipped per session directive.
