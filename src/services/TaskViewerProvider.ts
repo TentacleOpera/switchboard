@@ -3896,9 +3896,12 @@ Each plan file must include:
             console.log(`[TaskViewerProvider] Applied jules_monitor fallback command: ${cmd}`);
         }
 
-        // Fallback: mcp_monitor defaults to claude command with permission bypass flags when configured command is missing/blank
+        // Fallback: mcp_monitor defaults to claude command with haiku model and MCP-only tools.
+        // dontAsk is intentionally omitted — some MCP servers (e.g. Google Calendar) require
+        // interactive permission prompts for first-time access or OAuth token refresh. The
+        // monitor runs in a visible terminal the user is managing, so Claude can ask.
         if (role === 'mcp_monitor' && (!cmd || cmd.trim() === '')) {
-            cmd = 'claude --model claude-haiku-4-5 --permission-mode dontAsk --allowedTools "mcp__*"';
+            cmd = 'claude --model claude-haiku-4-5 --allowedTools "mcp__*"';
             console.log(`[TaskViewerProvider] Applied mcp_monitor fallback command: ${cmd}`);
         }
 
@@ -16514,7 +16517,7 @@ What would you like to find?`;
         // Safety invariant: jules_monitor and mcp_monitor are monitor-only and cannot receive execute dispatches.
         if (role === 'jules_monitor' || role === 'mcp_monitor') {
             clearDispatchLock();
-            const displayName = role === 'jules_monitor' ? "Jules Monitor" : "MCP Monitor";
+            const displayName = role === 'jules_monitor' ? "Jules Monitor" : TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
             vscode.window.showWarningMessage(`The '${displayName}' terminal is monitor-only and cannot receive agent actions.`);
             this._view?.webview.postMessage({ type: 'actionTriggered', role, success: false });
             return false;
@@ -20472,6 +20475,17 @@ What would you like to find?`;
         }
     }
 
+    /**
+     * The Comms Monitor terminal name. This is BOTH the user-visible terminal
+     * label AND a de-facto lookup key consumed by two matching mechanisms
+     * (normalize-based in TaskViewerProvider, regex-based in extension.ts) and
+     * it derives the `state.terminals` map key. Every creation + lookup site
+     * MUST route through this constant so the name stays consistent — a missed
+     * site silently orphans/disposes the monitor terminal. The internal role
+     * key `mcp_monitor` and config field `mcpMonitor` are unchanged.
+     */
+    public static readonly MCP_MONITOR_TERMINAL_NAME = 'Comms Monitor';
+
     public static readonly SOURCE_PRESETS: Record<string, string> = {
         slack: "Slack: unread direct messages and @-mentions across my channels.",
         gmail: "Gmail: unread or important emails in my inbox.",
@@ -20504,7 +20518,7 @@ What would you like to find?`;
             try {
                 await this._mcpMonitorTick();
             } catch (err) {
-                console.error('[MCP Monitor] Tick failed:', err);
+                console.error('[Comms Monitor] Tick failed:', err);
             }
         });
     }
@@ -20515,7 +20529,7 @@ What would you like to find?`;
 
         // Singleton guard: resolve the target terminal in this window
         const openTerminals = vscode.window.terminals || [];
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('MCP Monitor'));
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
         const terminal = openTerminals.find(t => {
             const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
             return tName === strippedTarget;
@@ -20602,7 +20616,7 @@ What would you like to find?`;
     }
 
     public async launchMcpMonitorTerminal(): Promise<void> {
-        const targetName = 'MCP Monitor';
+        const targetName = TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
 
         // Dispose any zombie (exited) terminal with the same name
@@ -20683,7 +20697,7 @@ What would you like to find?`;
 
     private _isMcpMonitorTerminalRunning(targetRole: string): boolean {
         const openTerminals = vscode.window.terminals || [];
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix('MCP Monitor'));
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
         const found = openTerminals.find(t => {
             const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
             return tName === strippedTarget;

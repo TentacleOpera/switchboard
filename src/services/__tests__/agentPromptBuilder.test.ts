@@ -176,22 +176,27 @@ suite('agentPromptBuilder', () => {
     });
 
     suite('writeEpicDescriptionIfEmpty option', () => {
-        test('writeEpicDescriptionIfEmpty: true includes epic description directive', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: true });
-            assert.ok(prompt.includes('WRITE EPIC DESCRIPTION IF EMPTY:'), 'Should include epic description directive');
+        test('writeEpicDescriptionIfEmpty: true + epicMode includes epic description directive', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: true, epicMode: true });
+            assert.ok(prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should include epic description directive');
             assert.ok(prompt.includes('## Goal'), 'Should reference Goal section');
             assert.ok(prompt.includes('## How the Subtasks Achieve This'), 'Should reference How the Subtasks Achieve This section');
             assert.ok(prompt.includes('## Dependencies & sequencing'), 'Should reference Dependencies & sequencing section');
         });
 
-        test('writeEpicDescriptionIfEmpty: false omits epic description directive', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: false });
-            assert.ok(!prompt.includes('WRITE EPIC DESCRIPTION IF EMPTY:'), 'Should NOT include epic description directive');
+        test('writeEpicDescriptionIfEmpty: false + epicMode omits epic description directive', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: false, epicMode: true });
+            assert.ok(!prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should NOT include epic description directive');
         });
 
-        test('writeEpicDescriptionIfEmpty: undefined includes epic description directive (default ON)', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), {});
-            assert.ok(prompt.includes('WRITE EPIC DESCRIPTION IF EMPTY:'), 'Should include epic description directive by default');
+        test('writeEpicDescriptionIfEmpty: true without epicMode omits directive (non-epic dispatch unaffected)', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: true });
+            assert.ok(!prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should NOT include epic description directive for non-epic dispatch');
+        });
+
+        test('writeEpicDescriptionIfEmpty: undefined + epicMode includes epic description directive (default ON)', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { epicMode: true });
+            assert.ok(prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should include epic description directive by default in epic mode');
         });
     });
 

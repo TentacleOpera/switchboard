@@ -436,7 +436,11 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as p
 // via the skill file as canonical source.
 export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then, at the very end of your chat summary to the user (after everything else), supply the ready-to-run research prompt so they can trigger web research. If you are confident about everything, state that no research is needed and omit both the section and the prompt.`;
 
-export const WRITE_EPIC_DESCRIPTION_IF_EMPTY_DIRECTIVE = `WRITE EPIC DESCRIPTION IF EMPTY: When processing an epic file, check whether it contains the following three sections: \`## Goal\`, \`## How the Subtasks Achieve This\`, and \`## Dependencies & sequencing\`. If any of these sections are missing or empty, backfill them based on the epic's existing content and its subtask plans. For \`## Goal\`, write a concise statement of what the epic accomplishes. For \`## How the Subtasks Achieve This\`, explain how the subtask plans collectively deliver the goal. For \`## Dependencies & sequencing\`, note any ordering constraints or cross-subtask dependencies. Do not overwrite sections that already have content — only backfill empty or missing ones. Follow the same conventions as the group-into-epics skill (\`.agents/skills/group-into-epics/SKILL.md\`).`;
+export const WRITE_EPIC_DESCRIPTION_IF_EMPTY_DIRECTIVE = `EPIC DESCRIPTION BACKFILL: The epic file path is included in the plan list above (the entry tagged [EPIC: ...]). Read that file. If it is missing any of these three sections, write them now following this format:
+- ## Goal: 2-4 sentences describing what the epic achieves, what problem it solves, and why these plans are grouped together.
+- ## How the Subtasks Achieve This: one bullet per member plan (subtask) explaining what it does and how it contributes to the epic's goal. Format: "- **<Plan Name>**: <what it does and how it contributes>"
+- ## Dependencies & sequencing: bullet list covering (a) cross-epic dependencies — what must land first from other epics, if any; (b) shipping order within this epic — which subtask should be coded/merged before which, and why; (c) prerequisites or guards that must be in place. If there are no cross-epic dependencies and the subtasks are independent, state that explicitly (e.g. "No cross-epic dependencies; subtasks are independent and can land in any order"). If there is only one subtask, note "Single subtask — no internal ordering."
+If all three sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 
@@ -861,7 +865,7 @@ export function buildKanbanBatchPrompt(
         if (adviseResearchIfUnsure) {
             plannerBase += '\n\n' + ADVISE_RESEARCH_DIRECTIVE;
         }
-        if (writeEpicDescriptionIfEmpty) {
+        if (writeEpicDescriptionIfEmpty && options?.epicMode) {
             plannerBase += '\n\n' + WRITE_EPIC_DESCRIPTION_IF_EMPTY_DIRECTIVE;
         }
         if (cavemanOutputEnabled) {

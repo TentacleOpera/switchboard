@@ -2913,6 +2913,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   <span class="tooltip">Planner outputs a research prompt (for Google AI Studio / Claude / your research agent) covering its uncertain assumptions</span>
                 </label>
 
+                <label class="checkbox-item" title="When dispatched against an epic, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the epic file">
+                  <input type="checkbox" id="plannerAddonWriteEpicDescriptionIfEmpty">
+                  <span>Write Epic Description If Empty</span>
+                  <span class="tooltip">When dispatched against an epic, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the epic file</span>
+                </label>
+
                 <div class="addon-radio-group" style="margin-top:8px;">
                   <span class="addon-label" style="font-weight:600;margin-bottom:4px;display:block;">Subagent Policy</span>
                   <label class="checkbox-item" title="Let the execution platform decide subagent behavior">
@@ -3272,6 +3278,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
                 document.getElementById('plannerAddonSkipTests').checked = !!config.addons?.skipTests;
                 document.getElementById('plannerAddonAdviseResearch').checked = config.addons?.adviseResearch !== false;
+                document.getElementById('plannerAddonWriteEpicDescriptionIfEmpty').checked = config.addons?.writeEpicDescriptionIfEmpty !== false;
                 // Load subagent policy radio for planner
                 const plannerSubagentPolicy = config.addons?.subagentPolicy || 'default';
                 const plannerSubagentRadios = document.getElementsByName('plannerSubagentPolicy');
@@ -4029,7 +4036,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch', 'plannerAddonWriteEpicDescriptionIfEmpty'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -7596,11 +7603,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             modeRow.appendChild(modeSelect);
             container.appendChild(modeRow);
 
-            // MCP Monitor Row
+            // Comms Monitor Row
             const mcpRow = document.createElement('div');
             mcpRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
             const mcpLabel = document.createElement('span');
-            mcpLabel.textContent = 'MCP MONITOR:';
+            mcpLabel.textContent = 'COMMS MONITOR:';
             const mcpSelect = document.createElement('select');
             mcpSelect.style.cssText = autobanSelectStyle + ' flex:1;';
             guardInteraction(mcpSelect);
@@ -7618,7 +7625,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             mcpRow.appendChild(mcpLabel);
             mcpRow.appendChild(mcpSelect);
 
-            // MCP Monitor Config Panel (Collapsible)
+            // Comms Monitor Config Panel (Collapsible)
             const mcpConfigPanel = document.createElement('div');
             mcpConfigPanel.style.cssText = 'padding:8px; margin:0 8px 8px 8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); display:' + (mcpMonitorConfig.enabled ? 'block' : 'none') + '; font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
 
@@ -7707,11 +7714,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const statusLine = document.createElement('div');
             statusLine.style.cssText = 'margin-top:8px; padding-top:6px; border-top:1px dashed var(--border-color); font-size:9px; line-height:1.3;';
             if (isMcpMonitorTerminalRunning) {
-                statusLine.innerHTML = '🟢 <strong>Monitor terminal:</strong> running';
+                statusLine.innerHTML = '🟢 <strong>Comms Monitor terminal:</strong> running';
             } else {
-                statusLine.innerHTML = '🔴 <strong>No monitor terminal running.</strong>';
+                statusLine.innerHTML = '🔴 <strong>No Comms Monitor terminal running.</strong>';
                 const launchBtn = document.createElement('button');
-                launchBtn.textContent = 'Launch Monitor Terminal';
+                launchBtn.textContent = 'Launch Comms Monitor Terminal';
                 launchBtn.style.cssText = 'display:block; margin-top:6px; padding:4px 10px; font-family:var(--font-mono); font-size:10px; cursor:pointer; background:var(--accent-teal); color:var(--bg-primary); border:none; border-radius:3px;';
                 guardInteraction(launchBtn);
                 launchBtn.addEventListener('click', () => {
@@ -7772,7 +7779,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // MCP description text always visible below dropdown
             const mcpDesc = document.createElement('div');
             mcpDesc.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            mcpDesc.textContent = 'The MCP Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
+            mcpDesc.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
 
             // Append MCP Monitor components after safety note
             container.appendChild(mcpRow);

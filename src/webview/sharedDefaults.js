@@ -44,7 +44,7 @@ const BUILT_IN_AGENT_LABELS = [
     { key: 'researcher', label: 'Researcher' },
     { key: 'claude_designer', label: 'Claude Designer' },
     { key: 'jules', label: 'Jules' },
-    { key: 'mcp_monitor', label: 'MCP Monitor' }
+    { key: 'mcp_monitor', label: 'Comms Monitor' }
 ];
 
 // Derivable helper
