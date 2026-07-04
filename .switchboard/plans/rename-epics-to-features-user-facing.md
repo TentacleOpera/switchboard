@@ -26,12 +26,12 @@ Confirmed by survey:
 
 ## Metadata
 - **Tags:** ui, terminology, refactor, webview, docs
-- **Complexity:** 4
+- **Complexity:** 5
 - **Repo:** switchboard
 - **Project:** switchboard
 
 ## User Review Required
-Yes — three boundary decisions below default to the low-risk option; confirm or flip before implementation.
+No — boundary decisions resolved (full slash-command rename; Notion renamed as a clean break since it is unreleased; docs included).
 
 ## Scope
 
@@ -48,8 +48,21 @@ Yes — three boundary decisions below default to the low-risk option; confirm o
 - `src/services/TaskViewerProvider.ts:3577` ("...requires a Planning Epic...").
 - `src/services/PlanningPanelProvider.ts:6252, 6298` ("Missing workspace or epic file...", "Failed to copy refine-epic prompt").
 
-**Documentation** *(boundary decision #3 — default: include)*
+**Documentation** *(in scope)*
 - `README.md` (~14), `docs/switchboard_user_manual.md` (~43), `docs/how_to_use_switchboard.md` (~14), plus `AGENTS.md`/`CLAUDE.md` concept prose (~10). No runtime risk.
+
+**Slash commands + skill files — FULL rename** *(in scope)*
+- Rename skill folders and their invocation names: `.claude/skills/create-epic/` → `create-feature/`, `improve-epic/` → `improve-feature/`, and the `refine-epic` prompt path → `refine-feature`.
+- Rename `.agents/skills/create_epic.md` → `create_feature.md`, `refine_epic.md` → `refine_feature.md`, `group-into-epics/` → `group-into-features/`, and the scripts `kanban_operations/create-epic.js` → `create-feature.js`, `assign-to-epic.js` → `assign-to-feature.js` (and every call site that invokes them).
+- Rename `.agents/workflows/improve-epic.md` → `improve-feature.md`; update cross-references in `improve-plan.md`, `switchboard-chat.md`, `sw-remote.md`, `switchboard-index.md`.
+- Update the invocation registry `src/services/ClaudeCodeMirrorService.ts:45–133` so the mirrored slash-command names become `create-feature`, `improve-feature`, `refine-feature`, `switchboard-feature`.
+- Update the workflow registry tables and skill tables in `CLAUDE.md` / `AGENTS.md`.
+- No `epic` alias retained — this is a clean rename, not an aliasing pass.
+
+**Notion sync property names — FULL rename (clean break, unreleased)** *(in scope)*
+- The Notion remote integration is **unreleased dev work**, so per repo migration rules it takes a clean break: no migration, no back-compat shim.
+- Rename the Notion database property names `'Is Epic'` → `'Is Feature'` and self-relation `'Epic'` → `'Feature'` in `NotionBackupService.ts` (~243, 246, 311, 316, 429, 441–442, 565, 585–587) and `NotionRemoteProvider.ts:112`.
+- Rename the `RemoteProvider.ts:29` interface field `isEpicCandidate` → `isFeatureCandidate` and its writers/readers (`LinearRemoteProvider.ts:77`, `NotionRemoteProvider.ts:112`, `RemoteControlService.ts:469, 530–531`) — since these are part of the same unreleased remote path, rename them together for cleanliness.
 
 ### ⚙️ OUT OF SCOPE — internal identifiers (~600 occurrences)
 Not renamed. No user impact; renaming is churn + risk.
@@ -65,13 +78,11 @@ Explicitly excluded per repo migration rules:
 - **SQLite columns `is_epic` / `epic_id`** and indexes `idx_plans_is_epic`/`idx_plans_epic_id` (KanbanDatabase, ~90 refs across migrations V29/V31/V36/V37/V41) — would need its own schema migration.
 - **Plan-file marker `> **Epic Plan ID:**`** and `subtask-of:`/`epic` HTML-comment tags — parsing/generation contracts.
 
-## Boundary Decisions (defaults chosen; flip if desired)
+## Resolved Decisions
 
-1. **Slash commands `/create-epic`, `/improve-epic`, `/refine-epic`** — user-typed (so user-facing) but also skill-folder names + `ClaudeCodeMirrorService.ts` registry entries and programmatically-called scripts (`create-epic.js`, `assign-to-epic.js`).
-   - **DEFAULT: add `/create-feature`, `/improve-feature`, `/refine-feature` aliases** pointing at the existing skills; keep the `-epic` forms working. Users see new names, nothing breaks. (Alternatives: full rename of skill folders+registry+docs; or leave slash commands as `epic`.)
-2. **Notion sync property names `'Is Epic'` / `'Epic'`** (`NotionBackupService.ts`, `NotionRemoteProvider.ts`) — appear in the user's own Notion workspace (visible) *and* are exact-match API contracts.
-   - **DEFAULT: OUT of scope.** Renaming breaks reads of already-synced Notion DBs unless the user's Notion schema is migrated too. (Alternative: rename with a remote-schema migration + back-compat.)
-3. **Documentation prose** — **DEFAULT: include** in this pass (no runtime risk, keeps terminology consistent). (Alternative: ship UI first, docs as follow-up.)
+1. **Slash commands / skill files → FULL rename.** `/create-epic`, `/improve-epic`, `/refine-epic` and their skill folders, scripts, workflows, and the `ClaudeCodeMirrorService.ts` registry are all renamed to the `feature` forms. No `epic` aliases retained. (See "Slash commands" under In Scope.)
+2. **Notion property names → FULL rename, clean break.** The Notion remote integration is unreleased dev work, so it takes a clean break with **no migration and no compat shim** (per repo rules: "Features that have only ever existed in unreleased dev work can take clean breaks"). Rename `'Is Epic'`/`'Epic'` → `'Is Feature'`/`'Feature'` and the `isEpicCandidate` remote-provider field. (See "Notion sync property names" under In Scope.)
+3. **Documentation → included** in this pass.
 
 ## Implementation Steps
 
@@ -80,17 +91,23 @@ Explicitly excluded per repo migration rules:
 3. **project.js dynamic strings** — edit the ~7 user-visible strings; leave the ~320 identifiers/DOM lookups.
 4. **implementation.html / setup.html** — edit only the confirmed-visible copy; in setup.html keep the literal `.switchboard/epics/` path token intact even while rewording surrounding text (Ambiguity #2).
 5. **Notification strings** — edit the ~16 `show*Message` literals in KanbanProvider/TaskViewer/PlanningPanel. These are plain user-facing English; safe.
-6. **(Decision #1) Slash-command aliases** — register `/create-feature` etc. in `ClaudeCodeMirrorService.ts` alongside existing entries; do not remove the `epic` forms.
-7. **(Decision #3) Docs** — rewrite user-facing "epic" prose to "feature" in README + manuals; optionally add a one-line "(formerly 'epics')" note for continuity.
-8. **Consistency sweep** — grep the changed webviews/services for any user-visible "epic"/"Epic" string missed; verify no identifier/class/id/message-type/DB/path token was altered.
+6. **Slash commands / skill files (full rename)** —
+   a. `git mv` skill folders `.claude/skills/create-epic` → `create-feature`, `improve-epic` → `improve-feature`; rename `refine-epic` prompt path → `refine-feature`.
+   b. `git mv` `.agents/skills/create_epic.md`, `refine_epic.md`, `group-into-epics/`, and `kanban_operations/create-epic.js` / `assign-to-epic.js` to their `feature` names.
+   c. `git mv` `.agents/workflows/improve-epic.md` → `improve-feature.md`.
+   d. Update **every call site / cross-reference**: `ClaudeCodeMirrorService.ts` registry (~45–133), workflow cross-refs in `improve-plan.md`/`switchboard-chat.md`/`sw-remote.md`/`switchboard-index.md`, and the registry/skill tables in `CLAUDE.md` and `AGENTS.md`. Grep for the old script/skill/workflow names to catch programmatic invocations.
+7. **Notion + remote-provider rename (clean break)** — rename `'Is Epic'`/`'Epic'` property strings in `NotionBackupService.ts` and `NotionRemoteProvider.ts`; rename `isEpicCandidate` → `isFeatureCandidate` in `RemoteProvider.ts` and its writers/readers (`LinearRemoteProvider.ts`, `NotionRemoteProvider.ts`, `RemoteControlService.ts`). No migration/back-compat.
+8. **Docs** — rewrite user-facing "epic" prose to "feature" in README + `docs/*` manuals + `AGENTS.md`/`CLAUDE.md` concept prose.
+9. **Consistency sweep** — grep the changed webviews/services/skills for any user-visible "epic"/"Epic" string or stale skill/workflow reference missed; verify no *internal* identifier/class/id/message-type/DB-column/`.switchboard/epics/`-path token was altered.
 
 ## Edge-Case & Dependency Audit
 - **Blind-replace hazard:** the #1 risk. Adjacent identifiers (`btn-epic-action`, `isEpic`, message `type:'createEpic'`) must survive. Enforce string-literal-only edits + per-hunk review.
 - **Mixed display/contract tokens:** `setup.html:616` and the `> **Epic Plan ID:**` marker contain a word that is both shown and parsed — reword the sentence, preserve the token.
 - **Race Conditions:** None — no async/state behavior changes.
 - **Security:** None.
-- **Migrations:** None required *because* persisted state is out of scope. This is the whole reason the plan is low-risk; do not let scope creep pull the directory or DB columns in without a companion migration plan.
-- **Tests:** existing tests referencing `.switchboard/epics/`, `is_epic`, `epic_id` should be unaffected (those identifiers are unchanged). Any test asserting on *display strings* (unlikely) would need updating.
+- **Migrations:** None. The `.switchboard/epics/` directory and SQLite `is_epic`/`epic_id` columns remain out of scope (still named `epic`), so no released-state migration is needed. The Notion rename is a *clean break* (unreleased feature) — explicitly no migration/back-compat, which is only valid because that integration never shipped. Do not let scope creep pull the directory or DB columns in without a companion migration plan.
+- **Skill/script rename fallout:** the biggest new risk. Any programmatic caller of `create-epic.js`/`assign-to-epic.js` or reference to the old skill/workflow names must be updated in lockstep, or the slash commands / kanban actions silently break. The `ClaudeCodeMirrorService` registry, workflow cross-refs, and CLAUDE.md/AGENTS.md tables are all coupled to these names.
+- **Tests:** tests referencing `.switchboard/epics/`, `is_epic`, `epic_id` are unaffected (unchanged). Tests referencing renamed skill/workflow file names, the Notion `'Is Epic'` property, or `isEpicCandidate` WILL need updating. Grep test dirs for these tokens.
 
 ## Verification
 - `npm run compile` succeeds (source is truth; ignore `dist/`).
@@ -107,5 +124,6 @@ Explicitly excluded per repo migration rules:
 - No schema, no migration, no protocol changes.
 
 ### Complex / Risky
-- Discipline of separating display text from adjacent identifiers in dense webview files (the only real difficulty).
-- Boundary decisions #1/#2 if the user opts into the higher-effort variants (slash-command full rename or Notion migration) — each would materially expand scope and add contract/migration risk.
+- Discipline of separating display text from adjacent identifiers in dense webview files.
+- **Full slash-command / skill-file rename:** file moves + registry + cross-references + programmatic call sites must move together, or slash commands and kanban actions break. This is the main risk carrier.
+- **Notion clean-break rename** is only safe because the integration is unreleased — validate that assumption holds before deleting the old property names.
