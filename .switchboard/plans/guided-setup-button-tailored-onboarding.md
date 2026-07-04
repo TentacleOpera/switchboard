@@ -42,6 +42,13 @@ The prompt **references the relevant doc paths** and instructs the pasted-into a
 them and walk the user through that one step interactively — it does not embed doc text
 (keeps the clipboard light and always in sync with the docs).
 
+### Companion changes
+
+- **Remove the old `PLUGIN TUTORIAL` button** in the analyst row of the Agents tab — the new
+  state-aware Guided Setup button supersedes it. (See step 5.)
+- **Add a "Hide Guided Setup button" toggle to `setup.html`** so users who no longer need
+  onboarding can dismiss it. (See step 6.)
+
 ## Detection surfaces (verified in codebase)
 
 All three checks run in the **extension host** (`TaskViewerProvider`), where the state and the
@@ -117,6 +124,43 @@ Short, action-oriented, e.g.:
 `Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through <the missing step>.`
 Vary the `<the missing step>` phrase per milestone so the toast reflects what was detected.
 
+### 5. Remove the old `PLUGIN TUTORIAL` button (`src/webview/implementation.html` + `TaskViewerProvider.ts`)
+
+- Delete the `btn-plugin-tutorial` button construction in `createAnalystRow()`
+  (`implementation.html:3477-3492`) — the whole `tutorialBtn` block through its
+  `container.appendChild(tutorialBtn)`.
+- Remove the now-orphaned `case 'pluginTutorial':` handler in `TaskViewerProvider.ts`
+  (line ~10420) — nothing else posts that message, so it becomes dead code. Confirm no other
+  reference before deleting.
+- **Leave the separate `COPY TUTORIAL PROMPT` button** (`btn-copy-tutorial-prompt`) in
+  `setup.html` untouched — it is a different (clipboard-only) control and out of scope.
+- No migration concern: this removes UI + a message handler, not persisted user state.
+
+### 6. "Hide Guided Setup button" toggle (`src/webview/setup.html` + host + `implementation.html`)
+
+Follow the existing settings pattern used by `julesAutoSyncSetting` / `designSystemDocSetting`
+(persist in host, push to webviews via config-state messages). Recommended as a **global**
+user preference (like `customAgents`' global key), since "no longer need it" is per-user, not
+per-workspace.
+
+1. **setup.html:** add a checkbox in the existing **"Switchboard guide"** section
+   (`setup.html:589-596`), labelled e.g. *"Hide the Guided Setup button in the sidebar"*. On
+   `change`, post `{ type: 'setHideGuidedSetup', enabled }` to the setup panel provider.
+   Initialise its checked state from a `hideGuidedSetupSetting` message on load.
+2. **Host (`TaskViewerProvider` + `SetupPanelProvider`):**
+   - Add `handleSetHideGuidedSetup(enabled)` → persist to globalState key
+     `switchboard.hideGuidedSetup`, and `handleGetHideGuidedSetup(): boolean` (default `false`
+     = visible).
+   - Handle the `setHideGuidedSetup` message in the setup panel's `onDidReceiveMessage`; after
+     saving, refresh both the setup panel (`postSetupPanelState`) and the sidebar
+     (`_postSidebarConfigurationState`).
+   - In `_postSidebarConfigurationState`, post `{ type: 'hideGuidedSetupSetting', enabled }`
+     (mirrors the `designSystemDocSetting` post at `TaskViewerProvider.ts:4515-4520`).
+   - In `postSetupPanelState`, post the same so the checkbox reflects saved state on open.
+3. **implementation.html:** on `hideGuidedSetupSetting`, toggle `#btn-guided-setup`'s
+   visibility (`style.display`). Default visible until a message says otherwise, so nothing
+   flickers on cold boot.
+
 ## Edge cases & risks
 
 - **No workspace open** → toast "Open a workspace folder to use Guided Setup." No copy.
@@ -134,8 +178,9 @@ Vary the `<the missing step>` phrase per milestone so the toast reflects what wa
 ## Out of scope
 
 - Changing the existing `Setup` button behaviour.
-- Persisting "guided setup dismissed/completed" state or auto-showing on first run — this is a
-  manual, always-available button.
+- Auto-showing/dismissing on first run — the button is manual and always-available (except when
+  the user hides it via the setup toggle in step 6).
+- Removing or changing the `COPY TUTORIAL PROMPT` button in `setup.html`.
 - Localizing the prompt/toast text.
 
 ## Verification
@@ -146,8 +191,12 @@ Vary the `<the missing step>` phrase per milestone so the toast reflects what wa
 - Unit: test the milestone-selection function (state inputs → chosen rung) and
   `_hasRegisteredTerminalAgent` in isolation, per the repo's testing approach (installed VSIX,
   `src/` as source of truth).
+- Confirm the analyst-row `PLUGIN TUTORIAL` button is gone and no console error fires from the
+  removed `pluginTutorial` path.
+- Toggle "Hide Guided Setup button" in setup.html → the sidebar button disappears immediately
+  (no reload); untoggle → it returns; setting persists across a window reload.
 
 ## Metadata
 
-**Complexity:** 4
+**Complexity:** 5
 **Tags:** feature, frontend, ui, ux
