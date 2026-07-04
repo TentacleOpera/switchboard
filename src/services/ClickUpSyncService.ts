@@ -1533,9 +1533,10 @@ export class ClickUpSyncService {
       )
     );
     if (moveResult.status !== 200) {
-      const detail = typeof moveResult.data === 'string'
-        ? moveResult.data
-        : JSON.stringify(moveResult.data);
+      const errData = moveResult.data;
+      const detail = typeof errData === 'string'
+        ? errData
+        : (errData?.message || errData?.err || JSON.stringify(errData));
       throw new Error(`Failed to move ClickUp task ${normalizedTaskId} to list ${normalizedTargetListId}. Status: ${moveResult.status} — ${detail}`);
     }
 
@@ -2231,9 +2232,13 @@ export class ClickUpSyncService {
       body.parent = parentPageId;
     }
     
-    const result = await this.httpRequestV3('POST', `/workspaces/${workspaceId}/docs/${docId}/page`, body);
+    const result = await this.httpRequestV3('POST', `/workspaces/${workspaceId}/docs/${docId}/pages`, body);
     if (result.status !== 200 && result.status !== 201) {
-      throw new Error(`ClickUp doc page creation failed with status ${result.status}: ${JSON.stringify(result.data)}`);
+      const errData = result.data;
+      const detail = typeof errData === 'string'
+        ? errData
+        : (errData?.message || errData?.err || JSON.stringify(errData));
+      throw new Error(`ClickUp doc page creation failed with status ${result.status}: ${detail}`);
     }
     
     return {
@@ -2302,7 +2307,7 @@ export class ClickUpSyncService {
       version = versionMatch[1] as 'v2' | 'v3';
       path = versionMatch[2];
     }
-    const apiPath = path + (query ? '?' + new URLSearchParams(query).toString() : '');
+    const apiPath = path + (query ? (path.includes('?') ? '&' : '?') + new URLSearchParams(query).toString() : '');
     const result = await this.httpRequestVersioned(version, method as any, apiPath, body);
     return result.data;
   }
