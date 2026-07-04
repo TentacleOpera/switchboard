@@ -180,3 +180,7 @@ Skipped per session directive. This is a webview UI state-reset fix; verificatio
 ## Recommendation
 
 Complexity 3/10 → **Send to Intern**. Single-file, three handlers, two resets + one cache invalidation. Line numbers verified against current source. No research needed — all claims confirmed by reading `src/webview/planning.js`.
+
+## Review Findings
+
+Reviewed in-place against `src/webview/planning.js` (no code changes required). All three hierarchy handlers (space `:9584`, folder `:9634`, list `:9687`) contain the reset triplet `clickUpProjectStatusFilterValue = ''` / `availableClickUpStatuses = []` / `_lastTicketsClickUpStateFilterHtml = ''` in the correct position — after `_resetSidebarDrillDown()` and before `saveTicketsState()`, so persisted state no longer carries the stale filter. Regression trace confirms: restore path (`restoreTicketsStateForRoot:10306`) sets the filter directly without firing `change` events, so handler resets don't clobber restore; provider-switch routes through `resetTicketsInMemoryState:10240` which already clears the filter; no double-trigger (resets fire no render); no orphaned references. Three NITs only (copy-pasted triplet could be a helper; plan line numbers drifted post-implementation; the `availableClickUpStatuses` clear is cosmetic) — none worth fixing. Compilation/tests skipped per session directive; static execution-path trace confirms the fix. Remaining risk: none material — the double-switch race is self-correcting via `clickupProjectLoaded`'s clear-and-re-request at `:5407`.
