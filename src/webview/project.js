@@ -1856,7 +1856,8 @@
     // fire does not scroll a detached/stale node. Uses instant (non-smooth)
     // scrolling because the destination is computed by us, not animated by
     // the user, and smooth scrolling races with post-innerHTML layout shifts
-    // (scrollbar appearance, toggle-row settle).
+    // (scrollbar appearance, toggle-row settle). 'instant' is used instead of
+    // 'auto' to future-proof against any future CSS scroll-behavior override.
     function scrollPlanItemIntoView(planId) {
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -1864,7 +1865,7 @@
                     `.kanban-plan-item[data-plan-id="${planId}"]`
                 );
                 if (el) {
-                    el.scrollIntoView({ behavior: 'auto', block: 'center' });
+                    el.scrollIntoView({ behavior: 'instant', block: 'center' });
                 }
             });
         });
@@ -1877,7 +1878,7 @@
                     `.epic-plan-item[data-plan-id="${planId}"]`
                 );
                 if (el) {
-                    el.scrollIntoView({ behavior: 'auto', block: 'center' });
+                    el.scrollIntoView({ behavior: 'instant', block: 'center' });
                 }
             });
         });

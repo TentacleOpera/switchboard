@@ -133,3 +133,7 @@ Apply the same deferral pattern to line 1936 (`itemDiv.scrollIntoView({ behavior
 9. **No regressions:** Manually click a plan item in the sidebar (normal click handler, line 1792) — confirm selection/preview still works (this path is unchanged).
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+Implementation verified present in `src/webview/project.js` (commit `13044c6`): `scrollPlanItemIntoView` and `scrollEpicItemIntoView` helpers added with double-rAF deferral and re-query-by-planId guards; applied to all three call sites (Kanban filter-clear fallback line 1931, Kanban normal path line 1948, Epic resolver line 1968). Review fix: changed `behavior: 'auto'` to `behavior: 'instant'` in both helpers per the plan's own Adversarial Synthesis recommendation, future-proofing against any future CSS `scroll-behavior: smooth` override. `node --check` passes with no syntax errors. No `scroll-behavior` CSS exists anywhere in `src/webview/` today. Remaining risk: rapid double-navigation (click Review Plan on A then B before settle) causes a single-frame flash as both deferred scrolls fire — acceptable since both are instant and B wins. No CRITICAL or MAJOR findings remain.

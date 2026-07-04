@@ -140,3 +140,7 @@ No CSS changes are required — the buttons reuse the existing `.strip-btn` clas
 9. **No regressions:** Confirm the existing sidebar Copy Link / Copy Prompt buttons still work unchanged. Confirm the complexity dot/value and the column/complexity dropdowns in the top bar still function.
 
 **Recommendation:** Send to Intern
+
+## Review Findings
+
+Implementation verified present in `src/webview/project.js` (commit `13044c6`): Copy Link and Copy Prompt buttons added to the complexity meta group in `renderKanbanMetaBar` (lines 2021-2022), gated on `plan.planFile` and `plan.sessionId` respectively; handlers wired at lines 2042-2065 mirroring the sidebar patterns (`toAgentRef` + clipboard for Copy Link, `copyKanbanPlanPrompt` postMessage for Copy Prompt). No double-trigger risk — `renderKanbanMetaBar` rebuilds `innerHTML` on every selection change, so old listeners are GC'd with old nodes. `node --check` passes. No CRITICAL or MAJOR findings. No review fixes applied — implementation matches the plan spec exactly. Remaining risk: narrow-viewport crowding when both buttons appear alongside complexity elements, mitigated by `.strip-btn` compact sizing and conditional gates.
