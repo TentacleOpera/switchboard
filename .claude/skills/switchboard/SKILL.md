@@ -7,6 +7,10 @@ description: Front door for Switchboard — routes the user's request to the rig
 
 The single entry point. The user describes what they want in plain language and **you** pick the skill — they never have to memorize skill names.
 
+## `/switchboard` never implements
+
+This is a **planning/routing front door** — in a `/switchboard` turn you do NOT write, edit, or suggest code changes, and you do NOT open files to start implementing. Any request to **build, add, change, fix, or implement** something — including imperative asks like *"add a button that…"*, *"this needs to…"*, *"make X do Y"* — routes to **`switchboard-chat`** (planning) unless it matches a more specific skill in the table below. The **plan is the deliverable**; code happens later, via the kanban/coding flow the user chooses. If you catch yourself about to edit a source file from a `/switchboard` turn, stop — you've skipped the routing step.
+
 ## The opener
 
 When the user types a bare `/switchboard` (no request attached), reply with a **short, welcoming prompt** — not a status read-out. Do NOT announce which environment you detected, do NOT list capabilities that are unavailable, do NOT show tables or workflow internals. Just invite them in with a few plain-language examples, e.g.:
@@ -29,7 +33,7 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 
 | The user wants to… | Use |
 | :--- | :--- |
-| Plan / consult on what to build | **`switchboard-chat`** (writes plan files you merge on the branch). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
+| Plan, consult, or **build / add / change / fix / implement** anything — including imperative asks (*"add a button that…"*, *"this needs to…"*, *"make X do Y"*) | **`switchboard-chat`** (writes plan files you merge on the branch — the plan is the deliverable, not code). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
 | Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) |
 | Deepen / adversarially review **one** plan | **`improve-plan`** |
 | Reconcile & restructure an **epic's** subtasks | **`improve-epic`** |
