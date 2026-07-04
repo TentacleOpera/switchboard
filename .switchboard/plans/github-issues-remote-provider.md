@@ -55,46 +55,80 @@ path as a manual drag (`_remoteApplyColumnMove` → dispatch); providers impleme
 | Card comment (`/comment` bridge) | issue comment |
 | Complexity / tags | issue fields / labels |
 
-1. **Provider class** implementing `RemoteProvider` (`pull: true`; `push: true` for high-fidelity
-   mirroring like Notion/Linear). Auth via a GitHub App / token with `issues` read-write on the
-   repo. Config stored in the DB config table under `remote.config` (same as other providers),
-   provider key `github-issues`.
-2. **Inbound (pull):** poll the repo's issues, read the "Switchboard Status" single-select field
-   value → `stateKeyToColumn` mapping → `onColumnMove` (echo-guarded by `target === current`).
-   Read sub-issue parent/child → epic links. Read new issue comments → `onComment`.
-3. **Outbound (push):** on local column move / epic change / comment, set the issue field
-   (`updateIssueFieldValue`), reparent sub-issues, or `createIssueComment`. Reuse the existing
-   `/comment` self-marker to prevent feedback loops.
-4. **Cursor / change detection:** poll on the existing cadence; use issue `updatedAt` (or a
-   stored per-issue field-value fingerprint) as the cursor. If a `field`-value webhook/event
-   proves reliable, add it as an accelerator later — not required for v1.
+1. **Provider class** implementing `RemoteProvider` (`pull: true`, `push: true`). Auth: a GitHub
+   App / fine-grained PAT with **`Issues: write`** *and* **`issue_fields: read`** (the latter is
+   required to discover org field definitions — without it calls fail with `Resource not
+   accessible by integration`). Config in the DB config table under `remote.config`, provider key
+   `github-issues`.
+2. **Inbound (pull):** poll issues, read the "Switchboard Status" single-select field value →
+   `stateKeyToColumn` → `onColumnMove` (echo-guarded by `target === current`). Read `parent`/
+   `subIssues` → epic links; new issue comments → `onComment` (dedupe self via `author.login`).
+3. **Outbound (push):** set the field via `setIssueFieldValues` (array of
+   `IssueFieldCreateOrUpdateInput { fieldId, singleSelectOptionId }`); reparent via `addSubIssue`;
+   set type via `updateIssue(issueTypeId:)`; comment via `addComment`. Reuse the `/comment`
+   self-marker to prevent feedback loops.
+   - **Create-then-Patch (design constraint):** `createIssue` / `POST …/issues` do **not** accept
+     field values or issue type in the root payload. Creating a card is a two-step sequence —
+     create the issue, then set field values + type + parent as a follow-up call. Handle partial
+     failure between the two steps.
+4. **Cursor / change detection:** poll with the search `updated:` qualifier
+   (`repo:o/n type:issue updated:>=<cursor>`) — a field-value change **does** bump the issue's
+   top-level `updatedAt`, so this catches column moves cheaply without scanning every issue. Field
+   id + option ids are resolved once via the `issueFields` connection and cached per repo (handle
+   option renames). (Optional accelerator: the `field_added` webhook fires on value set/update and
+   carries previous+current — not required for v1, polling suffices and matches Notion/Linear.)
 5. **Capabilities gate:** declare `{pull, push}` truthfully so the unified push seam
    (`remote-sync-refactor-1`) drives it correctly.
 
+## Research findings (resolved 2026-07 — API is sufficient; verdict: fully viable)
+
+API confirmed against GitHub GraphQL/REST schemas + changelog (issue fields GA 2026-07-02):
+- **Fields:** create at org level (`createIssueField`); list per-repo via the `issueFields`
+  connection; set values via `setIssueFieldValues` (array of `IssueFieldCreateOrUpdateInput`).
+  Full REST parity (`GET`/`POST …/issues/{n}/issue-field-values`).
+- **Change detection:** value change bumps `updatedAt`; poll via search `updated:>=<cursor>`.
+  `field_added` webhook fires on value set/update with previous+current (optional accelerator).
+- **Hierarchy:** `parent`/`subIssues` connections + `addSubIssue` mutation; `issueType` via
+  `updateIssue(issueTypeId:)`. Limits: **max depth 8, max 100 sub-issues per level.**
+- **Comments:** cursor-paginated `comments(after:)`; `author.login` reliably present for the
+  echo-guard.
+- **Poll cost:** ~1–2 GraphQL points/page (100 issues); a 2,000-issue full sync is <50 points,
+  well under the 5,000/hr pool.
+
+### ⚠️ Two caveats that shape the design
+1. **Create-then-Patch** — issue creation can't set fields/type inline; always a two-step
+   sequence (create → set field/type/parent). Handle partial failure.
+2. **`issue_fields: read` scope** — required alongside `Issues: write`, or field calls fail with
+   `Resource not accessible by integration`. In Actions, `GITHUB_TOKEN` needs it declared
+   explicitly.
+
 ## User Review Required
 
-- Confirm the field name/convention ("Switchboard Status") and whether Switchboard auto-creates
-  the single-select field + options on first connect (via `createIssueField`) vs requiring the
-  user to pre-create it.
-- Confirm auth model (GitHub App vs PAT) and scope; confirm private + public repo handling
-  (issue fields support per-field Public/Org visibility).
-- Confirm whether planning lives as issues in the *code* repo or a dedicated tracking repo.
+- **Org-scope gate (the one real product decision):** issue fields are **organization-scoped and
+  NOT available on standalone personal-account repos.** So a Switchboard user whose repo lives
+  under a personal account cannot use this provider. Decide the fallback: require an org, use a
+  dedicated tracking repo under an org, or fall back to Notion/Linear for personal-account users.
+  Detect and message this at connect time.
+- Confirm the field convention ("Switchboard Status") and whether Switchboard auto-creates the
+  single-select field + options on first connect vs requiring pre-creation.
+- Confirm planning issues live in the *code* repo vs a dedicated tracking repo.
 
 ## Complexity Audit
 
 ### Routine
 - Implementing the `RemoteProvider` interface (Notion/Linear are the template).
-- GraphQL calls for field read/set and sub-issue traversal.
+- GraphQL calls for field read/set (`issueFields` / `setIssueFieldValues`) and sub-issue traversal.
 
 ### Complex / Risky
-- **Field/option id resolution:** single-select writes need the field id + option id (like
-  Projects v2); cache them per repo and handle option renames.
-- **Poll cost / rate limits:** confirm GraphQL point cost of reading field values across a repo's
-  issues; page and cache. (Verify against GitHub GraphQL docs at implementation.)
-- **Value-change events:** GA notes `field_added`/`field_removed` webhooks; confirm whether a
-  value *change* fires an event. Polling covers it regardless (matches Notion/Linear).
-- **Availability tiers:** issue fields GA for Free/Team/Enterprise/GHEC + GHES 3.23 — gate the
-  provider on availability and degrade gracefully on older GHES.
+- **Field/option id resolution:** single-select writes need field id + option id; resolve once via
+  `issueFields` and cache per repo; handle option renames.
+- **Create-then-Patch partial failure:** an issue created but not yet field-stamped is a valid
+  GitHub issue with no column — reconcile on the next poll (treat missing field as CREATED).
+- **Org-scope availability:** gate the provider on org membership + issue-fields availability
+  (Free/Team/Enterprise/GHEC orgs; GHES ≥ 3.19 per research, though the GA changelog cited 3.23 —
+  confirm the exact GHES floor). Degrade gracefully; never offer it for personal accounts.
+- **Sub-issue limits:** depth 8 / 100-per-level — fine for epics→subtasks, but guard against a
+  pathological epic exceeding 100 children.
 
 ## Edge-Case & Dependency Audit
 
