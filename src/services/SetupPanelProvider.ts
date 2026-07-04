@@ -617,9 +617,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'persistPanelsSetting', enabled });
                     break;
                 }
+                case 'getHideGuidedSetupSetting':
+                    this._panel.webview.postMessage({
+                        type: 'hideGuidedSetupSetting',
+                        enabled: this._taskViewerProvider.handleGetHideGuidedSetupSetting()
+                    });
+                    break;
 
                 case 'setExcludeReviewedBacklogSetting':
                     await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'setHideGuidedSetup':
+                    await this._taskViewerProvider.handleSetHideGuidedSetupSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'setPersistPanelsSetting': {
@@ -1282,6 +1292,71 @@ export class SetupPanelProvider implements vscode.Disposable {
                         path: linearConfig?.ticketSaveLocation || '',
                         ticketsAutoSync
                     });
+                    break;
+                }
+                // ── Remote Control (§10) — delegated to KanbanProvider ─────────
+                case 'getRemoteConfig': {
+                    const payload = await this._kanbanProvider?.remoteGetConfigPayload(message.workspaceRoot);
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    break;
+                }
+                case 'setRemoteConfig': {
+                    const payload = await this._kanbanProvider?.remoteSetConfig(message.workspaceRoot, message.config);
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    break;
+                }
+                case 'runNotionRemoteSetup': {
+                    if (!this._kanbanProvider) {
+                        this._panel?.webview.postMessage({ type: 'notionRemoteSetupResult', success: false, error: 'Kanban provider unavailable' });
+                        break;
+                    }
+                    const result = await this._kanbanProvider.remoteRunNotionSetup(message.workspaceRoot);
+                    this._panel?.webview.postMessage({ type: 'notionRemoteSetupResult', ...result });
+                    break;
+                }
+                case 'startRemoteControl': {
+                    const active = (await this._kanbanProvider?.remoteStart(message.workspaceRoot)) === true;
+                    this._panel?.webview.postMessage({ type: 'remoteControlState', active });
+                    break;
+                }
+                case 'stopRemoteControl': {
+                    const active = this._kanbanProvider?.remoteStop(message.workspaceRoot) === true;
+                    this._panel?.webview.postMessage({ type: 'remoteControlState', active });
+                    break;
+                }
+                case 'getRemoteHealth': {
+                    const payload = await this._kanbanProvider?.remoteGetHealthPayload(message.workspaceRoot);
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    break;
+                }
+                case 'copyLinearAgentSkill': {
+                    if (!this._kanbanProvider) {
+                        this._panel?.webview.postMessage({ type: 'linearAgentSkillText', text: null, error: 'Kanban provider unavailable' });
+                        break;
+                    }
+                    const result = await this._kanbanProvider.remoteBuildLinearAgentSkillText(message.workspaceRoot);
+                    this._panel?.webview.postMessage({
+                        type: 'linearAgentSkillText',
+                        text: result.text || null,
+                        error: result.error,
+                    });
+                    break;
+                }
+                case 'getProjectContextSyncStatus': {
+                    const payload = await this._kanbanProvider?.projectContextGetStatus(message.workspaceRoot);
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    break;
+                }
+                case 'setProjectContextSyncEnabled': {
+                    const payload = await this._kanbanProvider?.projectContextSetEnabled(message.workspaceRoot, message.enabled === true);
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    break;
+                }
+                case 'projectContextSyncNow': {
+                    this._panel?.webview.postMessage({ type: 'projectContextSyncRunning' });
+                    const payload = await this._kanbanProvider?.projectContextSyncNow(message.workspaceRoot, { auto: false });
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    else { this._panel?.webview.postMessage({ type: 'projectContextSyncStatus', state: null, error: 'No workspace resolved' }); }
                     break;
                 }
                 case 'getAgentDirCleanupState': {

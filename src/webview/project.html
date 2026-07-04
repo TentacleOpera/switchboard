@@ -1668,12 +1668,9 @@
         <button class="shared-tab-btn" data-tab="epics">EPICS</button>
         <button class="shared-tab-btn" data-tab="projects">PROJECTS</button>
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
-        <button class="shared-tab-btn" data-tab="devdocs">DEV DOCS</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
         <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
         <button class="shared-tab-btn" data-tab="architect">ARCHITECT</button>
-        <button class="shared-tab-btn" data-tab="notebook">NOTEBOOKLM</button>
-        <button class="shared-tab-btn" data-tab="remote">REMOTE</button>
     </div>
     <div class="container">
         <!-- Kanban tab -->
@@ -1731,6 +1728,7 @@
                 <button id="btn-save-projects" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-projects" class="strip-btn" style="display:none;">Cancel</button>
                 <button class="strip-btn" id="btn-project-context" data-tooltip="When on, the selected project's PRD is injected into every dispatched prompt">PROJECT CONTEXT: OFF</button>
+                <button id="btn-architect-projects" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
                 <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
             </div>
             <div class="content-row">
@@ -1812,6 +1810,7 @@
                 <button id="btn-cancel-constitution" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-delete-constitution" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
                 <button id="btn-manage-constitution-paths" class="strip-btn" title="Manage constitution file paths" disabled>Manage Paths</button>
+                <button id="btn-architect-constitution" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
             </div>
             <div class="content-row">
                 <div id="constitution-list-pane">
@@ -1845,6 +1844,7 @@
                 <button id="btn-save-system" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-system" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-delete-system" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
+                <button id="btn-architect-system" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
             </div>
             <div class="content-row">
                 <div id="system-list-pane">
@@ -1865,216 +1865,7 @@
             </div>
         </div>
 
-        <!-- Dev Docs tab (developer documentation authored for the remote-agent context sync) -->
-        <div id="devdocs-content" class="shared-tab-content">
-            <div class="controls-strip">
-                <select id="devdocs-workspace-filter">
-                    <option value="">All Workspaces</option>
-                </select>
-                <button id="btn-create-devdoc" class="strip-btn" title="Create a new developer doc">+ New Doc</button>
-                <button id="btn-edit-devdocs" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-devdocs" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-devdocs" class="strip-btn" style="display:none;">Cancel</button>
-                <button id="btn-delete-devdocs" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
-                <span id="devdocs-status" style="font-size:11px; color:var(--text-secondary);"></span>
-            </div>
-            <div class="content-row">
-                <div id="devdocs-list-pane">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="empty-state">Loading docs...</div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div class="cyber-scanlines"></div>
-                    <div id="devdocs-preview-pane" class="constitution-preview-pane">
-                        <div id="devdocs-preview-content">
-                            <div class="empty-state">Select a dev doc to view it</div>
-                        </div>
-                        <textarea id="devdocs-editor" class="markdown-editor"></textarea>
-                    </div>
-                </div>
-            </div>
-        </div>
 
-        <!-- NotebookLM tab (relocated from planning.html — the dev-docs on-ramp) -->
-        <div id="notebook-content" class="shared-tab-content">
-            <div class="planning-card">
-                <div class="planning-card-header">NOTEBOOKLM INTEGRATION</div>
-                <div class="planning-card-description">NotebookLM integration allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.</div>
-
-                <div id="webai-status" class="planning-status"></div>
-
-                <div class="planning-card-section" style="margin-bottom: 16px;">
-                    <div class="planning-card-description" style="margin-bottom: 4px;">Workspace</div>
-                    <select id="notebook-workspace-filter" class="planning-input" style="width: 100%;">
-                    </select>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">1. BUNDLE CODE</div>
-                    <div class="planning-card-description">Package code into docx files for NotebookLM compatibility.</div>
-                    <button id="btn-bundle-code" class="planning-button">BUNDLE CODE</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">2. UPLOAD TO NOTEBOOKLM</div>
-                    <div class="planning-card-description">Create new Notebook and upload all files in the integration folder as sources.</div>
-                    <div class="planning-controls">
-                        <button id="btn-open-notebooklm" class="planning-button">OPEN NOTEBOOKLM</button>
-                        <button id="btn-open-airlock-folder" class="planning-button secondary">OPEN FOLDER</button>
-                    </div>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">3. COPY SPRINT PLANNING PROMPT</div>
-                    <div class="planning-card-description">Generate a prompt for NotebookLM to write expanded plans for every plan in the NEW Kanban column. Copy the output and use Step 4 below to import.</div>
-                    <button id="btn-copy-sprint-prompt" class="planning-button secondary">COPY SPRINT PROMPT</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">4. IMPORT PLANS</div>
-                    <div class="planning-card-description">
-                        Paste your expanded plans from NotebookLM. Plans matching titles in the NEW column will overwrite the originals; others will be created as new plans.
-                    </div>
-                    <button id="btn-import-notebooklm-plans" class="planning-button secondary">IMPORT PLANS</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Remote tab (§10, relocated from kanban.html — config only) -->
-        <div id="remote-content" class="shared-tab-content">
-            <div style="padding:12px; overflow-y:auto; height:100%; max-width:640px;">
-                <div class="db-subsection" style="border-top:none;">
-                    <div class="subsection-header"><span id="remote-subsection-title">Remote Control</span></div>
-                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
-                        Drive your boards remotely. Moving a card between remote states moves it here and
-                        dispatches that column's agent; comments are routed to the current column's agent,
-                        which replies back through the remote. Polling only — no webhooks, nothing to expose.
-                        <br><strong>Notion</strong> has no active-issue cap — pick it when Linear's free-tier
-                        limit gets in the way. Notion is an <em>agent</em> control surface: connect Notion to
-                        claude.ai and let the remote Claude session drive it via the Notion MCP connector.
-                    </div>
-
-                    <!-- Provider selector -->
-                    <label style="display:block; margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Provider</span>
-                        <select id="remote-provider" class="workspace-project-select">
-                            <option value="linear">Linear</option>
-                            <option value="notion">Notion</option>
-                            <option value="clickup">ClickUp (push-only)</option>
-                        </select>
-                    </label>
-
-                    <!-- Workspace selector -->
-                    <label style="display:block; margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Workspace</span>
-                        <select id="remote-workspace" class="workspace-project-select"></select>
-                    </label>
-
-                    <!-- Boards to sync: themed checkbox list, includes "No Project" base board -->
-                    <div style="margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
-                        <div id="remote-boards-list" class="remote-checkbox-list"></div>
-                    </div>
-
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                        <input type="checkbox" id="remote-silent-sync">
-                        <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
-                    </label>
-
-                    <!-- Remote mode: Ingest (pull only) vs Full (pull + mirror + dispatch) -->
-                    <div style="margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Remote mode</span>
-                        <label style="display:inline-flex; align-items:center; gap:4px; margin-right:16px; cursor:pointer;">
-                            <input type="radio" name="remote-mode" value="ingest" id="remote-mode-ingest">
-                            <span>Ingest (pull only)</span>
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
-                            <input type="radio" name="remote-mode" value="full" id="remote-mode-full">
-                            <span>Full (pull + mirror + dispatch)</span>
-                        </label>
-                    </div>
-
-                    <!-- Comment polling toggle -->
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                        <input type="checkbox" id="remote-comments">
-                        <span>Poll comments from remote</span>
-                    </label>
-
-                    <!-- Push toggle — grayed out if provider lacks push capability -->
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;" id="remote-push-label">
-                        <input type="checkbox" id="remote-push">
-                        <span>Push status &amp; content to remote</span>
-                    </label>
-
-                    <label style="display:block; margin-bottom:12px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
-                        <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60">
-                    </label>
-
-                    <!-- Start/stop pinging (the kanban board toolbar keeps its own toggle) -->
-                    <div style="margin-bottom:12px; display:flex; align-items:center; gap:10px;">
-                        <button id="btn-remote-control-toggle" class="strip-btn">Start Remote Control</button>
-                        <span id="remote-control-state" style="font-size:10px; color:var(--text-secondary);"></span>
-                    </div>
-
-                    <!-- Sync health: last poll/push status, rate-limit/backoff, persistent-failure indicator -->
-                    <div id="remote-health-section" style="margin-bottom:12px; padding:8px 10px; border:1px solid var(--border-color, rgba(127,127,127,0.2)); border-radius:4px; font-size:11px; line-height:1.6; display:none;">
-                        <div class="subsection-header" style="margin-bottom:6px;"><span>Sync Health</span></div>
-                        <div id="remote-health-poll" style="color:var(--text-secondary);"></div>
-                        <div id="remote-health-push" style="color:var(--text-secondary);"></div>
-                        <div id="remote-health-throttle" style="color:var(--text-secondary); display:none;"></div>
-                        <div id="remote-health-failure" style="color:var(--text-secondary); display:none; margin-top:4px; font-weight:bold;"></div>
-                    </div>
-
-                    <!-- Linear-only: one-time setup helper for Linear's native AI agent.
-                         Generates instructions tailored to the user's column mappings. -->
-                    <div id="remote-linear-agent-skill" style="margin-bottom:12px; display:none;">
-                        <button id="btn-copy-linear-agent-skill" class="strip-btn"
-                                title="Copy tailored instructions for Linear's native AI agent">
-                            Copy Linear Agent Skill
-                        </button>
-                        <span id="copy-linear-agent-skill-status" style="font-size:11px; color:var(--text-secondary); margin-left:8px;"></span>
-                    </div>
-
-                    <!-- Project-context sync: Dev Docs + PRDs + constitution → Notion context
-                         page + Linear project docs, so the remote agent plans from real context. -->
-                    <div style="margin-top:6px; margin-bottom:12px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
-                        <div class="subsection-header"><span>Project Context Sync</span></div>
-                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                            Mirrors this workspace's <strong>Dev Docs + project PRDs + constitution</strong> to the
-                            remote — a "Switchboard Project Context" page in Notion and a project document in
-                            Linear — so the remote planning agent works from real context instead of the card
-                            text alone. Switchboard is the source of truth; remote edits are overwritten.
-                        </div>
-                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                            <input type="checkbox" id="remote-context-auto">
-                            <span>Auto-sync after saving a Dev Doc, PRD, or the constitution</span>
-                        </label>
-                        <div style="display:flex; align-items:center; gap:10px;">
-                            <button id="btn-context-sync-now" class="strip-btn">Sync Context Now</button>
-                            <span id="remote-context-status" style="font-size:10px; color:var(--text-secondary);"></span>
-                        </div>
-                        <div id="remote-context-last-result" style="margin-top:6px; font-size:10px; color:var(--text-secondary);"></div>
-                    </div>
-
-                    <!-- Notion-only one-time setup: creates the plans + comments databases,
-                         backs up the selected boards, and matches the column select to the board. -->
-                    <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
-                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                            Run this once after selecting boards. It creates the Notion plans + "Switchboard
-                            Comments" databases, backs up the selected boards' cards, and matches the
-                            <code>Kanban Column</code> options to your board.
-                        </div>
-                        <button id="btn-notion-remote-setup" class="strip-btn">Run Notion setup sync</button>
-                        <span id="remote-notion-setup-status" style="display:block; margin-top:6px; font-size:10px; color:var(--text-secondary);"></span>
-                    </div>
-
-                    <span id="remote-config-status" style="font-size:10px; color:var(--text-secondary);"></span>
-                </div>
-            </div>
-        </div>
 
         <!-- Tuning tab -->
         <div id="tuning-content" class="shared-tab-content">
@@ -2110,44 +1901,6 @@
                 </div>
             </div>
         </div>
-        <div id="architect-content" class="shared-tab-content">
-            <div class="controls-strip">
-                <select id="architect-workspace-filter">
-                    <option value="">All Workspaces</option>
-                </select>
-                <button id="btn-open-architect" class="strip-btn">Open Architect Terminal</button>
-                <button id="btn-copy-architect-prompt" class="strip-btn">Copy Architect Prompt</button>
-            </div>
-            <div class="content-row">
-                <div id="architect-list-pane">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div id="architect-doc-list">
-                        <div class="empty-state">Loading governance documents...</div>
-                    </div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div class="cyber-scanlines"></div>
-                    <div id="architect-preview-pane" class="constitution-preview-pane">
-                        <div id="architect-preview-content">
-                            <div class="empty-state">
-                                <h2>Architect Mode</h2>
-                                <p>The Architect agent guides you through writing and refining your project's governance documents:</p>
-                                <ul>
-                                    <li><strong>PRD</strong> — Product Requirements Document</li>
-                                    <li><strong>Constitution</strong> — Coding standards and conventions</li>
-                                    <li><strong>System Files</strong> — CLAUDE.md and AGENTS.md</li>
-                                    <li><strong>Tuning</strong> — Extracted insights and governance updates</li>
-                                </ul>
-                                <p>Click "Open Architect Terminal" to start a guided session, or select a document from the sidebar to preview it.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
     <div id="new-epic-modal" class="kanban-log-overlay" style="display: none;">
         <div class="kanban-log-modal" style="width: 400px;">
             <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
@@ -2220,28 +1973,6 @@
         </div>
     </div>
 
-    <!-- New Dev Doc Modal -->
-    <div id="new-devdoc-modal" class="kanban-log-overlay" style="display: none;">
-        <div class="kanban-log-modal" style="width: 400px;">
-            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
-                Create New Dev Doc
-            </div>
-            <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="new-devdoc-name" style="font-size: 11px; color: var(--text-secondary);">Doc Name *</label>
-                    <input type="text" id="new-devdoc-name" placeholder="e.g. Architecture Overview" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="new-devdoc-workspace" style="font-size: 11px; color: var(--text-secondary);">Workspace</label>
-                    <select id="new-devdoc-workspace" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;"></select>
-                </div>
-            </div>
-            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
-                <button id="btn-new-devdoc-cancel" class="strip-btn">Cancel</button>
-                <button id="btn-new-devdoc-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
-            </div>
-        </div>
-    </div>
 
     <!-- Manage Constitution Paths Modal -->
     <div class="folder-modal" id="constitution-paths-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="constitution-paths-modal-title">

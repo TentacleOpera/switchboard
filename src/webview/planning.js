@@ -26,10 +26,11 @@
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
         kanbanListCollapsed: persistedState.kanbanListCollapsed || false,
-        editMode: { docs: false, local: false, kanban: false, online: false },
-        editOriginalContent: { docs: null, local: null, kanban: null, online: null },
-        dirtyFlags: { docs: false, local: false, kanban: false, online: false },
-        externalChangePending: { docs: false, local: false, kanban: false, online: false },
+        devdocsListCollapsed: false,
+        editMode: { docs: false, local: false, kanban: false, online: false, devdocs: false },
+        editOriginalContent: { docs: null, local: null, kanban: null, online: null, devdocs: null },
+        dirtyFlags: { docs: false, local: false, kanban: false, online: false, devdocs: false },
+        externalChangePending: { docs: false, local: false, kanban: false, online: false, devdocs: false },
         reviewMode: { kanban: false },
         kanbanReviewSelectedText: '',
         docsWorkspaceRootFilter: '',
@@ -1535,6 +1536,7 @@
         if (tabName === 'tickets') { applySidebarState('tickets', state.ticketsPreviewCollapsed); }
         else if (tabName === 'kanban') { applySidebarState('kanban', state.kanbanListCollapsed); }
         else if (tabName === 'html') { applySidebarState('html', state.htmlPreviewCollapsed); }
+        else if (tabName === 'devdocs') { applySidebarState('devdocs', state.devdocsListCollapsed); }
         else if (tabName === 'docs' || tabName === 'local' || tabName === 'research' || tabName === 'online') {
             applySidebarState(tabName === 'docs' ? 'docs' : tabName, state.docsListCollapsed);
         }
@@ -1542,6 +1544,12 @@
         // 5. Tab-specific initialization
         if (tabName === 'kanban') {
             vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+        }
+        if (tabName === 'devdocs') {
+            vscode.postMessage({ type: 'loadDevDocs' });
+        }
+        if (tabName === 'notebook') {
+            hydrateNotebookTab();
         }
         if (tabName === 'docs') {
             vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
@@ -3859,6 +3867,81 @@
         console.log('[PlanningPanel Webview] Received message:', msg.type, msg);
 
         switch (msg.type) {
+            // ── Dev Docs & NotebookLM ──
+            case 'devDocsList':
+                _devDocs = msg.docs || [];
+                renderDevDocsList();
+                if (_pendingDevDocSelection) {
+                    const target = _devDocs.find(d => d.path === _pendingDevDocSelection);
+                    _pendingDevDocSelection = null;
+                    if (target) selectDevDoc(target);
+                }
+                break;
+            case 'devDocContent':
+                if (_devDocSelected && _devDocSelected.path === msg.path) {
+                    if (state.editMode.devdocs) {
+                        state.externalChangePending.devdocs = true;
+                    } else {
+                        if (devdocsPreviewContent) devdocsPreviewContent.innerHTML = msg.renderedHtml || '';
+                        state.editOriginalContent.devdocs = msg.content || '';
+                        if (btnEditDevdocs) btnEditDevdocs.disabled = false;
+                        if (btnDeleteDevdocs) btnDeleteDevdocs.style.display = '';
+                    }
+                }
+                break;
+            case 'devDocSaved':
+                if (devdocsStatus) devdocsStatus.textContent = msg.ok ? 'Saved ✓' : ('Save failed' + (msg.error ? ': ' + msg.error : ''));
+                if (msg.ok) {
+                    exitEditMode('devdocs');
+                    if (_devDocSelected) selectDevDoc(_devDocSelected);
+                    setTimeout(() => { if (devdocsStatus && devdocsStatus.textContent === 'Saved ✓') devdocsStatus.textContent = ''; }, 2000);
+                }
+                break;
+            case 'devDocCreated':
+                if (msg.ok) {
+                    _pendingDevDocSelection = msg.path || null;
+                    vscode.postMessage({ type: 'loadDevDocs' });
+                } else {
+                    showToast('Create failed: ' + (msg.error || 'unknown error'), 'error');
+                }
+                break;
+            case 'devDocDeleted':
+                if (msg.ok) {
+                    if (_devDocSelected && _devDocSelected.path === msg.path) {
+                        _devDocSelected = null;
+                        if (devdocsPreviewContent) devdocsPreviewContent.innerHTML = '<div class="empty-state">Select a dev doc to view it</div>';
+                        if (btnEditDevdocs) btnEditDevdocs.disabled = true;
+                        if (btnDeleteDevdocs) btnDeleteDevdocs.style.display = 'none';
+                    }
+                    vscode.postMessage({ type: 'loadDevDocs' });
+                } else {
+                    showToast('Delete failed: ' + (msg.error || 'unknown error'), 'error');
+                }
+                break;
+            case 'notebookDefaultRoot':
+                if (msg.root) {
+                    _notebookWorkspaceRoot = msg.root;
+                    const filter = document.getElementById('notebook-workspace-filter');
+                    if (filter) filter.value = msg.root;
+                }
+                break;
+            case 'airlock_exportComplete': {
+                const statusEl = document.getElementById('webai-status');
+                if (statusEl) statusEl.textContent = msg.message || (msg.success ? 'Bundle complete.' : 'Bundle failed.');
+                const bundleBtn = document.getElementById('btn-bundle-code');
+                if (bundleBtn) { bundleBtn.disabled = false; bundleBtn.textContent = 'BUNDLE CODE'; }
+                break;
+            }
+            case 'importNotebookLMPlansResult': {
+                const statusEl = document.getElementById('webai-status');
+                if (statusEl) {
+                    statusEl.textContent = `Imported: ${msg.overwritten || 0} overwritten, ${msg.created || 0} created` +
+                        (msg.errors ? `, ${msg.errors} error(s)` : '');
+                }
+                const importBtn = document.getElementById('btn-import-notebooklm-plans');
+                if (importBtn) { importBtn.disabled = false; importBtn.textContent = 'IMPORT PLANS'; }
+                break;
+            }
             case 'error':
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 break;
@@ -6530,6 +6613,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
         _kanbanWorkspaceItems = msg.workspaceItems || [];
+        populateDevDocsAndNotebookFilters();
         _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects || {};
         updatePrdButtonState();
         _kanbanAvailableColumns = msg.columns || [];  // NEW: store available columns
@@ -6752,7 +6836,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     const EDIT_BUTTON_IDS = {
         docs: { edit: 'btn-edit', save: 'btn-save', cancel: 'btn-cancel' },
-        kanban: { edit: 'btn-edit-kanban', save: 'btn-save-kanban', cancel: 'btn-cancel-kanban' }
+        kanban: { edit: 'btn-edit-kanban', save: 'btn-save-kanban', cancel: 'btn-cancel-kanban' },
+        devdocs: { edit: 'btn-edit-devdocs', save: 'btn-save-devdocs', cancel: 'btn-cancel-devdocs' }
     };
 
     function enterEditMode(tab) {
@@ -6762,10 +6847,12 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const previewPaneId = tab === 'docs' ? 'preview-pane'
             : tab === 'design' ? 'preview-pane-design'
             : tab === 'kanban' ? 'kanban-preview-pane'
+            : tab === 'devdocs' ? 'devdocs-preview-pane'
             : null;
         const textareaId = tab === 'docs' ? 'markdown-editor'
             : tab === 'design' ? 'markdown-editor-design'
             : tab === 'kanban' ? 'kanban-editor'
+            : tab === 'devdocs' ? 'devdocs-editor'
             : null;
         const previewPane = previewPaneId ? document.getElementById(previewPaneId) : null;
         const textarea = textareaId ? document.getElementById(textareaId) : null;
@@ -6776,6 +6863,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (tab === 'docs') {
             content = state.activeDocContent || '';
             state.editOriginalContent.docs = content;
+        } else if (tab === 'devdocs') {
+            content = state.editOriginalContent.devdocs || '';
         } else {
             content = state.editOriginalContent.kanban || '';
         }
@@ -6829,6 +6918,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const previewPaneId = tab === 'docs' ? 'preview-pane'
             : tab === 'design' ? 'preview-pane-design'
             : tab === 'kanban' ? 'kanban-preview-pane'
+            : tab === 'devdocs' ? 'devdocs-preview-pane'
             : null;
         const previewPane = previewPaneId ? document.getElementById(previewPaneId) : null;
         if (previewPane) {
@@ -10587,6 +10677,259 @@ Instructions:
     // Wire message handlers for sync-related responses
     const _origMessageHandler = window.addEventListener ? null : null; // placeholder — actual dispatch is inline switch below
     // We will add cases to the main switch in the message handler block above
+
+    // =========================================================================
+    // DEV DOCS & NOTEBOOKLM TAB
+    // =========================================================================
+    function showToast(message, type = 'info') {
+        const toast = document.createElement('div');
+        toast.className = `toast-notification toast-${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transition = 'opacity 0.3s ease-out';
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
+    }
+
+    const devdocsWorkspaceFilter = document.getElementById('devdocs-workspace-filter');
+    const devdocsListPane = document.getElementById('devdocs-list-pane');
+    const devdocsPreviewContent = document.getElementById('devdocs-preview-content');
+    const devdocsEditor = document.getElementById('devdocs-editor');
+    const btnCreateDevdoc = document.getElementById('btn-create-devdoc');
+    const btnEditDevdocs = document.getElementById('btn-edit-devdocs');
+    const btnSaveDevdocs = document.getElementById('btn-save-devdocs');
+    const btnCancelDevdocs = document.getElementById('btn-cancel-devdocs');
+    const btnDeleteDevdocs = document.getElementById('btn-delete-devdocs');
+    const devdocsStatus = document.getElementById('devdocs-status');
+    let _devDocs = [];
+    let _devDocSelected = null;
+    let _devDocsWsFilter = '';
+    let _pendingDevDocSelection = null;
+    let _notebookWorkspaceRoot = '';
+    let _notebookHydrated = false;
+
+    function renderDevDocsList() {
+        if (!devdocsListPane) return;
+        devdocsListPane.innerHTML = '';
+        devdocsListPane.appendChild(buildSidebarToggleRow(state.devdocsListCollapsed));
+
+        const docs = _devDocsWsFilter
+            ? _devDocs.filter(d => d.workspaceRoot === _devDocsWsFilter)
+            : _devDocs;
+
+        if (docs.length === 0) {
+            const emptyState = document.createElement('div');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'No dev docs yet. Use "+ New Doc" to create one.';
+            devdocsListPane.appendChild(emptyState);
+            return;
+        }
+
+        docs.forEach(doc => {
+            const row = document.createElement('div');
+            row.className = 'system-file-item';
+            if (_devDocSelected && _devDocSelected.path === doc.path) row.classList.add('selected');
+            row.dataset.path = doc.path;
+            const wsLabel = !_devDocsWsFilter && doc.workspaceLabel
+                ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">${escapeHtml(doc.workspaceLabel)}</div>`
+                : '';
+            row.innerHTML = `<div style="font-weight:500;">${escapeHtml(doc.title || doc.fileName)}</div>${wsLabel}`;
+            row.addEventListener('click', () => {
+                if (state.dirtyFlags.devdocs) exitEditMode('devdocs');
+                devdocsListPane.querySelectorAll('.system-file-item').forEach(el => el.classList.remove('selected'));
+                row.classList.add('selected');
+                selectDevDoc(doc);
+            });
+            devdocsListPane.appendChild(row);
+        });
+
+        // Auto-select the first visible doc when the current selection isn't shown.
+        const stillVisible = _devDocSelected && docs.some(d => d.path === _devDocSelected.path);
+        if (!stillVisible && docs.length > 0) {
+            const first = devdocsListPane.querySelector('.system-file-item');
+            if (first) first.classList.add('selected');
+            selectDevDoc(docs[0]);
+        }
+    }
+
+    function selectDevDoc(doc) {
+        _devDocSelected = doc;
+        if (devdocsPreviewContent) devdocsPreviewContent.innerHTML = '<div class="empty-state">Loading...</div>';
+        vscode.postMessage({ type: 'readDevDoc', path: doc.path, workspaceRoot: doc.workspaceRoot });
+    }
+
+    if (devdocsWorkspaceFilter) {
+        devdocsWorkspaceFilter.addEventListener('change', () => {
+            if (state.dirtyFlags.devdocs) exitEditMode('devdocs');
+            _devDocsWsFilter = devdocsWorkspaceFilter.value;
+            renderDevDocsList();
+        });
+    }
+    if (devdocsEditor) {
+        devdocsEditor.addEventListener('input', () => { state.dirtyFlags.devdocs = true; });
+    }
+    if (btnEditDevdocs) btnEditDevdocs.addEventListener('click', () => enterEditMode('devdocs'));
+    if (btnCancelDevdocs) btnCancelDevdocs.addEventListener('click', () => exitEditMode('devdocs'));
+    if (btnSaveDevdocs) {
+        btnSaveDevdocs.addEventListener('click', () => {
+            if (!_devDocSelected) return;
+            if (devdocsStatus) devdocsStatus.textContent = 'Saving…';
+            vscode.postMessage({
+                type: 'saveDevDoc',
+                path: _devDocSelected.path,
+                workspaceRoot: _devDocSelected.workspaceRoot,
+                content: devdocsEditor ? devdocsEditor.value : ''
+            });
+        });
+    }
+    if (btnDeleteDevdocs) {
+        btnDeleteDevdocs.addEventListener('click', () => {
+            if (!_devDocSelected) return;
+            vscode.postMessage({ type: 'deleteDevDoc', path: _devDocSelected.path, workspaceRoot: _devDocSelected.workspaceRoot });
+        });
+    }
+
+    const newDevdocModal = document.getElementById('new-devdoc-modal');
+    if (btnCreateDevdoc && newDevdocModal) {
+        btnCreateDevdoc.addEventListener('click', () => {
+            const nameInput = document.getElementById('new-devdoc-name');
+            if (nameInput) nameInput.value = '';
+            const wsSelect = document.getElementById('new-devdoc-workspace');
+            if (wsSelect) {
+                const desired = _devDocsWsFilter
+                    || (devdocsWorkspaceFilter && devdocsWorkspaceFilter.value)
+                    || (_kanbanWorkspaceItems[0] && _kanbanWorkspaceItems[0].workspaceRoot) || '';
+                if (desired) wsSelect.value = desired;
+            }
+            newDevdocModal.style.display = 'flex';
+            if (nameInput) nameInput.focus();
+        });
+    }
+    document.getElementById('btn-new-devdoc-cancel')?.addEventListener('click', () => {
+        if (newDevdocModal) newDevdocModal.style.display = 'none';
+    });
+    document.getElementById('btn-new-devdoc-submit')?.addEventListener('click', () => {
+        const nameInput = document.getElementById('new-devdoc-name');
+        const wsSelect = document.getElementById('new-devdoc-workspace');
+        const name = nameInput ? nameInput.value.trim() : '';
+        const wsRoot = wsSelect ? wsSelect.value : '';
+        if (!name) { showToast('Doc name is required.', 'error'); return; }
+        if (!wsRoot) { showToast('Select a workspace.', 'error'); return; }
+        vscode.postMessage({ type: 'createDevDoc', name, workspaceRoot: wsRoot });
+        if (newDevdocModal) newDevdocModal.style.display = 'none';
+    });
+
+    function getNotebookWorkspaceRoot() {
+        const sel = document.getElementById('notebook-workspace-filter');
+        return (sel && sel.value)
+            || _notebookWorkspaceRoot
+            || (_kanbanWorkspaceItems[0] && _kanbanWorkspaceItems[0].workspaceRoot)
+            || '';
+    }
+
+    function hydrateNotebookTab() {
+        // Ensure workspace items are fresh, then restore the persisted selection once.
+        vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+        if (!_notebookHydrated) {
+            _notebookHydrated = true;
+            vscode.postMessage({ type: 'notebookDefaultRoot' });
+        }
+    }
+
+    document.getElementById('notebook-workspace-filter')?.addEventListener('change', (e) => {
+        _notebookWorkspaceRoot = e.target.value;
+        vscode.postMessage({ type: 'persistTabState', tabKey: 'notebook.root', state: _notebookWorkspaceRoot });
+    });
+
+    document.getElementById('btn-bundle-code')?.addEventListener('click', () => {
+        const btn = document.getElementById('btn-bundle-code');
+        if (btn) { btn.disabled = true; btn.textContent = 'BUNDLING...'; }
+        const statusEl = document.getElementById('webai-status');
+        if (statusEl) statusEl.textContent = 'Bundling workspace code…';
+        vscode.postMessage({ type: 'airlock_export', workspaceRoot: getNotebookWorkspaceRoot() });
+    });
+
+    document.getElementById('btn-open-notebooklm')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'airlock_openNotebookLM', workspaceRoot: getNotebookWorkspaceRoot() });
+    });
+
+    document.getElementById('btn-open-airlock-folder')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'airlock_openFolder', workspaceRoot: getNotebookWorkspaceRoot() });
+    });
+
+    document.getElementById('btn-copy-sprint-prompt')?.addEventListener('click', () => {
+        const btn = document.getElementById('btn-copy-sprint-prompt');
+        const prompt = `Please analyze the uploaded codebase and generate sprint plans. Output each plan separated by this exact format:
+
+--- PLAN ---
+[plan 1 content here]
+
+--- PLAN ---
+[plan 2 content here]
+
+--- PLAN ---
+[plan 3 content here]
+
+Each plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
+        navigator.clipboard.writeText(prompt).then(() => {
+            if (btn) {
+                btn.textContent = 'COPIED';
+                setTimeout(() => { btn.textContent = 'COPY SPRINT PROMPT'; }, 2000);
+            }
+        }).catch(() => {
+            showToast('Copy failed — check console.', 'error');
+        });
+    });
+
+    document.getElementById('btn-import-notebooklm-plans')?.addEventListener('click', () => {
+        const btn = document.getElementById('btn-import-notebooklm-plans');
+        if (btn) { btn.disabled = true; btn.textContent = 'IMPORTING...'; }
+        const statusEl = document.getElementById('webai-status');
+        if (statusEl) statusEl.textContent = 'Importing plans from clipboard…';
+        vscode.postMessage({ type: 'importNotebookLMPlans', workspaceRoot: getNotebookWorkspaceRoot() });
+    });
+
+    function populateDevDocsAndNotebookFilters() {
+        const devdocsWorkspaceFilter = document.getElementById('devdocs-workspace-filter');
+        const notebookWorkspaceFilter = document.getElementById('notebook-workspace-filter');
+        const newDevdocWorkspace = document.getElementById('new-devdoc-workspace');
+
+        if (devdocsWorkspaceFilter) {
+            devdocsWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
+            _kanbanWorkspaceItems.forEach(ws => {
+                const opt = document.createElement('option');
+                opt.value = ws.workspaceRoot;
+                opt.textContent = ws.label;
+                devdocsWorkspaceFilter.appendChild(opt);
+            });
+            devdocsWorkspaceFilter.value = _devDocsWsFilter || '';
+        }
+
+        if (notebookWorkspaceFilter) {
+            notebookWorkspaceFilter.innerHTML = '';
+            _kanbanWorkspaceItems.forEach(ws => {
+                const opt = document.createElement('option');
+                opt.value = ws.workspaceRoot;
+                opt.textContent = ws.label;
+                notebookWorkspaceFilter.appendChild(opt);
+            });
+            const desired = _notebookWorkspaceRoot || (_kanbanWorkspaceItems[0] && _kanbanWorkspaceItems[0].workspaceRoot) || '';
+            notebookWorkspaceFilter.value = desired;
+            if (notebookWorkspaceFilter.value) _notebookWorkspaceRoot = notebookWorkspaceFilter.value;
+        }
+
+        if (newDevdocWorkspace) {
+            newDevdocWorkspace.innerHTML = '';
+            _kanbanWorkspaceItems.forEach(ws => {
+                const opt = document.createElement('option');
+                opt.value = ws.workspaceRoot;
+                opt.textContent = ws.label;
+                newDevdocWorkspace.appendChild(opt);
+            });
+        }
+    }
 
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });

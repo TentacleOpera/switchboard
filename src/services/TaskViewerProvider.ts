@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { getConstitutionPath } from './constitutionUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
 import { applyThemeBodyClass, getEffectiveColourKanbanIcons } from './themeBodyClass';
 import type { FSWatcher, Dirent, Stats } from 'fs';
@@ -4017,6 +4018,16 @@ Each plan file must include:
         await config.update('excludeReviewedBacklogFromDropdown', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetHideGuidedSetupSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('hideGuidedSetup', false);
+    }
+
+    public async handleSetHideGuidedSetupSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('hideGuidedSetup', enabled, vscode.ConfigurationTarget.Global);
+        await config.update('hideGuidedSetup', undefined, vscode.ConfigurationTarget.Workspace);
+    }
+
 
 
     public handleGetStatusShowTerminalsSetting(): boolean {
@@ -4421,6 +4432,11 @@ Each plan file must include:
             enabled: this.handleGetJulesAutoSyncSetting()
         });
 
+        this._view.webview.postMessage({
+            type: 'hideGuidedSetupSetting',
+            enabled: this.handleGetHideGuidedSetupSetting()
+        });
+
 
 
         const designSystemDocSetting = this.handleGetDesignSystemDocSetting();
@@ -4466,6 +4482,11 @@ Each plan file must include:
         this._setupPanelProvider.postMessage({
             type: 'julesAutoSyncSetting',
             enabled: this.handleGetJulesAutoSyncSetting()
+        });
+
+        this._setupPanelProvider.postMessage({
+            type: 'hideGuidedSetupSetting',
+            enabled: this.handleGetHideGuidedSetupSetting()
         });
 
 
@@ -8974,6 +8995,9 @@ Each plan file must include:
                     case 'runSetupIDEs':
                         vscode.commands.executeCommand('switchboard.setupIDEs');
                         break;
+                    case 'guidedSetup':
+                        await this._handleGuidedSetup();
+                        break;
                     case 'openKanban':
                         vscode.commands.executeCommand('switchboard.openKanban', data.tab);
                         break;
@@ -10309,34 +10333,7 @@ What would you like to find?`;
                         await this._handleSendAnalystMessage(instruction);
                         break;
                     }
-                    case 'pluginTutorial': {
-                        const manualUri = vscode.Uri.joinPath(this._context.extensionUri, 'docs', 'switchboard_user_manual.md');
-                        let manualExists = false;
-                        try {
-                            await vscode.workspace.fs.stat(manualUri);
-                            manualExists = true;
-                        } catch {
-                            // Manual not found — fall back to README
-                        }
 
-                        const readmeUri = vscode.Uri.joinPath(this._context.extensionUri, 'README.md');
-                        let readmeExists = false;
-                        try {
-                            await vscode.workspace.fs.stat(readmeUri);
-                            readmeExists = true;
-                        } catch {
-                            // README not found either — fall back to knowledge-based tutorial
-                        }
-
-                        const instruction = manualExists
-                            ? `Please read the Switchboard Comprehensive User Manual at ${manualUri.fsPath} — specifically the Table of Contents at the top of the file to see all available topics — and offer to guide me through an interactive tutorial of Switchboard features. Start by presenting a numbered menu of the major features (for example: AUTOBAN, Pair Programming, Airlock, Kanban Workflow, Archive) and ask me which one I'd like to learn about first. Adapt your explanations to my current workspace context where possible.`
-                            : readmeExists
-                            ? `Please read the Switchboard plugin README at ${readmeUri.fsPath} and offer to guide me through an interactive tutorial of its features. Start by presenting a numbered menu of the major features (for example: AUTOBAN, Pair Programming, Airlock, Kanban Workflow, Archive) and ask me which one I'd like to learn about first. Adapt your explanations to my current workspace context where possible.`
-                            : `I'd like a guided tutorial of the Switchboard plugin features. Please give me an overview of the main capabilities — such as AUTOBAN, Pair Programming, Airlock, Kanban Workflow, and Archive — and offer to walk me through any of them step by step. Ask me which feature I'd like to start with.`;
-
-                        await this._handleSendAnalystMessage(instruction);
-                        break;
-                    }
                     case 'resetDatabase': {
                         await this.handleResetDatabase();
                         break;
@@ -15937,6 +15934,10 @@ What would you like to find?`;
             if (closedStripped === monitorStripped) {
                 await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
                 this._stopMcpMonitorLoop();
+                // Reset visibility so the monitor doesn't reappear in the agent grid
+                await this.setVisibleAgent('mcp_monitor', false);
+                // Clean up in-memory dispatch map
+                this._registeredTerminals?.delete(this._suffixedName(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
                 await this._postMcpMonitorConfig();
             }
 
@@ -16000,6 +16001,14 @@ What would you like to find?`;
             this._registeredTerminals?.clear();
             this._terminalAgentInfo.clear();
         });
+
+        // Reset the MCP monitor visibility flag so a dead monitor column doesn't
+        // reappear in the agent grid after a full reset.
+        try {
+            await this.setVisibleAgent('mcp_monitor', false);
+        } catch (e) {
+            console.warn('[TaskViewerProvider] Failed to reset mcp_monitor visibility during deregister-all:', e);
+        }
 
         // 2. Orphan Sweep: close unregistered terminals matching Switchboard-created patterns.
         // Only prefix patterns for names Switchboard explicitly creates — never broad
@@ -20750,6 +20759,7 @@ What would you like to find?`;
      */
     public async stopMcpMonitorTerminal(): Promise<void> {
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
+        const suffixedKey = this._suffixedName(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME);
         const live = (vscode.window.terminals || []).find(t => {
             const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
             return tName === strippedTarget && t.exitStatus === undefined;
@@ -20757,9 +20767,21 @@ What would you like to find?`;
         if (live) {
             live.dispose();
         }
+        // Clean up in-memory dispatch map
+        this._registeredTerminals?.delete(suffixedKey);
+        // Reset visibility so createAgentGrid no longer includes the monitor
+        await this.setVisibleAgent('mcp_monitor', false);
+        // Clean up persistent state entry
+        await this.updateState(async (state: any) => {
+            if (state.terminals && state.terminals[suffixedKey]) {
+                delete state.terminals[suffixedKey];
+            }
+        });
+        this.clearTerminalAgentInfo(suffixedKey);
         await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
         this._stopMcpMonitorLoop();
         await this._postMcpMonitorConfig();
+        this.refresh();
     }
 
     public async setVisibleAgent(role: string, visible: boolean): Promise<void> {
@@ -20776,5 +20798,79 @@ What would you like to find?`;
             return tName === strippedTarget;
         });
         return !!found && found.exitStatus === undefined;
+    }
+
+    private async _handleGuidedSetup(): Promise<void> {
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace root open.');
+            return;
+        }
+
+        try {
+            // 1. Check for registered terminal agent
+            const hasAgent = await this._hasRegisteredTerminalAgent();
+            if (!hasAgent) {
+                const prompt = `You are onboarding a Switchboard user. Read docs/how_to_use_switchboard.md and docs/switchboard_user_manual.md (specifically ## 2. Installation & First-Time Setup and ## 3. Agent Roles & Configuration), then walk me through registering a terminal agent interactively — one step at a time, checking I've done each before moving on. Point out the AGENT SETUP button in the sidebar. Focus only on this; don't dump the whole manual.`;
+                await vscode.env.clipboard.writeText(prompt);
+                vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through agent setup.');
+                return;
+            }
+
+            // 2. Check for plans exist
+            const hasPlans = await this._hasPlans(workspaceRoot);
+            if (!hasPlans) {
+                const prompt = `You are onboarding a Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 4. The AUTOBAN (Kanban Board) and ## 17. Core Workflows), then walk me through the kanban board interactively — one step at a time, checking I've done each before moving on. Focus on how to create a plan and drag a card to dispatch it. Focus only on this; don't dump the whole manual.`;
+                await vscode.env.clipboard.writeText(prompt);
+                vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through creating and running plans.');
+                return;
+            }
+
+            // 3. Check for constitution exists
+            const constitutionPath = getConstitutionPath(this._context, workspaceRoot);
+            const hasConstitution = fs.existsSync(constitutionPath);
+            if (!hasConstitution) {
+                const prompt = `You are onboarding a Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 8. Projects, Epics & Governance) and study the Project panel structure in project.html, then walk me through establishing a project constitution interactively — one step at a time, checking I've done each before moving on. Focus only on this; don't dump the whole manual.`;
+                await vscode.env.clipboard.writeText(prompt);
+                vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through setting up a project constitution.');
+                return;
+            }
+
+            // 4. All three present -> advanced tips
+            const prompt = `You are onboarding an experienced Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 5. Planning Tools & Workflows, ## 7. Multi-Repo Control Plane, ## 9. Design Panel (Google Stitch + Claude), ## 30. Remote Control (provider-agnostic), and the /improve-plan / epics features), then walk me through advanced tips and features interactively — one step at a time, checking if I want to learn about each. Focus only on this; don't dump the whole manual.`;
+            await vscode.env.clipboard.writeText(prompt);
+            vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through advanced features and tips.');
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Couldn't copy to clipboard — see [error]: ${err?.message || err}`);
+        }
+    }
+
+    private async _hasRegisteredTerminalAgent(): Promise<boolean> {
+        const statePath = this._resolveStateFilePath();
+        if (!statePath) return false;
+        try {
+            if (fs.existsSync(statePath)) {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                const state = JSON.parse(content);
+                return Object.keys(state.terminals || {}).length > 0;
+            }
+        } catch (e) {
+            // ignore
+        }
+        return false;
+    }
+
+    private async _hasPlans(workspaceRoot: string): Promise<boolean> {
+        try {
+            const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+            if (!fs.existsSync(plansDir)) {
+                return false;
+            }
+            const files = await fs.promises.readdir(plansDir);
+            const planFiles = files.filter(f => f.endsWith('.md') && !f.startsWith('brain_'));
+            return planFiles.length > 0;
+        } catch {
+            return false;
+        }
     }
 }

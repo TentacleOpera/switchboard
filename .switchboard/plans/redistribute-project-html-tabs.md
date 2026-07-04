@@ -19,7 +19,8 @@ The three moves:
 3. **NotebookLM + Dev Docs → `planning.html`** (added to its research tab bar).
 
 ## Metadata
-- **Tags:** [frontend, UI, UX, refactor, webview]
+- **Plan ID:** 6A46C1BC-AB5F-453F-B063-4508BE3AC8F1
+- **Tags:** [frontend, ui, ux, refactor]
 - **Complexity:** 6
 
 ## User Review Required
@@ -51,12 +52,7 @@ The three moves:
 - Ordering suggestion: do Move 3 (NotebookLM+DevDocs → planning) and Move 2 (Architect button) first — they are low-risk and self-contained — then Move 1 (Remote → Setup) which is the cross-provider change.
 
 ## Adversarial Synthesis
-Key risks and mitigations:
-1. **Assuming host handlers must move for the planning.html tabs.** They must **not** — the shared `PlanningPanelProvider._handleMessage` already serves both panels. Moving/duplicating the cases would create double handling. Mitigation: move markup + JS listeners only; leave `_handleMessage` cases intact.
-2. **Migrating the wrong project-context command.** `setProjectContextEnabled` (Projects, stays) vs `setProjectContextSyncEnabled` (Remote, moves) differ by one word. Mitigation: audit checklist above; grep both before deleting.
-3. **CSS breakage from comma-group edits.** Removing `#devdocs-preview-content`/`#remote-content` tokens from large grouped selectors can accidentally leave dangling commas or strip a sibling. Mitigation: edit each group surgically and re-verify the remaining selectors compile (no trailing comma before `{`).
-4. **Remote replies posting to the wrong webview.** Setup's handlers must post to the Setup panel. Mitigation: use the Setup panel's own `postMessage`, not `_projectPanel`.
-5. **Orphaned host code.** `gatherArchitectDocStatus` / `loadArchitectDocStatus` / `readArchitectDoc` and the Remote cases in `PlanningPanelProvider` become dead after the moves. Mitigation: remove the doc-list/preview + Remote cases; keep `openArchitectTerminal`/`copyArchitectPrompt`.
+Key risks: (1) the sync trio's enable toggle (`setProjectContextSyncEnabled` → `projectContextSetEnabled`, `KanbanProvider.ts:2087`) was missing from the Setup delegation list — without it the sync-enable button is dead in Setup (now added); (2) migrating the wrong project-context command (`setProjectContextEnabled` stays vs `setProjectContextSyncEnabled` moves — differ by one word); (3) CSS comma-group surgery on `#devdocs-preview-content`/`#remote-content` selectors can leave dangling commas or strip siblings; (4) Remote replies posting to the wrong webview (Setup handlers must use their own `postMessage`, not `_projectPanel`). Mitigations: audit checklist in Edge-Case section, grep both command names before deleting, edit each CSS group surgically, and use the Setup panel's own postMessage for all Remote replies.
 
 ## Proposed Changes
 
@@ -96,7 +92,7 @@ Key risks and mitigations:
 
 **`src/services/PlanningPanelProvider.ts`**
 - **Keep** `openArchitectTerminal` (`~4391`) and `copyArchitectPrompt` (`~4415`) and their helper `buildArchitectPrompt`.
-- Remove now-orphaned `loadArchitectDocStatus` (`~4426`), `readArchitectDoc` (`~4436`), and `gatherArchitectDocStatus` (unless reused elsewhere — grep first).
+- Remove now-orphaned `loadArchitectDocStatus` (`~4396`), `readArchitectDoc` (`~4406`), and `gatherArchitectDocStatus` (`~1160`). **Confirmed safe to remove:** grep shows `gatherArchitectDocStatus` has exactly one call site (line 4401, inside the `loadArchitectDocStatus` case being deleted) — no other references exist in the codebase.
 
 ### Move 1 — Remote tab → `setup.html` (do last)
 
@@ -116,7 +112,7 @@ Key risks and mitigations:
 - Add posting logic for `getRemoteConfig`/`setRemoteConfig`/`runNotionRemoteSetup`/`startRemoteControl`/`stopRemoteControl`/`getRemoteHealth`/`copyLinearAgentSkill` + the sync trio, and inbound handlers for their replies — targeting the Setup webview.
 
 **`src/services/SetupPanelProvider.ts`**
-- In the `switch (message.type)` (starts `~124`), add cases for the commands above, each delegating to the existing KanbanProvider methods via `this._kanbanProvider`: `remoteGetConfigPayload` (`KanbanProvider.ts:1910`), `remoteSetConfig` (`1919`), `remoteRunNotionSetup` (`1930`), `remoteStart` (`1950`), `remoteStop` (`1984`), `remoteGetHealthPayload` (`2007`), `remoteBuildLinearAgentSkillText` (`2026`), `projectContextGetStatus` (`2075`), `projectContextSyncNow` (`2103`). Post results back to the Setup panel.
+- In the `switch (message.type)` (starts `~125`), add cases for the commands above, each delegating to the existing KanbanProvider methods via `this._kanbanProvider`: `remoteGetConfigPayload` (`KanbanProvider.ts:1911`), `remoteSetConfig` (`1920`), `remoteRunNotionSetup` (`1931`), `remoteStart` (`1951`), `remoteStop` (`1985`), `remoteGetHealthPayload` (`2008`), `remoteBuildLinearAgentSkillText` (`2027`), `projectContextGetStatus` (`2076`), `projectContextSetEnabled` (`2087` — **the sync-enable toggle; do not omit**), `projectContextSyncNow` (`2104`). Post results back to the Setup panel.
 
 **`src/services/PlanningPanelProvider.ts`**
 - Remove the now-unused Remote cases (`~2392–2470`), including the sync trio. Leave `KanbanProvider`'s methods intact (Setup now calls them).
@@ -124,8 +120,7 @@ Key risks and mitigations:
 ## Verification Plan
 
 ### Automated Tests
-- No unit tests exist for these webviews; changes are UI wiring. Rely on `npm run compile` (webpack) succeeding — it type-checks `SetupPanelProvider.ts` / `PlanningPanelProvider.ts` and will catch broken references to removed handlers/helpers.
-- `dist/` is not used for testing per project rules; build the VSIX only for the manual pass.
+- No automated tests run for this plan (session directive: skip compilation, skip tests). All verification is manual via an installed VSIX.
 
 ### Manual Verification (installed VSIX)
 1. **project.html** shows exactly 6 tabs: Kanban Plans, Epics, Projects, Constitution, System, Tuning. No horizontal overflow.
@@ -137,4 +132,4 @@ Key risks and mitigations:
 
 ---
 
-**Recommendation:** Complexity 6 → sequence the moves (3 → 2 → 1); consider `/improve-plan` before coding the cross-provider Remote migration.
+**Recommendation:** Complexity 6 → Send to Coder. Sequence the moves (3 → 2 → 1); Move 1 (Remote → Setup) is the cross-provider change and carries the most risk.
