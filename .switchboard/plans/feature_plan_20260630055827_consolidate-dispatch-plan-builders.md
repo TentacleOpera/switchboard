@@ -277,3 +277,13 @@ At each former builder site and at `generateUnifiedPrompt`, add a short comment:
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder.**
+
+## Review Findings
+
+**Files changed:** `src/services/KanbanProvider.ts` (fix only), `src/services/TaskViewerProvider.ts`, `src/services/PlanningPanelProvider.ts`, `src/services/worktreeResolver.ts`, `src/test/dispatch-plan-builder.test.js`, `src/test/prompt-working-dir-regression.test.js` — all implementation changes were prior commits; this review pass fixed one CRITICAL syntax error.
+
+**CRITICAL — fixed:** `KanbanProvider.ts:3575` — the JSDoc comment block for `_postEpicWorkflowModeState` lost its `/**` opener and first two lines when `buildDispatchPlans` and its helpers were inserted before it, producing 1400+ TypeScript syntax errors (TS1005/TS1434 cascade). Restored the full comment. Typecheck now passes with only 5 pre-existing TS2835 module-resolution warnings (unchanged baseline). All 17 dispatch-plan-builder acceptance tests pass.
+
+**NIT (defer):** `_handleCopyPlanLink` fallback (TaskViewerProvider.ts:14455) references `planRecord?.repoScope` which is always `undefined` in the fallback branch — harmless via `|| ''` but misleading. `_handleTriggerAgentActionInternal` (line 16383) still calls `resolveWorktreePathForPlan` for terminal resolution, causing a redundant DB query alongside the builder's internal resolution — not a correctness issue. `copyEpicPlannerPrompt` (PlanningPanelProvider.ts:3572) uses `(kp as any)._getKanbanDb()` to access a private method — pre-existing code smell, not introduced by this work.
+
+**Remaining risks:** The `_handleCopyPlanLink` record-less fallback (rare path: `_resolvePlanContextForSession` succeeded but DB lookup returned null) cannot expand epic subtasks — same behavior as before, not a regression. Manual VSIX verification (byte-identical non-epic prompt snapshots across all four entry points) was not run per SKIP TESTS/COMPILATION directives.

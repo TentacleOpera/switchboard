@@ -335,3 +335,13 @@ method is not modified). Verification is manual, via an installed VSIX on a real
 Complexity 4 → **Send to Coder**. Single-file delegation to an existing public method; the only
 non-trivial aspects are the two documented Clarification side effects, which are the intended
 parity outcome and require no new code.
+
+## Review Findings
+
+**Files changed:** `src/services/PlanningPanelProvider.ts` — the `createEpic` handler (lines 3833-3882) was rewritten to delegate to `KanbanProvider.createEpicFromPlanIds`. No fixes were needed; the implementation matches the plan's proposed code exactly.
+
+**Verification:** Typecheck passes (only 5 pre-existing TS2835 module-resolution warnings, unchanged baseline). No new errors introduced. The `createEpicFromPlanIds` signature `(workspaceRoot, name, planIds, description?)` matches the call `(wsRoot, name, [], description)`. No double-trigger: `_refreshBoard()` (via `switchboard.refreshUI`) refreshes the Kanban board + sidebar, while `fetchKanbanPlans` refreshes the Epics tab (project panel) — different panels, both idempotent. `TaskViewerProvider` never calls `fetchKanbanPlans`, confirming no indirect double-trigger.
+
+**No findings:** The implementation is clean. The `_kanbanProvider` undefined guard, `epicError` UX on failure, and `fetchKanbanPlans` follow-up are all present and correct. The newly-applied side effects (worktree provisioning, outbound sync) and the `## Goal` format change are documented in the plan and are intended parity outcomes of delegation.
+
+**Remaining risks:** Manual VSIX verification (board refresh, filename UUID check, DB project/project_id check, re-import robustness) was not run per SKIP TESTS/COMPILATION directives. The `_kanbanProvider`-undefined edge case trades "creates with bugs" for "surfaces error and does not create" — the correct trade but a named behavior delta.
