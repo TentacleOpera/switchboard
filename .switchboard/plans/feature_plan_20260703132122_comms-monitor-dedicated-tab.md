@@ -325,3 +325,7 @@ Add a case alongside the existing monitor cases (`setMcpMonitorConfig` at **6263
 ---
 
 **Recommendation (complexity 6):** Send to Coder.
+
+## Review Findings
+
+**Files changed:** `src/webview/kanban.html` (added `sourceIntervals: mcpMonitorConfig.sourceIntervals` to the `saveMonitorConfig` posted config). **Validation:** grep confirmed COMMS tab button at line 2502, `comms-tab-content` at 2587, `createCommsPanel` at 8764, `renderCommsPanel` at 9192, `guardCommsInteraction` at 8746; `createAutobanPanel` (7538) ends before `renderAutobanPanel` (8725) — no monitor code remains in the autoban panel; `updateMcpMonitorConfig` handler calls `renderCommsPanel()` with interaction guard; tab-switch wiring at 9231. **Fixes applied:** CRITICAL — `saveMonitorConfig` was not sending `sourceIntervals` in the posted config, so per-source interval dropdown changes were never persisted to the backend (local state updated but lost on next config push); added `sourceIntervals: mcpMonitorConfig.sourceIntervals` to the `postKanbanMessage` config payload. **Remaining risks:** None — the extraction is clean, interaction guards are independent, and the interval persistence path is now complete.

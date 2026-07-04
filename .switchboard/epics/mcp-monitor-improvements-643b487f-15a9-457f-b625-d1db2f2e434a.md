@@ -4,13 +4,13 @@
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Comms Monitor: Editable Prompt Preview with Timestamps, Channels, and DM/Channel Differentiation](../plans/feature_plan_20260703131419_comms-monitor-editable-prompt-preview.md) — **LEAD CODED**
-- [ ] [Rename "MCP Monitor" to "Comms Monitor" (Display Labels Only)](../plans/feature_plan_20260703131420_comms-monitor-rename-display-labels.md) — **LEAD CODED**
-- [ ] [Comms Monitor: Highlight Claude Dependency and Haiku Model in UI](../plans/feature_plan_20260703131421_comms-monitor-claude-dependency-haiku-highlight.md) — **LEAD CODED**
-- [ ] [Move Comms Monitor to a Dedicated COMMS Tab](../plans/feature_plan_20260703132122_comms-monitor-dedicated-tab.md) — **LEAD CODED**
-- [ ] [Comms Monitor: Fix Stuck "Running" Status and Add Stop/Disable Controls](../plans/feature_plan_20260703133016_comms-monitor-stuck-running-status-and-stop-control.md) — **LEAD CODED**
-- [ ] [Comms Monitor: Remove dontAsk Permission Mode from Startup Command](../plans/feature_plan_20260703142159_comms-monitor-remove-dontask-permission-mode.md) — **LEAD CODED**
-- [ ] [Comms Monitor: Lifecycle, Polling & Per-Source Scheduling (consolidated)](../plans/feature_plan_20260703160000_comms-monitor-lifecycle-polling-consolidated.md) — **LEAD CODED**
+- [ ] [Comms Monitor: Editable Prompt Preview with Timestamps, Channels, and DM/Channel Differentiation](../plans/feature_plan_20260703131419_comms-monitor-editable-prompt-preview.md) — **CODE REVIEWED**
+- [ ] [Rename "MCP Monitor" to "Comms Monitor" (Display Labels Only)](../plans/feature_plan_20260703131420_comms-monitor-rename-display-labels.md) — **CODE REVIEWED**
+- [ ] [Comms Monitor: Highlight Claude Dependency and Haiku Model in UI](../plans/feature_plan_20260703131421_comms-monitor-claude-dependency-haiku-highlight.md) — **CODE REVIEWED**
+- [ ] [Move Comms Monitor to a Dedicated COMMS Tab](../plans/feature_plan_20260703132122_comms-monitor-dedicated-tab.md) — **CODE REVIEWED**
+- [ ] [Comms Monitor: Fix Stuck "Running" Status and Add Stop/Disable Controls](../plans/feature_plan_20260703133016_comms-monitor-stuck-running-status-and-stop-control.md) — **CODE REVIEWED**
+- [ ] [Comms Monitor: Remove dontAsk Permission Mode from Startup Command](../plans/feature_plan_20260703142159_comms-monitor-remove-dontask-permission-mode.md) — **CODE REVIEWED**
+- [ ] [Comms Monitor: Lifecycle, Polling & Per-Source Scheduling (consolidated)](../plans/feature_plan_20260703160000_comms-monitor-lifecycle-polling-consolidated.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ---

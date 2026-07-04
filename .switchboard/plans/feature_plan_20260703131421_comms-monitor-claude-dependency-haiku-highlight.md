@@ -229,3 +229,7 @@ For transparency, show the actual command that will be sent (collapsible to avoi
 ## Recommendation
 
 **Complexity 4 → Send to Coder.** Additive, low-risk change reusing established config-push and DOM-build patterns, but it touches a shared cross-webview message surface (`_postMcpMonitorConfig`) and displays a fallback string that a sibling plan edits, so it needs a coder who will coordinate the epic-level shared surfaces rather than an unattended intern pass.
+
+## Review Findings
+
+**Files changed:** none (implementation verified correct as-is). **Validation:** `resolvedStartupCommand` is included in `_postMcpMonitorConfig` message and stored in `mcpMonitorResolvedCmd` outside the interaction guard; `detectModel` correctly handles empty/claude/haiku/sonnet/opus/custom commands; `cmdPre` uses `textContent` (not `innerHTML`) for command display — no injection risk; displayed fallback command correctly reflects the `dontAsk` removal from the sibling plan. **No fixes needed.** **Remaining risks:** `detectModel` substring check could mislabel exotic custom commands containing "claude" (e.g. `my-claude-wrapper`) as "Default (not Haiku)" rather than "Custom command" — acceptable per plan's design decision.

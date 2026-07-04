@@ -9023,10 +9023,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         const scopeParts = [];
                         if (!cfg.slackDmOnly) scopeParts.push(channels.length > 0 ? `messages in channels: ${channels.join(', ')}` : 'messages in channels (all)');
                         if (!cfg.slackChannelOnly) scopeParts.push('direct messages (DMs)');
-                        lines.push(`Slack: unread ${scopeParts.join(' and ')} and @-mentions ${boundary}. Clearly label each item as [DM] or [channel: #name].`);
+                        const slackLast = cfg.sourceLastCheckAt && cfg.sourceLastCheckAt['slack'];
+                        const slackBoundary = slackLast ? `since ${new Date(slackLast).toUTCString()}` : 'in the past 24 hours';
+                        lines.push(`Slack: unread ${scopeParts.join(' and ')} and @-mentions ${slackBoundary}. Clearly label each item as [DM] or [channel: #name].`);
                     } else if (src === 'gmail') {
                         const label = cfg.gmailLabel && cfg.gmailLabel.trim() ? cfg.gmailLabel.trim() : 'INBOX';
-                        lines.push(`Gmail: unread or important emails in label "${label}" ${boundary}. Include sender and subject for each.`);
+                        const gmailLast = cfg.sourceLastCheckAt && cfg.sourceLastCheckAt['gmail'];
+                        const gmailBoundary = gmailLast ? `since ${new Date(gmailLast).toUTCString()}` : 'in the past 24 hours';
+                        lines.push(`Gmail: unread or important emails in label "${label}" ${gmailBoundary}. Include sender and subject for each.`);
                     } else if (src === 'gcal') {
                         lines.push('Google Calendar: events starting in the next 24 hours.');
                     }
@@ -9166,6 +9170,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         enabled,
                         sources,
                         customInstruction,
+                        sourceIntervals: mcpMonitorConfig.sourceIntervals,
                         slackChannels,
                         slackDmOnly,
                         slackChannelOnly,

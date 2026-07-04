@@ -147,3 +147,7 @@ The only functional change is removing `--permission-mode dontAsk` from the comm
 ## Recommendation
 
 **Complexity 2 → Send to Intern.** A single-line string edit with an accompanying comment update, no schema/UI/migration impact, and one well-documented cross-plan literal to keep in sync. The behavioral implication (interactive prompts) is intended and covered by the existing in-flight guard.
+
+## Review Findings
+
+**Files changed:** none (implementation verified correct as-is). **Validation:** fallback command at `TaskViewerProvider.ts:3906` is `claude --model claude-haiku-4-5 --allowedTools "mcp__*"` — no `dontAsk`; comment at 3901-3904 explains the rationale; `jules_monitor` (3896) and `claude_artifacts` (3911) fallbacks unchanged; sibling haiku-highlight plan's `detectModel` still correctly identifies "Haiku" from the updated command. **No fixes needed.** **Remaining risks:** Users with a custom `mcp_monitor` startup command that includes `dontAsk` are intentionally not migrated — their custom command is used as-is.

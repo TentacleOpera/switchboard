@@ -16056,6 +16056,7 @@ What would you like to find?`;
             const monitorStripped = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
             const closedStripped = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name));
             if (closedStripped === monitorStripped) {
+                await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
                 this._stopMcpMonitorLoop();
                 await this._postMcpMonitorConfig();
             }
@@ -20666,22 +20667,20 @@ What would you like to find?`;
             scopeParts.push('direct messages (DMs)');
         }
         const scope = scopeParts.join(' and ');
-        const boundary = this._slackGmailBoundary(cfg);
+        const boundary = this._sourceBoundary(cfg, 'slack');
         return `Slack: unread ${scope} and @-mentions ${boundary}. Clearly label each item as [DM] or [channel: #name].`;
     }
 
     private _buildGmailPromptLine(cfg: McpMonitorConfig): string {
         const label = cfg.gmailLabel && cfg.gmailLabel.trim() ? cfg.gmailLabel.trim() : 'INBOX';
-        const boundary = this._slackGmailBoundary(cfg);
+        const boundary = this._sourceBoundary(cfg, 'gmail');
         return `Gmail: unread or important emails in label "${label}" ${boundary}. Include sender and subject for each.`;
     }
 
-    private _slackGmailBoundary(cfg: McpMonitorConfig): string {
-        const slackLast = cfg.sourceLastCheckAt['slack'];
-        const gmailLast = cfg.sourceLastCheckAt['gmail'];
-        const candidates = [slackLast, gmailLast].filter(Boolean).map(s => new Date(s as string).getTime());
-        if (candidates.length === 0) return 'in the past 24 hours';
-        return `since ${new Date(Math.min(...candidates)).toUTCString()}`;
+    private _sourceBoundary(cfg: McpMonitorConfig, source: string): string {
+        const last = cfg.sourceLastCheckAt[source];
+        if (!last) return 'in the past 24 hours';
+        return `since ${new Date(last).toUTCString()}`;
     }
 
     /**
@@ -20901,6 +20900,7 @@ What would you like to find?`;
         if (live) {
             live.dispose();
         }
+        await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
         this._stopMcpMonitorLoop();
         await this._postMcpMonitorConfig();
     }

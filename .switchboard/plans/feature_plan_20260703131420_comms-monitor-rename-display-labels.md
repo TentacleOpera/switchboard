@@ -165,6 +165,10 @@ Line 47:
    - Install with a live pre-rename terminal named "MCP Monitor": tick does not find it (expected — name mismatch); clicking Launch creates a new "Comms Monitor" terminal that ticks correctly. Confirm no crash from the orphaned old `state.terminals` entry.
 6. **Regression:** The `switchboard.launchMcpMonitorTerminal` command ID is unchanged — existing keybindings/external command references still work.
 
+## Review Findings
+
+**Files changed:** none (implementation verified correct as-is). **Validation:** grep confirmed zero `'MCP Monitor'` string literals remain in `src/`; `MCP_MONITOR_TERMINAL_NAME` constant is used at all 14 creation/lookup/disposal sites across `TaskViewerProvider.ts` and `extension.ts`; internal keys (`mcp_monitor`, `mcpMonitor`) preserved; `sharedDefaults.js` label reads 'Comms Monitor'. **No fixes needed.** **Remaining risks:** None — the atomic rename was executed correctly via the shared constant, and the internal role key is unchanged so existing installs are safe.
+
 ---
 
 **Recommendation: Send to Intern.** Complexity 3 (routine, 1-3 band). The edits are mechanical string swaps, but they MUST be applied atomically across `TaskViewerProvider.ts` and `extension.ts` because the terminal-name literal is a shared cross-file lookup key — the intern must not stop after editing one file. Run the name-consistency grep and the grid-disposal manual test before marking done.
