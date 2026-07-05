@@ -10134,7 +10134,13 @@ ${FOCUS_DIRECTIVE}`;
         const effectiveColumn = resolvedColumn === 'BACKLOG' ? 'CREATED' : resolvedColumn;
         console.log(`[KanbanProvider] createFeatureFromPlanIds: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
         const planId = crypto.randomUUID();
-        const sessionId = crypto.randomUUID();
+        // Mint session_id = plan_id (the registry canonical form). The system already
+        // converges every row to session_id = plan_id; minting it correct at birth
+        // removes the feature from the stale-entry sweep entirely (defense-in-depth
+        // for any sweep path). The old code minted two independent UUIDs, which made
+        // every feature row "stale by construction" and triggered the lossy
+        // delete+reinsert canonicalization that demoted is_feature to 0.
+        const sessionId = planId;
 
         const slug = (featureName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'feature');
         const featureDir = path.join(workspaceRoot, '.switchboard', 'features');

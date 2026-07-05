@@ -11574,6 +11574,7 @@ What would you like to find?`;
             if (allPlans.length > 0) {
                 const entries: Record<string, PlanRegistryEntry> = {};
                 const staleEntries: PlanRegistryEntry[] = [];
+                const localSessionOnlyPairs: Array<{ planId: string; sessionId: string }> = [];
                 for (const p of allPlans) {
                     let effectiveSourceType = p.sourceType;
                     let effectivePlanId = p.planId || p.sessionId;
@@ -11596,19 +11597,38 @@ What would you like to find?`;
                     const canonicalSessionId = this._getRegistrySessionId(normalizedPlanId, effectiveSourceType);
 
                     if (p.planId !== normalizedPlanId || p.sessionId !== canonicalSessionId) {
-                        staleEntries.push({
-                            planId: normalizedPlanId,
-                            ownerWorkspaceId: p.workspaceId,
-                            sourceType: effectiveSourceType,
-                            localPlanPath: effectiveLocalPlanPath,
-                            brainSourcePath: p.brainSourcePath || undefined,
-                            mirrorPath: effectiveMirrorPath,
-                            topic: p.topic,
-                            createdAt: p.createdAt,
-                            updatedAt: p.updatedAt,
-                            status: p.status as PlanRegistryEntry['status'],
-                            project: (p.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : p.project) || undefined,
-                        });
+                        // Split stale entries by defect kind. Brain rows always need the
+                        // rebuild path (their plan_id genuinely changes on rename, so
+                        // delete+reinsert is the designed normalization). Local rows
+                        // whose ONLY defect is a non-canonical session_id (plan_id
+                        // already correct) get batched in-place canonicalization — one
+                        // transaction, one _persist() — to avoid a persist storm and to
+                        // skip the lossy delete+reinsert that demoted features. Local
+                        // rows whose plan_id is also wrong (legacy rows with empty
+                        // plan_id that fell back to sessionId) still need the rebuild,
+                        // but with the isFeature passthrough from Change 1 they can no
+                        // longer demote features.
+                        const isLocalSessionIdOnly = effectiveSourceType !== 'brain' && p.planId === normalizedPlanId;
+                        if (isLocalSessionIdOnly) {
+                            localSessionOnlyPairs.push({
+                                planId: normalizedPlanId,
+                                sessionId: canonicalSessionId
+                            });
+                        } else {
+                            staleEntries.push({
+                                planId: normalizedPlanId,
+                                ownerWorkspaceId: p.workspaceId,
+                                sourceType: effectiveSourceType,
+                                localPlanPath: effectiveLocalPlanPath,
+                                brainSourcePath: p.brainSourcePath || undefined,
+                                mirrorPath: effectiveMirrorPath,
+                                topic: p.topic,
+                                createdAt: p.createdAt,
+                                updatedAt: p.updatedAt,
+                                status: p.status as PlanRegistryEntry['status'],
+                                project: (p.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : p.project) || undefined,
+                            });
+                        }
                     }
 
                     entries[normalizedPlanId] = {
@@ -11626,11 +11646,19 @@ What would you like to find?`;
                     };
                 }
                 this._planRegistry = { version: 1, entries };
+                // Batched in-place canonicalization for local session-id-only defects.
+                if (localSessionOnlyPairs.length > 0) {
+                    await db.canonicalizeSessionIds(localSessionOnlyPairs);
+                }
+                // Rebuild path for brain rows + legacy local rows whose plan_id is also
+                // wrong. Local session-id-only rows are NOT routed here (batched above).
                 if (staleEntries.length > 0) {
                     for (const staleEntry of staleEntries) {
                         await this._registerPlan(workspaceRoot, staleEntry);
                     }
-                    console.log(`[TaskViewerProvider] Normalized ${staleEntries.length} stale brain registry row(s) on startup`);
+                    console.log(`[TaskViewerProvider] Normalized ${staleEntries.length} stale registry row(s) on startup (${localSessionOnlyPairs.length} local session-id batched, ${staleEntries.length} rebuilt)`);
+                } else if (localSessionOnlyPairs.length > 0) {
+                    console.log(`[TaskViewerProvider] Normalized ${localSessionOnlyPairs.length} local session-id-only row(s) on startup (batched)`);
                 }
                 // Migrate legacy file if it still exists
                 await this._migrateLegacyPlanRegistry(workspaceRoot, db);
@@ -11755,7 +11783,17 @@ What would you like to find?`;
         if (db) {
             const existing = await this._getRegistryDbRecord(db, entry.planId, entry.sourceType);
             if (existing && (existing.planId !== entry.planId || existing.sessionId !== sessionId)) {
-                await db.deletePlan(existing.sessionId);
+                if (existing.planId === entry.planId) {
+                    // Same row, non-canonical session key. Canonicalize IN PLACE.
+                    // The old delete+reinsert dropped every DB-owned column not present in
+                    // PlanRegistryEntry (is_feature, feature_id, kanban_column, project_id,
+                    // worktree_id, provider ids) — this was the feature-demotion bug.
+                    await db.canonicalizeSessionIdByPlanId(entry.planId, sessionId);
+                } else {
+                    // Genuinely different plan_id (brain-mirror rename case this code was
+                    // built for) — delete the old row so insertFileDerivedPlan can re-insert.
+                    await db.deletePlan(existing.sessionId);
+                }
             }
             for (const candidateSessionId of this._getRegistrySessionIdCandidates(entry.planId, entry.sourceType)) {
                 if (candidateSessionId === sessionId) continue;
@@ -11818,7 +11856,8 @@ What would you like to find?`;
                 routedTo: existing?.routedTo || '',
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
-                worktreeId: existing?.worktreeId
+                worktreeId: existing?.worktreeId,
+                isFeature: existing?.isFeature
             });
         }
         console.log(`[TaskViewerProvider] Registered plan: ${entry.planId} (${entry.sourceType}) topic="${entry.topic}"`);

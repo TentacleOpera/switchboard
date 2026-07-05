@@ -1468,6 +1468,16 @@ export class KanbanDatabase {
             }
         }
 
+        // is_feature floor: a file under .switchboard/features/ IS a feature, no matter
+        // which caller built the record. Prevents any lossy record shape (registry
+        // entries, run-sheet records) from demoting a feature on fresh INSERT. The ON
+        // CONFLICT CASE below already handles the update path; this floor only matters
+        // when the row does not yet exist (fresh INSERT), which is precisely the window
+        // where the lossy-record demotion bug fired.
+        const effectiveIsFeature = (record.isFeature && record.isFeature > 0)
+            ? record.isFeature
+            : (relativePlanFile.replace(/\\/g, '/').startsWith('.switchboard/features/') ? 1 : 0);
+
         const sql = `
             INSERT INTO plans (
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
@@ -1500,7 +1510,7 @@ export class KanbanDatabase {
                 record.updatedAt,
                 record.sourceType,
                 record.workspaceName || '',
-                record.isFeature ?? 0
+                effectiveIsFeature
             ]);
             this._db.run('COMMIT');
         } catch (error) {
@@ -2258,6 +2268,47 @@ export class KanbanDatabase {
             'DELETE FROM plans WHERE plan_id = ?',
             [planId]
         );
+    }
+
+    /**
+     * Canonicalize a row's session_id in place without touching any other column.
+     * Used by the plan-registry stale-entry sweep to fix non-canonical session keys
+     * (e.g. createFeatureFromPlanIds minted session_id ≠ plan_id) WITHOUT the old
+     * delete+reinsert path that dropped DB-owned columns (is_feature, feature_id,
+     * kanban_column, project_id, worktree_id, provider ids).
+     */
+    public async canonicalizeSessionIdByPlanId(planId: string, sessionId: string): Promise<boolean> {
+        if (!planId || !sessionId) return false;
+        return this._persistedUpdate(
+            'UPDATE plans SET session_id = ? WHERE plan_id = ?',
+            [sessionId, planId]
+        );
+    }
+
+    /**
+     * Batched variant: one transaction, one _persist(). Used by _loadPlanRegistry to
+     * canonicalize many stale local rows in a single pass without a persist storm.
+     * Mirrors upsertPlans' BEGIN…COMMIT + single _persist() shape.
+     */
+    public async canonicalizeSessionIds(pairs: Array<{ planId: string; sessionId: string }>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (pairs.length === 0) return true;
+        this._db.run('BEGIN');
+        try {
+            for (const { planId, sessionId } of pairs) {
+                if (!planId || !sessionId) continue;
+                this._db.run(
+                    'UPDATE plans SET session_id = ? WHERE plan_id = ?',
+                    [sessionId, planId]
+                );
+            }
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] canonicalizeSessionIds failed:', error);
+            return false;
+        }
+        return this._persist();
     }
 
     // Core CRUD for imported documents
@@ -5678,6 +5729,137 @@ export class KanbanDatabase {
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V46 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V47: Repair the botched V46 rename. When V46's `RENAME COLUMN is_epic TO is_feature`
+        // threw "duplicate column", the epic→feature data copy never happened. Root cause: the
+        // epic→feature sweep also rewrote the *historical* V29 ADD-COLUMN migration to add the
+        // NEW names, so on any DB where V29 ran the new columns already existed (empty) by the
+        // time V46 ran — the rename rolled back, but the version still advanced to 46, so V46
+        // will never retry. The result is both column sets coexisting with the live membership
+        // stranded in the old `epic_id` (and the flag in `is_epic`), while the code reads the
+        // empty new columns. On plans this shows features with names but no subtasks; on
+        // worktrees the feature_id column is missing entirely (V46 threw before its worktrees
+        // rename), so every `SELECT … feature_id FROM worktrees` fails.
+        //
+        // This reconciles by copying old → new. Idempotent and guarded: only fills new columns
+        // that are still empty, and only reads old columns that still exist — a fresh DB (which
+        // never had the old columns) is a clean no-op. Old columns are left in place (inert);
+        // nothing writes them anymore, and keeping them avoids a needless table rebuild.
+        const v47 = await this.getMigrationVersion();
+        if (v47 < 47) {
+            const db = this._db;
+            try {
+                db.exec('BEGIN');
+                const colExists = (table: string, col: string): boolean => {
+                    const stmt = db.prepare(`SELECT COUNT(*) as c FROM pragma_table_info('${table}') WHERE name = '${col}'`);
+                    try { return stmt.step() ? Number((stmt.getAsObject() as any).c) > 0 : false; }
+                    finally { stmt.free(); }
+                };
+
+                // plans: restore stranded subtask→feature membership and the feature flag.
+                if (colExists('plans', 'epic_id')) {
+                    db.exec(`UPDATE plans SET feature_id = epic_id WHERE (feature_id IS NULL OR feature_id = '') AND epic_id IS NOT NULL AND epic_id != ''`);
+                }
+                if (colExists('plans', 'is_epic')) {
+                    db.exec(`UPDATE plans SET is_feature = 1 WHERE (is_feature IS NULL OR is_feature = 0) AND is_epic = 1`);
+                }
+                db.exec(`CREATE INDEX IF NOT EXISTS idx_plans_is_feature ON plans(is_feature)`);
+                db.exec(`CREATE INDEX IF NOT EXISTS idx_plans_feature_id ON plans(feature_id)`);
+
+                // worktrees: V46 never reached its worktrees rename (the plans rename threw
+                // first), so feature_id is missing. Add it back, then copy from epic_id.
+                if (!colExists('worktrees', 'feature_id')) {
+                    db.exec(`ALTER TABLE worktrees ADD COLUMN feature_id TEXT`);
+                }
+                if (colExists('worktrees', 'epic_id')) {
+                    db.exec(`UPDATE worktrees SET feature_id = epic_id WHERE (feature_id IS NULL OR feature_id = '') AND epic_id IS NOT NULL AND epic_id != ''`);
+                }
+
+                // config: the same sweep renamed these toggle keys epic_* → feature_*, so the
+                // old values would silently reset to defaults. Carry them over. INSERT OR IGNORE
+                // on the PK means a value already set under the new key is never overwritten.
+                db.exec(`INSERT OR IGNORE INTO config (key, value)
+                         SELECT REPLACE(key, 'epic_', 'feature_'), value FROM config
+                         WHERE key IN ('epic_goal_enabled', 'epic_ultracode_enabled', 'epic_workflow_mode')`);
+
+                db.exec('COMMIT');
+                await this.setMigrationVersion(47);
+                console.log('[KanbanDatabase] V47 migration completed: reconciled epic_id → feature_id / is_epic → is_feature after failed V46 rename');
+            } catch (e) {
+                try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V47 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V48: Repoint feature plan_file paths from the removed .switchboard/epics/ directory to
+        // .switchboard/features/, where the epic→feature rename physically moved the files. The
+        // column rename (V46/V47) never touched plan_file, so every feature row still pointed at
+        // .switchboard/epics/<name>.md — a directory the rename deleted. Both the Features-tab
+        // preview (project.js selectFeature) and the kanban board (KanbanProvider) gate on
+        // fs.existsSync(plan_file), so features rendered no body AND dropped off the board
+        // entirely. The move kept basenames identical, so a prefix rewrite re-links every row.
+        //
+        // One wrinkle: a feature file whose name lacks a UUID (e.g. online-docs-inline-editing.md)
+        // can't be matched to its existing row by the watcher, so the watcher minted a NEW
+        // is_feature=0 duplicate under the features/ path. Drop those strays first so the rewrite
+        // doesn't collide on plan_file. Idempotent: once repointed there are no epics/ rows left.
+        const v48 = await this.getMigrationVersion();
+        if (v48 < 48) {
+            const db = this._db;
+            try {
+                db.exec('BEGIN');
+                // Remove watcher-minted is_feature=0 strays that shadow a real epics/ feature row.
+                db.exec(`DELETE FROM plans
+                         WHERE plan_file LIKE '.switchboard/features/%'
+                           AND (is_feature = 0 OR is_feature IS NULL)
+                           AND (feature_id IS NULL OR feature_id = '')
+                           AND EXISTS (
+                             SELECT 1 FROM plans e
+                             WHERE e.plan_file = '.switchboard/epics/' || substr(plans.plan_file, length('.switchboard/features/') + 1)
+                               AND e.is_feature = 1
+                           )`);
+                // Repoint the deleted epics/ dir to features/ (basenames unchanged by the move).
+                db.exec(`UPDATE plans
+                         SET plan_file = '.switchboard/features/' || substr(plan_file, length('.switchboard/epics/') + 1)
+                         WHERE plan_file LIKE '.switchboard/epics/%'`);
+                db.exec('COMMIT');
+                await this.setMigrationVersion(48);
+                console.log('[KanbanDatabase] V48 migration completed: repointed .switchboard/epics/ plan_file paths to .switchboard/features/');
+            } catch (e) {
+                try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V48 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V49: Heal feature rows demoted by the plan-registry stale-entry sweep.
+        // The shipped _registerPlan canonicalization hard-deleted + re-inserted rows
+        // whose session_id ≠ plan_id from a lossy PlanRegistryEntry shape that carried
+        // no isFeature field, so is_feature landed at 0 on the fresh INSERT. Every
+        // feature created by createFeatureFromPlanIds (which minted two independent
+        // UUIDs) was stale-by-construction and got demoted. No self-heal timer existed,
+        // so demoted rows stayed demoted until a watcher re-import happened to fire.
+        // Idempotent: a file under .switchboard/features/ IS a feature by the unified-
+        // architecture invariant (the watcher asserts this on every import), so no
+        // false promotions. Do NOT touch kanban_column here — the tombstone/recompute
+        // machinery owns column healing, and features demoted long ago may have been
+        // legitimately moved since.
+        const v49 = await this.getMigrationVersion();
+        if (v49 < 49) {
+            const db = this._db;
+            try {
+                db.exec('BEGIN');
+                db.exec(
+                    `UPDATE plans SET is_feature = 1
+                     WHERE plan_file LIKE '.switchboard/features/%' AND (is_feature = 0 OR is_feature IS NULL)`
+                );
+                db.exec('COMMIT');
+                await this.setMigrationVersion(49);
+                console.log('[KanbanDatabase] V49 migration completed: healed is_feature=0 feature rows under .switchboard/features/');
+            } catch (e) {
+                try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V49 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
     }
