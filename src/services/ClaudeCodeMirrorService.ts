@@ -39,10 +39,10 @@ interface MirrorEntry {
 
 // --- Finalized manifest (post-cleanup, 2026-06-24): 4 workflows + 21 skills. ---
 // 2026-07-03: added `sw` alias + remote-session skills (improve-remote-plan,
-// create-epic) + move-task proxies (clickup-move-task, linear-move-issue) that
+// create-feature) + move-task proxies (clickup-move-task, linear-move-issue) that
 // were previously advertised in AGENTS.md but never generated into workspaces.
 // 2026-07-03: added `/switchboard` front-door router (workflows/switchboard-index.md)
-// and `/improve-epic` (workflows/improve-epic.md) epic-reconciliation skill.
+// and `/improve-feature` (workflows/improve-feature.md) feature-reconciliation skill.
 const MIRROR_MANIFEST: MirrorEntry[] = [
     // Workflows → user-invocable skills (default both-mode).
     // /switchboard — front door: detects local vs remote and routes to the right skill.
@@ -50,8 +50,8 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'workflows/memo.md', name: 'memo', invocation: 'default' },
     { source: 'workflows/accuracy.md', name: 'accuracy', invocation: 'default' },
     { source: 'workflows/improve-plan.md', name: 'improve-plan', invocation: 'default' },
-    // /improve-epic — epic reconciliation; authorised to restructure the subtask set.
-    { source: 'workflows/improve-epic.md', name: 'improve-epic', invocation: 'default' },
+    // /improve-feature — feature reconciliation; authorised to restructure the subtask set.
+    { source: 'workflows/improve-feature.md', name: 'improve-feature', invocation: 'default' },
     // /switchboard-split — split one plan into Complex/Risky + Routine files (remote splitter).
     { source: 'workflows/switchboard-split.md', name: 'switchboard-split', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
@@ -59,11 +59,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // `/switchboard` front door, which detects local vs remote and routes planning
     // (local → switchboard-chat; remote → the sw-remote.md playbook, still shipped
     // under .agents/workflows/ and loaded by the router, just no longer a command).
-    // Remote-session skills — operate on Linear/epic files directly, used when the
+    // Remote-session skills — operate on Linear/feature files directly, used when the
     // VS Code extension is off (claude.ai / Claude Code web). Both were previously
     // authored only under .claude/ and so never shipped to user workspaces.
     { source: 'skills/improve_remote_plan.md', name: 'improve-remote-plan', invocation: 'default', allowedTools: 'Bash' },
-    { source: 'skills/create_epic.md', name: 'create-epic', invocation: 'default' },
+    { source: 'skills/create_feature.md', name: 'create-feature', invocation: 'default' },
 
     // Side-effecting proxy skills → disable-model-invocation (explicit /name only).
     { source: 'skills/clickup_api.md', name: 'clickup-api', invocation: 'no-model', allowedTools: 'Bash' },
@@ -85,11 +85,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'skills/generate_diagram.md', name: 'generate-diagram', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/kanban_operations', name: 'kanban-operations', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/refine_ticket.md', name: 'refine-ticket', invocation: 'no-model' },
-    { source: 'skills/refine_epic.md', name: 'refine-epic', invocation: 'no-model' },
+    { source: 'skills/refine_feature.md', name: 'refine-feature', invocation: 'no-model' },
 
     // Model-invocable procedure skills — an agent loads these by description and
     // follows the flow directly (no button click required).
-    { source: 'skills/group-into-epics', name: 'group-into-epics', invocation: 'default', allowedTools: 'Bash' },
+    { source: 'skills/group-into-features', name: 'group-into-features', invocation: 'default', allowedTools: 'Bash' },
 
     // Pure info-retrieval / read-only skills → user-invokable:false + rich description.
     {
@@ -130,7 +130,7 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // above, added so typing `/switchboard-` surfaces the whole family (the `/switchboard`
     // router points at these). Additive: the canonical names keep working.
     { source: 'workflows/improve-plan.md', name: 'switchboard-plan', invocation: 'default' },
-    { source: 'workflows/improve-epic.md', name: 'switchboard-epic', invocation: 'default' },
+    { source: 'workflows/improve-feature.md', name: 'switchboard-feature', invocation: 'default' },
     { source: 'skills/improve_remote_plan.md', name: 'switchboard-remote-plan', invocation: 'default', allowedTools: 'Bash' },
     { source: 'skills/notion_api.md', name: 'switchboard-notion', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/linear_api.md', name: 'switchboard-linear', invocation: 'no-model', allowedTools: 'Bash' },

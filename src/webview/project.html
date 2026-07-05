@@ -1665,7 +1665,7 @@
 <body>
     <div class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN PLANS</button>
-        <button class="shared-tab-btn" data-tab="epics">EPICS</button>
+        <button class="shared-tab-btn" data-tab="epics">FEATURES</button>
         <button class="shared-tab-btn" data-tab="projects">PROJECTS</button>
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
@@ -1765,21 +1765,21 @@
                 <select id="epics-column-filter">
                     <option value="">All Columns</option>
                 </select>
-                <button id="btn-new-epic" class="strip-btn">+ New Epic</button>
+                <button id="btn-new-epic" class="strip-btn">+ New Feature</button>
             </div>
             <div class="content-row">
                 <div id="epics-list-pane">
                     <div class="sidebar-toggle-row">
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
-                    <div class="empty-state">Loading epics...</div>
+                    <div class="empty-state">Loading features...</div>
                 </div>
                 <div class="preview-panel-wrapper">
                     <div class="cyber-scanlines"></div>
                     <div id="epic-preview-meta-bar" style="display:none;"></div>
                     <div id="epics-preview-pane" class="epics-preview-pane">
                         <div id="epics-preview-content">
-                            <div class="kanban-empty-state">Select an epic to preview</div>
+                            <div class="kanban-empty-state">Select a feature to preview</div>
                         </div>
                         <textarea id="epics-editor" class="markdown-editor"></textarea>
                     </div>
@@ -1904,12 +1904,12 @@
     <div id="new-epic-modal" class="kanban-log-overlay" style="display: none;">
         <div class="kanban-log-modal" style="width: 400px;">
             <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
-                Create New Epic
+                Create New Feature
             </div>
             <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="new-epic-name" style="font-size: 11px; color: var(--text-secondary);">Epic Name *</label>
-                    <input type="text" id="new-epic-name" placeholder="Enter epic name" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
+                    <label for="new-epic-name" style="font-size: 11px; color: var(--text-secondary);">Feature Name *</label>
+                    <input type="text" id="new-epic-name" placeholder="Enter feature name" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 4px;">
                     <label for="new-epic-description" style="font-size: 11px; color: var(--text-secondary);">Description</label>
@@ -1927,7 +1927,7 @@
     <div id="epic-add-subtask-overlay" class="kanban-log-overlay" style="display: none;">
         <div class="kanban-log-modal" style="width: 420px;">
             <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
-                Add Subtask to Epic
+                Add Subtask to Feature
             </div>
             <div style="padding: 16px; display: flex; flex-direction: column; gap: 10px;">
                 <label for="epic-add-subtask-select" style="font-size: 11px; color: var(--text-secondary);">Select a plan to add as a subtask</label>

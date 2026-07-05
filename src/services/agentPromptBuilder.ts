@@ -265,7 +265,7 @@ export interface PromptBuilderOptions {
      * orchestration directives is a NO-OP for 'none' and unset — those keep existing behavior.
      */
     epicWorktreeMode?: string;
-    /** The epic's planId. Required for the high-low planner consolidation directive (assign-to-epic.js target) and the high-low executor directive. */
+    /** The epic's planId. Required for the high-low planner consolidation directive (assign-to-feature.js target) and the high-low executor directive. */
     epicPlanId?: string;
     /** Pre-provisioned tier worktrees for a `high-low`-mode epic, resolved from the worktrees table's `tier` column. Drives EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW. */
     tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
@@ -498,10 +498,10 @@ export const EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW = (epicTopic: string, tierWor
  * subtask-linking loop, and `PlanFileImporter.ts`'s explicit comment that file-derived imports
  * have "no business setting DB-owned columns (is_epic, epic_id, ...)". So the two new consolidated
  * plans CANNOT be linked to the epic by embedding a marker in their file content — they must be
- * linked via the `assign-to-epic.js` script (routes through the running extension's
- * `/kanban/epic/assign` endpoint, which calls updateEpicStatus + regenerates the epic file). The
+ * linked via the `assign-to-feature.js` script (routes through the running extension's
+ * `/kanban/feature/assign` endpoint, which calls updateEpicStatus + regenerates the feature file). The
  * directive below instructs the planner to write the files first (so they get a planId from the
- * watcher import) and then explicitly run assign-to-epic.js — this is the only correct linkage
+ * watcher import) and then explicitly run assign-to-feature.js — this is the only correct linkage
  * path; a content marker would silently produce orphan CREATED cards.
  */
 export const PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE = (epicTopic: string, epicPlanId: string, subtaskPlans: Array<{ planId: string; topic: string; complexity?: string }>) =>
@@ -516,8 +516,8 @@ export const PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE = (epicTopic: string, epic
     `3. Write the two new files to .switchboard/plans/ with descriptive filenames. Give each a "**Complexity:**" metadata line reflecting its tier (>=5 for the high plan, <=4 for the low plan) and a "**Consolidated From:**" metadata line listing the original subtask planIds, for human traceability.\n` +
     `4. Do NOT delete, edit, or replace the ${subtaskPlans.length} original subtask plan files — keep them as-is; the new files are additional, not replacements.\n` +
     `5. After writing both files, wait a few seconds for the file watcher to import them (they need to be picked up and assigned a planId before they can be linked), then run:\n` +
-    `   node .agents/skills/kanban_operations/assign-to-epic.js ${epicPlanId} '["<new-high-plan-planId>","<new-low-plan-planId>"]'\n` +
-    `   Look up each new plan's planId via .agents/skills/kanban_operations/get-state.js (matched by plan_file/topic) before running assign-to-epic.js — do not guess the planId.\n` +
+    `   node .agents/skills/kanban_operations/assign-to-feature.js ${epicPlanId} '["<new-high-plan-planId>","<new-low-plan-planId>"]'\n` +
+    `   Look up each new plan's planId via .agents/skills/kanban_operations/get-state.js (matched by plan_file/topic) before running assign-to-feature.js — do not guess the planId.\n` +
     `6. Report the two new plan file paths and their planIds at the end of your response so the executor dispatch can find them.`;
 
 /**

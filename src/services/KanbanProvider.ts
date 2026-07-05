@@ -8676,7 +8676,7 @@ ${FOCUS_DIRECTIVE}`;
                 const allWorktrees = await db.getWorktrees();
                 const existing = allWorktrees.find(w => String(w.epic_id) === msg.epicId && w.status === 'active');
                 if (existing) {
-                    vscode.window.showInformationMessage(`Epic already has worktree: ${existing.branch}`);
+                    vscode.window.showInformationMessage(`Feature already has worktree: ${existing.branch}`);
                     break;
                 }
 
@@ -8693,7 +8693,7 @@ ${FOCUS_DIRECTIVE}`;
                         await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
                     }
 
-                    vscode.window.showInformationMessage(`Worktree created for epic: ${branch}`);
+                    vscode.window.showInformationMessage(`Worktree created for feature: ${branch}`);
                     await this._refreshBoard(workspaceRoot);
                     await this._sendWorktreeConfig(workspaceRoot);
                 } catch (e: any) {
@@ -8771,7 +8771,7 @@ ${FOCUS_DIRECTIVE}`;
                 if (!workspaceRoot) break;
                 const validModes = ['none', 'per-subtask', 'high-low'];
                 if (!validModes.includes(mode)) {
-                    vscode.window.showWarningMessage(`Invalid epic worktree mode: ${mode}`);
+                    vscode.window.showWarningMessage(`Invalid feature worktree mode: ${mode}`);
                     break;
                 }
                 const db = this._getKanbanDb(workspaceRoot);
@@ -8912,23 +8912,23 @@ ${FOCUS_DIRECTIVE}`;
                 if (!db || !(await db.ensureReady())) break;
                 const epic = await db.getPlanByPlanId(msg.epicSessionId);
                 if (!epic || !epic.isEpic) {
-                    vscode.window.showWarningMessage('Target is not a valid epic.');
+                    vscode.window.showWarningMessage('Target is not a valid feature.');
                     break;
                 }
                 const lockColumnsRaw = await db.getConfig('epic_lock_columns');
                 const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
                 if (lockColumns.includes(epic.kanbanColumn)) {
-                    vscode.window.showWarningMessage('Cannot modify subtasks of an epic in a locked column.');
+                    vscode.window.showWarningMessage('Cannot modify subtasks of a feature in a locked column.');
                     break;
                 }
                 const subtask = await db.getPlanByPlanId(msg.subtaskSessionId);
                 if (!subtask) break;
                 if (subtask.isEpic) {
-                    vscode.window.showWarningMessage('Cannot add an epic as a subtask.');
+                    vscode.window.showWarningMessage('Cannot add a feature as a subtask.');
                     break;
                 }
                 if (subtask.epicId && subtask.epicId !== epic.planId) {
-                    vscode.window.showWarningMessage('Subtask already belongs to another epic.');
+                    vscode.window.showWarningMessage('Subtask already belongs to another feature.');
                     break;
                 }
                 await db.updateEpicStatus(subtask.planId, 0, epic.planId);
@@ -8945,7 +8945,7 @@ ${FOCUS_DIRECTIVE}`;
                 if (!db || !(await db.ensureReady())) break;
                 const plan = await db.getPlanByPlanId(String(msg.planId));
                 if (!plan) { vscode.window.showWarningMessage('Plan not found.'); break; }
-                if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already an epic.'); break; }
+                if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already a feature.'); break; }
 
                 // If a custom name is provided, persist it to BOTH the DB topic and the file's
                 // # H1 heading. DB-only is NOT durable: the next re-import re-derives topic from
@@ -9020,7 +9020,7 @@ ${FOCUS_DIRECTIVE}`;
                     msg.description ? String(msg.description) : undefined
                 );
                 if (!result.success) {
-                    vscode.window.showWarningMessage(result.error || 'Failed to create epic.');
+                    vscode.window.showWarningMessage(result.error || 'Failed to create feature.');
                 }
                 break;
             }
@@ -9616,7 +9616,7 @@ ${FOCUS_DIRECTIVE}`;
         const allWorktrees = await db.getWorktrees();
         const integrationWt = allWorktrees.find(w => String(w.epic_id) === String(subtaskWt.epic_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
         if (!integrationWt) {
-            vscode.window.showErrorMessage(`Merge failed: no active epic integration worktree found for this branch.`);
+            vscode.window.showErrorMessage(`Merge failed: no active feature integration worktree found for this branch.`);
             return;
         }
         try {
@@ -9624,7 +9624,7 @@ ${FOCUS_DIRECTIVE}`;
             await execFileAsync('git', ['-C', integrationWt.path, 'merge', subtaskWt.branch], { timeout: 30000 });
             await this._removeWorktreeRow(workspaceRoot, db, subtaskWt, 'merged');
             await this._pruneWorktrees(workspaceRoot);
-            vscode.window.showInformationMessage(`Merged ${subtaskWt.branch} into epic integration branch ${integrationWt.branch}`);
+            vscode.window.showInformationMessage(`Merged ${subtaskWt.branch} into feature integration branch ${integrationWt.branch}`);
         } catch (e: any) {
             vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
         }
@@ -9647,9 +9647,9 @@ ${FOCUS_DIRECTIVE}`;
             } else {
                 await this._pruneWorktrees(workspaceRoot);
             }
-            vscode.window.showInformationMessage(`Merged epic integration branch into main: ${integrationWt.branch}`);
+            vscode.window.showInformationMessage(`Merged feature integration branch into main: ${integrationWt.branch}`);
         } catch (e: any) {
-            vscode.window.showErrorMessage(`Epic merge failed: ${e.message}`);
+            vscode.window.showErrorMessage(`Feature merge failed: ${e.message}`);
         }
     }
 
@@ -10327,8 +10327,8 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Build the clipboard prompt for the "Suggest Epics" board button. The procedure
-     * lives in the model-invocable `group-into-epics` skill (`.agents/skills/group-into-epics/SKILL.md`);
+     * Build the clipboard prompt for the "Suggest Features" board button. The procedure
+     * lives in the model-invocable `group-into-features` skill (`.agents/skills/group-into-features/SKILL.md`);
      * this method reads that skill file and injects the dynamic workspace root, mirroring
      * how `copyRefinePrompt` reads `refine_ticket.md`. This keeps the button's clipboard
      * output self-contained (host-agnostic) while eliminating procedure duplication — an
@@ -10336,36 +10336,36 @@ ${FOCUS_DIRECTIVE}`;
      * Falls back to an embedded copy if the skill file is missing (older install / dev).
      */
     private _buildSuggestEpicsPrompt(workspaceRoot: string, projectFilter: string | null = null): string {
-        const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'group-into-epics', 'SKILL.md');
+        const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'group-into-features', 'SKILL.md');
         let skillBody = '';
         try {
             skillBody = fs.readFileSync(skillPath, 'utf8');
         } catch {
             // Legacy .agent/ folder fallback, then embedded fallback.
             try {
-                skillBody = fs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'group-into-epics', 'SKILL.md'), 'utf8');
+                skillBody = fs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'group-into-features', 'SKILL.md'), 'utf8');
             } catch {
-                skillBody = `You are grouping loose Switchboard plans into epics. Follow this flow exactly — do not create any epic before the user approves.
+                skillBody = `You are grouping loose Switchboard plans into features. Follow this flow exactly — do not create any feature before the user approves.
 
 1. SCAN
    Read the board snapshot:
      cat {{WORKSPACE_ROOT}}/.switchboard/kanban-board.md
    Scope: CREATED and PLAN REVIEWED columns only. Ignore BACKLOG and all post-coding columns.
-   Each plan line ends with an HTML comment with a planId: value — use that (not the filename) when calling create-epic.js. Skip lines tagged epic or subtask-of:...
+   Each plan line ends with an HTML comment with a planId: value — use that (not the filename) when calling create-feature.js. Skip lines tagged epic or subtask-of:...
 
 2. READ PLAN BODIES — extract goal/problem/dependencies/tags; cluster by capability theme.
 
-3. PROPOSE (single message, all groups at once) — min 2 plans/epic; standalone section for singles; flag overlap/redundancy/gap. For each: name, Goal, How the Subtasks Achieve This, member plans. Then stop and wait.
+3. PROPOSE (single message, all groups at once) — min 2 plans/feature; standalone section for singles; flag overlap/redundancy/gap. For each: name, Goal, How the Subtasks Achieve This, member plans. Then stop and wait.
 
 4. CONFIRM — wait for user approval. Do not touch the database until confirmed.
 
 5. EXECUTE — for each approved group:
-   node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "{{WORKSPACE_ROOT}}" "<goal text with escaped quotes>"
-   Then manually write the ## How the Subtasks Achieve This section into each epic file.
+   node .agents/skills/kanban_operations/create-feature.js "<feature name>" '["planId1","planId2",...]' "{{WORKSPACE_ROOT}}" "<goal text with escaped quotes>"
+   Then manually write the ## How the Subtasks Achieve This section into each feature file.
 
 6. BACKLOG (optional) — ask the user; only proceed if they say yes.
 
-Note: epic creation updates the Switchboard board and writes a .switchboard/epics/ file. Epic creation syncs the epic as a parent issue/task and links subtasks as children in Linear/ClickUp IF real-time sync is enabled.`;
+Note: feature creation updates the Switchboard board and writes a .switchboard/epics/ file. Feature creation syncs the feature as a parent issue/task and links subtasks as children in Linear/ClickUp IF real-time sync is enabled.`;
             }
         }
         // Strip YAML frontmatter (the skill description is for model-invocation discovery,

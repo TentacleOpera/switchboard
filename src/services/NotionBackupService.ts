@@ -240,10 +240,10 @@ export class NotionBackupService {
                 ] } },
                 'ClickUp Task ID': { rich_text: {} },
                 'Linear Issue ID': { rich_text: {} },
-                // Epic structure — 'Is Epic' is created up-front; the 'Epic' self-relation
+                // Epic structure — 'Is Feature' is created up-front; the 'Feature' self-relation
                 // is added post-creation via _ensureEpicProperties (Notion requires the DB
                 // to exist before a relation can reference it).
-                'Is Epic': { checkbox: {} }
+                'Is Feature': { checkbox: {} }
             }
         };
 
@@ -308,14 +308,14 @@ export class NotionBackupService {
         const dbColumns = Array.from(new Set(allPlans.map(p => String(p.kanbanColumn || '').trim()).filter(Boolean)));
         const allColumns = Array.from(new Set([...(columnNames || []), ...dbColumns].map(c => String(c).trim()).filter(Boolean)));
         await this._ensureColumnSelectOptions(plansDatabaseId, allColumns);
-        // Ensure epic schema properties (Is Epic checkbox + Epic self-relation) exist.
+        // Ensure feature schema properties (Is Feature checkbox + Feature self-relation) exist.
         // Idempotent — upgrades existing DBs in-place; no-op if already present.
         await this._ensureEpicProperties(plansDatabaseId);
 
         // 3. Back up the participating plans and write page ids back.
-        //    Two-pass: Pass 1 creates/updates all pages (with Is Epic but no Epic relation —
-        //    the relation needs the epic's page id, which may not exist yet). Pass 2 PATCHes
-        //    each subtask page to set its Epic relation now that all page ids are known.
+        //    Two-pass: Pass 1 creates/updates all pages (with Is Feature but no Feature relation —
+        //    the relation needs the feature's page id, which may not exist yet). Pass 2 PATCHes
+        //    each subtask page to set its Feature relation now that all page ids are known.
         const participating = allPlans.filter(p => p.status !== 'deleted' && boardSet.has(p.project || ''));
         let backedUp = 0;
         const planIdToPageId = new Map<string, string>(); // collected during Pass 1
@@ -344,7 +344,7 @@ export class NotionBackupService {
             if (!subtaskPageId) { continue; }
             try {
                 await this._notionFetchService.httpRequest('PATCH', `/pages/${subtaskPageId}`, {
-                    properties: { 'Epic': { relation: [{ id: epicPageId }] } }
+                    properties: { 'Feature': { relation: [{ id: epicPageId }] } }
                 }, 10000);
             } catch (e) {
                 console.warn(`[NotionBackupService] Pass 2: failed to set Epic relation for ${plan.planId}:`, e);
@@ -426,8 +426,8 @@ export class NotionBackupService {
     }
 
     /**
-     * Idempotently ensure the `Is Epic` (checkbox) and `Epic` (single-property self-relation)
-     * properties exist on the plans DB. The `Epic` relation is a self-relation — Notion
+     * Idempotently ensure the `Is Feature` (checkbox) and `Feature` (single-property self-relation)
+     * properties exist on the plans DB. The `Feature` relation is a self-relation — Notion
      * requires the database to exist before a relation can reference it, so it is PATCHed
      * in after creation (same pattern as `_ensureColumnSelectOptions`). Safe to call on
      * every setup — only PATCHes properties that are missing.
@@ -438,11 +438,11 @@ export class NotionBackupService {
             if (dbResult.status !== 200) { return; }
             const props = dbResult.data?.properties || {};
             const patch: Record<string, any> = {};
-            if (!props['Is Epic']) {
-                patch['Is Epic'] = { checkbox: {} };
+            if (!props['Is Feature']) {
+                patch['Is Feature'] = { checkbox: {} };
             }
-            if (!props['Epic']) {
-                patch['Epic'] = { relation: { database_id: databaseId, type: 'single_property', single_property: {} } };
+            if (!props['Feature']) {
+                patch['Feature'] = { relation: { database_id: databaseId, type: 'single_property', single_property: {} } };
             }
             if (Object.keys(patch).length > 0) {
                 await this._notionFetchService.httpRequest('PATCH', `/databases/${databaseId}`, { properties: patch }, 10000);
@@ -562,8 +562,8 @@ export class NotionBackupService {
             'Source Type': { select: { name: plan.sourceType } },
             'ClickUp Task ID': { rich_text: [{ text: { content: plan.clickupTaskId || '' } }] },
             'Linear Issue ID': { rich_text: [{ text: { content: plan.linearIssueId || '' } }] },
-            'Is Epic': { checkbox: Boolean(plan.isEpic) },
-            'Epic': epicRelation
+            'Is Feature': { checkbox: Boolean(plan.isEpic) },
+            'Feature': epicRelation
         };
     }
 
@@ -582,10 +582,10 @@ export class NotionBackupService {
             const getNumber = (prop: any): number => prop?.number ?? 0;
             const getMultiSelect = (prop: any): string => (prop?.multi_select || []).map((t: any) => t.name).join(',');
 
-            // Epic structure — Is Epic checkbox + Epic relation (self-relation to plans DB).
+            // Feature structure — Is Feature checkbox + Feature relation (self-relation to plans DB).
             // If the properties don't exist (pre-epic-schema setup), these read falsy — safe.
-            const isEpic = p['Is Epic']?.checkbox === true ? 1 : 0;
-            const epicRelation = p['Epic']?.relation;
+            const isEpic = p['Is Feature']?.checkbox === true ? 1 : 0;
+            const epicRelation = p['Feature']?.relation;
             const epicNotionPageId = Array.isArray(epicRelation) && epicRelation.length > 0
                 ? String(epicRelation[0]?.id || '') : '';
 

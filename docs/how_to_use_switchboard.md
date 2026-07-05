@@ -8,7 +8,7 @@ To get the most out of Switchboard, follow the standard full-lifecycle pipeline:
 
 1. **Define your Project & Constitution**: Create a project on the Kanban board (**+ Add Project**), set repo-wide inviolate rules (Constitution) in the Project Panel, and write the project's requirements in its PRD (Project Panel → PROJECTS tab).
 2. **Setup your Requirements**: Turn on **PROJECT CONTEXT** so the active project's PRD is injected into every agent prompt; optionally add Notion design-doc links for richer specs.
-3. **Break into Epics & Plans**: Write individual plan files into `.switchboard/plans/`, and group related plans into Epics (Project Panel → EPICS tab) so they can be planned and shipped together — optionally inside an isolated git worktree. See section 5.
+3. **Break into Features & Plans**: Write individual plan files into `.switchboard/plans/`, and group related plans into Features (Project Panel → FEATURES tab) so they can be planned and shipped together — optionally inside an isolated git worktree. See section 5.
 4. **Orchestrate via the Board**: Drag and drop plans through Kanban columns to dispatch work to your CLI or copy prompts for IDE chat agents.
 5. **Multi-Repo Execution**: Coordinate agents across multiple codebases simultaneously using the Control Plane.
 6. **Self-Review**: Run the Reviewer agent to catch bugs and verify implementations against the plans and attached Design Doc.
@@ -90,25 +90,25 @@ On the Kanban **Setup** tab, enable the **Auto-Archive Rule** to automatically c
 
 ---
 
-## 5. Orchestrating with Epics
+## 5. Orchestrating with Features
 
-When a feature is too big for one plan, group its plans into an **Epic** so they move and ship as a unit. Manage epics in the **Project Panel → EPICS** tab.
+When a feature is too big for one plan, group its plans into a **Feature** so they move and ship as a unit. Manage features in the **Project Panel → FEATURES** tab.
 
-### Building an epic
-- Click **+ New Epic** (name + optional description; tick **Add to Kanban board** to show it as a card), or select a plan on the board and click **PROMOTE TO EPIC**.
-- Use **+ Subtask** to attach existing plans. Subtasks disappear from the main board (so you don't see duplicates) and travel with the epic when you drag it.
-- Epic cards are easy to spot — purple left border and an `EPIC · N subtasks` badge.
+### Building a feature
+- Click **+ New Feature** (name + optional description; tick **Add to Kanban board** to show it as a card), or select a plan on the board and click **PROMOTE TO FEATURE**.
+- Use **+ Subtask** to attach existing plans. Subtasks disappear from the main board (so you don't see duplicates) and travel with the feature when you drag it.
+- Feature cards are easy to spot — purple left border and a `FEATURE · N subtasks` badge.
 
-### Three ways to run an epic
-Click the **?** button in the Epics tab for this same cheat-sheet:
-- **Step** — Drag the epic column-to-column on the board. Each column's agent batch-processes every subtask before the epic advances. Best when you want to watch each stage.
-- **Orchestrate** — Click **Orchestrate** on the epic. One Orchestrator agent runs the whole epic end-to-end with native subagents. Enable the **Orchestrator** role in the Kanban Agents tab to dispatch directly; otherwise the button just copies the assembled prompt for you to paste.
-- **Split (recommended)** — Drag the epic to the **Planner** column first so every subtask plan gets improved, *then* click **Orchestrate** to hand the polished epic to the Orchestrator. You get better plans *and* coordinated implementation.
+### Three ways to run a feature
+Click the **?** button in the Features tab for this same cheat-sheet:
+- **Step** — Drag the feature column-to-column on the board. Each column's agent batch-processes every subtask before the feature advances. Best when you want to watch each stage.
+- **Orchestrate** — Click **Orchestrate** on the feature. One Orchestrator agent runs the whole feature end-to-end with native subagents. Enable the **Orchestrator** role in the Kanban Agents tab to dispatch directly; otherwise the button just copies the assembled prompt for you to paste.
+- **Split (recommended)** — Drag the feature to the **Planner** column first so every subtask plan gets improved, *then* click **Orchestrate** to hand the polished feature to the Orchestrator. You get better plans *and* coordinated implementation.
 
 ### Worktree isolation
-Bind an epic to its own git worktree/branch so its agents never collide with your main checkout. Manage worktrees from the Kanban **WORKTREES** panel — dispatched agents automatically `cd` into the worktree and switch to its branch, and you can merge or abandon the worktree when the epic is done. This is ideal for running several epics in parallel without branch churn.
+Bind a feature to its own git worktree/branch so its agents never collide with your main checkout. Manage worktrees from the Kanban **WORKTREES** panel — dispatched agents automatically `cd` into the worktree and switch to its branch, and you can merge or abandon the worktree when the feature is done. This is ideal for running several features in parallel without branch churn.
 
-> Deleting an epic only detaches its subtasks (they return to the board) — it never destroys the underlying plans.
+> Deleting a feature only detaches its subtasks (they return to the board) — it never destroys the underlying plans.
 
 ---
 

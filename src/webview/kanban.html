@@ -2519,7 +2519,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <!-- Left Side: Workspace/Project controls -->
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
             <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
-            <button class="strip-btn is-teal" id="btn-epic-action" data-tooltip="Convert selected plans to epic or manage existing epic" disabled>PROMOTE TO EPIC</button>
+            <button class="strip-btn is-teal" id="btn-epic-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
             <button id="btn-delete-project" class="strip-icon-btn" data-tooltip="Select a project to delete" disabled>
                 <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
@@ -2541,10 +2541,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
                 <img src="{{ICON_CLI}}" alt="CLI Triggers">
             </button>
-            <button class="strip-icon-btn is-off" id="btn-epic-ultracode" data-tooltip="Epic workflow: prepend ultracode directive to epic prompts">
+            <button class="strip-icon-btn is-off" id="btn-epic-ultracode" data-tooltip="Feature workflow: prepend ultracode directive to feature prompts">
                 <img src="{{ICON_ULTRACODE}}" alt="Ultracode">
             </button>
-            <button class="strip-icon-btn is-off" id="btn-epic-goal" data-tooltip="Epic workflow: prepend /goal slash command to epic prompts">
+            <button class="strip-icon-btn is-off" id="btn-epic-goal" data-tooltip="Feature workflow: prepend /goal slash command to feature prompts">
                 <img src="{{ICON_GOAL}}" alt="Goal">
             </button>
             <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
@@ -2577,7 +2577,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <img src="{{ICON_22}}" alt="Reset Timers" style="width: 17px; height: 17px;">
                 </button>
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
-                <button class="strip-btn" id="btn-suggest-epics" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose epic groupings">SUGGEST EPICS</button>
+                <button class="strip-btn" id="btn-suggest-epics" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span style="opacity:0.6;">⎇</span>
@@ -2782,10 +2782,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <input id="agents-tab-custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
             <label class="modal-label" for="agents-tab-custom-agent-command">Startup command</label>
             <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
-            <label class="checkbox-item" title="When dispatched on an epic, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern)." style="margin-top:8px;">
+            <label class="checkbox-item" title="When dispatched on a feature, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern)." style="margin-top:8px;">
               <input type="checkbox" id="agents-tab-custom-agent-apply-epic-directives">
-              <span>Apply epic ultracode/goal directives</span>
-              <span class="tooltip">When dispatched on an epic, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern).</span>
+              <span>Apply feature ultracode/goal directives</span>
+              <span class="tooltip">When dispatched on a feature, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern).</span>
             </label>
             <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
               Configure prompt add-ons and custom instructions in the <strong>PROMPTS</strong> tab after saving this agent.
@@ -2929,10 +2929,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   <span class="tooltip">Planner outputs a research prompt (for Google AI Studio / Claude / your research agent) covering its uncertain assumptions</span>
                 </label>
 
-                <label class="checkbox-item" title="When dispatched against an epic, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the epic file">
+                <label class="checkbox-item" title="When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file">
                   <input type="checkbox" id="plannerAddonWriteEpicDescriptionIfEmpty">
-                  <span>Write Epic Description If Empty</span>
-                  <span class="tooltip">When dispatched against an epic, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the epic file</span>
+                  <span>Write Feature Description If Empty</span>
+                  <span class="tooltip">When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file</span>
                 </label>
 
                 <div class="addon-radio-group" style="margin-top:8px;">
@@ -3170,20 +3170,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <div id="epic-create-modal" class="modal-overlay hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 class="modal-title" id="epic-create-title">Create Epic</h3>
+                <h3 class="modal-title" id="epic-create-title">Create Feature</h3>
                 <button class="modal-close-btn" id="epic-create-close">&times;</button>
             </div>
             <div class="modal-body">
                 <p class="modal-plan-count" id="epic-create-plan-count"></p>
                 <ul class="modal-plan-list" id="epic-create-plan-list"></ul>
-                <label for="epic-create-name">Epic Name</label>
-                <input type="text" id="epic-create-name" class="modal-input" placeholder="Epic name..." />
+                <label for="epic-create-name">Feature Name</label>
+                <input type="text" id="epic-create-name" class="modal-input" placeholder="Feature name..." />
                 <label for="epic-create-description">Description</label>
                 <textarea id="epic-create-description" class="modal-textarea" placeholder="Optional description..." rows="3"></textarea>
             </div>
             <div class="modal-footer">
                 <button class="modal-btn modal-btn-secondary" id="epic-create-cancel">Cancel</button>
-                <button class="modal-btn modal-btn-primary" id="epic-create-submit">Create Epic</button>
+                <button class="modal-btn modal-btn-primary" id="epic-create-submit">Create Feature</button>
             </div>
         </div>
     </div>
@@ -4736,8 +4736,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                            </button>`
                         : '';
                     const epicAddBtn = isCreated
-                        ? `<button class="column-icon-btn" data-action="addBlankEpic" data-column="${escapeAttr(def.id)}" data-tooltip="Add a blank epic to this column">
-                               <img src="${ICON_CODE_MAP}" alt="Add Epic">
+                        ? `<button class="column-icon-btn" data-action="addBlankEpic" data-column="${escapeAttr(def.id)}" data-tooltip="Add a blank feature to this column">
+                               <img src="${ICON_CODE_MAP}" alt="Add Feature">
                            </button>`
                         : '';
                     const testingFailBtn = (def.kind === 'coded')
@@ -5617,7 +5617,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const epicBadge = ''; // Badge removed; epic identity shown via purple border + meta line
             
             const cardMetaContent = card.isEpic
-                ? `<span class="epic-subtask-label">EPIC: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
+                ? `<span class="epic-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
                 : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`;
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
@@ -5625,7 +5625,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
                    </button>`;
             const cardId = escapeAttr(card.planId || card.sessionId || '');
-            const reviewTooltip = card.isEpic ? 'Review epic' : 'Review plan';
+            const reviewTooltip = card.isEpic ? 'Review feature' : 'Review plan';
             return `
                 <div class="kanban-card${completedClass}${epicClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
                     <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}</div>
@@ -7072,23 +7072,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const nonEpics = selected.filter(s => !s.isEpic);
             if (selected.length === 0) {
                 btn.disabled = true;
-                btn.textContent = 'PROMOTE TO EPIC';
+                btn.textContent = 'PROMOTE TO FEATURE';
             } else if (epics.length === 1 && nonEpics.length === 0) {
                 // On-board epic management moved to the Epics tab — no lone-epic board action.
                 btn.disabled = true;
-                btn.textContent = 'PROMOTE TO EPIC';
+                btn.textContent = 'PROMOTE TO FEATURE';
             } else if (epics.length === 1 && nonEpics.length > 0) {
                 btn.disabled = false;
-                btn.textContent = `ADD ${nonEpics.length} TO EPIC`;
+                btn.textContent = `ADD ${nonEpics.length} TO FEATURE`;
             } else if (epics.length === 0 && nonEpics.length === 1) {
                 btn.disabled = false;
-                btn.textContent = 'PROMOTE TO EPIC';
+                btn.textContent = 'PROMOTE TO FEATURE';
             } else if (epics.length === 0 && nonEpics.length > 1) {
                 btn.disabled = false;
-                btn.textContent = 'GROUP INTO EPIC';
+                btn.textContent = 'GROUP INTO FEATURE';
             } else {
                 btn.disabled = true;
-                btn.textContent = 'PROMOTE TO EPIC';
+                btn.textContent = 'PROMOTE TO FEATURE';
             }
         }
 
@@ -7615,10 +7615,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (planCount) planCount.style.display = 'none';
                 if (planList) planList.style.display = 'none';
                 if (nameInput) nameInput.value = '';
-                if (titleText) titleText.textContent = 'Add Epic';
+                if (titleText) titleText.textContent = 'Add Feature';
                 if (descLabel) descLabel.style.display = '';
                 if (descInput) descInput.style.display = '';
-                if (submitBtn) submitBtn.textContent = 'Add Epic';
+                if (submitBtn) submitBtn.textContent = 'Add Feature';
                 if (modal) modal.classList.remove('hidden');
                 return;
             }
@@ -7633,17 +7633,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const firstTopic = selectedPlans[0]?.topic || '';
             if (isSinglePromote) {
                 if (nameInput) nameInput.value = firstTopic;
-                if (titleText) titleText.textContent = 'Promote to Epic';
+                if (titleText) titleText.textContent = 'Promote to Feature';
                 if (descLabel) descLabel.style.display = 'none';
                 if (descInput) descInput.style.display = 'none';
-                if (submitBtn) submitBtn.textContent = 'Promote to Epic';
+                if (submitBtn) submitBtn.textContent = 'Promote to Feature';
             } else {
                 const suggestion = firstTopic.length > 40 ? firstTopic.substring(0, 37) + '...' : firstTopic;
-                if (nameInput) nameInput.value = suggestion ? suggestion + ' Epic' : '';
-                if (titleText) titleText.textContent = 'Create Epic';
+                if (nameInput) nameInput.value = suggestion ? suggestion + ' Feature' : '';
+                if (titleText) titleText.textContent = 'Create Feature';
                 if (descLabel) descLabel.style.display = '';
                 if (descInput) descInput.style.display = '';
-                if (submitBtn) submitBtn.textContent = 'Create Epic';
+                if (submitBtn) submitBtn.textContent = 'Create Feature';
             }
             if (modal) modal.classList.remove('hidden');
         }
@@ -9773,7 +9773,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             let chipText = '';
             let chipTitle = '';
             if (w.epicTopic) {
-                chipText = `Epic: ${w.epicTopic}`;
+                chipText = `Feature: ${w.epicTopic}`;
                 chipTitle = w.epicProject ? `Project: ${w.epicProject}` : '';
             } else if (w.project) {
                 chipText = `Project: ${w.project}`;
@@ -9854,9 +9854,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const scopeSpan = document.createElement('span');
             if (w.epicTopic) {
-                scopeSpan.textContent = `Scope: Catches plans in epic '${w.epicTopic}' — overrides project worktree.`;
+                scopeSpan.textContent = `Scope: Catches plans in feature '${w.epicTopic}' — overrides project worktree.`;
             } else if (w.project) {
-                scopeSpan.textContent = `Scope: Catches '${w.project}' plans not claimed by an epic worktree.`;
+                scopeSpan.textContent = `Scope: Catches '${w.project}' plans not claimed by a feature worktree.`;
             } else {
                 scopeSpan.textContent = 'Scope: No automatic routing — work manually.';
             }
@@ -9907,8 +9907,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const descriptionDiv = document.createElement('div');
             descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            descriptionDiv.innerHTML = '<strong>Routing order:</strong> epic worktree → project worktree → main repo.<br><br>' +
-                'When a worktree is active, Switchboard automatically opens agent terminals inside the worktree and routes work in epics or projects to the relevant worktree. ' +
+            descriptionDiv.innerHTML = '<strong>Routing order:</strong> feature worktree → project worktree → main repo.<br><br>' +
+                'When a worktree is active, Switchboard automatically opens agent terminals inside the worktree and routes work in features or projects to the relevant worktree. ' +
                 'Coder prompts reference the worktree path so agents edit code inside the worktree instead of the workspace root. ' +
                 'If no worktree matches a plan, the plan runs in the main repo terminals as usual.';
             configSection.appendChild(descriptionDiv);
@@ -10000,7 +10000,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // ==========================================
             // EPICS SECTION
             // ==========================================
-            const epicsSection = createSubsection('EPICS');
+            const epicsSection = createSubsection('FEATURES');
 
             // EPICS -> Auto Mode
             const autoModeHeader = document.createElement('div');
@@ -10010,7 +10010,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const epicsDesc = document.createElement('div');
             epicsDesc.style.cssText = 'padding:4px 8px 0; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            epicsDesc.textContent = 'Auto Mode controls whether worktrees are provisioned automatically as epics and subtasks are created. This never affects the manual "Create Epic Worktree" button below.';
+            epicsDesc.textContent = 'Auto Mode controls whether worktrees are provisioned automatically as features and subtasks are created. This never affects the manual "Create Feature Worktree" button below.';
             epicsSection.appendChild(epicsDesc);
 
             const autoModeGroup = document.createElement('div');
@@ -10020,8 +10020,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const currentEpicWorktreeMode = (config && config.epicWorktreeMode) || 'none';
             const AUTO_MODE_OPTIONS = [
                 { value: 'none', label: 'None', desc: 'No automatic worktrees — use the manual button below.' },
-                { value: 'per-subtask', label: 'Per Subtask', desc: 'Provision a dedicated worktree for every subtask added to an epic.' },
-                { value: 'high-low', label: 'High/Low Complexity Split', desc: 'Provision two tier worktrees (high & low complexity) off the epic integration branch; the planner consolidates subtasks into two plans run in parallel.' }
+                { value: 'per-subtask', label: 'Per Subtask', desc: 'Provision a dedicated worktree for every subtask added to a feature.' },
+                { value: 'high-low', label: 'High/Low Complexity Split', desc: 'Provision two tier worktrees (high & low complexity) off the feature integration branch; the planner consolidates subtasks into two plans run in parallel.' }
             ];
             AUTO_MODE_OPTIONS.forEach(opt => {
                 const label = document.createElement('label');
@@ -10068,12 +10068,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             epicForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px 8px;';
             const epicLabel = document.createElement('span');
             epicLabel.style.fontSize = '11px';
-            epicLabel.textContent = 'Epic:';
+            epicLabel.textContent = 'Feature:';
             const epicSelect = document.createElement('select');
             epicSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
             const epicDefaultOpt = document.createElement('option');
             epicDefaultOpt.value = '';
-            epicDefaultOpt.textContent = '-- Choose an Epic --';
+            epicDefaultOpt.textContent = '-- Choose a Feature --';
             epicSelect.appendChild(epicDefaultOpt);
             const epicCards = (Array.isArray(currentCards) ? currentCards : []).filter(c => c.isEpic);
             epicCards.forEach(epic => {
@@ -10087,7 +10087,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             createEpicBtn.className = 'worktree-primary-btn';
             createEpicBtn.style.padding = '4px 8px';
             createEpicBtn.style.fontSize = '10px';
-            createEpicBtn.textContent = 'Create Epic Worktree';
+            createEpicBtn.textContent = 'Create Feature Worktree';
             if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
                 createEpicBtn.disabled = true;
                 createEpicBtn.title = 'No git repositories detected in control plane';
@@ -10095,7 +10095,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             createEpicBtn.addEventListener('click', () => {
                 const selectedEpicId = epicSelect.value;
                 if (!selectedEpicId) {
-                    postKanbanMessage({ type: 'showWarning', message: 'Please select an epic first.' });
+                    postKanbanMessage({ type: 'showWarning', message: 'Please select a feature first.' });
                     return;
                 }
                 const epic = epicCards.find(e => e.planId === selectedEpicId);
@@ -10118,12 +10118,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // EPICS -> Active Worktrees
             const activeEpicHeader = document.createElement('div');
             activeEpicHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle);';
-            activeEpicHeader.textContent = 'Active Epic Worktrees';
+            activeEpicHeader.textContent = 'Active Feature Worktrees';
             epicsSection.appendChild(activeEpicHeader);
 
             const activeEpicListContainer = document.createElement('div');
             activeEpicListContainer.style.cssText = 'padding: 0 8px 8px;';
-            activeEpicListContainer.appendChild(renderWorktreeList(epicWTs, 'No active epic worktrees.'));
+            activeEpicListContainer.appendChild(renderWorktreeList(epicWTs, 'No active feature worktrees.'));
             epicsSection.appendChild(activeEpicListContainer);
 
             container.appendChild(epicsSection);

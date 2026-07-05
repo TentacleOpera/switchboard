@@ -316,9 +316,9 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /kanban/epic — create an epic from a set of subtask plan IDs via the running
-     * extension (DB upsert + subtask linking + epic-file write + board refresh). Reached
-     * by the kanban_operations create-epic.js script. Epic creation does NOT sync to
+     * POST /kanban/feature — create a feature from a set of subtask plan IDs via the running
+     * extension (DB upsert + subtask linking + feature-file write + board refresh). Reached
+     * by the kanban_operations create-feature.js script. Feature creation does NOT sync to
      * Linear/ClickUp. Body: { name: string, planIds: string[], workspaceRoot?: string, description?: string }.
      */
     private async _handleKanbanCreateEpic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -366,9 +366,9 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /kanban/epic/assign — batch-assign existing plans to an existing epic via the
-     * running extension. Reached by the kanban_operations assign-to-epic.js script. Plans
-     * already on another epic are reported in `skipped`, not treated as a failure.
+     * POST /kanban/feature/assign — batch-assign existing plans to an existing feature via the
+     * running extension. Reached by the kanban_operations assign-to-feature.js script. Plans
+     * already on another feature are reported in `skipped`, not treated as a failure.
      * Body: { epicPlanId: string, planIds: string[], workspaceRoot?: string }.
      */
     private async _handleKanbanAssignEpic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1105,9 +1105,9 @@ export class LocalApiServer {
                 await this._handleUpdateClickUpTask(taskId, req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
                 await this._handleKanbanMove(req, res);
-            } else if (pathname === '/kanban/epic' && req.method === 'POST') {
+            } else if (pathname === '/kanban/feature' && req.method === 'POST') {
                 await this._handleKanbanCreateEpic(req, res);
-            } else if (pathname === '/kanban/epic/assign' && req.method === 'POST') {
+            } else if (pathname === '/kanban/feature/assign' && req.method === 'POST') {
                 await this._handleKanbanAssignEpic(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);

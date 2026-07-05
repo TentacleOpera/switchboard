@@ -1,21 +1,21 @@
 ---
-name: create-epic
-description: Create a Switchboard epic from a remote session by writing the epic file directly — use when the VS Code extension is not running and create-epic.js is unreachable
+name: create-feature
+description: Create a Switchboard feature from a remote session by writing the feature file directly — use when the VS Code extension is not running and create-feature.js is unreachable
 ---
 
-# Create Epic (Remote Session)
+# Create Feature (Remote Session)
 
-Create a Switchboard epic by writing the epic file directly to
+Create a Switchboard feature by writing the feature file directly to
 `.switchboard/epics/`. Use this skill when you are in a **remote session**
 (Claude Code web, claude.ai) and the VS Code extension is not running —
-`create-epic.js` routes through the extension's LocalApiServer and has no
+`create-feature.js` routes through the extension's LocalApiServer and has no
 direct-DB fallback, so it fails when the extension is unreachable.
 
 ## When to Use
 
 - You are in a remote session (no VS Code extension running).
-- The user asks to create a new epic (grouping plans together, or a standalone epic).
-- Do NOT use this skill if the extension IS running — call `create-epic.js` instead
+- The user asks to create a new feature (grouping plans together, or a standalone feature).
+- Do NOT use this skill if the extension IS running — call `create-feature.js` instead
   (it's authoritative: does DB upsert, subtask linking, file write, and board refresh
   atomically).
 
@@ -23,23 +23,23 @@ direct-DB fallback, so it fails when the extension is unreachable.
 
 1. Check for `.switchboard/api-server-port.txt` in the workspace root.
 2. If present and the health endpoint responds
-   (`GET http://127.0.0.1:{port}/health`), the extension is live — use `create-epic.js`.
+   (`GET http://127.0.0.1:{port}/health`), the extension is live — use `create-feature.js`.
 3. If absent or health check fails, proceed with direct file write.
 
-## Epic File Format
+## Feature File Format
 
-Epic files live in `.switchboard/epics/` and follow this structure:
+Feature files live in `.switchboard/epics/` and follow this structure:
 
 ```markdown
 ---
-description: '{Epic Name}'
+description: '{Feature Name}'
 ---
 
-# {Epic Name}
+# {Feature Name}
 
 ## Goal
 
-{Description of what this epic achieves and why it matters.}
+{Description of what this feature achieves and why it matters.}
 
 ## How the Subtasks Achieve This
 
@@ -65,7 +65,7 @@ preserved by _regenerateEpicFile on subsequent subtask changes.}
    extension-generated files.
 3. **No `## Metadata` section** — the extension writes `complexity: 'Unknown'` and `tags: ''`
    directly to the DB (`createEpicFromPlanIds` lines 8741–8742), NOT via a `## Metadata` section
-   in the file. Real epic files do NOT contain a Metadata section. An optional `## Metadata`
+   in the file. Real feature files do NOT contain a Metadata section. An optional `## Metadata`
    section MAY be added (the watcher will parse it if present), but it is not part of the
    extension-generated format.
 
@@ -89,32 +89,32 @@ replaces this when subtasks are linked via `_regenerateEpicFile`.
 
 ## Linking Existing Plans as Subtasks
 
-After writing the epic file, to link existing plans (identified by their `planId` from
+After writing the feature file, to link existing plans (identified by their `planId` from
 `kanban-board.md`):
 
 ```bash
-node .agents/skills/kanban_operations/assign-to-epic.js "{epicPlanId}" '["subtaskPlanId1","subtaskPlanId2"]' "{workspaceRoot}"
+node .agents/skills/kanban_operations/assign-to-feature.js "{epicPlanId}" '["subtaskPlanId1","subtaskPlanId2"]' "{workspaceRoot}"
 ```
 
 This also routes through the extension; in a remote session it will fail and the agent should
 note that subtask linking will need to be done when VS Code is next opened, OR the user can
 drag-and-drop in the kanban UI.
 
-## Sourcing Existing Suggest-Epic Content
+## Sourcing Existing Suggest-Feature Content
 
-The kanban UI's "Suggest Epics" button generates a detailed prompt (see
+The kanban UI's "Suggest Features" button generates a detailed prompt (see
 `_buildSuggestEpicsPrompt` in `KanbanProvider.ts`) that:
 - Scans `kanban-board.md` for ungrouped plans in pre-coding columns
 - Groups them by theme
-- Proposes epic names and goals for user approval
-- Then calls `create-epic.js`
+- Proposes feature names and goals for user approval
+- Then calls `create-feature.js`
 
 If the user has not specified which plans to group, read `kanban-board.md`, propose groupings,
-get approval, then create the epic files.
+get approval, then create the feature files.
 
 ## After Writing
 
 - Commit the new file to git (the epics folder will be tracked once
   `expose-epics-folder-in-gitignore.md` is deployed).
-- Note to the user that the extension will automatically import the epic into the kanban DB on
+- Note to the user that the extension will automatically import the feature into the kanban DB on
   next activation via the GlobalPlanWatcherService.

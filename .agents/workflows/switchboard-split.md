@@ -6,7 +6,7 @@ description: Split one plan into two along complexity lines — a Complex/Risky 
 
 Split a single plan into two files by complexity, so the risky work and the routine work can be dispatched to different agents (Lead Coder vs Coder/Intern). This is the remote, file-based equivalent of the local splitter agent (`SPLIT_PLAN_DIRECTIVE`) — it needs no extension or dispatch engine, just file writes, so it works in a remote/cloud session.
 
-For splitting an **epic** into complexity tiers, use `improve-epic` in high/low mode instead — this skill is for one plan.
+For splitting a **feature** into complexity tiers, use `improve-feature` in high/low mode instead — this skill is for one plan.
 
 ## Input
 

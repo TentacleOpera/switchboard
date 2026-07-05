@@ -206,11 +206,11 @@ When the work described will span 3 or more plan files on a related topic (shari
 common feature area or root cause):
 
 - **Early (during scoping):** Flag it once: *"This looks like it will produce 3+
-  related plans — once they're all drafted, want me to group them under an epic?"*
+  related plans — once they're all drafted, want me to group them under a feature?"*
   Do not create anything yet.
 - **Closing (when all plans are drafted):** Offer again: *"You now have [N] plans
-  covering [topic] — want me to create an epic to group them?"*
+  covering [topic] — want me to create a feature to group them?"*
 
-Only create the epic if the user confirms. In a remote session, epic creation follows
-the `/create-epic` skill (direct file write to `.switchboard/epics/`) or the
-`create-epic.js` script if the extension is reachable.
+Only create the feature if the user confirms. In a remote session, feature creation follows
+the `/create-feature` skill (direct file write to `.switchboard/epics/`) or the
+`create-feature.js` script if the extension is reachable.

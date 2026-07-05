@@ -50,8 +50,8 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | :--- | :--- | :--- |
 | `/switchboard` | **`switchboard-index.md`** | Front door — detects local vs remote and routes the request to the right Switchboard skill. Start here when unsure which skill to use. |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for an epic use `/improve-epic`. |
-| `/improve-epic` | **`improve-epic.md`** | Reconcile & restructure an epic's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. Supports a high/low complexity-tier mode. |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for a feature use `/improve-feature`. |
+| `/improve-feature` | **`improve-feature.md`** | Reconcile & restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. Supports a high/low complexity-tier mode. |
 | `/switchboard-split` | **`switchboard-split.md`** | Split one plan into a Complex/Risky file + a Routine companion so the tiers can be coded separately. Remote-safe (file writes). |
 | `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
@@ -131,9 +131,9 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
 | `switchboard-chat` | Local consultative planning mode. Reached via `/switchboard` in local mode (the `/sw` alias was retired). Reads kanban state so you can reference columns and chain workflows. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
-| `create-epic` | Create a Switchboard epic from a remote session by writing the epic file directly to `.switchboard/epics/` — use when the VS Code extension is not running and `create-epic.js` is unreachable |
+| `create-feature` | Create a Switchboard feature from a remote session by writing the feature file directly to `.switchboard/epics/` — use when the VS Code extension is not running and `create-feature.js` is unreachable |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
-| `improve-epic` | User runs `/improve-epic` on an epic (or improve-plan detects an epic). Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
+| `improve-feature` | User runs `/improve-feature` on a feature (or improve-plan detects a feature). Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
 | `switchboard-split` | User runs `/switchboard-split` on one plan — splits it into a Complex/Risky file + a Routine companion (`<stem>_routine.md`) along its Complexity Audit. Remote-safe file writes; the local splitter's remote equivalent. |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.

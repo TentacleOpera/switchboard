@@ -1,14 +1,14 @@
 ---
-description: Group loose Switchboard plans into epics — scan pre-coding columns, cluster by capability, propose all groupings for one approval, then create epics via create-epic.js
+description: Group loose Switchboard plans into features — scan pre-coding columns, cluster by capability, propose all groupings for one approval, then create features via create-feature.js
 ---
 
-# Skill: Group Into Epics
+# Skill: Group Into Features
 
-You are grouping loose Switchboard plans into epics. Follow this flow exactly — do not create any epic before the user approves.
+You are grouping loose Switchboard plans into features. Follow this flow exactly — do not create any feature before the user approves.
 
 ## When to Use
 
-Triggered when the user asks to "group plans into an epic", "organise loose plans into epics", or "suggest epic groupings", OR by clicking the **Suggest Epics** board button (which copies this skill's text with the workspace root injected).
+Triggered when the user asks to "group plans into a feature", "organise loose plans into features", or "suggest feature groupings", OR by clicking the **Suggest Features** board button (which copies this skill's text with the workspace root injected).
 
 ## Flow
 
@@ -26,19 +26,19 @@ Ignore BACKLOG and all post-coding columns.
 Each plan line ends with an HTML comment, e.g.:
 ```
 - [.switchboard/plans/foo.md](...) — Foo <!-- planId:abc-123 -->
-- [.switchboard/epics/epic-def.md](...) — Bar Epic <!-- planId:def-456 epic -->
-- [.switchboard/plans/baz.md](...) — Baz <!-- planId:ghi-789 subtask-of:"Bar Epic" -->
+- [.switchboard/epics/epic-def.md](...) — Bar Feature <!-- planId:def-456 epic -->
+- [.switchboard/plans/baz.md](...) — Baz <!-- planId:ghi-789 subtask-of:"Bar Feature" -->
 ```
 
-Skip lines tagged `epic` (they are epics) or `subtask-of:...` (already assigned).
-Use the `planId:` value from the comment — NOT the filename — when calling create-epic.js.
-(A path under .switchboard/epics/ also indicates an epic, but subtask detection
+Skip lines tagged `epic` (they are features) or `subtask-of:...` (already assigned).
+Use the `planId:` value from the comment — NOT the filename — when calling create-feature.js.
+(A path under .switchboard/epics/ also indicates a feature, but subtask detection
 requires the subtask-of tag — do not rely on filenames alone.)
 
 ### 1a. DETERMINE PROJECT SCOPE
 
 The active project filter is injected as `{{ACTIVE_PROJECT_FILTER}}` when
-invoked from the **Suggest Epics** board button. This may be:
+invoked from the **Suggest Features** board button. This may be:
 - A specific project name (e.g. `Remote sync`)
 - `__unassigned__` (user is viewing plans with no project)
 - Empty / unset / the literal placeholder token (no filter active, OR the
@@ -68,15 +68,15 @@ title then deep-read within each cluster.
 ### 3. PROPOSE (single message, all groups at once)
 
 Group by underlying capability theme, not by surface keyword.
-Cross-provider plans that address the same capability go into one epic.
-Minimum 2 plans per epic. Single-plan "groups" go in the Standalone section.
+Cross-provider plans that address the same capability go into one feature.
+Minimum 2 plans per feature. Single-plan "groups" go in the Standalone section.
 Flag POSSIBLE OVERLAP / REDUNDANCY / GAP where detected.
-For each proposed epic, write:
-- Epic name
-- Goal: 2-4 sentences describing what the epic achieves, what problem it
+For each proposed feature, write:
+- Feature name
+- Goal: 2-4 sentences describing what the feature achieves, what problem it
   solves, and why these plans are grouped together.
 - How the Subtasks Achieve This: one bullet per member plan explaining what
-  it does and how it contributes to the epic's goal. Format:
+  it does and how it contributes to the feature's goal. Format:
     - **Plan Name**: <what it does and how it contributes>
 - Dependencies & sequencing: note any ordering constraints between subtasks
   (e.g. "Subtask A must land before Subtask B can be tested") and any
@@ -98,30 +98,30 @@ avoid them, so the bash command does not break. Also avoid $, backticks, and
 backslashes in the Goal text — these are shell metacharacters inside double quotes.
 
 ```bash
-node .agents/skills/kanban_operations/create-epic.js "<epic name>" '["planId1","planId2",...]' "{{WORKSPACE_ROOT}}" "<goal text with escaped quotes>"
+node .agents/skills/kanban_operations/create-feature.js "<feature name>" '["planId1","planId2",...]' "{{WORKSPACE_ROOT}}" "<goal text with escaped quotes>"
 ```
 
-The description becomes the ## Goal section in the epic file.
-After all epics are created, write the ## How the Subtasks Achieve This section
-and the ## Dependencies & sequencing section into each epic file manually (the
-create-epic script only writes the Goal).
+The description becomes the ## Goal section in the feature file.
+After all features are created, write the ## How the Subtasks Achieve This section
+and the ## Dependencies & sequencing section into each feature file manually (the
+create-feature script only writes the Goal).
 Use the text from your step 3 proposal — paste the How the Subtasks Achieve This
 section between the Goal and the `<!-- BEGIN SUBTASKS -->` marker, then paste the
 Dependencies & sequencing section immediately after the Subtasks block. Both
 sections are preserved by _regenerateEpicFile on subsequent subtask changes, so
 they only need to be written once.
 
-To add more plans to an epic later, use assign-to-epic.js with the epic planId from the create-epic.js output.
+To add more plans to a feature later, use assign-to-feature.js with the feature planId from the create-feature.js output.
 
 ### 6. BACKLOG (optional, after execution)
 
-Ask the user: "Would you like me to analyse the BACKLOG for epic groupings too?"
+Ask the user: "Would you like me to analyse the BACKLOG for feature groupings too?"
 Do NOT re-read the board or inspect the BACKLOG column yourself.
 If the user says yes, repeat steps 1-5 scoped to the BACKLOG column.
 If the user says no or does not respond, stop.
 
 ## Notes
 
-- Epic creation updates the Switchboard board and writes a `.switchboard/epics/` file. It does NOT sync to Linear/ClickUp.
-- The `create-epic.js` / `assign-to-epic.js` verb scripts are documented in `.agents/skills/kanban_operations/SKILL.md`.
-- The confirm gate is load-bearing: never create any epic before the user approves.
+- Feature creation updates the Switchboard board and writes a `.switchboard/epics/` file. It does NOT sync to Linear/ClickUp.
+- The `create-feature.js` / `assign-to-feature.js` verb scripts are documented in `.agents/skills/kanban_operations/SKILL.md`.
+- The confirm gate is load-bearing: never create any feature before the user approves.

@@ -31,10 +31,10 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 | Plan / consult on what to build | **`switchboard-chat`** (writes plan files you merge on the branch). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
 | Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) |
 | Deepen / adversarially review **one** plan | **`improve-plan`** |
-| Reconcile & restructure an **epic's** subtasks | **`improve-epic`** |
+| Reconcile & restructure a **feature's** subtasks | **`improve-feature`** |
 | Split **one plan** into Complex/Risky + Routine tiers | **`switchboard-split`** |
-| Tier a whole **epic** by complexity (high/low) | **`improve-epic`** high/low mode |
-| Create a new epic | **`create-epic`** |
+| Tier a whole **feature** by complexity (high/low) | **`improve-feature`** high/low mode |
+| Create a new feature | **`create-feature`** |
 | Improve a plan stored in **Linear** | **`improve-remote-plan`** |
 | Reply to a Notion/Linear **remote-control** card | **`notion-api`** / **`linear-api`** |
 | Move a kanban card | **`kanban-operations`** locally; remotely via the git control-plane `**Column:**` line, a `manifest.json` change, or Notion/Linear MCP |
@@ -47,7 +47,7 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 ## How to respond
 
 - **You do the routing.** Match the request, then invoke the skill (its slash command, or read `.claude/skills/<name>/SKILL.md`) — don't reimplement it. Name the skill in a line at most; keep the focus on doing the work, not describing the machinery.
-- **Chain when natural**, e.g. planning → `create-epic` → `improve-epic`.
+- **Chain when natural**, e.g. planning → `create-feature` → `improve-feature`.
 - **Surface a gap only when a request actually hits one.** A few skills need the running extension (`clickup-*`, `improve-remote-plan`, live `kanban.db`/DuckDB reads). In a remote session, don't preemptively warn about them — only if the user asks for one, say the direct route needs the extension and offer the remote equivalent (plan work → plain plan-file edits; board moves → `manifest.json` or MCP).
 - **Only ask a question if genuinely ambiguous**, and then just one; otherwise pick the best fit and proceed.
 - **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them.

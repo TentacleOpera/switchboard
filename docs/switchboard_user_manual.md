@@ -13,7 +13,7 @@
 5. [Planning Tools & Workflows](#5-planning-tools--workflows)
 6. [Pair Programming Mode](#6-pair-programming-mode)
 7. [Multi-Repo Control Plane](#7-multi-repo-control-plane)
-8. [Projects, Epics & Governance](#8-projects-epics--governance)
+8. [Projects, Features & Governance](#8-projects-features--governance)
 9. [Design Panel (Google Stitch + Claude)](#9-design-panel-google-stitch--claude)
 10. [Research / Local Docs Panel](#10-research--local-docs-panel)
 11. [PM Tool Sync](#11-pm-tool-sync)
@@ -95,7 +95,7 @@ Switchboard ships with the following built-in agent roles (defined in `agentConf
 | `researcher` | Researcher | Research tasks. |
 | `splitter` | Splitter Agent | Splits large plans into sub-plans. |
 | `gatherer` | Context Gatherer | Gathers code context before planning. |
-| `orchestrator` | Orchestrator | Runs an entire Epic end-to-end with native subagents. Off by default — enable in the Kanban Agents tab to dispatch epics directly (otherwise **Orchestrate** copies the prompt). Defaults to a subagent-per-subtask policy and can optionally use a git worktree per plan. See §8 (Epics). |
+| `orchestrator` | Orchestrator | Runs an entire Feature end-to-end with native subagents. Off by default — enable in the Kanban Agents tab to dispatch features directly (otherwise **Orchestrate** copies the prompt). Defaults to a subagent-per-subtask policy and can optionally use a git worktree per plan. See §8 (Features). |
 | `claude_designer` | Claude Designer | Imports a design from claude.ai/design into a target folder using the repo's existing components and styles. Off by default. See §9 (Design Panel → CLAUDE tab). |
 | `mcp_monitor` | MCP Monitor | Monitor-only role. On an interval it pings a dedicated Claude terminal to check your connected MCP sources (Slack, Gmail, Google Calendar, custom) and report anything needing attention. Off by default; it is read-only and cannot receive execute dispatches. See §4 (MCP Monitor). |
 
@@ -275,9 +275,9 @@ Run a single board that orchestrates agents across multiple repositories with a 
 
 ---
 
-## 8. Projects, Epics & Governance
+## 8. Projects, Features & Governance
 
-This section covers **Projects**, **Epics**, the **Constitution**, and the **System** doc. Most of this is managed in the **Project Panel** (`switchboard.openProjectPanel`) — the PROJECTS, EPICS, CONSTITUTION, and SYSTEM tabs. The exceptions are board-level project actions — creating a project, assigning plans to it, and the **PROJECT CONTEXT** toggle — which live on the **Kanban board** (`switchboard.openKanban`) control strip because they act on the board.
+This section covers **Projects**, **Features**, the **Constitution**, and the **System** doc. Most of this is managed in the **Project Panel** (`switchboard.openProjectPanel`) — the PROJECTS, FEATURES, CONSTITUTION, and SYSTEM tabs. The exceptions are board-level project actions — creating a project, assigning plans to it, and the **PROJECT CONTEXT** toggle — which live on the **Kanban board** (`switchboard.openKanban`) control strip because they act on the board.
 
 ### Projects
 A **Project** is a workspace-scoped grouping of plans *and* the carrier of project-wide context (a PRD / spec). Use projects to slice one repo's board into areas (e.g. `frontend`, `backend`, `infra`) and to give every agent working in that area the same requirements.
@@ -288,7 +288,7 @@ A **Project** is a workspace-scoped grouping of plans *and* the carrier of proje
 
 **Filter / delete** — The Workspace/Project Selector filters the board to a single project (or "No Project"). The **Delete Project** icon button removes the selected project.
 
-**Per-project PRD (Product Requirements Document)** — Each project can have a PRD: a loose set of requirements respected across every plan in that project, independent of epics. Author it on the **Project Panel's PROJECTS tab** — pick the project, write the requirements, and click **SAVE PRD**. It is stored at `.switchboard/projects/<project>/prd.md` (git-trackable; a path hint shows the exact file).
+**Per-project PRD (Product Requirements Document)** — Each project can have a PRD: a loose set of requirements respected across every plan in that project, independent of features. Author it on the **Project Panel's PROJECTS tab** — pick the project, write the requirements, and click **SAVE PRD**. It is stored at `.switchboard/projects/<project>/prd.md` (git-trackable; a path hint shows the exact file).
 
 **PROJECT CONTEXT toggle** — The **PROJECT CONTEXT** button on the Kanban control strip is off by default. When you turn it on, the active project's PRD is injected into **every dispatched prompt** — planner, lead, coder, reviewer, tester, and orchestrator — under the verbatim header:
 
@@ -298,30 +298,30 @@ PROJECT REQUIREMENTS (PRD):
 
 For most roles the full PRD content is inlined; for the **Orchestrator** a link to the PRD file is passed instead (so the prompt stays slim and subagents read the file directly). This is the modern, per-project replacement for the older workspace-wide planner Design Doc setting (see *Append Design Doc / Legacy* below).
 
-**Projects vs. Epics** — A Project is a *persistent* organizational scope plus a shared spec; it has no run lifecycle. An **Epic** is an *executable* grouping of plans (its subtasks) with three run modes — see below. A plan can belong to a project and an epic at the same time.
+**Projects vs. Features** — A Project is a *persistent* organizational scope plus a shared spec; it has no run lifecycle. A **Feature** is an *executable* grouping of plans (its subtasks) with three run modes — see below. A plan can belong to a project and a feature at the same time.
 
 Project state is stored in the Kanban database: the `projects` table (`id`, `name`, `workspace_id`, `created_at`) and the `project` / `project_id` columns on `plans` (see §26).
 
-### Epics
-An **Epic** groups several related plans (its *subtasks*) so they can be planned and shipped as one coordinated unit. Epics are managed in the **EPICS** tab of the Project Panel and stored as files in `.switchboard/epics/`.
+### Features
+A **Feature** groups several related plans (its *subtasks*) so they can be planned and shipped as one coordinated unit. Features are managed in the **FEATURES** tab of the Project Panel and stored as files in `.switchboard/epics/`.
 
-**Creating and managing epics**
-- **+ New Epic** — Opens a dialog: *Epic Name* (required), *Description* (optional, markdown), and an *Add to Kanban board* checkbox (show the epic as a card immediately). Click **Create**.
-- **PROMOTE TO EPIC** (Kanban board) — Select a plan on the board and promote it; its file moves from `.switchboard/plans/` to `.switchboard/epics/` and it becomes an epic.
-- **+ Subtask** — Attach an existing plan to the selected epic. Subtasks are hidden from the main Kanban board (to avoid duplication) and reappear there if detached.
-- **Orchestrate** — Assemble the epic + all subtasks into an orchestrator prompt (preview modal with **Copy Prompt** / **Send to Orchestrator**).
-- **Delete Epic** — Deletes the epic only; its subtasks are **detached** (returned to the board), never destroyed.
+**Creating and managing features**
+- **+ New Feature** — Opens a dialog: *Feature Name* (required), *Description* (optional, markdown), and an *Add to Kanban board* checkbox (show the feature as a card immediately). Click **Create**.
+- **PROMOTE TO FEATURE** (Kanban board) — Select a plan on the board and promote it; its file moves from `.switchboard/plans/` to `.switchboard/epics/` and it becomes a feature.
+- **+ Subtask** — Attach an existing plan to the selected feature. Subtasks are hidden from the main Kanban board (to avoid duplication) and reappear there if detached.
+- **Orchestrate** — Assemble the feature + all subtasks into an orchestrator prompt (preview modal with **Copy Prompt** / **Send to Orchestrator**).
+- **Delete Feature** — Deletes the feature only; its subtasks are **detached** (returned to the board), never destroyed.
 
-**Epic cards on the board** — Epic cards have a 4px purple left border, a faint purple tint, and an `EPIC · N subtasks` badge. Selecting one shows a purple glow (overriding the theme's normal selection color). Subtasks travel with the epic: dragging an epic to a new column cascades the move to every subtask.
+**Feature cards on the board** — Feature cards have a 4px purple left border, a faint purple tint, and a `FEATURE · N subtasks` badge. Selecting one shows a purple glow (overriding the theme's normal selection color). Subtasks travel with the feature: dragging a feature to a new column cascades the move to every subtask.
 
-**Three ways to run an epic** (the **?** button in the Epics tab shows this cheat-sheet):
-1. **Step** — Drag the epic column-to-column on the board; each column's agent batch-processes every subtask before the epic advances.
-2. **Orchestrate** — Click **Orchestrate**; one Orchestrator agent runs the whole epic end-to-end with native subagents. Enable the **Orchestrator** role in the Kanban Agents tab to dispatch directly — otherwise the button copies the assembled prompt to paste manually.
-3. **Split (recommended)** — Drag the epic to the **Planner** column to improve every subtask plan, *then* click **Orchestrate** to hand the improved epic to the Orchestrator to implement.
+**Three ways to run a feature** (the **?** button in the Features tab shows this cheat-sheet):
+1. **Step** — Drag the feature column-to-column on the board; each column's agent batch-processes every subtask before the feature advances.
+2. **Orchestrate** — Click **Orchestrate**; one Orchestrator agent runs the whole feature end-to-end with native subagents. Enable the **Orchestrator** role in the Kanban Agents tab to dispatch directly — otherwise the button copies the assembled prompt to paste manually.
+3. **Split (recommended)** — Drag the feature to the **Planner** column to improve every subtask plan, *then* click **Orchestrate** to hand the improved feature to the Orchestrator to implement.
 
-**Worktree dispatch routing** — An epic can be bound to a dedicated git worktree and branch so its agents work in isolation from your main checkout. Manage worktrees from the Kanban **WORKTREES** panel. Dispatched agents automatically `cd` into the worktree path and `git switch` to its branch before running; a worktree can later be marked `merged` (Switchboard removes it from disk) or `abandoned`. This makes it practical to run several epics in parallel without branch churn.
+**Worktree dispatch routing** — A feature can be bound to a dedicated git worktree and branch so its agents work in isolation from your main checkout. Manage worktrees from the Kanban **WORKTREES** panel. Dispatched agents automatically `cd` into the worktree path and `git switch` to its branch before running; a worktree can later be marked `merged` (Switchboard removes it from disk) or `abandoned`. This makes it practical to run several features in parallel without branch churn.
 
-Epic state is stored in the Kanban database (`plans.is_epic`, `plans.epic_id`, `plans.worktree_id`, `plans.worktree_status`, and the `worktrees` table — see §26).
+Feature state is stored in the Kanban database (`plans.is_epic`, `plans.epic_id`, `plans.worktree_id`, `plans.worktree_status`, and the `worktrees` table — see §26).
 
 ### Constitution (Spec-Driven Governance)
 Set inviolate rules and invariants in the Project panel. Switchboard automatically injects them into Planner and Coder prompts using the verbatim header:
@@ -403,7 +403,7 @@ Manage local research, design system files, and Antigravity Brain artifacts.
 **Capabilities beyond import.** ClickUp is a **push-only mirror** — Switchboard pushes state and content *out* to ClickUp but does not poll ClickUp changes back (for two-way remote control, use Linear or Notion). What's supported:
 - **Content push** — local plan edits update the linked ClickUp task description.
 - **Move task between lists** — including status auto-mapping when the source status has no name-match in the target list, and reporting when a task lives in multiple/sprint lists.
-- **Epic round-trip** — importing a ClickUp parent-with-subtasks creates a Switchboard epic + subtasks, and local epics push out as native parent/child ClickUp tasks.
+- **Feature round-trip** — importing a ClickUp parent-with-subtasks creates a Switchboard feature + subtasks, and local features push out as native parent/child ClickUp tasks.
 - **Agent-driven surface** (via skills / LocalApiServer): create/modify tasks, comments, file attachments, and docs/doc-pages.
 
 ### Linear
@@ -419,7 +419,7 @@ Manage local research, design system files, and Antigravity Brain artifacts.
 - **Bidirectional description sync** — editing an issue's description in Linear now flows back into the local plan file automatically (with hash-based loop prevention), not only on the both-sides-changed conflict path.
 - **Status/column sync both directions** via Remote Control polling (see §30).
 - **Move an issue to a different Linear project.**
-- **Epic round-trip** — import a parent-with-subtasks as an epic; push a local epic out as parent/child issues.
+- **Feature round-trip** — import a parent-with-subtasks as a feature; push a local feature out as parent/child issues.
 - **Comments + attachments** on top-level issues are captured into the plan body on import.
 - **Archive / unarchive** via the idempotent `issueArchive` / `issueUnarchive` mutations — used by the Auto-Archive Rule (§14) to keep you under Linear's free-tier active-issue cap.
 
@@ -928,10 +928,10 @@ Stores one row per plan/card on the Kanban board.
 | `dispatched_ide` | TEXT | `''` | IDE name (e.g. `Visual Studio Code`, `Cursor`, `Windsurf`) |
 | `clickup_task_id` | TEXT | `''` | ClickUp task ID for PM sync |
 | `linear_issue_id` | TEXT | `''` | Linear issue ID for PM sync |
-| `worktree_id` | INTEGER | `NULL` | FK to `worktrees.id` for epic-based worktree dispatch |
+| `worktree_id` | INTEGER | `NULL` | FK to `worktrees.id` for feature-based worktree dispatch |
 | `worktree_status` | TEXT | `'none'` | Worktree state: `none`, `active`, `merged`, `deleted` |
-| `is_epic` | INTEGER | `0` | `1` if this plan is an epic, `0` otherwise |
-| `epic_id` | TEXT | `''` | `plan_id` of the parent epic (empty if standalone) |
+| `is_epic` | INTEGER | `0` | `1` if this plan is a feature, `0` otherwise |
+| `epic_id` | TEXT | `''` | `plan_id` of the parent feature (empty if standalone) |
 | `workspace_name` | TEXT | `''` | Human-readable workspace name (backfilled from config) |
 | `project_id` | INTEGER | `NULL` | FK to `projects.id` for project-level grouping |
 
@@ -970,14 +970,14 @@ Workspace-scoped project registry for grouping plans.
 
 #### `worktrees`
 
-Git worktree registry for epic-based dispatch routing.
+Git worktree registry for feature-based dispatch routing.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | INTEGER (PK, AUTOINCREMENT) | Worktree ID |
 | `branch` | TEXT (UNIQUE) | Git branch name |
 | `path` | TEXT | Filesystem path to worktree |
-| `epic_id` | TEXT | `plan_id` of associated epic (nullable) |
+| `epic_id` | TEXT | `plan_id` of associated feature (nullable) |
 | `created_at` | TEXT | Creation timestamp |
 | `status` | TEXT | `active` or other lifecycle state |
 | `project` | TEXT | Project name (added V34) |
@@ -1151,7 +1151,7 @@ The database uses a versioned migration system tracked in `migration_meta`. The 
 | V26 | Added `worktree_id` column to `plans` |
 | V27 | Added `worktree_status` column to `plans` |
 | V28 | Normalized `__unassigned__` sentinel values to empty string in `plans.project` |
-| V29 | Added `is_epic` and `epic_id` columns for epic support |
+| V29 | Added `is_epic` and `epic_id` columns for feature support |
 | V30 | Recreated `worktrees` table with `epic_id` FK; migrated legacy meta keys |
 | V31 | Fixed `worktrees.epic_id` type from INTEGER to TEXT |
 | V32 | Promoted Stitch manifest blob to `stitch_projects` and `stitch_screens` tables |
@@ -1229,7 +1229,7 @@ The central orchestration panel, hosted by `KanbanProvider`. Eight tabs: KANBAN,
 **KANBAN Tab**
 The board itself with drag-and-drop columns. Controls strip:
 - **Workspace/Project Selector** — Filter the board by workspace and project. **ASSIGN** button assigns the selected plan(s) to the chosen workspace/project.
-- **PROMOTE TO EPIC** — Convert selected plans to an epic or manage an existing epic.
+- **PROMOTE TO FEATURE** — Convert selected plans to a feature or manage an existing feature.
 - **+ (Add Project)** — Create a new project (prompts for a project name).
 - **Delete Project** — Remove the selected project (icon button).
 - **PROJECT CONTEXT** — Toggle (off by default). When on, the active project's PRD (authored on the Project Panel's PROJECTS tab) is injected into every dispatched prompt across all roles.
@@ -1255,7 +1255,7 @@ Per-role prompt customization:
 - **Role Selector** — Dropdown to select agent role (includes custom agents).
 - **Planner Config** (shown for Planner role):
   - **Workflow File** — Enable/disable, set workflow file path (e.g., `.agents/workflows/improve-plan.md`), validate path.
-  - **Add-ons** — Switchboard Safeguards, Planning Epic Reference, Project Constitution Reference, Project PRD Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests.
+  - **Add-ons** — Switchboard Safeguards, Planning Feature Reference, Project Constitution Reference, Project PRD Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests.
   - **Subagent Policy** — Not Specified / No Subagents / Use Subagents / Custom Subagent (with name input).
 - **Research Complexity** (shown for Researcher/Code Researcher): Quick / Standard / Deep / Academic. Save to Local Docs toggle.
 - **Non-Planner Add-ons** — Role-specific add-ons (inline challenge, accurate coding, pair programming, etc.).
@@ -1268,7 +1268,7 @@ Automation panel for configuring AUTOBAN rules and timing per column. Includes b
 Configure Remote Control — provider (Linear / Notion / ClickUp), boards to sync, remote mode (Ingest / Full), comment-polling and push toggles, silent syncing, and ping frequency. Includes a Sync Health panel. See §30. (This config tab lives in the Project panel; the start/stop toggle is on the Kanban toolbar.)
 
 **WORKTREES Tab**
-Manage git worktrees for epic-based dispatch routing. Create, list, and delete worktrees associated with epics.
+Manage git worktrees for feature-based dispatch routing. Create, list, and delete worktrees associated with features.
 
 **UAT Tab**
 User Acceptance Testing checklist. **REFRESH** button reloads the UAT checklist from the database. Shows test items with pass/fail status tracking.
@@ -1300,12 +1300,12 @@ Authors the per-project **Product Requirements (PRD)** that the Kanban board's P
 - **SAVE PRD** — Write the editor content to `.switchboard/projects/<project>/prd.md` (git-trackable). A path hint shows the exact file path.
 - **Editor** — Markdown textarea for the project's product requirements. See §8 (Projects).
 
-**EPICS Tab**
-- **Workspace filter**, **+ New Epic**, **?** (How to Run an Epic — 3 ways).
-- Epic list pane (sidebar) with a preview/edit pane.
-- Per-epic actions: **Orchestrate** (assemble + dispatch the epic orchestration prompt), **+ Subtask** (attach an existing plan), **Delete Epic** (detaches subtasks).
-- **New Epic modal** — Name, description, *Add to Kanban board* checkbox.
-- See §8 (Epics) for the full workflow.
+**FEATURES Tab**
+- **Workspace filter**, **+ New Feature**, **?** (How to Run a Feature — 3 ways).
+- Feature list pane (sidebar) with a preview/edit pane.
+- Per-feature actions: **Orchestrate** (assemble + dispatch the feature orchestration prompt), **+ Subtask** (attach an existing plan), **Delete Feature** (detaches subtasks).
+- **New Feature modal** — Name, description, *Add to Kanban board* checkbox.
+- See §8 (Features) for the full workflow.
 
 **CONSTITUTION Tab**
 - **Constitution Reference** indicator with **Turn off** button.

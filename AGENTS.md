@@ -19,8 +19,8 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | :--- | :--- | :--- |
 | `/switchboard` | **`switchboard-index.md`** | Front door — detects local vs remote and routes the request to the right Switchboard skill. Start here when unsure which skill to use. |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for an epic use `/improve-epic`. |
-| `/improve-epic` | **`improve-epic.md`** | Reconcile & restructure an epic's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. Supports a high/low complexity-tier mode. |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for a feature use `/improve-feature`. |
+| `/improve-feature` | **`improve-feature.md`** | Reconcile & restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. Supports a high/low complexity-tier mode. |
 | `/switchboard-split` | **`switchboard-split.md`** | Split one plan into a Complex/Risky file + a Routine companion so the tiers can be coded separately. Remote-safe (file writes). |
 | `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
@@ -99,12 +99,12 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
 | `switchboard` | User types `/switchboard` or doesn't know which skill they need — front door that detects local vs remote and routes the request to the right skill. |
 | `switchboard-chat` | Local consultative planning mode. Reached via `/switchboard` in local mode (the `/sw` alias was retired). Reads kanban state so you can reference columns and chain workflows. |
-| `improve-epic` | User runs `/improve-epic` on an epic. Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
+| `improve-feature` | User runs `/improve-feature` on a feature. Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
 | `switchboard-split` | User runs `/switchboard-split` on one plan — splits it into a Complex/Risky file + a Routine companion. Remote-safe file writes; the local splitter's remote equivalent. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
-| `refine_epic` | User clicks "Refine" on a selected epic in the Epics tab to copy a prompt that fleshes out the epic description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_epic"`) |
-| `group-into-epics` | User asks to "group plans into an epic", "organise loose plans into epics", or "suggest epic groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates epics via create-epic.js (model-invocable; also sourced by the Suggest Epics board button) |
-| `create-epic` | Create a Switchboard epic from a remote session by writing the epic file directly to `.switchboard/epics/` — use when the VS Code extension is not running and `create-epic.js` is unreachable |
+| `refine_feature` | User clicks "Refine" on a selected feature in the Features tab to copy a prompt that fleshes out the feature description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_feature"`) |
+| `group-into-features` | User asks to "group plans into a feature", "organise loose plans into features", or "suggest feature groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates features via create-feature.js (model-invocable; also sourced by the Suggest Features board button) |
+| `create-feature` | Create a Switchboard feature from a remote session by writing the feature file directly to `.switchboard/epics/` — use when the VS Code extension is not running and `create-feature.js` is unreachable |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.

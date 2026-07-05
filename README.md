@@ -18,7 +18,7 @@ There is nothing to install beyond the extension itself. If you already have you
 - **Spec-driven governance** — Inject project-wide rules (Constitution) automatically into every agent step.
 - **Multi-repo Control Plane** — Run a single board that orchestrates agents across multiple repositories with a shared local database.
 - **Design-in-the-loop** — Generate UIs with Google Stitch *or* import designs from Claude (claude.ai/design) directly inside the IDE to feed requirements straight into plans and code.
-- **Epics & worktrees** — Group related plans into Epics and run them three ways (step the board, hand to a single Orchestrator agent, or split planning from implementation), with optional git-worktree isolation per epic.
+- **Features & worktrees** — Group related plans into Features and run them three ways (step the board, hand to a single Orchestrator agent, or split planning from implementation), with optional git-worktree isolation per feature.
 - **PM tool sync** — Map plan states to ClickUp, Linear, and Notion in real time or on completion.
 
 ---
@@ -77,7 +77,7 @@ Configure roles:
 - **Acceptance Tester** — Validates finished work.
 - **Analyst** — General research.
 - **Ticket Updater** — Reads imported tickets and posts short triage verdicts (severity, area, recommended action) back to ClickUp/Linear as comments.
-- **Orchestrator** — Runs an entire Epic end-to-end with native subagents (off by default; enable in the Kanban Agents tab).
+- **Orchestrator** — Runs an entire Feature end-to-end with native subagents (off by default; enable in the Kanban Agents tab).
 - **Claude Designer** — Imports a design from claude.ai/design into the target folder using the repo's existing components and styles (off by default).
 - **MCP Monitor** — Read-only monitor role; on an interval it pings a dedicated Claude terminal to check connected MCP sources (Slack, Gmail, Google Calendar, custom) and report what needs attention (off by default).
 
@@ -149,24 +149,24 @@ Also in the Automation panel: turn on the **MCP Monitor** to have Switchboard pe
 
 ## Project Management & Sync
 
-Organize plans into **Projects** (areas within a repo that also carry shared requirements) and **Epics** (groups of related plans with coordinated execution).
+Organize plans into **Projects** (areas within a repo that also carry shared requirements) and **Features** (groups of related plans with coordinated execution).
 
 ### Projects
 A **Project** slices a repo's board into areas (e.g. `frontend`, `backend`, `infra`) and carries a shared spec for that area. Create one on the Kanban board control strip with **+ (Add Project)**, assign plans with **ASSIGN**, and filter the board with the Workspace/Project selector.
 
 Each project can hold a **PRD** (Product Requirements Document) authored on the Project Panel's **PROJECTS** tab and stored at `.switchboard/projects/<project>/prd.md` (git-trackable). Toggle **PROJECT CONTEXT** on the Kanban control strip to inject the active project's PRD — under the header `PROJECT REQUIREMENTS (PRD):` — into *every* dispatched prompt (planner, lead, coder, reviewer, tester, orchestrator). This is the per-project, all-roles successor to the old workspace-wide planner Design Doc setting.
 
-### Epics
-An Epic groups several plans (its subtasks) so they can be planned and shipped together. Manage epics in the **Project Panel → EPICS** tab: **+ New Epic** to create one (with an optional "Add to Kanban board"), **+ Subtask** to attach existing plans, **Orchestrate** to hand the whole epic to an Orchestrator agent, and **Delete Epic** (subtasks are detached, never destroyed). You can also select a plan on the board and click **PROMOTE TO EPIC**.
+### Features
+A Feature groups several plans (its subtasks) so they can be planned and shipped together. Manage features in the **Project Panel → FEATURES** tab: **+ New Feature** to create one (with an optional "Add to Kanban board"), **+ Subtask** to attach existing plans, **Orchestrate** to hand the whole feature to an Orchestrator agent, and **Delete Feature** (subtasks are detached, never destroyed). You can also select a plan on the board and click **PROMOTE TO FEATURE**.
 
-On the Kanban board, epic cards show a purple left border and an `EPIC · N subtasks` badge; their subtasks are hidden from the main board to avoid duplication and travel with the epic when you drag it (cascade move).
+On the Kanban board, feature cards show a purple left border and a `FEATURE · N subtasks` badge; their subtasks are hidden from the main board to avoid duplication and travel with the feature when you drag it (cascade move).
 
-**Three ways to run an epic** (see the `?` help in the Epics tab):
-- **Step** — Drag the epic column-to-column on the board; each column's agent batch-processes every subtask.
-- **Orchestrate** — Click **Orchestrate**; one Orchestrator agent runs the whole epic end-to-end with native subagents.
-- **Split (recommended)** — Drag the epic to the **Planner** column to improve every subtask plan, *then* **Orchestrate** to hand the improved epic to the Orchestrator to implement.
+**Three ways to run a feature** (see the `?` help in the Features tab):
+- **Step** — Drag the feature column-to-column on the board; each column's agent batch-processes every subtask.
+- **Orchestrate** — Click **Orchestrate**; one Orchestrator agent runs the whole feature end-to-end with native subagents.
+- **Split (recommended)** — Drag the feature to the **Planner** column to improve every subtask plan, *then* **Orchestrate** to hand the improved feature to the Orchestrator to implement.
 
-**Worktree isolation** — An epic can be bound to a dedicated git worktree/branch so its agents work in isolation. Manage worktrees from the Kanban WORKTREES panel; dispatched agents `cd` into the worktree and switch to its branch automatically, and the worktree can later be merged or abandoned.
+**Worktree isolation** — A feature can be bound to a dedicated git worktree/branch so its agents work in isolation. Manage worktrees from the Kanban WORKTREES panel; dispatched agents `cd` into the worktree and switch to its branch automatically, and the worktree can later be merged or abandoned.
 
 ### ClickUp & Linear Sync
 Configure tokens in Setup.
@@ -178,8 +178,8 @@ Commands:
 Settings: `switchboard.kanban.completedLimit`, `switchboard.kanban.dbPath`
 
 Beyond token + import, both integrations now do more:
-- **ClickUp** (push-only mirror — pushes out, doesn't poll back): outbound content push, move a task between lists (with status auto-mapping), epic round-trip (import parent+subtasks as an epic; push local epics out as native parent/child tasks), plus agent-driven task/comment/attachment/doc creation.
-- **Linear** (full two-way): bidirectional description sync (Linear edits flow back into the plan file), status/column sync via Remote Control, move an issue between projects, epic round-trip, comments + attachments captured on import, and archive/unarchive used by the Auto-Archive rule.
+- **ClickUp** (push-only mirror — pushes out, doesn't poll back): outbound content push, move a task between lists (with status auto-mapping), feature round-trip (import parent+subtasks as a feature; push local features out as native parent/child tasks), plus agent-driven task/comment/attachment/doc creation.
+- **Linear** (full two-way): bidirectional description sync (Linear edits flow back into the plan file), status/column sync via Remote Control, move an issue between projects, feature round-trip, comments + attachments captured on import, and archive/unarchive used by the Auto-Archive rule.
 
 ### Notion Design Doc Integration
 Fetch, cache, and append design documents to prompts.
@@ -283,7 +283,7 @@ Settings:
 - **Kanban** (`switchboard.openKanban`) — Visual board plus tabs for Agents, Prompts, Automation, Remote, Worktrees, UAT, and Setup. Projects are created here (board toolbar) and the PROJECT CONTEXT toggle lives here.
 - **Setup** (`switchboard.openSetupPanel`) — Central configuration.
 - **Planning** (`switchboard.openPlanningPanel`) — Authoring interface.
-- **Project Panel** (`switchboard.openProjectPanel`) — Projects (per-project PRDs), Epics, Constitution, System docs, Tuning insights, the **Architect** tab (guided governance setup), and the **Remote** tab (Remote Control config).
+- **Project Panel** (`switchboard.openProjectPanel`) — Projects (per-project PRDs), Features, Constitution, System docs, Tuning insights, the **Architect** tab (guided governance setup), and the **Remote** tab (Remote Control config).
   ![Project panel — Constitution](docs/TODO_project_panel.png)
 - **Design Panel** (`switchboard.openDesignPanel`) — Six tabs: STITCH (Google Stitch), CLAUDE (claude.ai/design import), BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM.
   ![Design panel — Stitch](docs/TODO_design_panel.png)

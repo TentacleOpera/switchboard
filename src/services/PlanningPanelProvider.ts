@@ -3571,12 +3571,12 @@ Start by checking which documents exist, then present the menu.`;
                     const kp = this._kanbanProvider;
                     const db = (kp as any)._getKanbanDb(wsRoot);
                     if (!db || !(await db.ensureReady())) {
-                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
+                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this feature.' });
                         break;
                     }
                     const epic = await db.getPlanByPlanId(sessionId);
                     if (!epic || !epic.isEpic) {
-                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this epic.' });
+                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this feature.' });
                         break;
                     }
 
@@ -3765,17 +3765,17 @@ Start by checking which documents exist, then present the menu.`;
                     const lockColumnsRaw = await db.getConfig('epic_lock_columns');
                     const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
                     if (lockColumns.includes(epic.kanbanColumn)) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot modify subtasks of an epic in a locked column.' });
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot modify subtasks of a feature in a locked column.' });
                         break;
                     }
                     const subtask = await db.getPlanByPlanId(subtaskSessionId);
                     if (!subtask) break;
                     if (subtask.isEpic) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot add an epic as a subtask.' });
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot add a feature as a subtask.' });
                         break;
                     }
                     if (subtask.epicId && subtask.epicId !== epic.planId) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Subtask already belongs to another epic.' });
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Subtask already belongs to another feature.' });
                         break;
                     }
                     await db.updateEpicStatus(subtask.planId, 0, epic.planId);
@@ -3839,7 +3839,7 @@ Start by checking which documents exist, then present the menu.`;
                     }
                     const name = String(msg.name || '').trim();
                     if (!name) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Epic name is required.' });
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Feature name is required.' });
                         break;
                     }
                     const description = msg.description ? String(msg.description).trim() : undefined;
@@ -3863,7 +3863,7 @@ Start by checking which documents exist, then present the menu.`;
                         description
                     );
                     if (!result.success) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: result.error || 'Failed to create epic.' });
+                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: result.error || 'Failed to create feature.' });
                         break;
                     }
 
@@ -4132,7 +4132,7 @@ Start by checking which documents exist, then present the menu.`;
                 const projectName = msg.projectName;
                 const promptText =
                     `Please act as a product manager. I want to build a Product Requirements Document (PRD) for the project "${projectName}" in the workspace at ${wsRoot}.\n` +
-                    `A PRD is a loose set of product requirements respected across all plans in this project — independent of epics. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
+                    `A PRD is a loose set of product requirements respected across all plans in this project — independent of features. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
                     `Please ask me the following questions one by one or help me draft it:\n` +
                     `1. Vision: In one sentence, what is this project's primary purpose?\n` +
                     `2. Target Users: Who are the primary users, and what is their main pain point?\n` +
@@ -4166,7 +4166,7 @@ Start by checking which documents exist, then present the menu.`;
                 const projectName = msg.projectName;
                 const promptText =
                     `Please act as a product manager. I want to build a Product Requirements Document (PRD) for the project "${projectName}" in the workspace at ${wsRoot}.\n` +
-                    `A PRD is a loose set of product requirements respected across all plans in this project — independent of epics. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
+                    `A PRD is a loose set of product requirements respected across all plans in this project — independent of features. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
                     `Please ask me the following questions one by one or help me draft it:\n` +
                     `1. Vision: In one sentence, what is this project's primary purpose?\n` +
                     `2. Target Users: Who are the primary users, and what is their main pain point?\n` +
@@ -6220,7 +6220,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     const { planId, planFile, title, subtaskCount } = msg;
                     if (!workspaceRoot || !planFile) {
-                        vscode.window.showErrorMessage('Missing workspace or epic file for refine prompt');
+                        vscode.window.showErrorMessage('Missing workspace or feature file for refine prompt');
                         break;
                     }
 
@@ -6228,12 +6228,12 @@ Read the existing ticket content from the local file if it exists. Determine wha
                     const nfs = require('fs') as typeof import('fs');
                     let skillContent = '';
                     try {
-                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'skills', 'refine_epic.md'), 'utf8');
+                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'skills', 'refine_feature.md'), 'utf8');
                     } catch {
                         try {
-                            skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'refine_epic.md'), 'utf8');
+                            skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'refine_feature.md'), 'utf8');
                         } catch {
-                            skillContent = `Refine this epic into a complete specification with:
+                            skillContent = `Refine this feature into a complete specification with:
 - A clear ## Goal (outcome + problem it solves)
 - ## Success Criteria (checkboxed, testable)
 - ## Scope (in/out)
@@ -6248,25 +6248,25 @@ Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. 
                     let existingContent = '';
                     try { existingContent = nfs.readFileSync(epicFilePath, 'utf8'); } catch { /* file may not exist yet */ }
 
-                    const prompt = `You are refining a Switchboard epic into a complete, decomposable specification.
+                    const prompt = `You are refining a Switchboard feature into a complete, decomposable specification.
 
 ## Skill Instructions
 ${skillContent}
 
-## Epic to Refine
+## Feature to Refine
 - **Title:** ${title || ''}
 - **Existing subtask cards:** ${subtaskCount || 0}
 - **Local file path (write the refined content here):** ${epicFilePath}
 
-## Current epic file content
-${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete epic at the path above)'}
+## Current feature file content
+${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete feature at the path above)'}
 
-Read the current content above. Determine what's missing. Produce a complete epic following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown. Write the refined markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary and the proposed subtask list.`;
+Read the current content above. Determine what's missing. Produce a complete feature following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown. Write the refined markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary and the proposed subtask list.`;
 
                     await vscode.env.clipboard.writeText(prompt);
-                    showTemporaryNotification('Refine-epic prompt copied to clipboard. Paste it into your agent.');
+                    showTemporaryNotification('Refine-feature prompt copied to clipboard. Paste it into your agent.');
                 } catch (err) {
-                    vscode.window.showErrorMessage(`Failed to copy refine-epic prompt: ${String(err)}`);
+                    vscode.window.showErrorMessage(`Failed to copy refine-feature prompt: ${String(err)}`);
                 }
                 break;
             }

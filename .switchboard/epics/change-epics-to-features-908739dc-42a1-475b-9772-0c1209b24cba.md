@@ -47,7 +47,7 @@ Phase 1 (user-facing + routes + script filenames)
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Rename "Epics" → "Features" (User-Facing Surfaces Only)](../plans/rename-epics-to-features-user-facing.md) — **CREATED**
-- [ ] [Feature Operations Agent Clarity — Verb Scripts, API Endpoints & Intent→Action Cheatsheet](../plans/feature_plan_20260704232500_epic-operations-agent-clarity.md) — **CREATED**
-- [ ] [Plan: Rename "Epics" → "Features" (Internal Identifiers + Persisted State — Phase 2)](../plans/rename-epics-to-features-internal-phase2.md) — **CREATED**
+- [ ] [Plan: Rename "Epics" → "Features" (User-Facing Surfaces Only)](../plans/rename-epics-to-features-user-facing.md) — **LEAD CODED**
+- [ ] [Feature Operations Agent Clarity — Verb Scripts, API Endpoints & Intent→Action Cheatsheet](../plans/feature_plan_20260704232500_epic-operations-agent-clarity.md) — **LEAD CODED**
+- [ ] [Plan: Rename "Epics" → "Features" (Internal Identifiers + Persisted State — Phase 2)](../plans/rename-epics-to-features-internal-phase2.md) — **LEAD CODED**
 <!-- END SUBTASKS -->

@@ -12,9 +12,9 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 - **SESSION vs PRODUCT SCOPE**: Session directives (e.g. "single-repo", "skip compilation", "skip tests") constrain HOW you verify and organize the plan, not WHAT the plan covers. Do not conflate repo structure constraints with product feature requirements. If the plan targets multi-root workspaces, you must preserve and improve that scope regardless of the current session's repo configuration.
 - **SINGLE PASS**: Complete enhancement, dependency checks, adversarial critique, balanced synthesis, and plan update in one continuous response.
 
-## Target is an epic? Use improve-epic instead
+## Target is a feature? Use improve-feature instead
 
-If the target file is under `.switchboard/epics/` or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` block, this is an **epic**, not a single plan. Stop and use the **`improve-epic`** workflow — it improves every subtask and is authorised to restructure the set (merge/delete/rewrite/split). This `improve-plan` workflow is for a single plan and is deliberately non-destructive, which is the wrong contract for an epic.
+If the target file is under `.switchboard/epics/` or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` block, this is a **feature**, not a single plan. Stop and use the **`improve-feature`** workflow — it improves every subtask and is authorised to restructure the set (merge/delete/rewrite/split). This `improve-plan` workflow is for a single plan and is deliberately non-destructive, which is the wrong contract for a feature.
 
 ## Steps
 

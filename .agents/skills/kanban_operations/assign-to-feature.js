@@ -1,32 +1,27 @@
 #!/usr/bin/env node
 //
-// Create an epic from a set of subtask plans and link those plans to it.
+// Assign existing plans to an existing feature (batch). Plans already on another feature
+// (or that are themselves features / missing) are reported in `skipped`, not failed.
 //
 // Routes through the running Switchboard extension's local API server
-// (POST /kanban/epic). The extension performs the create via KanbanProvider, so it
-// inherits the DB upsert, subtask linking, epic-file write, and board refresh.
+// (POST /kanban/feature/assign). The extension links each subtask, regenerates the feature
+// file, and refreshes the board once.
 //
-// NOTE on sync: epic creation does NOT fan out to Linear/ClickUp. The webview
-// createEpic flow has never synced to external trackers, and the new epic file is
-// deliberately skipped by the plan watcher. This script preserves that behavior.
-//
-// NOTE on fallback: unlike move-card.js, there is no direct-DB fallback. Epic creation
-// spans project inheritance, column resolution, a YAML-safe file write, and per-subtask
-// linking — replicating that in raw DB calls risks an orphaned epic (DB record with no
-// file, or unlinked subtasks). So when the extension isn't reachable, this fails with a
-// clear instruction to start it rather than writing a half-formed epic.
+// NOTE on fallback: like create-feature.js, there is no direct-DB fallback. Assignment
+// must also regenerate the feature markdown file (KanbanProvider logic, not reachable
+// from a standalone Node process), so a raw-DB link would leave the feature file stale.
+// When the extension isn't reachable, this fails with a clear instruction to start it.
 //
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const epicName = process.argv[2];
+const epicPlanId = process.argv[2];
 const planIdsJson = process.argv[3];
 const workspaceRoot = process.argv[4] || '.';
-const description = process.argv[5] || undefined;
 
-if (!epicName || !planIdsJson) {
-  console.error("Usage: node create-epic.js <epic_name> <plan_ids_json> [workspace_root] [description]");
+if (!epicPlanId || !planIdsJson) {
+  console.error("Usage: node assign-to-feature.js <feature_plan_id> <plan_ids_json> [workspace_root]");
   console.error('  plan_ids_json is a JSON array of planId values, e.g. \'["abc-123","def-456"]\'');
   process.exit(1);
 }
@@ -87,8 +82,7 @@ function httpJson(method, port, urlPath, bodyObj, timeoutMs) {
   });
 }
 
-// ── Route through the running extension. When reachable it is authoritative: a
-// logical failure is reported as-is, NOT retried via some other path. ──
+// ── Route through the running extension. When reachable it is authoritative. ──
 async function tryViaExtension() {
   const port = findApiPort(workspaceRoot) || findApiPort(process.cwd());
   if (!port) return { reachable: false };
@@ -101,16 +95,15 @@ async function tryViaExtension() {
   }
 
   try {
-    const resp = await httpJson('POST', port, '/kanban/epic', {
+    const resp = await httpJson('POST', port, '/kanban/feature/assign', {
       workspaceRoot,
-      name: epicName,
-      planIds,
-      description
+      epicPlanId,
+      planIds
     }, 15000);
     let parsed = {};
     try { parsed = JSON.parse(resp.body); } catch { /* non-JSON body */ }
     if (resp.status >= 200 && resp.status < 300 && parsed.success) {
-      return { reachable: true, success: true, epicPlanId: parsed.epicPlanId, epicSessionId: parsed.epicSessionId };
+      return { reachable: true, success: true, assigned: parsed.assigned || [], skipped: parsed.skipped || [] };
     }
     return { reachable: true, success: false, error: parsed.error || `HTTP ${resp.status}` };
   } catch (err) {
@@ -122,17 +115,17 @@ async function tryViaExtension() {
   const viaExt = await tryViaExtension();
   if (viaExt.reachable) {
     if (viaExt.success) {
-      console.log(JSON.stringify({ ok: true, epicPlanId: viaExt.epicPlanId, epicSessionId: viaExt.epicSessionId }));
+      console.log(JSON.stringify({ ok: true, assigned: viaExt.assigned, skipped: viaExt.skipped }));
       process.exit(0);
     }
     console.log(JSON.stringify({ ok: false, error: viaExt.error || 'unknown error' }));
     process.exit(1);
   }
 
-  // Extension not reachable — no safe direct-DB fallback for epic creation.
+  // Extension not reachable — no safe direct-DB fallback for feature assignment.
   console.log(JSON.stringify({
     ok: false,
-    error: 'Switchboard extension not reachable. Epic creation requires the running extension (no direct-DB fallback). Open the workspace in VS Code with Switchboard active and retry.'
+    error: 'Switchboard extension not reachable. Feature assignment requires the running extension (no direct-DB fallback). Open the workspace in VS Code with Switchboard active and retry.'
   }));
   process.exit(1);
 })().catch(err => {

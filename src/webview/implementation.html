@@ -2584,7 +2584,7 @@
                     collisionSeen.set(key, seen);
                     const total = collisionTotals.get(key) || 0;
                     const counterSuffix = total > 1 ? ` (${seen})` : '';
-                    const epicPrefix = sheet.isEpic === 1 ? '[EPIC] ' : '';
+                    const epicPrefix = sheet.isEpic === 1 ? '[FEATURE] ' : '';
                     opt.text = `${epicPrefix}${toTopic(sheet.topic)}${counterSuffix} (${getDisplayDate(sheet.createdAt)})`;
                     group.appendChild(opt);
                 }

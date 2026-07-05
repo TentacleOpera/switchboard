@@ -2118,7 +2118,7 @@
         if (filtered.length === 0) {
             const emptyState = document.createElement('div');
             emptyState.className = 'empty-state';
-            emptyState.textContent = 'No epics found. Use "+ New Epic" to create one.';
+            emptyState.textContent = 'No features found. Use "+ New Feature" to create one.';
             epicsListPane.appendChild(emptyState);
             return;
         }
@@ -2327,9 +2327,9 @@
         const isManageable = !!plan;
         const manageGroup = `
             <div class="kanban-meta-group" style="display:flex; gap:6px;">
-                <button class="strip-btn" id="btn-epic-refine" title="Refine this epic's description and propose a subtask breakdown — copies a prompt to the clipboard">Refine</button>
-                <button class="strip-btn" id="btn-epic-add-subtask" title="Add an existing plan to this epic as a subtask">+ Subtask</button>
-                <button class="strip-btn" id="btn-epic-delete" style="color:#ff6b6b;" title="Delete this epic (subtasks are detached)">Delete Epic</button>
+                <button class="strip-btn" id="btn-epic-refine" title="Refine this feature's description and propose a subtask breakdown — copies a prompt to the clipboard">Refine</button>
+                <button class="strip-btn" id="btn-epic-add-subtask" title="Add an existing plan to this feature as a subtask">+ Subtask</button>
+                <button class="strip-btn" id="btn-epic-delete" style="color:#ff6b6b;" title="Delete this feature (subtasks are detached)">Delete Feature</button>
             </div>
         `;
         metaBar.innerHTML = `
@@ -2371,7 +2371,7 @@
                     deleteSubtasks: false
                 });
                 _epicSelectedPlan = null;
-                if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select an epic to preview</div>';
+                if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a feature to preview</div>';
                 metaBar.style.display = 'none';
             });
         }
@@ -2482,7 +2482,7 @@
                     vscode.postMessage({ type: 'deleteKanbanPlan', planId: plan.planId, planFile: plan.planFile, workspaceRoot: plan.workspaceRoot });
                     _epicSubtaskPreview = null;
                     _epicPreviewFilePath = _epicSelectedPlan ? _epicSelectedPlan.planFile : null;
-                    if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select an epic to preview</div>';
+                    if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a feature to preview</div>';
                     if (_epicSelectedPlan) renderEpicMetaBar(_epicSelectedPlan);
                     else metaBar.style.display = 'none';
                 });

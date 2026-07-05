@@ -3483,7 +3483,7 @@ Each plan file must include:
             return false;
         }
         if (!this._isAcceptanceTesterDesignDocConfigured()) {
-            vscode.window.showErrorMessage('Acceptance Tester requires a Planning Epic to be enabled and attached in Setup.');
+            vscode.window.showErrorMessage('Acceptance Tester requires a Planning Feature to be enabled and attached in Setup.');
             return false;
         }
         return true;
