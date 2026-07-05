@@ -289,7 +289,7 @@ Settings:
   ![Design panel — Stitch](docs/TODO_design_panel.png)
 - **Research / LOCAL DOCS Panel** — Manage local research, design system files, and Antigravity Brain artifacts.
   ![Research panel — Local Docs](docs/TODO_research_panel.png)
-  Settings: `switchboard.research.localFolderPaths`, `switchboard.research.htmlFolderPaths`, `switchboard.research.designFolderPaths`, `switchboard.research.antigravityBrainEnabled`
+  Settings: `switchboard.research.localFolderPaths`, `switchboard.research.htmlFolderPaths`, `switchboard.research.designFolderPaths`
 - **Status Bar Hub** (`switchboard.openHub`) — Grouped actions dropdown.
   Settings: `switchboard.statusBar.showTerminalControls`, `switchboard.statusBar.showKanbanButton`, `switchboard.statusBar.showArtifactsButton`, `switchboard.statusBar.showDesignButton`, `switchboard.statusBar.showProjectButton`, `switchboard.statusBar.compactMode`
 

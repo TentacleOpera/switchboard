@@ -944,10 +944,6 @@ export class PlanningPanelProvider {
         }
         this._antigravityWatchers = [];
 
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const enabled = config.get<boolean>('research.antigravityBrainEnabled', false);
-        if (!enabled) { return; }
-
         const allRoots = this._getWorkspaceRoots();
         const service = this._getLocalFolderService(allRoots[0] || '');
         const brainPaths = service.detectAntigravityBrainPaths();
@@ -2661,17 +2657,7 @@ Start by checking which documents exist, then present the menu.`;
                 await this._handleFetchPageContent(workspaceRoot, msg.sourceId, msg.docId, msg.pageId, msg.requestId);
                 break;
             }
-            case 'toggleAntigravityBrain': {
-                const enabled = Boolean(msg.enabled);
-                await vscode.workspace.getConfiguration('switchboard').update(
-                    'research.antigravityBrainEnabled',
-                    enabled,
-                    vscode.ConfigurationTarget.Global  // MUST be Global — user preference, not workspace
-                );
-                this._setupAntigravityWatcher();        // Re-setup watcher on toggle
-                await this._sendLocalDocsReady();       // Refresh tree
-                break;
-            }
+
             case 'fetchAntigravityArtifact': {
                 const artifactPath = msg.artifactPath;
                 const requestId = msg.requestId || -1;
@@ -7509,9 +7495,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 artifacts: Array<{ id: string; name: string; relativePath: string }>;
             }> = [];
 
-            const agConfig = vscode.workspace.getConfiguration('switchboard');
-            const agEnabled = agConfig.get<boolean>('research.antigravityBrainEnabled', false);
-            if (agEnabled && allRoots.length > 0) {
+            if (allRoots.length > 0) {
                 try {
                     const agService = this._getLocalFolderService(allRoots[0]);
                     antigravitySessions = await agService.listAntigravitySessions();
@@ -7532,7 +7516,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 ticketsFolderPathsByRoot,
                 nodes: mappedNodes,
                 antigravitySessions,
-                antigravityEnabled: agEnabled,
                 workspaceItems
             });
             if (!force && signature === this._lastLocalDocsSignature) {
@@ -7549,8 +7532,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 nodes: mappedNodes,
                 workspaceItems,
                 kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
-                antigravitySessions,
-                antigravityEnabled: agEnabled
+                antigravitySessions
             });
         } catch (err) {
             console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);

@@ -1,0 +1,82 @@
+# Fix Start Terminal Button Styling in Comms Tab
+
+## Goal
+
+In the Comms Monitor tab of `kanban.html`, the "Start Terminal" button uses a completely different visual style from the rest of the extension's buttons. It has a solid teal background with dark text (`background:var(--accent-teal); color:var(--bg-primary)`), while the established button pattern throughout the extension uses a colored outline + colored text on a dark/transparent background (the `.strip-btn.is-active` or `.strip-btn.is-teal` pattern). The "Start Terminal" button should be restyled to match the extension's standard button aesthetic.
+
+### Problem Analysis & Root Cause
+
+The Comms Monitor lifecycle buttons are created dynamically in JavaScript (lines 9203-9266 of `src/webview/kanban.html`) with inline styles via `btnBaseStyle`. The "Start Terminal" and "Start Polling" buttons both use:
+```javascript
+startTermBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
+```
+
+This produces a solid-filled button that clashes with the extension's design language. The extension's standard active/primary button style (defined in CSS at line 455) is:
+```css
+.strip-btn.is-active {
+    color: var(--accent-teal);
+    border-color: var(--accent-teal-dim);
+    box-shadow: var(--glow-teal);
+    background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+}
+```
+
+This is an outline style: teal text, teal border, mostly-transparent background with a subtle teal tint. The "Start Terminal" button should use this aesthetic instead of a solid fill.
+
+The root cause is that these buttons are created with raw inline styles in JS rather than using the extension's CSS classes, so they don't inherit the established design system.
+
+## Metadata
+
+- **Tags:** ui-cleanup, comms-tab, button-styling, kanban-html
+- **Complexity:** 2
+
+## Complexity Audit
+
+**Routine.** Change inline styles on dynamically-created buttons. No logic changes, no backend changes. The "Start Polling" button has the same issue and should be fixed for consistency.
+
+## Edge-Case & Dependency Audit
+
+- The `btnBaseStyle` variable is shared by all lifecycle buttons (Start Terminal, Check Auth, Start Polling, Stop Polling, Stop Monitor). Only the "primary action" buttons (Start Terminal, Start Polling) need the teal outline style; the secondary buttons (Check Auth, Stop Polling) already use a darker panel style which is acceptable.
+- The "Stop Monitor" button uses `var(--accent-red)` which is intentional (destructive action) — leave it as-is.
+- Button disabled states and text changes ("Starting…", etc.) are handled separately and won't be affected.
+- The `guardCommsInteraction` wrapper and click handlers must be preserved.
+
+## Proposed Changes
+
+### `src/webview/kanban.html` — Restyle Start Terminal and Start Polling buttons (~lines 9208-9210, 9229-9231)
+
+**Start Terminal button (line 9210):**
+
+Before:
+```javascript
+startTermBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
+```
+
+After:
+```javascript
+startTermBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);';
+```
+
+**Start Polling button (line 9231):**
+
+Before:
+```javascript
+startPollBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
+```
+
+After:
+```javascript
+startPollBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);';
+```
+
+Note: The `btnBaseStyle` already includes `border:none;` — the inline `border:1px solid var(--accent-teal-dim)` will override it since it appears later in the cssText string.
+
+## Verification Plan
+
+1. Open the Kanban board and switch to the Comms tab.
+2. Enable the Comms Monitor (set to "On").
+3. Verify the "Start Terminal" button has a teal outline + teal text on a mostly-transparent background, matching the extension's standard active button style.
+4. Click "Start Terminal" and verify the "Start Polling" button that appears has the same outline style.
+5. Verify the "Check Auth" and "Stop Polling" buttons retain their existing secondary style.
+6. Verify the "Stop Monitor" button retains its red destructive style.
+7. Verify all buttons still function correctly (clicking triggers the right backend messages).

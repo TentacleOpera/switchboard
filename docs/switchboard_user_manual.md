@@ -383,7 +383,6 @@ Manage local research, design system files, and Antigravity Brain artifacts.
 - `switchboard.research.localFolderPaths` — Paths to folders containing research files (`.md`, `.txt`, `.markdown`, `.rst`, `.adoc`). Supports `~` for home directory.
 - `switchboard.research.htmlFolderPaths` — Paths to folders containing HTML prototype files (`.html`, `.htm`) for preview.
 - `switchboard.research.designFolderPaths` — Paths to folders containing design system files and image assets (`.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`).
-- `switchboard.research.antigravityBrainEnabled` — Show Antigravity session artifacts in the LOCAL DOCS panel (default: false).
 
 ---
 
@@ -621,7 +620,6 @@ All settings are defined in `package.json` contributes.configuration. Scope: `ap
 | `switchboard.research.localFolderPaths` | array | `[]` | application | Paths to local research files |
 | `switchboard.research.htmlFolderPaths` | array | `[]` | application | Paths to HTML prototype files |
 | `switchboard.research.designFolderPaths` | array | `[]` | application | Paths to design system files |
-| `switchboard.research.antigravityBrainEnabled` | boolean | false | — | Show Antigravity session artifacts |
 | `switchboard.kanban.completedLimit` | integer | 100 | resource | Max cards in Completed column (1–500) |
 | `switchboard.kanban.dbPath` | string | `""` | resource | Custom Kanban DB path |
 | `switchboard.kanban.controlPlaneRoot` | string | `""` | resource | Explicit Control Plane folder override |

@@ -262,3 +262,7 @@ Even though the watcher sets `isFeature = 1` for feature files and calls `update
 ## Recommendation
 
 **Send to Coder** (Complexity 6).
+
+## Review Findings
+
+Reviewed commit b259620 (2026-07-06): all five code changes implemented as specified across `KanbanDatabase.ts` (is_feature floor, `canonicalizeSessionIdByPlanId`/`canonicalizeSessionIds`, V49 migration), `TaskViewerProvider.ts` (in-place `_registerPlan` canonicalization with `isFeature` passthrough, batched sweep split), and `KanbanProvider.ts` (`sessionId = planId` at mint); Change 6 (probe cleanup) correctly deferred to post-UAT. No CRITICAL/MAJOR findings; no fixes applied. Two NITs noted: the `else { deletePlan }` branch in `_registerPlan` is unreachable (lookup is by `plan_id`, so `existing.planId !== entry.planId` is impossible), and a theoretical duplicate-row window exists if a same-`plan_id` row under a different `plan_file` carried a stale session key — no current caller can construct that, so no guard was added. Verification was SQL-only per session directives (SKIP COMPILATION/TESTS): a dry run on a copy of the live `kanban.db` (at V48) confirmed V49 heals exactly the one known demoted feature (`6a7d5edc`, idempotently) and the batched sweep has no backlog storm (the sole raw-SQL "stale" active-local row is a brain-mirror file the sweep's source-type conversion already handles). Remaining risks: the theoretical duplicate-row window above, and UAT still needs to confirm a fresh "Group into Feature" survives sidebar activation with `is_feature=1` before probes are removed.

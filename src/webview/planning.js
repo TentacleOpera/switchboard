@@ -2864,7 +2864,7 @@
         }
         
         if (filterSet.has('antigravity') && state._lastLocalDocsMsg) {
-            renderAntigravitySessions(state._lastLocalDocsMsg.antigravitySessions || [], state._lastLocalDocsMsg.antigravityEnabled || false);
+            renderAntigravitySessions(state._lastLocalDocsMsg.antigravitySessions || []);
         }
         
         if (state.activeDocId) {
@@ -2937,13 +2937,11 @@
         });
     }
 
-    function renderAntigravitySessions(sessions, enabled) {
+    function renderAntigravitySessions(sessions) {
         if (!treePane) { return; }
 
         const existing = document.getElementById('antigravity-section');
         if (existing) { existing.remove(); }
-
-        if (!enabled) { return; }
 
         const section = document.createElement('div');
         section.id = 'antigravity-section';
@@ -3023,9 +3021,7 @@
         
         rerenderUnifiedDocs();
 
-        state.antigravityEnabled = msg.antigravityEnabled || false;
-        const agToggleModal = document.getElementById('antigravity-toggle-modal');
-        if (agToggleModal) { agToggleModal.checked = state.antigravityEnabled; }
+
 
         renderFolderListModal();
         populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot));
@@ -7622,11 +7618,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
         modal.style.display = 'flex';
-        // Sync antigravity toggle state from JS state
-        const modalToggle = document.getElementById('antigravity-toggle-modal');
-        if (modalToggle) {
-            modalToggle.checked = !!state.antigravityEnabled;
-        }
+
         // Render folder list from current state (fast-path for pre-warmed state)
         renderFolderListModal();
         // Request fresh folder list from backend to ensure sync (catches startup race)
@@ -7690,10 +7682,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
     });
 
-    // Antigravity toggle in modal — send message directly
-    document.getElementById('antigravity-toggle-modal').addEventListener('change', (e) => {
-        vscode.postMessage({ type: 'toggleAntigravityBrain', enabled: e.target.checked });
-    });
+
 
     // Modal folder management buttons
     document.getElementById('btn-refresh-folders-modal').addEventListener('click', () => {

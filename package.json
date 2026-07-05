@@ -378,11 +378,6 @@
           "description": "Paths to local folders containing design system files (.md, .txt, .markdown, .rst, .adoc) and image assets (.png, .jpg, .jpeg, .gif, .svg). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "application"
         },
-        "switchboard.research.antigravityBrainEnabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Show Antigravity session artifacts in the LOCAL DOCS panel."
-        },
         "switchboard.kanban.completedLimit": {
           "type": "integer",
           "default": 100,
