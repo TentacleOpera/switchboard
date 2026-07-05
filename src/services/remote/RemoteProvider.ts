@@ -24,9 +24,9 @@ export interface RemoteStateDelta {
     /** If the remote card's parent changed, the new parent's remote id (or '' if unparented).
      *  Undefined = no parent change detected (provider didn't query it). */
     parentRemoteId?: string;
-    /** If the remote card is itself a parent (has children), mark it as an epic candidate.
+    /** If the remote card is itself a parent (has children), mark it as an feature candidate.
      *  Undefined = provider didn't query it. */
-    isEpicCandidate?: boolean;
+    isFeatureCandidate?: boolean;
     /** ISO timestamp of the remote item's last update. Linear: issue.updatedAt. Notion: page.last_edited_time. */
     updatedAt?: string;
     /** Remote item body/description. Linear: issue.description. Notion: undefined (deferred). */
@@ -50,7 +50,7 @@ export interface RemoteCommentDelta {
 /**
  * Declared provider capabilities — gates UI honestly (no toggle offers a capability
  * a provider lacks). The Remote Sync Refactor (1/3) formalized pull/push; the
- * project-context + archive capabilities ride the same object so epic 1's context
+ * project-context + archive capabilities ride the same object so feature 1's context
  * sync and the auto-archive rule dispatch through the provider seam, not a parallel
  * pipeline.
  */

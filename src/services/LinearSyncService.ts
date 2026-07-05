@@ -2393,9 +2393,9 @@ export class LinearSyncService {
   // ── Import Issues (legacy — used by extension.ts) ────────────
 
   /**
-   * Two-pass import: parent issues with children ALWAYS become Switchboard epics
-   * (written to .switchboard/epics/), children are linked via direct DB writes
-   * (epic_id). Deeply nested hierarchies are flattened to one level. The GraphQL
+   * Two-pass import: parent issues with children ALWAYS become Switchboard features
+   * (written to .switchboard/features/), children are linked via direct DB writes
+   * (feature_id). Deeply nested hierarchies are flattened to one level. The GraphQL
    * query fetches the full hierarchy recursively (5 levels deep). Insert-before-
    * write ordering prevents the child-planId race (watcher would mint a random
    * planId if it fires between file write and DB insert).
@@ -2547,8 +2547,8 @@ export class LinearSyncService {
       const issueNameById = new Map<string, string>(allTasks.map((t: any) => [t.id, `${t.title} (${t.identifier})`]));
 
       await fs.promises.mkdir(plansDir, { recursive: true });
-      const epicDir = path.join(this._workspaceRoot, '.switchboard', 'epics');
-      await fs.promises.mkdir(epicDir, { recursive: true });
+      const featureDir = path.join(this._workspaceRoot, '.switchboard', 'features');
+      await fs.promises.mkdir(featureDir, { recursive: true });
       let imported = 0;
       let skipped = 0;
 
@@ -2604,7 +2604,7 @@ export class LinearSyncService {
       }
 
       // A top-level parent has children in the batch AND no in-batch parent.
-      // An intermediate parent has children AND an in-batch parent — it's a subtask, not an epic.
+      // An intermediate parent has children AND an in-batch parent — it's a subtask, not an feature.
       const isParent = (taskId: string) => childrenByParentId.has(taskId);
       const isChild = (task: any) => {
         const parentId = task.parent?.id;
@@ -2676,11 +2676,11 @@ export class LinearSyncService {
         ].join('\n');
 
         if (isTopLevelParent(issue)) {
-          // Top-level parent → epic: insert DB, mark epic, persist linear_issue_id,
-          // THEN write to .switchboard/epics/ (insert-before-write).
+          // Top-level parent → feature: insert DB, mark feature, persist linear_issue_id,
+          // THEN write to .switchboard/features/ (insert-before-write).
           const uuid = crypto.randomUUID();
           uuidByIssueId.set(issue.id, uuid);
-          const epicPlanFile = path.join('.switchboard', 'epics', `linear_import_${issue.id}_${uuid}.md`);
+          const featurePlanFile = path.join('.switchboard', 'features', `linear_import_${issue.id}_${uuid}.md`);
 
           if (ready && workspaceId) {
             try {
@@ -2688,7 +2688,7 @@ export class LinearSyncService {
                 planId: uuid,
                 sessionId: '',
                 topic: issue.title || `Linear Issue ${issue.identifier}`,
-                planFile: epicPlanFile,
+                planFile: featurePlanFile,
                 kanbanColumn,
                 status: 'active' as any,
                 complexity: 'Unknown',
@@ -2704,18 +2704,18 @@ export class LinearSyncService {
                 routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
-                isEpic: 1,
-                epicId: ''
+                isFeature: 1,
+                featureId: ''
               } as any);
-              await db.updateEpicStatus(uuid, 1, '');
-              await db.updateLinearIssueIdByPlanFile(epicPlanFile, workspaceId, issue.id);
+              await db.updateFeatureStatus(uuid, 1, '');
+              await db.updateLinearIssueIdByPlanFile(featurePlanFile, workspaceId, issue.id);
             } catch (dbErr) {
-              console.warn(`[LinearSync] import: DB insert failed for epic ${issue.id}, file will be written (watcher will ingest):`, dbErr);
+              console.warn(`[LinearSync] import: DB insert failed for feature ${issue.id}, file will be written (watcher will ingest):`, dbErr);
             }
           }
 
-          const epicPath = path.join(this._workspaceRoot, epicPlanFile);
-          await fs.promises.writeFile(epicPath, stub, 'utf8');
+          const featurePath = path.join(this._workspaceRoot, featurePlanFile);
+          await fs.promises.writeFile(featurePath, stub, 'utf8');
           imported++;
         } else if (isChild(issue)) {
           // Child (including intermediate parents) → subtask: insert DB, persist
@@ -2725,11 +2725,11 @@ export class LinearSyncService {
           const childPlanFile = path.join(plansDir, `linear_import_${issue.id}.md`);
           const childRelPath = path.relative(this._workspaceRoot, childPlanFile);
 
-          // Add Epic Plan ID metadata line for debugging (if parent UUID is known).
+          // Add Feature Plan ID metadata line for debugging (if parent UUID is known).
           const parentIssueId = issue.parent?.id;
           const parentUuid = parentIssueId ? uuidByIssueId.get(parentIssueId) || '' : '';
           const childStub = parentUuid
-            ? stub.replace(metaLines, `${metaLines}\n> **Epic Plan ID:** ${parentUuid}`)
+            ? stub.replace(metaLines, `${metaLines}\n> **Feature Plan ID:** ${parentUuid}`)
             : stub;
 
           if (ready && workspaceId) {
@@ -2774,7 +2774,7 @@ export class LinearSyncService {
       // ── Pass 2: Link children to top-level parents (flatten) ────
       // For each child, walk up the parentId chain to find the top-level
       // in-batch parent (a task that has no in-batch parent itself). Link
-      // the child to that epic's planId via updateEpicStatus.
+      // the child to that feature's planId via updateFeatureStatus.
       if (ready) {
         for (const issue of filteredTasks) {
           if (!isChild(issue)) { continue; }
@@ -2811,9 +2811,9 @@ export class LinearSyncService {
             const topParentUuid = uuidByIssueId.get(topParentIssueId);
             if (topParentUuid) {
               try {
-                await db.updateEpicStatus(childUuid, 0, topParentUuid);
+                await db.updateFeatureStatus(childUuid, 0, topParentUuid);
               } catch (linkErr) {
-                console.warn(`[LinearSync] import: failed to link child ${issue.id} to epic ${topParentIssueId}:`, linkErr);
+                console.warn(`[LinearSync] import: failed to link child ${issue.id} to feature ${topParentIssueId}:`, linkErr);
               }
             }
           }
@@ -2826,22 +2826,22 @@ export class LinearSyncService {
     }
   }
 
-  // ── Epic Outbound Sync ───────────────────────────────────────
+  // ── Feature Outbound Sync ───────────────────────────────────────
 
   /**
-   * Sync a Switchboard epic + its subtasks to Linear as a parent issue with
-   * child issues linked via parentId. Creates/updates the epic issue first
+   * Sync a Switchboard feature + its subtasks to Linear as a parent issue with
+   * child issues linked via parentId. Creates/updates the feature issue first
    * (await, not debounce), then links each subtask's existing Linear issue
    * as a child. Subtasks without an existing Linear issue are skipped (added
-   * to `failed`) — they will be linked on a future epic-sync trigger once
+   * to `failed`) — they will be linked on a future feature-sync trigger once
    * their individual sync creates an issue.
    */
-  public async syncEpicWithSubtasks(params: {
-    epicPlanFile: string;
-    epicTopic: string;
-    epicColumn: string;
+  public async syncFeatureWithSubtasks(params: {
+    featurePlanFile: string;
+    featureTopic: string;
+    featureColumn: string;
     subtasks: Array<{ planFile: string; topic: string; complexity: string }>;
-  }): Promise<{ epicIssueId?: string; linked: string[]; failed: string[] }> {
+  }): Promise<{ featureIssueId?: string; linked: string[]; failed: string[] }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
       return { linked: [], failed: params.subtasks.map(s => s.planFile) };
@@ -2852,54 +2852,54 @@ export class LinearSyncService {
 
     const linked: string[] = [];
     const failed: string[] = [];
-    let epicIssueId: string | null = null;
+    let featureIssueId: string | null = null;
 
     try {
-      // 1. Create/update the epic issue first (await, bypass debounce).
+      // 1. Create/update the feature issue first (await, bypass debounce).
       await this.syncPlan(
-        { planFile: params.epicPlanFile, topic: params.epicTopic, complexity: 'Unknown' },
-        params.epicColumn
+        { planFile: params.featurePlanFile, topic: params.featureTopic, complexity: 'Unknown' },
+        params.featureColumn
       );
 
-      // 2. Look up the epic's issue ID. If still a creating_* temp marker, retry once.
-      epicIssueId = await this.getIssueIdForPlan(params.epicPlanFile);
-      if (epicIssueId && epicIssueId.startsWith('creating_')) {
+      // 2. Look up the feature's issue ID. If still a creating_* temp marker, retry once.
+      featureIssueId = await this.getIssueIdForPlan(params.featurePlanFile);
+      if (featureIssueId && featureIssueId.startsWith('creating_')) {
         await new Promise(resolve => setTimeout(resolve, 200));
-        epicIssueId = await this.getIssueIdForPlan(params.epicPlanFile);
+        featureIssueId = await this.getIssueIdForPlan(params.featurePlanFile);
       }
-      if (!epicIssueId || epicIssueId.startsWith('creating_')) {
-        console.warn(`[LinearSync] syncEpicWithSubtasks: epic issue ID not resolved for ${params.epicPlanFile} — all subtasks failed`);
+      if (!featureIssueId || featureIssueId.startsWith('creating_')) {
+        console.warn(`[LinearSync] syncFeatureWithSubtasks: feature issue ID not resolved for ${params.featurePlanFile} — all subtasks failed`);
         return { linked: [], failed: params.subtasks.map(s => s.planFile) };
       }
 
-      // 3. Link each subtask's existing Linear issue as a child of the epic.
+      // 3. Link each subtask's existing Linear issue as a child of the feature.
       for (const sub of params.subtasks) {
         try {
           const subIssueId = await this.getIssueIdForPlan(sub.planFile);
           if (subIssueId && !subIssueId.startsWith('creating_')) {
-            await this.updateIssueParent(subIssueId, epicIssueId);
+            await this.updateIssueParent(subIssueId, featureIssueId);
             linked.push(sub.planFile);
           } else {
             failed.push(sub.planFile);
           }
         } catch (linkErr) {
-          console.warn(`[LinearSync] syncEpicWithSubtasks: failed to link subtask ${sub.planFile}:`, linkErr);
+          console.warn(`[LinearSync] syncFeatureWithSubtasks: failed to link subtask ${sub.planFile}:`, linkErr);
           failed.push(sub.planFile);
         }
       }
-    } catch (epicErr) {
-      console.warn(`[LinearSync] syncEpicWithSubtasks: epic sync failed:`, epicErr);
+    } catch (featureErr) {
+      console.warn(`[LinearSync] syncFeatureWithSubtasks: feature sync failed:`, featureErr);
       return { linked: [], failed: params.subtasks.map(s => s.planFile) };
     }
 
-    return { epicIssueId: epicIssueId ?? undefined, linked, failed };
+    return { featureIssueId: featureIssueId ?? undefined, linked, failed };
   }
 
   /**
-   * Unlink subtasks from their epic in Linear — set each subtask's parent to null.
-   * Used when a subtask is removed from an epic or reassigned.
+   * Unlink subtasks from their feature in Linear — set each subtask's parent to null.
+   * Used when a subtask is removed from an feature or reassigned.
    */
-  public async unlinkSubtasksFromEpic(subtaskPlanFiles: string[]): Promise<{ unlinked: string[]; failed: string[] }> {
+  public async unlinkSubtasksFromFeature(subtaskPlanFiles: string[]): Promise<{ unlinked: string[]; failed: string[] }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
       return { unlinked: [], failed: subtaskPlanFiles };
@@ -2922,7 +2922,7 @@ export class LinearSyncService {
           unlinked.push(planFile);
         }
       } catch (err) {
-        console.warn(`[LinearSync] unlinkSubtasksFromEpic: failed for ${planFile}:`, err);
+        console.warn(`[LinearSync] unlinkSubtasksFromFeature: failed for ${planFile}:`, err);
         failed.push(planFile);
       }
     }

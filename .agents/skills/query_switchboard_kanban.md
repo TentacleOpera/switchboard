@@ -155,8 +155,8 @@ sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column F
 | linear_issue_id | TEXT | Linear issue ID |
 | worktree_id | INTEGER | Associated worktree ID |
 | worktree_status | TEXT | Worktree status ('none', 'active', 'merged', 'deleted') |
-| is_epic | INTEGER | 1 if this plan is an epic, 0 otherwise |
-| epic_id | TEXT | Parent epic plan_id if this is a subtask |
+| is_feature | INTEGER | 1 if this plan is an feature, 0 otherwise |
+| feature_id | TEXT | Parent feature plan_id if this is a subtask |
 | workspace_name | TEXT | Human-readable name of the workspace |
 | project_id | INTEGER | Foreign key matching projects.id |
 
@@ -179,4 +179,4 @@ sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column F
 **Key:** `workspace_id` stores the workspace identifier.
 
 ## Cross-Reference
-For ready-made query templates on workspace names, projects, and epics, see the [query_kanban_plans.md](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.agents/skills/query_kanban_plans.md) skill.
+For ready-made query templates on workspace names, projects, and features, see the [query_kanban_plans.md](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.agents/skills/query_kanban_plans.md) skill.

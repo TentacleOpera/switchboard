@@ -6,7 +6,7 @@ description: Reconcile and restructure a feature's subtasks — improve each, th
 
 Use this workflow when the target is a Switchboard **feature** (a container of subtask plans), not a single plan. Its job is to make the subtask **set** coherent: improve every subtask, detect inconsistencies between them, and then **restructure** — merge overlapping plans, delete superseded ones, rewrite contradictory ones, split oversized ones.
 
-Detect a feature when the target file is under `.switchboard/epics/`, or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` / `<!-- END SUBTASKS -->` block. If the target is a single plan, use `improve-plan` instead.
+Detect a feature when the target file is under `.switchboard/features/`, or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` / `<!-- END SUBTASKS -->` block. If the target is a single plan, use `improve-plan` instead.
 
 ## Why this is a separate skill
 
@@ -20,7 +20,7 @@ Restructuring is expected — but bounded:
 - **Git is the undo.** Commit before any destructive op (delete/merge) so it is trivially reversible. Deletion of a plan file on a branch is cheap — it is a working document, not shipped user data. Do not treat it with production-data caution.
 - **Never hand-edit the auto-generated subtasks block** (`<!-- BEGIN/END SUBTASKS -->`) — Switchboard regenerates it from the DB.
 - **Route set changes through the real mechanisms**, not the block:
-  - *Remote (no extension):* `git rm` the removed subtask `.md` files (the plan watcher hard-deletes their rows on the next local pull), create any new consolidated plan file with an embedded `**Plan ID:** <uuid>`, and write a `.switchboard/plans/manifest.json` entry linking the new plan to the feature (`epicId` = the feature's Plan ID; `fromColumn`/`kanbanColumn` if a column move is wanted). Detect remote by the absence of `.switchboard/api-server-port.txt`.
+  - *Remote (no extension):* `git rm` the removed subtask `.md` files (the plan watcher hard-deletes their rows on the next local pull), create any new consolidated plan file with an embedded `**Plan ID:** <uuid>`, and write a `.switchboard/plans/manifest.json` entry linking the new plan to the feature (`featureId` = the feature's Plan ID; `fromColumn`/`kanbanColumn` if a column move is wanted). Detect remote by the absence of `.switchboard/api-server-port.txt`.
   - *Local (extension running):* use `assign-to-feature.js` / the feature's create path for card-set changes.
 - **Report the restructure** — what merged into what, what was deleted, what survived — so the diff is legible. End with the reconciled subtask list.
 
@@ -59,7 +59,7 @@ When the user asks to tier the feature by complexity — "high/low split", "spli
    - **LOW** — every subtask scoring **≤ 4**, merged into one plan.
    - If a tier is empty, still write its file and state there is no work for that tier (so a downstream two-tier executor has both).
 3. Give each new file a `**Complexity:**` for its tier and a `**Consolidated From:** <planIds>` metadata line for traceability; embed a fresh `**Plan ID:**`.
-4. `git rm` the original subtask files (their intent now lives in the two tier files) and write a `.switchboard/plans/manifest.json` linking both new tier plans to the feature (`epicId` = the feature's Plan ID). Locally this is `assign-to-feature.js`.
+4. `git rm` the original subtask files (their intent now lives in the two tier files) and write a `.switchboard/plans/manifest.json` linking both new tier plans to the feature (`featureId` = the feature's Plan ID). Locally this is `assign-to-feature.js`.
 5. Report the two tier files, what merged into each, and the reconciled subtask list.
 
 Use this when the intent is parallel execution by complexity tier; use the default free-form Step 4 when the intent is just "make the set coherent".

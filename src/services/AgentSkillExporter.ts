@@ -343,9 +343,9 @@ export class AgentSkillExporter {
             lines.push('(Ask the user to paste this content if you cannot access the file.)');
             lines.push('');
         }
-        if (addons.applyEpicDirectives) {
-            lines.push('### Epic Directives');
-            lines.push('- Apply epic-level directives when working on plans that belong to an epic.');
+        if (addons.applyFeatureDirectives) {
+            lines.push('### Feature Directives');
+            lines.push('- Apply feature-level directives when working on plans that belong to an feature.');
             lines.push('');
         }
         if (addons.defaultPromptOverride) {

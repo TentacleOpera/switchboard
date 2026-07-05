@@ -4230,21 +4230,21 @@
                 // Pending selection will be resolved in handleKanbanPlansReady if not matched immediately.
                 break;
             }
-            case 'epicDetails': {
-                const epicId = msg.epic ? msg.epic.planId : '';
-                const accordion = kanbanListPane && kanbanListPane.querySelector(`.epic-accordion[data-plan-id="${epicId}"]`);
-                const container = accordion && accordion.querySelector('.epic-subtasks');
-                const epicWorkspaceRoot = accordion ? (accordion.dataset.workspaceRoot || '') : '';
+            case 'featureDetails': {
+                const featureId = msg.feature ? msg.feature.planId : '';
+                const accordion = kanbanListPane && kanbanListPane.querySelector(`.feature-accordion[data-plan-id="${featureId}"]`);
+                const container = accordion && accordion.querySelector('.feature-subtasks');
+                const featureWorkspaceRoot = accordion ? (accordion.dataset.workspaceRoot || '') : '';
                 if (container) {
-                    if (!msg.epic) {
-                        container.innerHTML = '<span style="color: var(--vscode-errorForeground, #ff6b6b);">Epic not found</span>';
+                    if (!msg.feature) {
+                        container.innerHTML = '<span style="color: var(--vscode-errorForeground, #ff6b6b);">Feature not found</span>';
                     } else if (!msg.subtasks || msg.subtasks.length === 0) {
                         container.innerHTML = '<span style="color: var(--text-secondary);">No subtasks</span>';
                     } else {
                         container.innerHTML = msg.subtasks.map(st => `
                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0;">
                                 <span>${escapeHtml(st.topic)}</span>
-                                <button class="epic-remove-subtask-btn strip-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" data-workspace-root="${escapeHtml(epicWorkspaceRoot)}" style="margin: 0; padding: 1px 4px; font-size: 10px;">Remove</button>
+                                <button class="feature-remove-subtask-btn strip-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" data-workspace-root="${escapeHtml(featureWorkspaceRoot)}" style="margin: 0; padding: 1px 4px; font-size: 10px;">Remove</button>
                             </div>
                         `).join('');
                     }
@@ -5855,7 +5855,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
     let _kanbanPlansCache = [];
     let _kanbanAllWorkspaceProjects = {};  // { [resolvedRoot]: string[] }
     let _kanbanWorkspaceItems = [];         // { workspaceRoot, label }[]
-    let _kanbanViewMode = 'all'; // 'all' | 'epics'
+    let _kanbanViewMode = 'all'; // 'all' | 'features'
     let _kanbanSelectedPlan = null;
     let _kanbanPreviewRequestId = 0;
     let _kanbanAvailableColumns = [];  // { id, label, kind }[] — merged across workspaces
@@ -6108,10 +6108,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         const foldersBtn = document.createElement('button');
         foldersBtn.className = 'sidebar-folders-btn';
-        foldersBtn.id = 'kanban-view-epics-toggle';
-        foldersBtn.textContent = _kanbanViewMode === 'epics' ? 'Epics' : 'Plans';
+        foldersBtn.id = 'kanban-view-features-toggle';
+        foldersBtn.textContent = _kanbanViewMode === 'features' ? 'Features' : 'Plans';
         foldersBtn.addEventListener('click', () => {
-            _kanbanViewMode = _kanbanViewMode === 'all' ? 'epics' : 'all';
+            _kanbanViewMode = _kanbanViewMode === 'all' ? 'features' : 'all';
             renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
         });
 
@@ -6154,8 +6154,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
         // Already sorted by mtime descending from backend, but can double check
         filtered.sort((a, b) => b.mtime - a.mtime);
 
-        if (_kanbanViewMode === 'epics') {
-            filtered = filtered.filter(plan => plan.isEpic);
+        if (_kanbanViewMode === 'features') {
+            filtered = filtered.filter(plan => plan.isFeature);
         }
 
         kanbanListPane.innerHTML = '';
@@ -6164,7 +6164,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         kanbanListPane.appendChild(buildKanbanToggleRow());
 
         if (filtered.length === 0) {
-            const emptyMsg = _kanbanViewMode === 'epics' ? 'No epics found' : 'No matching kanban plans';
+            const emptyMsg = _kanbanViewMode === 'features' ? 'No features found' : 'No matching kanban plans';
             const emptyStateDiv = document.createElement('div');
             emptyStateDiv.className = 'kanban-empty-state';
             emptyStateDiv.textContent = emptyMsg;
@@ -6192,15 +6192,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
             ).join('');
 
             const complexityClass = _complexityToCssClass(plan.complexity);
-            const epicAccordion = (_kanbanViewMode === 'epics' && plan.isEpic)
+            const featureAccordion = (_kanbanViewMode === 'features' && plan.isFeature)
                 ? `
-                    <details class="epic-accordion" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}" style="margin-top: 6px; font-size: 11px;">
+                    <details class="feature-accordion" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}" style="margin-top: 6px; font-size: 11px;">
                         <summary style="cursor: pointer; color: var(--text-secondary);">Subtasks (${plan.subtaskCount || 0}) — click to expand</summary>
-                        <div class="epic-subtasks" style="margin-top: 4px; padding-left: 8px;">Loading...</div>
+                        <div class="feature-subtasks" style="margin-top: 4px; padding-left: 8px;">Loading...</div>
                         <div style="margin-top: 6px; display: flex; gap: 4px; align-items: center;">
-                            <select class="epic-add-subtask-select" style="flex: 1; font-size: 11px;"><option value="">Add subtask...</option>${_kanbanPlansCache.filter(p => !p.isEpic && !p.epicId && (p.workspaceRoot || '') === (plan.workspaceRoot || '')).map(p => `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('')}</select>
-                            <button class="epic-add-subtask-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px;">Add</button>
-                            <button class="epic-delete-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px; color: #ff6b6b;">Delete Epic</button>
+                            <select class="feature-add-subtask-select" style="flex: 1; font-size: 11px;"><option value="">Add subtask...</option>${_kanbanPlansCache.filter(p => !p.isFeature && !p.featureId && (p.workspaceRoot || '') === (plan.workspaceRoot || '')).map(p => `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('')}</select>
+                            <button class="feature-add-subtask-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px;">Add</button>
+                            <button class="feature-delete-btn strip-btn" style="margin: 0; padding: 2px 6px; font-size: 10px; color: #ff6b6b;">Delete Feature</button>
                         </div>
                     </details>
                 `
@@ -6225,7 +6225,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
                             return `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}" data-copy-label="${escapeHtml(copyLabel)}" title="${escapeHtml(copyLabel)}">${escapeHtml(copyLabel)}</button>`;
                         })() : ''}
                     </div>
-                    ${epicAccordion}
+                    ${featureAccordion}
                 </div>
             `;
 
@@ -6330,34 +6330,34 @@ Return ONLY the drafted prompt with no additional commentary.`;
             kanbanListPane.appendChild(itemDiv);
         });
 
-        // Epic accordion interactions
-        if (_kanbanViewMode === 'epics') {
-            kanbanListPane.querySelectorAll('.epic-accordion').forEach(details => {
+        // Feature accordion interactions
+        if (_kanbanViewMode === 'features') {
+            kanbanListPane.querySelectorAll('.feature-accordion').forEach(details => {
                 details.addEventListener('toggle', () => {
                     if (details.open) {
                         const planId = details.dataset.planId;
-                        vscode.postMessage({ type: 'getEpicDetails', sessionId: planId, workspaceRoot: details.dataset.workspaceRoot || '' });
+                        vscode.postMessage({ type: 'getFeatureDetails', sessionId: planId, workspaceRoot: details.dataset.workspaceRoot || '' });
                     }
                 });
             });
-            kanbanListPane.querySelectorAll('.epic-add-subtask-btn').forEach(btn => {
+            kanbanListPane.querySelectorAll('.feature-add-subtask-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    const details = btn.closest('.epic-accordion');
-                    const epicSessionId = details ? details.dataset.planId : '';
-                    const select = btn.parentElement.querySelector('.epic-add-subtask-select');
+                    const details = btn.closest('.feature-accordion');
+                    const featureSessionId = details ? details.dataset.planId : '';
+                    const select = btn.parentElement.querySelector('.feature-add-subtask-select');
                     const subtaskSessionId = select ? select.value : '';
-                    if (epicSessionId && subtaskSessionId) {
-                        vscode.postMessage({ type: 'addSubtaskToEpic', epicSessionId, subtaskSessionId, workspaceRoot: details.dataset.workspaceRoot || '' });
+                    if (featureSessionId && subtaskSessionId) {
+                        vscode.postMessage({ type: 'addSubtaskToFeature', featureSessionId, subtaskSessionId, workspaceRoot: details.dataset.workspaceRoot || '' });
                     }
                 });
             });
-            kanbanListPane.querySelectorAll('.epic-delete-btn').forEach(btn => {
+            kanbanListPane.querySelectorAll('.feature-delete-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    const details = btn.closest('.epic-accordion');
+                    const details = btn.closest('.feature-accordion');
                     const sessionId = details ? details.dataset.planId : '';
-                    vscode.postMessage({ type: 'deleteEpic', sessionId, workspaceRoot: details.dataset.workspaceRoot || '', deleteSubtasks: true });
+                    vscode.postMessage({ type: 'deleteFeature', sessionId, workspaceRoot: details.dataset.workspaceRoot || '', deleteSubtasks: true });
                 });
             });
         }
@@ -6365,13 +6365,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     if (kanbanListPane) {
         kanbanListPane.addEventListener('click', (e) => {
-            const removeBtn = e.target.closest('.epic-remove-subtask-btn');
+            const removeBtn = e.target.closest('.feature-remove-subtask-btn');
             if (removeBtn) {
                 e.stopPropagation();
                 const subtaskSessionId = removeBtn.dataset.subtaskSession;
-                const epicWorkspaceRoot = removeBtn.dataset.workspaceRoot || '';
+                const featureWorkspaceRoot = removeBtn.dataset.workspaceRoot || '';
                 if (subtaskSessionId) {
-                    vscode.postMessage({ type: 'removeSubtaskFromEpic', subtaskSessionId, workspaceRoot: epicWorkspaceRoot });
+                    vscode.postMessage({ type: 'removeSubtaskFromFeature', subtaskSessionId, workspaceRoot: featureWorkspaceRoot });
                 }
             }
         });
@@ -7286,7 +7286,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         }
     }
 
-    // Planning-context setting has moved to the Project panel's Epics tab.
+    // Planning-context setting has moved to the Project panel's Features tab.
     // (The former "Set as Active Planning Context" button has been removed from this panel.)
 
     // Folder modal open logic

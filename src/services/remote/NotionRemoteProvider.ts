@@ -100,16 +100,16 @@ export class NotionRemoteProvider implements RemoteProvider {
             const stateKey = String(row.properties?.['Kanban Column']?.select?.name || '').trim();
             if (remoteId && stateKey) {
                 // Feature structure — read Is Feature checkbox + Feature relation (added by
-                // NotionBackupService._ensureEpicProperties). If the properties don't
+                // NotionBackupService._ensureFeatureProperties). If the properties don't
                 // exist yet (pre-feature-schema setup), these read falsy — safe degradation.
-                const epicRelation = row.properties?.['Feature']?.relation;
-                const parentRemoteId = Array.isArray(epicRelation) && epicRelation.length > 0
-                    ? String(epicRelation[0]?.id || '') : '';
+                const featureRelation = row.properties?.['Feature']?.relation;
+                const parentRemoteId = Array.isArray(featureRelation) && featureRelation.length > 0
+                    ? String(featureRelation[0]?.id || '') : '';
                 deltas.push({
                     remoteId,
                     stateKey,
                     parentRemoteId,
-                    isEpicCandidate: row.properties?.['Is Feature']?.checkbox === true,
+                    isFeatureCandidate: row.properties?.['Is Feature']?.checkbox === true,
                 });
             }
             const ts = String(row.last_edited_time || '');
@@ -210,7 +210,7 @@ export class NotionRemoteProvider implements RemoteProvider {
         return { ok: false, error: `Notion archive failed (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}` };
     }
 
-    // ── Project-context push (epic: Project Context & Remote UI Hub) ──────
+    // ── Project-context push (feature: Project Context & Remote UI Hub) ──────
     //
     // Writes the Dev Docs + PRDs + constitution bundle to a dedicated
     // "Switchboard Project Context" page created beside the plans DB. Obeys the

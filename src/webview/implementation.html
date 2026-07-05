@@ -2478,9 +2478,9 @@
 
         function renderRunSheetDropdown() {
             const rawSheets = currentPlanMode === 'active' ? currentActiveSheets : currentCompletedSheets;
-            // Exclude subtask plans (plans with a parent epic that are not themselves epics).
-            // Only epics and standalone plans (no epic parent) should appear in the dropdown.
-            const sheets = rawSheets.filter(s => s.isEpic === 1 || !s.epicId);
+            // Exclude subtask plans (plans with a parent feature that are not themselves features).
+            // Only features and standalone plans (no feature parent) should appear in the dropdown.
+            const sheets = rawSheets.filter(s => s.isFeature === 1 || !s.featureId);
             const lastSelected = runSheetSelect.value;
             runSheetSelect.innerHTML = '';
 
@@ -2565,7 +2565,7 @@
                 return date.toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase();
             };
             const toTopic = (value) => (value || 'UNTITLED').toUpperCase().trim();
-            const toCollisionKey = (sheet) => `${sheet.isEpic === 1 ? '1' : '0'}|${toTopic(sheet.topic)}|${getDayKey(sheet.createdAt)}`;
+            const toCollisionKey = (sheet) => `${sheet.isFeature === 1 ? '1' : '0'}|${toTopic(sheet.topic)}|${getDayKey(sheet.createdAt)}`;
             sorted.forEach(sheet => {
                 const key = toCollisionKey(sheet);
                 collisionTotals.set(key, (collisionTotals.get(key) || 0) + 1);
@@ -2584,8 +2584,8 @@
                     collisionSeen.set(key, seen);
                     const total = collisionTotals.get(key) || 0;
                     const counterSuffix = total > 1 ? ` (${seen})` : '';
-                    const epicPrefix = sheet.isEpic === 1 ? '[FEATURE] ' : '';
-                    opt.text = `${epicPrefix}${toTopic(sheet.topic)}${counterSuffix} (${getDisplayDate(sheet.createdAt)})`;
+                    const featurePrefix = sheet.isFeature === 1 ? '[FEATURE] ' : '';
+                    opt.text = `${featurePrefix}${toTopic(sheet.topic)}${counterSuffix} (${getDisplayDate(sheet.createdAt)})`;
                     group.appendChild(opt);
                 }
                 runSheetSelect.appendChild(group);

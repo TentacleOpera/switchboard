@@ -6,7 +6,7 @@ import * as path from 'path';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
-import { appendEpicClobberDiag } from './epicClobberDiag'; // DIAGNOSTIC (is_epic clobber) — remove with the probes
+import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -21,7 +21,7 @@ export interface WorktreeRow {
     id: number;
     branch: string;
     path: string;
-    epic_id: string | null;
+    feature_id: string | null;
     created_at: string;
     status: 'active' | 'merged' | 'abandoned';
     project: string | null;
@@ -59,8 +59,8 @@ export interface KanbanPlanRecord {
     notionPageId?: string;
     worktreeId?: number;
     worktreeStatus?: string; // 'none' | 'active' | 'merged' | 'deleted'
-    isEpic?: number;
-    epicId?: string;
+    isFeature?: number;
+    featureId?: string;
     workspaceName?: string;
     projectId?: number | null;
 }
@@ -143,8 +143,8 @@ CREATE TABLE IF NOT EXISTS plans (
     notion_page_id    TEXT DEFAULT '',
     worktree_id       INTEGER,
     worktree_status   TEXT DEFAULT 'none',
-    is_epic           INTEGER DEFAULT 0,
-    epic_id           TEXT DEFAULT '',
+    is_feature           INTEGER DEFAULT 0,
+    feature_id           TEXT DEFAULT '',
     workspace_name    TEXT DEFAULT '',
     project_id        INTEGER DEFAULT NULL
 );
@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     branch      TEXT NOT NULL UNIQUE,
     path        TEXT NOT NULL,
-    epic_id     TEXT,
+    feature_id     TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     status      TEXT NOT NULL DEFAULT 'active',
     project     TEXT,
@@ -274,8 +274,8 @@ const MIGRATION_V40_SQL = [
 
 // V42: worktree-per-subtask support. subtask_plan_id binds a worktree to a single
 // subtask plan (routing precedence in resolveWorktreePathForPlan); base_branch records
-// what a worktree was branched off (epic integration branch for subtasks, main/default
-// for the epic integration worktree itself); tier is reserved for Part 3's high/low
+// what a worktree was branched off (feature integration branch for subtasks, main/default
+// for the feature integration worktree itself); tier is reserved for Part 3's high/low
 // complexity split. All three are nullable — existing worktree rows get NULL, which is
 // correct (legacy worktrees have no subtask/tier binding).
 const MIGRATION_V42_SQL = [
@@ -297,6 +297,13 @@ const MIGRATION_V45_SQL: string[] = [
     `ALTER TABLE imported_docs ADD COLUMN needs_file_path_relative INTEGER DEFAULT 0`,
     `UPDATE imported_docs SET needs_file_path_relative = 1 WHERE file_path LIKE '/%' AND file_path != ''`,
 ];
+
+// V46: Rename is_feature → is_feature, feature_id → feature_id (clean break — feature is unreleased).
+// SQLite < 3.35 can't DROP COLUMN, so we rebuild the plans + worktrees tables with the new
+// column names, copy data, and swap. This is safe because the feature is unreleased — no
+// user data exists in these columns. The migration is idempotent: if the new columns already
+// exist (fresh DB or already migrated), it's a no-op.
+const MIGRATION_V46_SQL: string[] = [];
 
 
 
@@ -539,12 +546,12 @@ const MIGRATION_V28_SQL = [
     `UPDATE plans SET project = '' WHERE project = '__unassigned__'`,
 ];
 
-// V29: Add epic support columns to plans table
+// V29: Add feature support columns to plans table
 const MIGRATION_V29_SQL = [
-    `ALTER TABLE plans ADD COLUMN is_epic INTEGER DEFAULT 0`,
-    `ALTER TABLE plans ADD COLUMN epic_id TEXT DEFAULT ''`,
-    `CREATE INDEX IF NOT EXISTS idx_plans_epic_id ON plans(epic_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_plans_is_epic ON plans(is_epic)`,
+    `ALTER TABLE plans ADD COLUMN is_feature INTEGER DEFAULT 0`,
+    `ALTER TABLE plans ADD COLUMN feature_id TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_feature_id ON plans(feature_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_is_feature ON plans(is_feature)`,
 ];
 
 // V32: promote stitch.manifest blob to first-class tables
@@ -609,7 +616,7 @@ INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-    clickup_task_id, linear_issue_id, notion_page_id, worktree_id, is_epic, epic_id,
+    clickup_task_id, linear_issue_id, notion_page_id, worktree_id, is_feature, feature_id,
     workspace_name, project_id
  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
@@ -636,10 +643,10 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     linear_issue_id = excluded.linear_issue_id,
     notion_page_id = excluded.notion_page_id,
     worktree_id = excluded.worktree_id,
-    -- is_epic is STICKY via upsert: once 1, it can only be cleared by updateEpicStatus(planId, 0, '').
-    -- Callers pass record.isEpic ?? 0 (literal 0, never NULL), so COALESCE(0, is_epic) clobbered epics.
-    is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epic END,
-    epic_id = CASE WHEN excluded.epic_id IS NOT NULL AND excluded.epic_id != '' THEN excluded.epic_id ELSE epic_id END,
+    -- is_feature is STICKY via upsert: once 1, it can only be cleared by updateFeatureStatus(planId, 0, '').
+    -- Callers pass record.isFeature ?? 0 (literal 0, never NULL), so COALESCE(0, is_feature) clobbered features.
+    is_feature = CASE WHEN excluded.is_feature > 0 THEN excluded.is_feature ELSE plans.is_feature END,
+    feature_id = CASE WHEN excluded.feature_id IS NOT NULL AND excluded.feature_id != '' THEN excluded.feature_id ELSE feature_id END,
     workspace_name = excluded.workspace_name,
     project_id = COALESCE(excluded.project_id, plans.project_id)
 `;
@@ -650,7 +657,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_epic, epic_id,
+                       clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
@@ -720,11 +727,11 @@ export class KanbanDatabase {
     private static _instancesByDbPath = new Map<string, KanbanDatabase>();
     private static _warnedUnmappedRoots = new Set<string>();
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
-    // DIAGNOSTIC (is_epic clobber investigation): monotonic id so we can tell whether the
+    // DIAGNOSTIC (is_feature clobber investigation): monotonic id so we can tell whether the
     // KanbanProvider and the GlobalPlanWatcherService are operating on the SAME in-memory
     // sql.js instance. If they differ for the same on-disk DB, a stale-snapshot _persist()
-    // can silently overwrite an is_epic=1 write (clobber candidate ❷). See
-    // docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is identified.
+    // can silently overwrite an is_feature=1 write (clobber candidate ❷). See
+    // docs/investigation-feature-is_feature-clobber.md. Remove once the clobber is identified.
     private static _nextInstanceId = 1;
 
     /**
@@ -1226,8 +1233,8 @@ export class KanbanDatabase {
         return path.join(this._workspaceRoot, '.switchboard', 'kanban-board.md');
     }
 
-    // DIAGNOSTIC (is_epic clobber): stable per-instance tag, e.g. "#3(kanban.db)". Logged by
-    // the demotion guard and at the createEpicFromPlanIds fork so a mismatch between the
+    // DIAGNOSTIC (is_feature clobber): stable per-instance tag, e.g. "#3(kanban.db)". Logged by
+    // the demotion guard and at the createFeatureFromPlanIds fork so a mismatch between the
     // Provider's instance and the watcher's instance is visible in one repro run.
     public readonly instanceId: string;
 
@@ -1403,8 +1410,8 @@ export class KanbanDatabase {
                     record.linearIssueId || '',   // 22
                     record.notionPageId || '',    // 23
                     record.worktreeId ?? null,      // 24
-                    record.isEpic ?? 0,              // 25 — DEFAULT 0, not NULL (prevents is_epic=NULL clobber)
-                    record.epicId || '',             // 26
+                    record.isFeature ?? 0,              // 25 — DEFAULT 0, not NULL (prevents is_feature=NULL clobber)
+                    record.featureId || '',             // 26
                     record.workspaceName || '',      // 27
                     record.projectId ?? null         // 28
                 ]);
@@ -1428,11 +1435,11 @@ export class KanbanDatabase {
 
     /**
      * Insert a plan record using only file-derived fields.
-     * DB-owned columns (epic_id, kanban_column, status, worktree_id, etc.)
+     * DB-owned columns (feature_id, kanban_column, status, worktree_id, etc.)
      * are left at their schema DEFAULT values — the file has no business setting them.
-     * is_epic is the ONE exception: epic files set record.isEpic=1 before calling,
-     * and the ON CONFLICT clause makes it sticky (once 1, only updateEpicStatus
-     * can clear it) so re-imports of existing epics preserve is_epic=1 even when
+     * is_feature is the ONE exception: feature files set record.isFeature=1 before calling,
+     * and the ON CONFLICT clause makes it sticky (once 1, only updateFeatureStatus
+     * can clear it) so re-imports of existing features preserve is_feature=1 even when
      * the caller didn't set it. Use this for file-watcher imports and registry
      * saves that don't own DB state.
      */
@@ -1466,7 +1473,7 @@ export class KanbanDatabase {
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                 repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
                 brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_epic
+                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature
             ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
@@ -1475,7 +1482,7 @@ export class KanbanDatabase {
                 project = COALESCE(NULLIF(excluded.project, ''), plans.project),
                 project_id = COALESCE(excluded.project_id, plans.project_id),
                 updated_at = excluded.updated_at,
-                is_epic = CASE WHEN excluded.is_epic > 0 THEN excluded.is_epic ELSE plans.is_epic END
+                is_feature = CASE WHEN excluded.is_feature > 0 THEN excluded.is_feature ELSE plans.is_feature END
         `;
         try {
             this._db.run('BEGIN');
@@ -1493,7 +1500,7 @@ export class KanbanDatabase {
                 record.updatedAt,
                 record.sourceType,
                 record.workspaceName || '',
-                record.isEpic ?? 0
+                record.isFeature ?? 0
             ]);
             this._db.run('COMMIT');
         } catch (error) {
@@ -1640,75 +1647,75 @@ export class KanbanDatabase {
         }
     }
 
-    public async updateEpicStatus(planId: string, isEpic: number, epicId: string): Promise<boolean> {
+    public async updateFeatureStatus(planId: string, isFeature: number, featureId: string): Promise<boolean> {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
-        // DIAGNOSTIC (is_epic clobber investigation): catch an explicit demotion of a live
-        // epic in the act. Fires only when this instance currently sees the plan as an epic
-        // (is_epic=1) and the incoming write would clear it (is_epic=0). The stack trace names
+        // DIAGNOSTIC (is_feature clobber investigation): catch an explicit demotion of a live
+        // feature in the act. Fires only when this instance currently sees the plan as an feature
+        // (is_feature=1) and the incoming write would clear it (is_feature=0). The stack trace names
         // the exact caller (subtask-linking loop, PlanningPanel, remote sync, …). A HIT is a
         // smoking gun for the "explicit demotion" family (candidates ❶/❸/❺). SILENCE does not
         // clear candidate ❷ (lost-write via a stale instance) — pair with the instanceId logs.
-        // See docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is fixed.
-        if (plan.isEpic === 1 && isEpic === 0) {
+        // See docs/investigation-feature-is_feature-clobber.md. Remove once the clobber is fixed.
+        if (plan.isFeature === 1 && isFeature === 0) {
             const stack = new Error().stack;
             console.error(
-                `[KanbanDatabase] ⚠️ EPIC CLOBBER on instance ${this.instanceId}: updateEpicStatus(${planId}, 0, '${epicId}') would clear is_epic on epic "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
+                `[KanbanDatabase] ⚠️ FEATURE CLOBBER on instance ${this.instanceId}: updateFeatureStatus(${planId}, 0, '${featureId}') would clear is_feature on feature "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
                 stack
             );
-            appendEpicClobberDiag(this._workspaceRoot,
-                `EPIC-CLOBBER instance=${this.instanceId} updateEpicStatus(planId=${planId}, isEpic=0, epicId='${epicId}') on epic "${plan.topic}" (plan_file=${plan.planFile})\n${stack}`);
+            appendFeatureClobberDiag(this._workspaceRoot,
+                `FEATURE-CLOBBER instance=${this.instanceId} updateFeatureStatus(planId=${planId}, isFeature=0, featureId='${featureId}') on feature "${plan.topic}" (plan_file=${plan.planFile})\n${stack}`);
         }
-        const oldEpicId = plan.epicId;
+        const oldFeatureId = plan.featureId;
         const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
         let affected = 0;
         if (await this.ensureReady() && this._db) {
             try {
                 this._db.run(
-                    'UPDATE plans SET is_epic = ?, epic_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                    [isEpic, epicId, new Date().toISOString(), relativePlanFile, plan.workspaceId]
+                    'UPDATE plans SET is_feature = ?, feature_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                    [isFeature, featureId, new Date().toISOString(), relativePlanFile, plan.workspaceId]
                 );
                 affected = this._db.getRowsModified();
                 await this._persist();
             } catch (error) {
-                console.error('[KanbanDatabase] updateEpicStatus failed:', error);
+                console.error('[KanbanDatabase] updateFeatureStatus failed:', error);
                 return false;
             }
         }
         if (affected === 0) {
-            console.warn(`[KanbanDatabase] updateEpicStatus: 0 rows affected for planId=${planId} (race with delete?)`);
+            console.warn(`[KanbanDatabase] updateFeatureStatus: 0 rows affected for planId=${planId} (race with delete?)`);
         }
         const ok = affected > 0;
         if (ok) {
-            if (oldEpicId && oldEpicId !== epicId) { await this.recomputeEpicComplexity(oldEpicId); }
-            if (epicId && isEpic === 0) { await this.recomputeEpicComplexity(epicId); }
+            if (oldFeatureId && oldFeatureId !== featureId) { await this.recomputeFeatureComplexity(oldFeatureId); }
+            if (featureId && isFeature === 0) { await this.recomputeFeatureComplexity(featureId); }
         }
         return ok;
     }
 
     /**
-     * Recompute an epic's stored complexity as the max score among its active subtasks.
+     * Recompute an feature's stored complexity as the max score among its active subtasks.
      * Writes the numeric string (e.g. '8'), or 'Unknown' when no subtask carries a
-     * parseable score. Epic complexity is purely derived — this is the single source
+     * parseable score. Feature complexity is purely derived — this is the single source
      * of truth, invoked on membership change and whenever a subtask is rescored.
      */
-    public async recomputeEpicComplexity(epicPlanId: string): Promise<boolean> {
-        if (!epicPlanId || !(await this.ensureReady()) || !this._db) return false;
+    public async recomputeFeatureComplexity(featurePlanId: string): Promise<boolean> {
+        if (!featurePlanId || !(await this.ensureReady()) || !this._db) return false;
         const { parseComplexityScore } = require('./complexityScale');
-        const subtasks = await this.getSubtasksByEpicId(epicPlanId);
+        const subtasks = await this.getSubtasksByFeatureId(featurePlanId);
         const max = subtasks.reduce(
             (m, s) => Math.max(m, parseComplexityScore(s.complexity || '')), 0);
         const value = max >= 1 ? String(max) : 'Unknown';
         return this._persistedUpdate(
-            'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ? AND is_epic = 1',
-            [value, new Date().toISOString(), epicPlanId]
+            'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ? AND is_feature = 1',
+            [value, new Date().toISOString(), featurePlanId]
         );
     }
 
-    public async clearEpicIdForEpic(epicPlanId: string): Promise<boolean> {
+    public async clearFeatureIdForFeature(featurePlanId: string): Promise<boolean> {
         return this._persistedUpdate(
-            "UPDATE plans SET epic_id = '', updated_at = ? WHERE epic_id = ?",
-            [new Date().toISOString(), epicPlanId]
+            "UPDATE plans SET feature_id = '', updated_at = ? WHERE feature_id = ?",
+            [new Date().toISOString(), featurePlanId]
         );
     }
 
@@ -1807,19 +1814,19 @@ export class KanbanDatabase {
         }
         const normalized = this._ensureRelativePlanFile(planFile);
         const target = await this.getPlanByPlanFile(normalized, workspaceId);
-        if (target?.isEpic) {
-            // Epic complexity is derived — ignore the incoming (file-parsed) value; recompute.
-            // This is the clobber-guard: the auto-regenerated epic file has no Complexity line,
+        if (target?.isFeature) {
+            // Feature complexity is derived — ignore the incoming (file-parsed) value; recompute.
+            // This is the clobber-guard: the auto-regenerated feature file has no Complexity line,
             // so parsePlanMetadata returns 'Unknown', which would otherwise overwrite the
             // computed max. Redirect to the derived source of truth.
-            return this.recomputeEpicComplexity(target.planId);
+            return this.recomputeFeatureComplexity(target.planId);
         }
         const ok = await this._persistedUpdate(
             'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
             [complexity, new Date().toISOString(), normalized, workspaceId]
         );
-        // Bubble-up: a subtask rescore lifts the parent epic's derived complexity.
-        if (ok && target?.epicId) { await this.recomputeEpicComplexity(target.epicId); }
+        // Bubble-up: a subtask rescore lifts the parent feature's derived complexity.
+        if (ok && target?.featureId) { await this.recomputeFeatureComplexity(target.featureId); }
         return ok;
     }
 
@@ -1838,16 +1845,16 @@ export class KanbanDatabase {
             return false;
         }
         const target = await this.getPlanByPlanId(planId);
-        if (target?.isEpic) {
-            // Epic complexity is derived — ignore the incoming value; recompute from subtasks.
-            return this.recomputeEpicComplexity(planId);
+        if (target?.isFeature) {
+            // Feature complexity is derived — ignore the incoming value; recompute from subtasks.
+            return this.recomputeFeatureComplexity(planId);
         }
         const ok = await this._persistedUpdate(
             'UPDATE plans SET complexity = ?, updated_at = ? WHERE plan_id = ?',
             [complexity, new Date().toISOString(), planId]
         );
-        // Bubble-up: a subtask rescore lifts the parent epic's derived complexity.
-        if (ok && target?.epicId) { await this.recomputeEpicComplexity(target.epicId); }
+        // Bubble-up: a subtask rescore lifts the parent feature's derived complexity.
+        if (ok && target?.featureId) { await this.recomputeFeatureComplexity(target.featureId); }
         return ok;
     }
 
@@ -2604,7 +2611,7 @@ export class KanbanDatabase {
     /**
      * Resolve a project's numeric ID from its name and workspace.
      * Mirrors the inline lookup in insertFileDerivedPlan so callers that
-     * build plan records outside the watcher path (e.g. createEpicFromPlanIds)
+     * build plan records outside the watcher path (e.g. createFeatureFromPlanIds)
      * can resolve project_id without reaching into _db.
      */
     public async getProjectIdByName(workspaceId: string, projectName: string): Promise<number | null> {
@@ -2693,7 +2700,7 @@ export class KanbanDatabase {
     public async getWorktrees(): Promise<WorktreeRow[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
+            `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
         );
         const rows: any[] = [];
         try {
@@ -2707,7 +2714,7 @@ export class KanbanDatabase {
             id: Number(r.id),
             branch: String(r.branch || ''),
             path: String(r.path || ''),
-            epic_id: r.epic_id !== null && r.epic_id !== undefined && r.epic_id !== '' ? String(r.epic_id) : null,
+            feature_id: r.feature_id !== null && r.feature_id !== undefined && r.feature_id !== '' ? String(r.feature_id) : null,
             created_at: String(r.created_at || ''),
             status: r.status as 'active' | 'merged' | 'abandoned',
             project: r.project !== null && r.project !== undefined && r.project !== '' ? String(r.project) : null,
@@ -2718,14 +2725,14 @@ export class KanbanDatabase {
         }));
     }
 
-    public async addWorktree(branch: string, wtPath: string, epicId?: string, project?: string, subtaskPlanId?: string, baseBranch?: string, tier?: string): Promise<number> {
+    public async addWorktree(branch: string, wtPath: string, featureId?: string, project?: string, subtaskPlanId?: string, baseBranch?: string, tier?: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         this._db.run(
-            `INSERT INTO worktrees (branch, path, epic_id, project, subtask_plan_id, base_branch, tier, agents_open_with_grid) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+            `INSERT INTO worktrees (branch, path, feature_id, project, subtask_plan_id, base_branch, tier, agents_open_with_grid) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
             [
                 branch,
                 wtPath,
-                epicId !== undefined && epicId !== null ? epicId : null,
+                featureId !== undefined && featureId !== null ? featureId : null,
                 project !== undefined && project !== null ? project : null,
                 subtaskPlanId !== undefined && subtaskPlanId !== null ? subtaskPlanId : null,
                 baseBranch !== undefined && baseBranch !== null ? baseBranch : null,
@@ -2766,7 +2773,7 @@ export class KanbanDatabase {
     public async getWorktreeByBranch(branch: string): Promise<WorktreeRow | undefined> {
         if (!(await this.ensureReady()) || !this._db) return undefined;
         const stmt = this._db.prepare(
-            `SELECT id, branch, path, epic_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE branch = ? LIMIT 1`,
+            `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE branch = ? LIMIT 1`,
             [branch]
         );
         try {
@@ -2776,7 +2783,7 @@ export class KanbanDatabase {
                     id: Number(r.id),
                     branch: String(r.branch || ''),
                     path: String(r.path || ''),
-                    epic_id: r.epic_id !== null && r.epic_id !== undefined && r.epic_id !== '' ? String(r.epic_id) : null,
+                    feature_id: r.feature_id !== null && r.feature_id !== undefined && r.feature_id !== '' ? String(r.feature_id) : null,
                     created_at: String(r.created_at || ''),
                     status: r.status as 'active' | 'merged' | 'abandoned',
                     project: r.project !== null && r.project !== undefined && r.project !== '' ? String(r.project) : null,
@@ -3032,11 +3039,11 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
-    public async getEpicPlans(workspaceId: string): Promise<KanbanPlanRecord[]> {
+    public async getFeaturePlans(workspaceId: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND is_epic = 1 AND status = 'active'`,
+             WHERE workspace_id = ? AND is_feature = 1 AND status = 'active'`,
             [workspaceId]
         );
         return this._readRows(stmt);
@@ -3264,18 +3271,18 @@ export class KanbanDatabase {
                     'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
                     ['completed', 'COMPLETED', now, normalized, workspaceId]
                 );
-                // Cascade: if this plan is an epic, complete its active subtasks too (Class 8).
-                // WHERE epic_id = ? AND status = 'active' is atomic within this BEGIN/COMMIT and race-free.
+                // Cascade: if this plan is an feature, complete its active subtasks too (Class 8).
+                // WHERE feature_id = ? AND status = 'active' is atomic within this BEGIN/COMMIT and race-free.
                 const stmt = this._db.prepare(
-                    'SELECT plan_id, is_epic FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1',
+                    'SELECT plan_id, is_feature FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1',
                     [normalized, workspaceId]
                 );
-                let isEpic = false; let epicPlanId = '';
-                try { if (stmt.step()) { const r = stmt.getAsObject(); isEpic = !!Number(r.is_epic); epicPlanId = String(r.plan_id); } } finally { stmt.free(); }
-                if (isEpic && epicPlanId) {
+                let isFeature = false; let featurePlanId = '';
+                try { if (stmt.step()) { const r = stmt.getAsObject(); isFeature = !!Number(r.is_feature); featurePlanId = String(r.plan_id); } } finally { stmt.free(); }
+                if (isFeature && featurePlanId) {
                     this._db.run(
-                        "UPDATE plans SET status = 'completed', kanban_column = 'COMPLETED', updated_at = ? WHERE epic_id = ? AND status = 'active'",
-                        [now, epicPlanId]
+                        "UPDATE plans SET status = 'completed', kanban_column = 'COMPLETED', updated_at = ? WHERE feature_id = ? AND status = 'active'",
+                        [now, featurePlanId]
                     );
                 }
             }
@@ -4185,42 +4192,42 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
-    public async getSubtasksByEpicId(epicPlanId: string): Promise<KanbanPlanRecord[]> {
+    public async getSubtasksByFeatureId(featurePlanId: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans WHERE epic_id = ? AND status = 'active'`,
-            [epicPlanId]
+            `SELECT ${PLAN_COLUMNS} FROM plans WHERE feature_id = ? AND status = 'active'`,
+            [featurePlanId]
         );
         return this._readRows(stmt);
     }
 
     /**
-     * Subtask counts keyed by epic_id (== the epic's plan_id) for a whole workspace,
+     * Subtask counts keyed by feature_id (== the feature's plan_id) for a whole workspace,
      * in ONE grouped query. Counts active + completed subtasks.
      *
-     * Deliberately UNFILTERED by project/repo scope: an epic's subtask count is an
-     * intrinsic property of the epic, not of the current board view. The kanban board
+     * Deliberately UNFILTERED by project/repo scope: an feature's subtask count is an
+     * intrinsic property of the feature, not of the current board view. The kanban board
      * derives its rows from getBoardFilteredByProject(), so counting subtasks from that
      * filtered set dropped every subtask living in a different project (or any assigned
      * project while the board shows the default "__unassigned__" filter) — making every
-     * epic render "0 SUBTASKS". The file-based summaries never hit this because they read
+     * feature render "0 SUBTASKS". The file-based summaries never hit this because they read
      * the unfiltered getBoard(). This method gives the board that same unfiltered count.
      */
-    public async getSubtaskCountsByEpic(workspaceId: string): Promise<Map<string, number>> {
+    public async getSubtaskCountsByFeature(workspaceId: string): Promise<Map<string, number>> {
         const counts = new Map<string, number>();
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return counts;
         const stmt = this._db.prepare(
-            `SELECT epic_id AS epicId, COUNT(*) AS cnt FROM plans
-             WHERE workspace_id = ? AND epic_id IS NOT NULL AND epic_id != ''
+            `SELECT feature_id AS featureId, COUNT(*) AS cnt FROM plans
+             WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
                AND status IN ('active', 'completed')
-             GROUP BY epic_id`,
+             GROUP BY feature_id`,
             [workspaceId]
         );
         try {
             while (stmt.step()) {
                 const row = stmt.getAsObject();
-                const epicId = String(row.epicId ?? '');
-                if (epicId) counts.set(epicId, Number(row.cnt) || 0);
+                const featureId = String(row.featureId ?? '');
+                if (featureId) counts.set(featureId, Number(row.cnt) || 0);
             }
         } finally {
             stmt.free();
@@ -4229,19 +4236,19 @@ export class KanbanDatabase {
     }
 
     /**
-     * Active, non-epic plans whose `complexity` column is still 'Unknown'.
+     * Active, non-feature plans whose `complexity` column is still 'Unknown'.
      * Used by the one-time backfill reconciliation pass
      * (`KanbanProvider._backfillComplexityColumn`) to self-heal pre-fix installs
-     * whose audit-only complexity was never written to the column. Epics are
-     * excluded because epic complexity is derived (recomputeEpicComplexity), and
-     * parsing an epic file yields 'Unknown' — writing that back would clobber the
+     * whose audit-only complexity was never written to the column. Features are
+     * excluded because feature complexity is derived (recomputeFeatureComplexity), and
+     * parsing an feature file yields 'Unknown' — writing that back would clobber the
      * derived max. Completed/archived rows are excluded (display-only, bypass
      * file checks).
      */
     public async getUnscoredActivePlans(workspaceId: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND is_epic = 0 AND status = 'active' AND complexity = 'Unknown' ORDER BY updated_at ASC`,
+            `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND is_feature = 0 AND status = 'active' AND complexity = 'Unknown' ORDER BY updated_at ASC`,
             [workspaceId]
         );
         return this._readRows(stmt);
@@ -4249,19 +4256,19 @@ export class KanbanDatabase {
 
 
     /**
-     * Move an epic and all its subtasks to a target column atomically, keyed by plan_id.
-     * File-based epics/subtasks have session_id='' — the session_id-keyed updateColumnWithEpicCascade
+     * Move an feature and all its subtasks to a target column atomically, keyed by plan_id.
+     * File-based features/subtasks have session_id='' — the session_id-keyed updateColumnWithFeatureCascade
      * silently matches zero rows for them. This plan_id-keyed variant is the correct path (Class 2).
      */
-    public async updateColumnWithEpicCascadeByPlanId(
-        epicPlanId: string,
+    public async updateColumnWithFeatureCascadeByPlanId(
+        featurePlanId: string,
         subtaskPlanIds: string[],
         targetColumn: string
     ): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         // Validate column name (custom columns flow in from user config) — matches updateColumnByPlanFile.
         if (!VALID_KANBAN_COLUMNS.has(targetColumn) && !SAFE_COLUMN_NAME_RE.test(targetColumn)) {
-            console.error(`[KanbanDatabase] updateColumnWithEpicCascadeByPlanId rejected invalid column: ${targetColumn}`);
+            console.error(`[KanbanDatabase] updateColumnWithFeatureCascadeByPlanId rejected invalid column: ${targetColumn}`);
             return false;
         }
         const now = new Date().toISOString();
@@ -4269,7 +4276,7 @@ export class KanbanDatabase {
             this._db.run('BEGIN');
             this._db.run(
                 `UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_id = ?`,
-                [targetColumn, now, epicPlanId]
+                [targetColumn, now, featurePlanId]
             );
             if (subtaskPlanIds.length > 0) {
                 const placeholders = subtaskPlanIds.map(() => '?').join(',');
@@ -4283,36 +4290,36 @@ export class KanbanDatabase {
             return true;
         } catch (err) {
             try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
-            console.error('[KanbanDatabase] updateColumnWithEpicCascadeByPlanId failed:', err);
+            console.error('[KanbanDatabase] updateColumnWithFeatureCascadeByPlanId failed:', err);
             return false;
         }
     }
 
     /**
-     * Atomic, race-free epic cascade: move an epic and all its active subtasks
+     * Atomic, race-free feature cascade: move an feature and all its active subtasks
      * to a target column in one transaction. Optionally also update status.
      *
-     * Unlike updateColumnWithEpicCascadeByPlanId (which takes explicit subtaskPlanIds[]
-     * and has a read-then-write race), this uses `WHERE epic_id = ?` inside the UPDATE
-     * — subtasks added between the epic move and the subtask move are still caught.
+     * Unlike updateColumnWithFeatureCascadeByPlanId (which takes explicit subtaskPlanIds[]
+     * and has a read-then-write race), this uses `WHERE feature_id = ?` inside the UPDATE
+     * — subtasks added between the feature move and the subtask move are still caught.
      *
-     * @param epicPlanId    The epic's plan_id.
+     * @param featurePlanId    The feature's plan_id.
      * @param targetColumn  Target kanban column (validated against VALID_KANBAN_COLUMNS).
-     * @param targetStatus  Optional status to also set for the epic + subtasks (e.g. 'completed').
+     * @param targetStatus  Optional status to also set for the feature + subtasks (e.g. 'completed').
      *                      When omitted, status is NOT touched (correct for non-completion moves).
      * @param includeAllSubtasks When true, do NOT filter subtasks by status='active' (needed for
      *                      recovery/restore paths that must catch completed/deleted subtasks too).
      *                      Default false (only active subtasks cascade on forward moves).
      */
-    public async cascadeEpicByPlanId(
-        epicPlanId: string,
+    public async cascadeFeatureByPlanId(
+        featurePlanId: string,
         targetColumn: string,
         targetStatus?: string,
         includeAllSubtasks: boolean = false
     ): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         if (!VALID_KANBAN_COLUMNS.has(targetColumn) && !SAFE_COLUMN_NAME_RE.test(targetColumn)) {
-            console.error(`[KanbanDatabase] cascadeEpicByPlanId rejected invalid column: ${targetColumn}`);
+            console.error(`[KanbanDatabase] cascadeFeatureByPlanId rejected invalid column: ${targetColumn}`);
             return false;
         }
         const now = new Date().toISOString();
@@ -4320,20 +4327,20 @@ export class KanbanDatabase {
         const subtaskStatusFilter = includeAllSubtasks ? '' : " AND status = 'active'";
         try {
             this._db.run('BEGIN');
-            // Move the epic itself
-            const epicParams: unknown[] = targetStatus
-                ? [targetColumn, targetStatus, now, epicPlanId]
-                : [targetColumn, now, epicPlanId];
+            // Move the feature itself
+            const featureParams: unknown[] = targetStatus
+                ? [targetColumn, targetStatus, now, featurePlanId]
+                : [targetColumn, now, featurePlanId];
             this._db.run(
                 `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ? WHERE plan_id = ?`,
-                epicParams
+                featureParams
             );
             // Cascade subtasks atomically (no read-then-write race)
             const subtaskParams: unknown[] = targetStatus
-                ? [targetColumn, targetStatus, now, epicPlanId]
-                : [targetColumn, now, epicPlanId];
+                ? [targetColumn, targetStatus, now, featurePlanId]
+                : [targetColumn, now, featurePlanId];
             this._db.run(
-                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ? WHERE epic_id = ?${subtaskStatusFilter}`,
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ? WHERE feature_id = ?${subtaskStatusFilter}`,
                 subtaskParams
             );
             this._db.run('COMMIT');
@@ -4341,7 +4348,7 @@ export class KanbanDatabase {
             return true;
         } catch (err) {
             try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
-            console.error('[KanbanDatabase] cascadeEpicByPlanId failed:', err);
+            console.error('[KanbanDatabase] cascadeFeatureByPlanId failed:', err);
             return false;
         }
     }
@@ -4426,7 +4433,7 @@ export class KanbanDatabase {
             // migrations, post rollback-guard) so a rolled-back reload failure
             // never produces a false-positive bump.
             this._dataVersion++;
-            this._diagEpicSnapshot('reload'); // DIAGNOSTIC (is_epic clobber) — what this instance just loaded from disk
+            this._diagFeatureSnapshot('reload'); // DIAGNOSTIC (is_feature clobber) — what this instance just loaded from disk
         } catch (error) {
             console.error('[KanbanDatabase] Failed to reload from disk:', error);
             // Keep using stale in-memory copy — better than crashing
@@ -5177,7 +5184,7 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V28 migration completed: project values normalized from __unassigned__ to empty string');
         }
 
-        // V29: Add epic support columns to plans table
+        // V29: Add feature support columns to plans table
         const v29 = await this.getMigrationVersion();
         if (v29 < 29) {
             for (const sql of MIGRATION_V29_SQL) {
@@ -5186,7 +5193,7 @@ export class KanbanDatabase {
                 }
             }
             await this.setMigrationVersion(29);
-            console.log('[KanbanDatabase] V29 migration completed: epic support columns added');
+            console.log('[KanbanDatabase] V29 migration completed: feature support columns added');
         }
 
         // V30: Replace single-worktree meta keys with worktrees table
@@ -5216,7 +5223,7 @@ export class KanbanDatabase {
                         id          INTEGER PRIMARY KEY AUTOINCREMENT,
                         branch      TEXT NOT NULL UNIQUE,
                         path        TEXT NOT NULL,
-                        epic_id     INTEGER REFERENCES plans(id) ON DELETE SET NULL,
+                        feature_id     INTEGER REFERENCES plans(id) ON DELETE SET NULL,
                         created_at  TEXT NOT NULL DEFAULT (datetime('now')),
                         status      TEXT NOT NULL DEFAULT 'active'
                     );
@@ -5225,7 +5232,7 @@ export class KanbanDatabase {
                 // Restore old rows with defaults for new columns
                 for (const row of oldWorktreeRows) {
                     this._db.run(
-                        `INSERT OR IGNORE INTO worktrees (id, branch, path, epic_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?)`,
+                        `INSERT OR IGNORE INTO worktrees (id, branch, path, feature_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?)`,
                         [row.id, row.branch, '', null, row.created_at, 'active']
                     );
                 }
@@ -5272,14 +5279,14 @@ export class KanbanDatabase {
             }
         }
 
-        // V31: Fix worktrees.epic_id column type — was INTEGER (coerces non-numeric plan_id to 0),
+        // V31: Fix worktrees.feature_id column type — was INTEGER (coerces non-numeric plan_id to 0),
         // must be TEXT to store plans.plan_id values correctly.
         const v31 = await this.getMigrationVersion();
         if (v31 < 31) {
             try {
                 this._db.exec('BEGIN');
 
-                // Preserve existing rows — epic_id values are all NULL or 0 (unusable),
+                // Preserve existing rows — feature_id values are all NULL or 0 (unusable),
                 // restore as NULL since the original plan_id values were never stored correctly.
                 const oldRows: Array<{ id: number; branch: string; path: string; created_at: string; status: string }> = [];
                 try {
@@ -5303,7 +5310,7 @@ export class KanbanDatabase {
                         id          INTEGER PRIMARY KEY AUTOINCREMENT,
                         branch      TEXT NOT NULL UNIQUE,
                         path        TEXT NOT NULL,
-                        epic_id     TEXT,
+                        feature_id     TEXT,
                         created_at  TEXT NOT NULL DEFAULT (datetime('now')),
                         status      TEXT NOT NULL DEFAULT 'active'
                     );
@@ -5311,14 +5318,14 @@ export class KanbanDatabase {
 
                 for (const row of oldRows) {
                     this._db.run(
-                        `INSERT OR IGNORE INTO worktrees (id, branch, path, epic_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?)`,
+                        `INSERT OR IGNORE INTO worktrees (id, branch, path, feature_id, created_at, status) VALUES (?, ?, ?, ?, ?, ?)`,
                         [row.id, row.branch, row.path, null, row.created_at, row.status]
                     );
                 }
 
                 this._db.exec('COMMIT');
                 await this.setMigrationVersion(31);
-                console.log('[KanbanDatabase] V31 migration completed: worktrees.epic_id changed to TEXT');
+                console.log('[KanbanDatabase] V31 migration completed: worktrees.feature_id changed to TEXT');
             } catch (e) {
                 try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V31 migration failed:', e);
@@ -5412,13 +5419,13 @@ export class KanbanDatabase {
             }
         }
 
-        // V36: Run the unified epic file path migration and data repair
+        // V36: Run the unified feature file path migration and data repair
         const v36 = await this.getMigrationVersion();
         if (v36 < 36) {
             await this._runMigrationV36(this._workspaceRoot);
         }
 
-        // V37: Reconcile epic plan_ids with the UUID embedded in their filename.
+        // V37: Reconcile feature plan_ids with the UUID embedded in their filename.
         const v37 = await this.getMigrationVersion();
         if (v37 < 37) {
             await this._runMigrationV37();
@@ -5477,11 +5484,11 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V40 migration completed: url column added to imported_docs');
         }
 
-        // V41: epics derive complexity = max(active subtask score). Backfill legacy epics
+        // V41: features derive complexity = max(active subtask score). Backfill legacy features
         // that were stored as 'Unknown' (the pre-derivation default) so their stored
         // complexity matches the new derived model and routing converges. Idempotent and
-        // best-effort: only epics whose active-subtask max >= 1 are touched; unscored
-        // epics stay 'Unknown' (the existing Unknown→High batch-move threshold handles them).
+        // best-effort: only features whose active-subtask max >= 1 are touched; unscored
+        // features stay 'Unknown' (the existing Unknown→High batch-move threshold handles them).
         // Non-numeric legacy subtask scores cast to 0 here; the first runtime recompute
         // (on next membership/rescore event) self-heals them.
         const v41 = await this.getMigrationVersion();
@@ -5490,14 +5497,14 @@ export class KanbanDatabase {
                 this._db.exec(`
                     UPDATE plans SET complexity = CAST(
                         (SELECT MAX(CAST(s.complexity AS INTEGER)) FROM plans s
-                         WHERE s.epic_id = plans.plan_id AND s.status = 'active') AS TEXT)
-                    WHERE is_epic = 1
+                         WHERE s.feature_id = plans.plan_id AND s.status = 'active') AS TEXT)
+                    WHERE is_feature = 1
                       AND (SELECT MAX(CAST(s.complexity AS INTEGER)) FROM plans s
-                           WHERE s.epic_id = plans.plan_id AND s.status = 'active') >= 1
+                           WHERE s.feature_id = plans.plan_id AND s.status = 'active') >= 1
                 `);
             } catch { /* best effort */ }
             await this.setMigrationVersion(41);
-            console.log('[KanbanDatabase] V41 migration completed: epic complexity backfilled to subtask max');
+            console.log('[KanbanDatabase] V41 migration completed: feature complexity backfilled to subtask max');
         }
 
         // V42: worktree-per-subtask columns. Purely additive — subtask_plan_id, base_branch,
@@ -5623,18 +5630,86 @@ export class KanbanDatabase {
                 console.error('[KanbanDatabase] V45 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
+
+        // V46: Rename is_epic → is_feature, epic_id → feature_id (clean break).
+        // The feature concept is unreleased, so no user data exists. We use the
+        // SQLite table-rebuild pattern: rename old table, create new with correct
+        // schema, copy data with column mapping, drop old. Idempotent: if the new
+        // columns already exist (fresh DB), it's a no-op.
+        const v46 = await this.getMigrationVersion();
+        if (v46 < 46) {
+            try {
+                this._db.exec('BEGIN');
+                // Check if OLD columns still exist (pre-migration DB). We hardcode the
+                // old names here — the blanket rename must not touch these literals.
+                const plansColCheck = this._db.prepare(`SELECT COUNT(*) as c FROM pragma_table_info('plans') WHERE name = 'is_epic'`);
+                const plansColResult = plansColCheck.getAsObject() as any;
+                plansColCheck.free();
+                const hasOldPlansCol = plansColResult && plansColResult.c > 0;
+
+                const wtColCheck = this._db.prepare(`SELECT COUNT(*) as c FROM pragma_table_info('worktrees') WHERE name = 'epic_id'`);
+                const wtColResult = wtColCheck.getAsObject() as any;
+                wtColCheck.free();
+                const hasOldWorktreeCol = wtColResult && wtColResult.c > 0;
+
+                if (hasOldPlansCol) {
+                    // Build column mapping: old column names → new column names
+                    const plansColsStmt = this._db.prepare(`SELECT name FROM pragma_table_info('plans') ORDER BY cid`);
+                    const plansCols: string[] = [];
+                    while (plansColsStmt.step()) {
+                        plansCols.push((plansColsStmt.getAsObject() as any).name);
+                    }
+                    plansColsStmt.free();
+                    // Map old names to new names for the SELECT (alias old → new)
+                    const selectCols = plansCols.map((c: string) => {
+                        if (c === 'is_epic') return 'is_epic AS is_feature';
+                        if (c === 'epic_id') return 'epic_id AS feature_id';
+                        return c;
+                    });
+                    const insertCols = plansCols.map((c: string) => {
+                        if (c === 'is_epic') return 'is_feature';
+                        if (c === 'epic_id') return 'feature_id';
+                        return c;
+                    });
+                    this._db.exec(`ALTER TABLE plans RENAME TO plans_old_v46`);
+                    this._db.exec(SCHEMA_TABLES_SQL);
+                    this._db.exec(`INSERT INTO plans (${insertCols.join(', ')}) SELECT ${selectCols.join(', ')} FROM plans_old_v46`);
+                    this._db.exec(`DROP TABLE plans_old_v46`);
+                }
+                if (hasOldWorktreeCol) {
+                    const wtColsStmt = this._db.prepare(`SELECT name FROM pragma_table_info('worktrees') ORDER BY cid`);
+                    const wtCols: string[] = [];
+                    while (wtColsStmt.step()) {
+                        wtCols.push((wtColsStmt.getAsObject() as any).name);
+                    }
+                    wtColsStmt.free();
+                    const wtSelectCols = wtCols.map((c: string) => c === 'epic_id' ? 'epic_id AS feature_id' : c);
+                    const wtInsertCols = wtCols.map((c: string) => c === 'epic_id' ? 'feature_id' : c);
+                    this._db.exec(`ALTER TABLE worktrees RENAME TO worktrees_old_v46`);
+                    this._db.exec(SCHEMA_TABLES_SQL);
+                    this._db.exec(`INSERT INTO worktrees (${wtInsertCols.join(', ')}) SELECT ${wtSelectCols.join(', ')} FROM worktrees_old_v46`);
+                    this._db.exec(`DROP TABLE worktrees_old_v46`);
+                }
+                this._db.exec('COMMIT');
+                await this.setMigrationVersion(46);
+                console.log('[KanbanDatabase] V46 migration completed: is_epic → is_feature, epic_id → feature_id');
+            } catch (e) {
+                try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V46 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
     }
 
     /**
-     * V37 — Heal orphaned epic subtasks.
+     * V37 — Heal orphaned feature subtasks.
      *
-     * Subtask→epic links are stored as subtask.epic_id = epic.plan_id (DB-only). When an
-     * epic file's row is hard-deleted and re-imported (atomic save, rename, transient
+     * Subtask→feature links are stored as subtask.feature_id = feature.plan_id (DB-only). When an
+     * feature file's row is hard-deleted and re-imported (atomic save, rename, transient
      * delete+create, or a registry rebuild), the watcher used to mint a fresh random
-     * plan_id — silently orphaning every subtask so the epic showed 0 subtasks.
+     * plan_id — silently orphaning every subtask so the feature showed 0 subtasks.
      *
-     * The stable identity is the UUID in the epic's filename (`…-<uuid>.md`). This migration
-     * restores each epic's plan_id to that UUID and migrates any subtask / worktree links
+     * The stable identity is the UUID in the feature's filename (`…-<uuid>.md`). This migration
+     * restores each feature's plan_id to that UUID and migrates any subtask / worktree links
      * that pointed at the stale id. Idempotent: only touches rows where the ids disagree.
      * Going forward, GlobalPlanWatcherService derives the plan_id from the filename, so the
      * link stays intact across re-imports and this stays a no-op.
@@ -5643,24 +5718,24 @@ export class KanbanDatabase {
         if (!this._db) return;
         const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
         try {
-            // Any file under .switchboard/epics/ is an epic by the unified-architecture
-            // invariant (see GlobalPlanWatcherService) — match regardless of is_epic, since
+            // Any file under .switchboard/features/ is an feature by the unified-architecture
+            // invariant (see GlobalPlanWatcherService) — match regardless of is_feature, since
             // the clobbering bug also resets that flag to 0/NULL.
             const stmt = this._db.prepare(
-                `SELECT ${PLAN_COLUMNS} FROM plans WHERE plan_file LIKE '.switchboard/epics/%'`
+                `SELECT ${PLAN_COLUMNS} FROM plans WHERE plan_file LIKE '.switchboard/features/%'`
             );
-            const epics = this._readRows(stmt);
+            const features = this._readRows(stmt);
             let healed = 0;
-            for (const epic of epics) {
-                // Restore the epic flag if it was clobbered.
-                if (!epic.isEpic) {
-                    this._db.run('UPDATE plans SET is_epic = 1 WHERE plan_id = ?', [epic.planId]);
+            for (const feature of features) {
+                // Restore the feature flag if it was clobbered.
+                if (!feature.isFeature) {
+                    this._db.run('UPDATE plans SET is_feature = 1 WHERE plan_id = ?', [feature.planId]);
                 }
 
-                const match = path.basename(epic.planFile).match(UUID_RE);
+                const match = path.basename(feature.planFile).match(UUID_RE);
                 if (!match) continue;
                 const stableId = match[1];
-                const currentId = epic.planId;
+                const currentId = feature.planId;
                 if (!stableId || stableId === currentId) continue;
 
                 // Safety: never collide with an existing distinct row that already owns stableId.
@@ -5671,14 +5746,14 @@ export class KanbanDatabase {
                 try { collision = collisionStmt.step(); } finally { collisionStmt.free(); }
                 if (collision) continue;
 
-                // Re-link subtasks/worktrees that referenced the stale id, then fix the epic.
-                this._db.run('UPDATE plans SET epic_id = ? WHERE epic_id = ?', [stableId, currentId]);
-                try { this._db.run('UPDATE worktrees SET epic_id = ? WHERE epic_id = ?', [stableId, currentId]); } catch { /* worktrees may predate epic_id */ }
+                // Re-link subtasks/worktrees that referenced the stale id, then fix the feature.
+                this._db.run('UPDATE plans SET feature_id = ? WHERE feature_id = ?', [stableId, currentId]);
+                try { this._db.run('UPDATE worktrees SET feature_id = ? WHERE feature_id = ?', [stableId, currentId]); } catch { /* worktrees may predate feature_id */ }
                 this._db.run('UPDATE plans SET plan_id = ? WHERE plan_id = ?', [stableId, currentId]);
                 healed++;
             }
             if (healed > 0) {
-                console.log(`[KanbanDatabase] V37 migration: reconciled ${healed} epic plan_id(s) with filename UUID, re-linking subtasks`);
+                console.log(`[KanbanDatabase] V37 migration: reconciled ${healed} feature plan_id(s) with filename UUID, re-linking subtasks`);
             }
             await this.setMigrationVersion(37);
         } catch (migrationErr) {
@@ -5691,46 +5766,46 @@ export class KanbanDatabase {
         if (!this._db) return;
 
         try {
-            // ── File Migration: move epic files from plans/ to epics/ directory ──
+            // ── File Migration: move feature files from plans/ to features/ directory ──
             // MUST run before the data repair, because the data repair sets
-            // is_epic = NULL → 0, which would clobber clobbered epics before we
+            // is_feature = NULL → 0, which would clobber clobbered features before we
             // can identify and move them.
-            // Match: (a) all is_epic = 1 files in plans/ (properly marked, any filename),
-            //        (b) is_epic IS NULL files with the epic- prefix (clobbered by the
-            //            registry/watcher bug — the epic- prefix distinguishes them from
-            //            clobbered non-epic plans).
+            // Match: (a) all is_feature = 1 files in plans/ (properly marked, any filename),
+            //        (b) is_feature IS NULL files with the feature- prefix (clobbered by the
+            //            registry/watcher bug — the feature- prefix distinguishes them from
+            //            clobbered non-feature plans).
             const stmt = this._db.prepare(
                 `SELECT ${PLAN_COLUMNS} FROM plans WHERE plan_file LIKE '.switchboard/plans/%' AND (` +
-                `is_epic = 1 OR (is_epic IS NULL AND plan_file LIKE '.switchboard/plans/epic-%'))`
+                `is_feature = 1 OR (is_feature IS NULL AND plan_file LIKE '.switchboard/plans/feature-%'))`
             );
-            const epics = this._readRows(stmt);
-            const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
-            await fs.promises.mkdir(epicsDir, { recursive: true });
-            for (const epic of epics) {
-                const oldAbs = path.resolve(workspaceRoot, epic.planFile);
-                const basename = path.basename(epic.planFile);
-                const newRel = path.join('.switchboard', 'epics', basename);
+            const features = this._readRows(stmt);
+            const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
+            await fs.promises.mkdir(featuresDir, { recursive: true });
+            for (const feature of features) {
+                const oldAbs = path.resolve(workspaceRoot, feature.planFile);
+                const basename = path.basename(feature.planFile);
+                const newRel = path.join('.switchboard', 'features', basename);
                 const newAbs = path.resolve(workspaceRoot, newRel);
                 try {
                     if (fs.existsSync(oldAbs)) {
                         await fs.promises.copyFile(oldAbs, oldAbs + '.migrated.bak');
                         await fs.promises.rename(oldAbs, newAbs);
                     }
-                    await this.updatePlanFileByPlanId(epic.planId, newRel);
-                    // Restore is_epic = 1 in case it was clobbered to NULL
-                    this._db.run('UPDATE plans SET is_epic = 1 WHERE plan_id = ?', [epic.planId]);
+                    await this.updatePlanFileByPlanId(feature.planId, newRel);
+                    // Restore is_feature = 1 in case it was clobbered to NULL
+                    this._db.run('UPDATE plans SET is_feature = 1 WHERE plan_id = ?', [feature.planId]);
                 } catch (e) {
-                    console.warn(`[KanbanDatabase] V36 migration: failed to move ${epic.planFile}: ${e}`);
+                    console.warn(`[KanbanDatabase] V36 migration: failed to move ${feature.planFile}: ${e}`);
                     // Leave DB record as-is — filterGhostPlans will handle gracefully
                 }
             }
 
-            // ── Data Repair: fix remaining is_epic = NULL → 0 ──
-            // After the file migration has restored clobbered epics to is_epic = 1,
-            // any remaining NULL values are non-epic plans that were clobbered by
+            // ── Data Repair: fix remaining is_feature = NULL → 0 ──
+            // After the file migration has restored clobbered features to is_feature = 1,
+            // any remaining NULL values are non-feature plans that were clobbered by
             // the registry/watcher bug. Set them to the intended DEFAULT 0.
-            this._db.run('UPDATE plans SET is_epic = 0 WHERE is_epic IS NULL');
-            console.log('[KanbanDatabase] V36 data repair: set is_epic = 0 for remaining NULL records');
+            this._db.run('UPDATE plans SET is_feature = 0 WHERE is_feature IS NULL');
+            console.log('[KanbanDatabase] V36 data repair: set is_feature = 0 for remaining NULL records');
 
             await this.setMigrationVersion(36);
             console.log('[KanbanDatabase] V36 migration completed.');
@@ -6060,7 +6135,7 @@ FROM plans
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
                         record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.notionPageId || '',
                         record.worktreeId ?? null,
-                        record.isEpic ?? null, record.epicId || '',
+                        record.isFeature ?? null, record.featureId || '',
                         record.workspaceName || '', record.projectId ?? null
                     ]);
                     restored++;
@@ -6099,11 +6174,11 @@ FROM plans
             const exportRoot = this._resolveExportRoot();
 
             const allPlans = await this.getBoard(workspaceId);
-            // Build epic-id -> topic lookup so subtask lines can name their parent epic.
-            const epicTopicById = new Map<string, string>();
+            // Build feature-id -> topic lookup so subtask lines can name their parent feature.
+            const featureTopicById = new Map<string, string>();
             for (const plan of allPlans) {
-                if (plan.isEpic) {
-                    epicTopicById.set(plan.planId, plan.topic);
+                if (plan.isFeature) {
+                    featureTopicById.set(plan.planId, plan.topic);
                 }
             }
             const orderedColumns = [...DEFAULT_KANBAN_COLUMNS].sort((a, b) => a.order - b.order);
@@ -6143,16 +6218,16 @@ FROM plans
                         const filePath = path.isAbsolute(plan.planFile)
                             ? plan.planFile
                             : path.join(exportRoot, plan.planFile);
-                        // Append planId + epic assignment in an HTML comment so the visible
-                        // board is unchanged but the "Suggest Epics" agent can parse them
+                        // Append planId + feature assignment in an HTML comment so the visible
+                        // board is unchanged but the "Suggest Features" agent can parse them
                         // without falling back to the 1.3 MB get-state.js JSON blob.
                         const parts = [`planId:${plan.planId}`];
-                        if (plan.isEpic) { parts.push('epic'); }
-                        if (plan.epicId) {
-                            const epicTopic = epicTopicById.get(plan.epicId);
-                            parts.push(epicTopic ? `subtask-of:"${epicTopic}"` : `subtask-of:${plan.epicId}`);
+                        if (plan.isFeature) { parts.push('feature'); }
+                        if (plan.featureId) {
+                            const featureTopic = featureTopicById.get(plan.featureId);
+                            parts.push(featureTopic ? `subtask-of:"${featureTopic}"` : `subtask-of:${plan.featureId}`);
                         }
-                        // NEW: emit project tag so the Suggest Epics skill can filter by project.
+                        // NEW: emit project tag so the Suggest Features skill can filter by project.
                         // Empty/missing project → no tag (unassigned by definition).
                         if (plan.project) {
                             const safeProject = plan.project.replace(/"/g, '');
@@ -6228,29 +6303,29 @@ FROM plans
     }
 
     /**
-     * DIAGNOSTIC (is_epic clobber investigation) — TEMPORARY. Snapshot the is_epic state of
-     * every .switchboard/epics/ row THIS instance currently holds, tagged with the instance id
+     * DIAGNOSTIC (is_feature clobber investigation) — TEMPORARY. Snapshot the is_feature state of
+     * every .switchboard/features/ row THIS instance currently holds, tagged with the instance id
      * and a context label ("persist" = about to flush to disk, "reload" = just loaded from disk).
      *
      * This is the fallback that makes candidate ❷ visible without a second test run: if a stale
-     * instance flushes is_epic=0 for an epic the Provider just set to 1, the "persist" line names
-     * the offending instance and the exact moment. Logs nothing when the workspace has no epic
+     * instance flushes is_feature=0 for an feature the Provider just set to 1, the "persist" line names
+     * the offending instance and the exact moment. Logs nothing when the workspace has no feature
      * rows, to keep the file focused. Remove with the other probes.
      */
-    private _diagEpicSnapshot(context: 'persist' | 'reload'): void {
+    private _diagFeatureSnapshot(context: 'persist' | 'reload'): void {
         try {
             if (!this._db) return;
-            const res = this._db.exec("SELECT plan_file, is_epic, epic_id FROM plans WHERE plan_file LIKE '.switchboard/epics/%'");
+            const res = this._db.exec("SELECT plan_file, is_feature, feature_id FROM plans WHERE plan_file LIKE '.switchboard/features/%'");
             const rows = res[0]?.values ?? [];
             if (rows.length === 0) return;
-            const summary = rows.map(r => `${r[0]}=is_epic:${r[1]},epic_id:${r[2] ?? ''}`).join(' | ');
-            appendEpicClobberDiag(this._workspaceRoot, `${context} instance=${this.instanceId} epics=[ ${summary} ]`);
+            const summary = rows.map(r => `${r[0]}=is_feature:${r[1]},feature_id:${r[2] ?? ''}`).join(' | ');
+            appendFeatureClobberDiag(this._workspaceRoot, `${context} instance=${this.instanceId} features=[ ${summary} ]`);
         } catch { /* diagnostic only */ }
     }
 
     private async _persist(): Promise<boolean> {
         if (!this._db) return false;
-        this._diagEpicSnapshot('persist');
+        this._diagFeatureSnapshot('persist');
         // Bump the board-data version counter. Every board-data write funnels
         // through _persist(), so this is the single choke point that lets
         // KanbanProvider short-circuit a no-op refresh in O(1). Non-board-data
@@ -6688,8 +6763,8 @@ FROM plans
                     notionPageId: String(row.notion_page_id || ""),
                     worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined,
                     worktreeStatus: String(row.worktree_status || 'none') as 'none' | 'active' | 'merged' | 'deleted',
-                    isEpic: row.is_epic !== null && row.is_epic !== undefined ? Number(row.is_epic) : undefined,
-                    epicId: String(row.epic_id || ''),
+                    isFeature: row.is_feature !== null && row.is_feature !== undefined ? Number(row.is_feature) : undefined,
+                    featureId: String(row.feature_id || ''),
                     workspaceName: String(row.workspace_name || ""),
                     projectId: row.project_id !== null && row.project_id !== undefined ? Number(row.project_id) : null
                 });

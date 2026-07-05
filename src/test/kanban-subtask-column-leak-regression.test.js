@@ -1,16 +1,16 @@
 'use strict';
 
-// Regression: epic subtasks must NOT leak into column-batch operations.
+// Regression: feature subtasks must NOT leak into column-batch operations.
 //
-// An epic's subtasks each carry their own `kanban_column`, independent of the
-// epic's column. The board (kanban.html) rolls subtasks up under their epic and
-// does NOT render them as loose column cards (`displayCards.filter(card => !card.epicId)`).
+// An feature's subtasks each carry their own `kanban_column`, independent of the
+// feature's column. The board (kanban.html) rolls subtasks up under their feature and
+// does NOT render them as loose column cards (`displayCards.filter(card => !card.featureId)`).
 // Column-batch handlers in KanbanProvider (Advance All / moveAll, promptAll,
 // completeAll, batch planner/coder prompts, and the per-role prompt previews)
 // therefore MUST exclude subtask cards too — otherwise a subtask whose column
 // happens to match (e.g. CREATED) gets swept into the operation even though its
-// epic sits in a different column (e.g. BACKLOG). That divergence caused
-// "Advance All" on CREATED to dispatch a BACKLOG epic's subtasks instead of the
+// feature sits in a different column (e.g. BACKLOG). That divergence caused
+// "Advance All" on CREATED to dispatch a BACKLOG feature's subtasks instead of the
 // loose plans the user could actually see.
 
 const assert = require('assert');
@@ -34,8 +34,8 @@ function run() {
     const helperMatch = source.match(/private _visibleColumnCards\([^)]*\)\s*:\s*KanbanCard\[\]\s*\{[\s\S]*?\n {4}\}/);
     assert.ok(helperMatch, '_visibleColumnCards helper must exist');
     assert.ok(
-        /card\.column === column && !card\.epicId/.test(helperMatch[0]),
-        '_visibleColumnCards must exclude subtask cards via !card.epicId'
+        /card\.column === column && !card\.featureId/.test(helperMatch[0]),
+        '_visibleColumnCards must exclude subtask cards via !card.featureId'
     );
 
     // 2. Every column-batch handler must source its cards through the helper, not
@@ -49,7 +49,7 @@ function run() {
         );
         assert.ok(
             !/_lastCards\.filter\(card => card\.workspaceRoot === workspaceRoot && card\.column ===/.test(block),
-            `${caseName} must NOT use a raw column filter (would re-admit epic subtasks)`
+            `${caseName} must NOT use a raw column filter (would re-admit feature subtasks)`
         );
     }
 
@@ -64,10 +64,10 @@ function run() {
     );
 
     // 4. The per-role prompt-preview filters skip subtasks so previews match dispatch.
-    const previewGuards = source.match(/if \(c\.epicId\) return false;/g) || [];
+    const previewGuards = source.match(/if \(c\.featureId\) return false;/g) || [];
     assert.ok(
         previewGuards.length >= 2,
-        'both per-role prompt-preview filters must skip subtask cards (if (c.epicId) return false;)'
+        'both per-role prompt-preview filters must skip subtask cards (if (c.featureId) return false;)'
     );
 
     // 5. Reroute sendToBacklog and sendToNew to moveCardToColumn for cascading subtasks
@@ -79,19 +79,19 @@ function run() {
     assert.ok(newBlock.includes('moveCardToColumn('), 'sendToNew must call moveCardToColumn');
     assert.ok(!newBlock.includes('db.updateColumn(resolvedSessionId'), 'sendToNew must NOT call db.updateColumn directly');
 
-    // 6. completeAll must cascade column updates for epic cards so subtasks follow
-    //    to COMPLETED (same rigid-unit model — an epic's subtasks share its column).
+    // 6. completeAll must cascade column updates for feature cards so subtasks follow
+    //    to COMPLETED (same rigid-unit model — an feature's subtasks share its column).
     const completeBlock = getCaseBlock(source, 'completeAll');
     assert.ok(
-        completeBlock.includes('cascadeEpicByPlanId('),
-        'completeAll must cascade epic column updates via cascadeEpicByPlanId'
+        completeBlock.includes('cascadeFeatureByPlanId('),
+        'completeAll must cascade feature column updates via cascadeFeatureByPlanId'
     );
     assert.ok(
-        completeBlock.includes('card.isEpic'),
-        'completeAll must branch on card.isEpic to detect epic cards'
+        completeBlock.includes('card.isFeature'),
+        'completeAll must branch on card.isFeature to detect feature cards'
     );
 
-    // 7. Frontend collector: getAllInColumn must exclude subtask cards (!c.epicId)
+    // 7. Frontend collector: getAllInColumn must exclude subtask cards (!c.featureId)
     //    on BOTH return paths, mirroring the backend _visibleColumnCards contract.
     //    The backend was fixed in commit 3fff80a but the frontend collector was
     //    never touched — this test prevents that exact regression.
@@ -105,35 +105,35 @@ function run() {
     const collectorBody = collectorMatch[0];
     const codedAutoFilter = collectorBody.match(/CODED_IDS\.includes\(c\.column\)([^)]*)\)/);
     assert.ok(
-        codedAutoFilter && /!c\.epicId/.test(codedAutoFilter[0]),
-        'getAllInColumn CODED_AUTO branch must exclude subtask cards via !c.epicId'
+        codedAutoFilter && /!c\.featureId/.test(codedAutoFilter[0]),
+        'getAllInColumn CODED_AUTO branch must exclude subtask cards via !c.featureId'
     );
     const defaultFilter = collectorBody.match(/c\.column === col([^)]*)\)/);
     assert.ok(
-        defaultFilter && /!c\.epicId/.test(defaultFilter[0]),
-        'getAllInColumn default branch must exclude subtask cards via !c.epicId'
+        defaultFilter && /!c\.featureId/.test(defaultFilter[0]),
+        'getAllInColumn default branch must exclude subtask cards via !c.featureId'
     );
 
-    // 8. groupAllIntoEpic must resolve the effective column in backlog view.
+    // 8. groupAllIntoFeature must resolve the effective column in backlog view.
     //    In backlog view, the CREATED column slot displays BACKLOG cards (remapped
     //    via _effectiveColumn at render time). The handler must call getAllInColumn
     //    with 'BACKLOG' when showingBacklog && column === 'CREATED', not the raw
     //    'CREATED' column — otherwise it groups hidden real-CREATED cards instead
     //    of the visible BACKLOG cards.
-    const groupBlock = html.match(/case 'groupAllIntoEpic':\s*\{[\s\S]*?break;/);
-    assert.ok(groupBlock, 'groupAllIntoEpic handler must exist in kanban.html');
+    const groupBlock = html.match(/case 'groupAllIntoFeature':\s*\{[\s\S]*?break;/);
+    assert.ok(groupBlock, 'groupAllIntoFeature handler must exist in kanban.html');
     assert.ok(
         /showingBacklog[\s\S]*'CREATED'[\s\S]*'BACKLOG'/.test(groupBlock[0]),
-        'groupAllIntoEpic must resolve effective column (BACKLOG) when showingBacklog && column === CREATED'
+        'groupAllIntoFeature must resolve effective column (BACKLOG) when showingBacklog && column === CREATED'
     );
     assert.ok(
         /getAllInColumn\(effectiveCol\)/.test(groupBlock[0]),
-        'groupAllIntoEpic must call getAllInColumn with the resolved effective column, not the raw column'
+        'groupAllIntoFeature must call getAllInColumn with the resolved effective column, not the raw column'
     );
 
     // 9. In backlog view, the four pipeline buttons (moveSelected, moveAll,
     //    promptSelected, promptAll) must be suppressed on the CREATED column —
-    //    backlog is a holding pen, not a pipeline stage. Only the epic-group
+    //    backlog is a holding pen, not a pipeline stage. Only the feature-group
     //    button should remain. The gate is `(isCreated && showingBacklog)`.
     assert.ok(
         /pipelineButtons = \(isCreated && showingBacklog\) \? '' :/.test(html),

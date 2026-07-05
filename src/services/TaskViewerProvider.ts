@@ -975,7 +975,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             allRoots: allRoots,
             moveCard: async (wsRoot, sessionId, targetColumn, planFile) => {
                 // Route the kanban_operations fallback script's move through the
-                // provider so it inherits the epic cascade, integration-sync fan-out,
+                // provider so it inherits the feature cascade, integration-sync fan-out,
                 // and board refresh — the script's direct-DB path can't sync to
                 // Linear/ClickUp (the token lives in secret storage).
                 if (!this._kanbanProvider) {
@@ -1009,59 +1009,59 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            createEpic: async (wsRoot, name, planIds, description) => {
+            createFeature: async (wsRoot, name, planIds, description) => {
                 // Route the create-feature.js script through the provider so it inherits
-                // the DB upsert, subtask linking, epic-file write, and board refresh.
+                // the DB upsert, subtask linking, feature-file write, and board refresh.
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
                 }
                 try {
-                    return await this._kanbanProvider.createEpicFromPlanIds(wsRoot, name, planIds, description);
+                    return await this._kanbanProvider.createFeatureFromPlanIds(wsRoot, name, planIds, description);
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            assignToEpic: async (wsRoot, epicPlanId, planIds) => {
+            assignToFeature: async (wsRoot, featurePlanId, planIds) => {
                 // Route the assign-to-feature.js script through the provider for batch
                 // subtask linking + a single board refresh.
                 if (!this._kanbanProvider) {
                     return { success: false, assigned: [], skipped: [], error: 'Kanban provider not available' };
                 }
                 try {
-                    return await this._kanbanProvider.assignPlansToEpic(wsRoot, epicPlanId, planIds);
+                    return await this._kanbanProvider.assignPlansToFeature(wsRoot, featurePlanId, planIds);
                 } catch (err) {
                     return { success: false, assigned: [], skipped: [], error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            removeSubtaskFromEpic: async (wsRoot, subtaskPlanId) => {
+            removeSubtaskFromFeature: async (wsRoot, subtaskPlanId) => {
                 // Route the remove-from-feature.js script through the provider.
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
                 }
                 try {
-                    return await this._kanbanProvider._removeSubtaskFromEpic(wsRoot, subtaskPlanId);
+                    return await this._kanbanProvider._removeSubtaskFromFeature(wsRoot, subtaskPlanId);
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            deleteEpic: async (wsRoot, epicPlanId, deleteSubtasks) => {
+            deleteFeature: async (wsRoot, featurePlanId, deleteSubtasks) => {
                 // Route the delete-feature.js script through the provider.
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
                 }
                 try {
-                    return await this._kanbanProvider._deleteEpic(wsRoot, epicPlanId, deleteSubtasks);
+                    return await this._kanbanProvider._deleteFeature(wsRoot, featurePlanId, deleteSubtasks);
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            splitEpic: async (wsRoot, epicPlanId, keptPlanIds, firstEpicName, secondEpicName) => {
+            splitFeature: async (wsRoot, featurePlanId, keptPlanIds, firstFeatureName, secondFeatureName) => {
                 // Route the split-feature.js script through the provider.
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
                 }
                 try {
-                    return await this._kanbanProvider.splitEpic(wsRoot, epicPlanId, keptPlanIds, firstEpicName, secondEpicName);
+                    return await this._kanbanProvider.splitFeature(wsRoot, featurePlanId, keptPlanIds, firstFeatureName, secondFeatureName);
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
@@ -1908,7 +1908,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const planRecord = await db.getPlanBySessionId(this._lastSessionId);
                     if (planRecord) {
                         plan = {
-                            epicId: planRecord.epicId ?? undefined,
+                            featureId: planRecord.featureId ?? undefined,
                             planId: planRecord.planId ?? undefined,
                             workingDir: workspaceRoot,
                             absolutePath: planRecord.planFile,
@@ -1922,7 +1922,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const db = await this.getKanbanDbForRoot(plan.workingDir ?? plan.absolutePath);
             if (db) {
                 const worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
-                    epicId: plan.epicId,
+                    featureId: plan.featureId,
                     project: plan.project,
                     planId: plan.planId
                 });
@@ -2409,13 +2409,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!this._kanbanProvider) {
             const db = await this._getKanbanDb(workspaceRoot);
             if (!db) return false;
-            // Fallback: direct DB update with epic check (Class 4).
+            // Fallback: direct DB update with feature check (Class 4).
             // Guard: an empty sessionId (file-based plan) would make getPlanBySessionId('') match a
             // random empty-session plan (WHERE session_id='' LIMIT 1). Refuse to guess — return false.
             if (!sessionId) return false;
             const plan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
-            if (plan && plan.isEpic) {
-                return db.cascadeEpicByPlanId(plan.planId, column);
+            if (plan && plan.isFeature) {
+                return db.cascadeFeatureByPlanId(plan.planId, column);
             }
             return !!(await db.updateColumn(sessionId, column));
         }
@@ -2689,12 +2689,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     void this._checkOrphanedDatabase(effectiveWorkspaceRootForOrphanCheck);
                 }, 5000);
 
-                // Self-heal: regenerate all epic files so subtask lists stay in sync
+                // Self-heal: regenerate all feature files so subtask lists stay in sync
                 // with the DB. Catches files that got out of sync due to bugs, manual
                 // edits, watcher races, or extension upgrades. Deferred so it doesn't
                 // block startup.
                 setTimeout(() => {
-                    void this._kanbanProvider?.regenerateAllEpicFiles(effectiveWorkspaceRootForOrphanCheck);
+                    void this._kanbanProvider?.regenerateAllFeatureFiles(effectiveWorkspaceRootForOrphanCheck);
                 }, 3000);
             } catch (e) {
                 console.error(`[TaskViewerProvider] Failed to initialize Kanban DB on startup for ${workspaceRoot}:`, e);
@@ -3036,7 +3036,7 @@ Each plan file must include:
 - Create ${issues.length} plan file(s) total — one per issue
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
 - Do NOT skip the investigation step — read the relevant code before writing each plan
-- If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create an epic grouping them: "These [N] plans cover related work — want me to create an epic to group them together?" Only create the epic if the user confirms. See ${workspaceRoot}/.switchboard/epics/ for the format.`;
+- If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create an feature grouping them: "These [N] plans cover related work — want me to create an feature to group them together?" Only create the feature if the user confirms. See ${workspaceRoot}/.switchboard/features/ for the format.`;
 
         if (projectName) {
             prompt += '\n\n' + PROJECT_LINE_DIRECTIVE(projectName);
@@ -3144,7 +3144,7 @@ Each plan file must include:
         workspaceRoot: string
     ): Promise<Array<BatchPromptPlan & { sessionId: string }>> {
         // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
-        // — do not hand-roll (epic subtasks get silently dropped otherwise).
+        // — do not hand-roll (feature subtasks get silently dropped otherwise).
         const db = await this._getKanbanDb(workspaceRoot);
         if (!db) { return []; }
         const records: KanbanPlanRecord[] = [];
@@ -7507,8 +7507,8 @@ Each plan file must include:
         }
     }
 
-    /** Resolve the worktree path for a plan based on precedence: subtask worktree -> epic worktree -> project worktree -> undefined. */
-    public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { epicId?: string | null; project?: string | null; planId?: string | null }): Promise<string | undefined> {
+    /** Resolve the worktree path for a plan based on precedence: subtask worktree -> feature worktree -> project worktree -> undefined. */
+    public static async resolveWorktreePathForPlan(db: KanbanDatabase, plan: { featureId?: string | null; project?: string | null; planId?: string | null }): Promise<string | undefined> {
         const worktrees = await db.getWorktrees();
         return matchWorktreePath(worktrees, plan);
     }
@@ -12138,10 +12138,10 @@ What would you like to find?`;
                 if (this._kanbanProvider) {
                     await this._kanbanProvider.moveCardToColumn(workspaceRoot, sessionId, 'CREATED');
                 } else if (sessionId) {
-                    // No-provider fallback with epic cascade + empty-sessionId guard (Class 7).
+                    // No-provider fallback with feature cascade + empty-sessionId guard (Class 7).
                     const restorePlan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
-                    if (restorePlan && restorePlan.isEpic) {
-                        await db.cascadeEpicByPlanId(restorePlan.planId, 'CREATED', 'active', true);
+                    if (restorePlan && restorePlan.isFeature) {
+                        await db.cascadeFeatureByPlanId(restorePlan.planId, 'CREATED', 'active', true);
                     } else {
                         await db.updateColumn(sessionId, 'CREATED');
                     }
@@ -12710,7 +12710,7 @@ What would you like to find?`;
                             routedTo: '',
                             dispatchedAgent: '',
                             dispatchedIde: '',
-                            isEpic: 0
+                            isFeature: 0
                         }]);
                     } else {
                         await db.tombstonePlan(hash);
@@ -12758,7 +12758,7 @@ What would you like to find?`;
                     routedTo: '',
                     dispatchedAgent: '',
                     dispatchedIde: '',
-                    isEpic: 0
+                    isFeature: 0
                 }]);
             }
             this._tombstones.add(hash);
@@ -14471,8 +14471,8 @@ What would you like to find?`;
             const { baseInstruction: resolvedInstruction } = this._getPromptInstructionOptions(role, copyInstruction);
 
             // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
-            // — do not hand-roll (epic subtasks get silently dropped otherwise).
-            // When a DB record is available, route through the builder so epic
+            // — do not hand-roll (feature subtasks get silently dropped otherwise).
+            // When a DB record is available, route through the builder so feature
             // subtask bundling, worktree resolution, and plan-file fallbacks all
             // live in the single choke point. The record-less fallback (rare:
             // _resolvePlanContextForSession succeeded but the DB lookup did not)
@@ -14483,7 +14483,7 @@ What would you like to find?`;
                 plans = await this._kanbanProvider.buildDispatchPlans(resolvedWorkspaceRoot, [planRecord]);
             } else {
                 const workingDir = resolveWorkingDir(resolvedWorkspaceRoot, planRecord?.repoScope || '');
-                plans = [{ topic, absolutePath: planFileAbsolute, workingDir, isEpic: !!planRecord?.isEpic, project: planRecord?.project || undefined }];
+                plans = [{ topic, absolutePath: planFileAbsolute, workingDir, isFeature: !!planRecord?.isFeature, project: planRecord?.project || undefined }];
             }
 
             // Use standard prompt generation
@@ -14670,10 +14670,10 @@ What would you like to find?`;
                 if (this._kanbanProvider) {
                     await this._kanbanProvider.moveCardToColumn(resolvedWorkspaceRoot, sessionId, 'COMPLETED');
                 } else if (sessionId) {
-                    // No-provider fallback with epic cascade + empty-sessionId guard (Class 7).
+                    // No-provider fallback with feature cascade + empty-sessionId guard (Class 7).
                     const completePlan = await db.getPlanBySessionId(sessionId) ?? await db.getPlanByPlanId(sessionId);
-                    if (completePlan && completePlan.isEpic) {
-                        await db.cascadeEpicByPlanId(completePlan.planId, 'COMPLETED', 'completed');
+                    if (completePlan && completePlan.isFeature) {
+                        await db.cascadeFeatureByPlanId(completePlan.planId, 'COMPLETED', 'completed');
                     } else {
                         await db.updateColumn(sessionId, 'COMPLETED');
                     }
@@ -15512,7 +15512,7 @@ What would you like to find?`;
 
             // Capture the dataVersion BEFORE the DB read so the push key recorded by
             // refreshWithData corresponds to a version <= the data actually read. If a
-            // concurrent write (e.g. createEpicFromPlanIds) lands during the read window,
+            // concurrent write (e.g. createFeatureFromPlanIds) lands during the read window,
             // the recorded version will be lower than the post-write version, forcing the
             // trailing refresh to re-read and push fresh data instead of skipping as a no-op.
             const dataVersionAtRead = db.getDataVersion();
@@ -15579,8 +15579,8 @@ What would you like to find?`;
                     planFile: row.planFile || '',
                     createdAt: row.createdAt || '',
                     kanbanColumn: row.kanbanColumn || 'CREATED',
-                    isEpic: row.isEpic ?? 0,
-                    epicId: row.epicId || '',
+                    isFeature: row.isFeature ?? 0,
+                    featureId: row.featureId || '',
                 });
                 const kanbanStructure = await this.handleGetKanbanStructure(resolvedWorkspaceRoot);
                 const kanbanColumns = kanbanStructure.map(col => ({ id: col.id, label: col.label }));
@@ -16423,7 +16423,7 @@ What would you like to find?`;
                 planFileRelative = plan.planFile;
                 previousColumn = plan.kanbanColumn;
                 worktreePath = await TaskViewerProvider.resolveWorktreePathForPlan(db, {
-                    epicId: plan.epicId,
+                    featureId: plan.featureId,
                     project: plan.project,
                     planId: plan.planId
                 });
@@ -16549,11 +16549,11 @@ What would you like to find?`;
         const effectiveWorkspaceRoot = options?.workingDirectory ?? resolvedWorkspaceRoot;
 
         // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
-        // — do not hand-roll (epic subtasks get silently dropped otherwise).
+        // — do not hand-roll (feature subtasks get silently dropped otherwise).
         // The builder resolves plan-file path (with mirror/brain fallbacks),
         // working dir (repoScope), worktree path (three-tier record heuristic,
-        // matching the previous resolveWorktreePathForPlan call), isEpic,
-        // project, and expands epic subtasks in one place. The
+        // matching the previous resolveWorktreePathForPlan call), isFeature,
+        // project, and expands feature subtasks in one place. The
         // options.workingDirectory override (rare path) is applied to the
         // primary plan's workingDir AFTER the builder returns so path
         // resolution inside the builder uses the real resolvedWorkspaceRoot;
@@ -20863,14 +20863,14 @@ What would you like to find?`;
             const constitutionPath = getConstitutionPath(this._context, workspaceRoot);
             const hasConstitution = fs.existsSync(constitutionPath);
             if (!hasConstitution) {
-                const prompt = `You are onboarding a Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 8. Projects, Epics & Governance) and study the Project panel structure in project.html, then walk me through establishing a project constitution interactively — one step at a time, checking I've done each before moving on. Focus only on this; don't dump the whole manual.`;
+                const prompt = `You are onboarding a Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 8. Projects, Features & Governance) and study the Project panel structure in project.html, then walk me through establishing a project constitution interactively — one step at a time, checking I've done each before moving on. Focus only on this; don't dump the whole manual.`;
                 await vscode.env.clipboard.writeText(prompt);
                 vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through setting up a project constitution.');
                 return;
             }
 
             // 4. All three present -> advanced tips
-            const prompt = `You are onboarding an experienced Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 5. Planning Tools & Workflows, ## 7. Multi-Repo Control Plane, ## 9. Design Panel (Google Stitch + Claude), ## 30. Remote Control (provider-agnostic), and the /improve-plan / epics features), then walk me through advanced tips and features interactively — one step at a time, checking if I want to learn about each. Focus only on this; don't dump the whole manual.`;
+            const prompt = `You are onboarding an experienced Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 5. Planning Tools & Workflows, ## 7. Multi-Repo Control Plane, ## 9. Design Panel (Google Stitch + Claude), ## 30. Remote Control (provider-agnostic), and the /improve-plan / features features), then walk me through advanced tips and features interactively — one step at a time, checking if I want to learn about each. Focus only on this; don't dump the whole manual.`;
             await vscode.env.clipboard.writeText(prompt);
             vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through advanced features and tips.');
         } catch (err: any) {

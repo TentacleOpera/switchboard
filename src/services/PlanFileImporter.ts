@@ -139,7 +139,7 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
     }
 
     // Use insertFileDerivedPlan — this is a file-derived importer that has no
-    // business setting DB-owned columns (is_epic, epic_id, kanban_column, status).
+    // business setting DB-owned columns (is_feature, feature_id, kanban_column, status).
     let allOk = true;
     for (const record of records) {
         const ok = await db.insertFileDerivedPlan(record);

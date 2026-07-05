@@ -14,7 +14,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 
 ## Target is a feature? Use improve-feature instead
 
-If the target file is under `.switchboard/epics/` or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` block, this is a **feature**, not a single plan. Stop and use the **`improve-feature`** workflow — it improves every subtask and is authorised to restructure the set (merge/delete/rewrite/split). This `improve-plan` workflow is for a single plan and is deliberately non-destructive, which is the wrong contract for a feature.
+If the target file is under `.switchboard/features/` or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` block, this is a **feature**, not a single plan. Stop and use the **`improve-feature`** workflow — it improves every subtask and is authorised to restructure the set (merge/delete/rewrite/split). This `improve-plan` workflow is for a single plan and is deliberately non-destructive, which is the wrong contract for a feature.
 
 ## Steps
 
@@ -100,7 +100,7 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
 
 **When to emit:**
 - **Trigger A (remote only):** you have adversarially reviewed a plan → set `kanbanColumn: "PLAN REVIEWED"`.
-- **Trigger B (all agents):** if you restructured plans into an epic during review → include `isEpic`/`epicId` links for the epic + subtask set. Trigger B applies regardless of local/remote — epic relationships span multiple files and cannot be expressed via a single card move. **Local agents writing a Trigger B-only manifest:** set `kanbanColumn: "CREATED"` (or omit the field) so the ingestor does not auto-move the card — the user moves it manually.
+- **Trigger B (all agents):** if you restructured plans into an feature during review → include `isFeature`/`featureId` links for the feature + subtask set. Trigger B applies regardless of local/remote — feature relationships span multiple files and cannot be expressed via a single card move. **Local agents writing a Trigger B-only manifest:** set `kanbanColumn: "CREATED"` (or omit the field) so the ingestor does not auto-move the card — the user moves it manually.
 - Pure plan creation with no review and no grouping → no manifest.
 
 **Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced/reviewed). Write it **last**, after all `.md` files.
@@ -115,8 +115,8 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
       "planId": "550e8400-e29b-41d4-a716-446655440000",
       "kanbanColumn": "PLAN REVIEWED",
       "status": "active",
-      "isEpic": false,
-      "epicId": "",
+      "isFeature": false,
+      "featureId": "",
       "project": "Switchboard"
     }
   ]
@@ -125,16 +125,16 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
 
 **Field rules:**
 - `planFile` (**required**): path relative to workspace root, as stored in the DB.
-  Must be `.switchboard/plans/<name>.md` for plans or `.switchboard/epics/<name>.md` for epics.
+  Must be `.switchboard/plans/<name>.md` for plans or `.switchboard/features/<name>.md` for features.
   Bare filenames (e.g. `foo.md`) are auto-resolved to `.switchboard/plans/foo.md` but the
   full path is preferred. No `..` or absolute paths.
-- `planId` (recommended): must match the `**Plan ID:** <uuid>` embedded in the `.md` so identity is stable and `epicId` references resolve.
+- `planId` (recommended): must match the `**Plan ID:** <uuid>` embedded in the `.md` so identity is stable and `featureId` references resolve.
 - `kanbanColumn`: validated against the board's column set. Invalid → skipped (plan stays `CREATED`).
 - `fromColumn` (optional): the column the plan must currently be in for the `kanbanColumn` move to apply. Defaults to `CREATED` (the import-upgrade case). Set it to make a **forward transition from a later stage** — e.g. a remote coding agent advancing a plan `"fromColumn": "PLAN REVIEWED", "kanbanColumn": "CODED"`. If the plan is no longer in `fromColumn` (a human/host already moved it), the move is skipped by the stale-manifest guard.
 - `status`: `active` | `archived` | `completed` | `deleted`.
-- `isEpic` / `epicId`: `epicId` references another entry's `planId` (in-batch) or an existing DB epic. Process epics before subtasks (the ingestor sorts automatically).
+- `isFeature` / `featureId`: `featureId` references another entry's `planId` (in-batch) or an existing DB feature. Process features before subtasks (the ingestor sorts automatically).
 - `project`: project name; resolved to `project_id` at ingest (unknown project → kept as denormalized string).
 
-**Stale-manifest guard:** the ingestor overrides the column only when the row is currently in the entry's `fromColumn` (default `CREATED`); if the card is anywhere else — because a human/host already moved it — the column override is skipped (epic/project still applied). This lets a fresh manifest make a legitimate forward transition (e.g. `PLAN REVIEWED` → `CODED`) while a stale one is ignored. The manifest is deleted after all entries apply; idempotent if a delete is missed.
+**Stale-manifest guard:** the ingestor overrides the column only when the row is currently in the entry's `fromColumn` (default `CREATED`); if the card is anywhere else — because a human/host already moved it — the column override is skipped (feature/project still applied). This lets a fresh manifest make a legitimate forward transition (e.g. `PLAN REVIEWED` → `CODED`) while a stale one is ignored. The manifest is deleted after all entries apply; idempotent if a delete is missed.
 
-**`**Plan ID:**` embedding:** each plan `.md` must embed `**Plan ID:** <uuid>` (and epics use the `epic-<uuid>.md` filename) so `epicId` links resolve and identity is stable across re-imports. Required for Trigger B, recommended for Trigger A.
+**`**Plan ID:**` embedding:** each plan `.md` must embed `**Plan ID:** <uuid>` (and features use the `feature-<uuid>.md` filename) so `featureId` links resolve and identity is stable across re-imports. Required for Trigger B, recommended for Trigger A.

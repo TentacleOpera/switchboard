@@ -160,12 +160,12 @@
             color: var(--text-primary) !important;
             box-shadow: none !important;
         }
-        /* Epic cards: restore the purple identity that the !important .kanban-card rules above
+        /* Feature cards: restore the purple identity that the !important .kanban-card rules above
            otherwise flatten (mirrors the green .completed bar). Declared after :hover so the
-           purple survives hover. Selection still wins for non-epic cards; epic cards have their
-           own .epic-card.selected override below that keeps the purple border. */
-        body.theme-claudify .kanban-card.epic-card,
-        body.theme-claudify .kanban-card.epic-card:hover {
+           purple survives hover. Selection still wins for non-feature cards; feature cards have their
+           own .feature-card.selected override below that keeps the purple border. */
+        body.theme-claudify .kanban-card.feature-card,
+        body.theme-claudify .kanban-card.feature-card:hover {
             border-left: 4px solid #7c3aed !important;
             background: linear-gradient(180deg, color-mix(in srgb, #7c3aed 12%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
         }
@@ -176,8 +176,8 @@
             color: var(--text-primary) !important;
             box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
         }
-        /* Selected epic cards in Claudify: purple border instead of terracotta */
-        body.theme-claudify .kanban-card.epic-card.selected {
+        /* Selected feature cards in Claudify: purple border instead of terracotta */
+        body.theme-claudify .kanban-card.feature-card.selected {
             border-color: #7c3aed !important;
             box-shadow: inset 0 0 0 1px #7c3aed !important;
         }
@@ -192,7 +192,7 @@
         /* No warm text — card buttons and agent names fall back to the neutral greys
            (--text-secondary resting, --text-primary on hover) from the base rules. */
         /* Grey the remaining terracotta chrome: column count badges + the is-teal strip
-           buttons (ASSIGN/EPIC). Neutral at rest, no glow. */
+           buttons (ASSIGN/FEATURE). Neutral at rest, no glow. */
         body.theme-claudify .column-count {
             color: #8c8c8c;
             background: color-mix(in srgb, #8c8c8c 12%, transparent);
@@ -581,7 +581,7 @@
 
         /* Highlight ONLY the Remote Control & Automation buttons when active.
            Scoped by ID so the generic .strip-icon-btn.is-active rule above
-           (shared by CLI Triggers, Epic Ultracode/Goal, Collapse Coders, etc.)
+           (shared by CLI Triggers, Feature Ultracode/Goal, Collapse Coders, etc.)
            is NOT affected. No img filter — the border + background tint carry
            the cue, and an ID-scoped filter would clobber the Claudify colour
            icon opt-in rules. Mix with --panel-bg2 (not transparent) so the
@@ -910,11 +910,11 @@
             border-radius: 3px;
             white-space: nowrap;
         }
-        .epic-card {
+        .feature-card {
             border-left: 4px solid #7c3aed;
             background: rgba(124, 58, 237, 0.06);
         }
-        .epic-subtask-label {
+        .feature-subtask-label {
             color: #7c3aed;
             font-weight: 700;
         }
@@ -1347,8 +1347,8 @@
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
-        /* Selected epic cards: purple border instead of theme accent */
-        .kanban-card.epic-card.selected {
+        /* Selected feature cards: purple border instead of theme accent */
+        .kanban-card.feature-card.selected {
             border-color: #7c3aed;
             box-shadow: 0 0 8px color-mix(in srgb, #7c3aed 35%, transparent),
                         inset 0 0 4px color-mix(in srgb, #7c3aed 10%, transparent);
@@ -2519,7 +2519,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <!-- Left Side: Workspace/Project controls -->
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
             <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
-            <button class="strip-btn is-teal" id="btn-epic-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
+            <button class="strip-btn is-teal" id="btn-feature-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
             <button id="btn-delete-project" class="strip-icon-btn" data-tooltip="Select a project to delete" disabled>
                 <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
@@ -2541,10 +2541,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
                 <img src="{{ICON_CLI}}" alt="CLI Triggers">
             </button>
-            <button class="strip-icon-btn is-off" id="btn-epic-ultracode" data-tooltip="Feature workflow: prepend ultracode directive to feature prompts">
+            <button class="strip-icon-btn is-off" id="btn-feature-ultracode" data-tooltip="Feature workflow: prepend ultracode directive to feature prompts">
                 <img src="{{ICON_ULTRACODE}}" alt="Ultracode">
             </button>
-            <button class="strip-icon-btn is-off" id="btn-epic-goal" data-tooltip="Feature workflow: prepend /goal slash command to feature prompts">
+            <button class="strip-icon-btn is-off" id="btn-feature-goal" data-tooltip="Feature workflow: prepend /goal slash command to feature prompts">
                 <img src="{{ICON_GOAL}}" alt="Goal">
             </button>
             <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
@@ -2577,7 +2577,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <img src="{{ICON_22}}" alt="Reset Timers" style="width: 17px; height: 17px;">
                 </button>
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
-                <button class="strip-btn" id="btn-suggest-epics" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
+                <button class="strip-btn" id="btn-suggest-features" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span style="opacity:0.6;">⎇</span>
@@ -2783,7 +2783,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <label class="modal-label" for="agents-tab-custom-agent-command">Startup command</label>
             <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
             <label class="checkbox-item" title="When dispatched on a feature, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern)." style="margin-top:8px;">
-              <input type="checkbox" id="agents-tab-custom-agent-apply-epic-directives">
+              <input type="checkbox" id="agents-tab-custom-agent-apply-feature-directives">
               <span>Apply feature ultracode/goal directives</span>
               <span class="tooltip">When dispatched on a feature, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern).</span>
             </label>
@@ -2930,7 +2930,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </label>
 
                 <label class="checkbox-item" title="When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file">
-                  <input type="checkbox" id="plannerAddonWriteEpicDescriptionIfEmpty">
+                  <input type="checkbox" id="plannerAddonWriteFeatureDescriptionIfEmpty">
                   <span>Write Feature Description If Empty</span>
                   <span class="tooltip">When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file</span>
                 </label>
@@ -3166,30 +3166,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
-    <!-- Epic Create Modal -->
-    <div id="epic-create-modal" class="modal-overlay hidden">
+    <!-- Feature Create Modal -->
+    <div id="feature-create-modal" class="modal-overlay hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 class="modal-title" id="epic-create-title">Create Feature</h3>
-                <button class="modal-close-btn" id="epic-create-close">&times;</button>
+                <h3 class="modal-title" id="feature-create-title">Create Feature</h3>
+                <button class="modal-close-btn" id="feature-create-close">&times;</button>
             </div>
             <div class="modal-body">
-                <p class="modal-plan-count" id="epic-create-plan-count"></p>
-                <ul class="modal-plan-list" id="epic-create-plan-list"></ul>
-                <label for="epic-create-name">Feature Name</label>
-                <input type="text" id="epic-create-name" class="modal-input" placeholder="Feature name..." />
-                <label for="epic-create-description">Description</label>
-                <textarea id="epic-create-description" class="modal-textarea" placeholder="Optional description..." rows="3"></textarea>
+                <p class="modal-plan-count" id="feature-create-plan-count"></p>
+                <ul class="modal-plan-list" id="feature-create-plan-list"></ul>
+                <label for="feature-create-name">Feature Name</label>
+                <input type="text" id="feature-create-name" class="modal-input" placeholder="Feature name..." />
+                <label for="feature-create-description">Description</label>
+                <textarea id="feature-create-description" class="modal-textarea" placeholder="Optional description..." rows="3"></textarea>
             </div>
             <div class="modal-footer">
-                <button class="modal-btn modal-btn-secondary" id="epic-create-cancel">Cancel</button>
-                <button class="modal-btn modal-btn-primary" id="epic-create-submit">Create Feature</button>
+                <button class="modal-btn modal-btn-secondary" id="feature-create-cancel">Cancel</button>
+                <button class="modal-btn modal-btn-primary" id="feature-create-submit">Create Feature</button>
             </div>
         </div>
     </div>
 
-    <!-- Epic management lives in the Epics tab of the project view (orchestration, delete,
-         add/remove subtask). The on-board epic-manage modal was removed (no per-epic UI
+    <!-- Feature management lives in the Features tab of the project view (orchestration, delete,
+         add/remove subtask). The on-board feature-manage modal was removed (no per-feature UI
          that silently saves global config). -->
 
     <div id="tooltip-overlay"></div>
@@ -3294,7 +3294,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
                 document.getElementById('plannerAddonSkipTests').checked = !!config.addons?.skipTests;
                 document.getElementById('plannerAddonAdviseResearch').checked = config.addons?.adviseResearch !== false;
-                document.getElementById('plannerAddonWriteEpicDescriptionIfEmpty').checked = config.addons?.writeEpicDescriptionIfEmpty !== false;
+                document.getElementById('plannerAddonWriteFeatureDescriptionIfEmpty').checked = config.addons?.writeFeatureDescriptionIfEmpty !== false;
                 // Load subagent policy radio for planner
                 const plannerSubagentPolicy = config.addons?.subagentPolicy || 'default';
                 const plannerSubagentRadios = document.getElementsByName('plannerSubagentPolicy');
@@ -3537,7 +3537,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           document.getElementById('agents-tab-inline-form-title').textContent = agent ? `Edit: ${agent.name}` : 'New Custom Agent';
           document.getElementById('agents-tab-custom-agent-name').value = agent?.name || '';
           document.getElementById('agents-tab-custom-agent-command').value = agent?.startupCommand || '';
-          document.getElementById('agents-tab-custom-agent-apply-epic-directives').checked = !!agent?.addons?.applyEpicDirectives;
+          document.getElementById('agents-tab-custom-agent-apply-feature-directives').checked = !!agent?.addons?.applyFeatureDirectives;
 
 
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
@@ -3579,8 +3579,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
           }
 
-          const applyEpicDirectives = document.getElementById('agents-tab-custom-agent-apply-epic-directives').checked;
-          nextAgent.addons = { ...(nextAgent.addons || {}), applyEpicDirectives };
+          const applyFeatureDirectives = document.getElementById('agents-tab-custom-agent-apply-feature-directives').checked;
+          nextAgent.addons = { ...(nextAgent.addons || {}), applyFeatureDirectives };
 
           const duplicate = agentsTabCustomAgents.find(agent =>
             (agentsTabEditingAgentId ? agent.id !== agentsTabEditingAgentId : true) &&
@@ -3782,7 +3782,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
             .map(col => col.id);
         let currentCards = [];
-        let currentEpicWorktrees = {};
+        let currentFeatureWorktrees = {};
         let lastAgentNames = {};
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
@@ -3852,8 +3852,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             postKanbanMessage({ type: 'scanFoldersNow' });
         });
 
-        document.getElementById('btn-suggest-epics')?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'suggestEpics', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: activeProjectFilter ?? null });
+        document.getElementById('btn-suggest-features')?.addEventListener('click', () => {
+            postKanbanMessage({ type: 'suggestFeatures', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: activeProjectFilter ?? null });
         });
 
         btnDeleteProject?.addEventListener('click', () => {
@@ -4052,7 +4052,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch', 'plannerAddonWriteEpicDescriptionIfEmpty'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch', 'plannerAddonWriteFeatureDescriptionIfEmpty'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -4289,26 +4289,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
-        // Epic workflow toggles: independently toggleable (both can be active at once)
-        let epicUltracodeEnabled = false;
-        let epicGoalEnabled = false;
-        function updateEpicWorkflowToggleUi() {
-            const ucBtn = document.getElementById('btn-epic-ultracode');
-            const goalBtn = document.getElementById('btn-epic-goal');
+        // Feature workflow toggles: independently toggleable (both can be active at once)
+        let featureUltracodeEnabled = false;
+        let featureGoalEnabled = false;
+        function updateFeatureWorkflowToggleUi() {
+            const ucBtn = document.getElementById('btn-feature-ultracode');
+            const goalBtn = document.getElementById('btn-feature-goal');
             if (ucBtn) {
-                ucBtn.classList.toggle('is-active', epicUltracodeEnabled);
-                ucBtn.classList.toggle('is-off', !epicUltracodeEnabled);
+                ucBtn.classList.toggle('is-active', featureUltracodeEnabled);
+                ucBtn.classList.toggle('is-off', !featureUltracodeEnabled);
             }
             if (goalBtn) {
-                goalBtn.classList.toggle('is-active', epicGoalEnabled);
-                goalBtn.classList.toggle('is-off', !epicGoalEnabled);
+                goalBtn.classList.toggle('is-active', featureGoalEnabled);
+                goalBtn.classList.toggle('is-off', !featureGoalEnabled);
             }
         }
-        function toggleEpicUltracode() {
-            epicUltracodeEnabled = !epicUltracodeEnabled;
-            updateEpicWorkflowToggleUi();
-            postKanbanMessage({ type: 'setEpicWorkflowMode', ultracode: epicUltracodeEnabled, goal: epicGoalEnabled });
-            if (epicUltracodeEnabled) { fireUltracodeBlast(); }
+        function toggleFeatureUltracode() {
+            featureUltracodeEnabled = !featureUltracodeEnabled;
+            updateFeatureWorkflowToggleUi();
+            postKanbanMessage({ type: 'setFeatureWorkflowMode', ultracode: featureUltracodeEnabled, goal: featureGoalEnabled });
+            if (featureUltracodeEnabled) { fireUltracodeBlast(); }
         }
 
         // Obnoxious-by-request: giant animated ULTRACODE slam. Afterburner only — it speaks
@@ -4328,10 +4328,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             setTimeout(() => blast.remove(), 1750);
         }
 
-        function toggleEpicGoal() {
-            epicGoalEnabled = !epicGoalEnabled;
-            updateEpicWorkflowToggleUi();
-            postKanbanMessage({ type: 'setEpicWorkflowMode', ultracode: epicUltracodeEnabled, goal: epicGoalEnabled });
+        function toggleFeatureGoal() {
+            featureGoalEnabled = !featureGoalEnabled;
+            updateFeatureWorkflowToggleUi();
+            postKanbanMessage({ type: 'setFeatureWorkflowMode', ultracode: featureUltracodeEnabled, goal: featureGoalEnabled });
         }
 
         function updateComplexityRoutingToggleUi() {
@@ -4502,9 +4502,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function getAllInColumn(col) {
             if (col === 'CODED_AUTO') {
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-                return currentCards.filter(c => CODED_IDS.includes(c.column) && !c.epicId).map(c => c.planId || c.sessionId || '').filter(Boolean);
+                return currentCards.filter(c => CODED_IDS.includes(c.column) && !c.featureId).map(c => c.planId || c.sessionId || '').filter(Boolean);
             }
-            return currentCards.filter(c => c.column === col && !c.epicId).map(c => c.planId || c.sessionId || '').filter(Boolean);
+            return currentCards.filter(c => c.column === col && !c.featureId).map(c => c.planId || c.sessionId || '').filter(Boolean);
         }
 
         function escapeAttr(value) {
@@ -4595,7 +4595,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isEpic ? '1' : '0'}|${card.subtaskCount || 0}|${card.epicId || ''}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}`)
                 .sort()
                 .join('||');
         }
@@ -4735,8 +4735,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                <img src="${ICON_ANALYST_MAP}" alt="Re-plan">
                            </button>`
                         : '';
-                    const epicAddBtn = isCreated
-                        ? `<button class="column-icon-btn" data-action="addBlankEpic" data-column="${escapeAttr(def.id)}" data-tooltip="Add a blank feature to this column">
+                    const featureAddBtn = isCreated
+                        ? `<button class="column-icon-btn" data-action="addBlankFeature" data-column="${escapeAttr(def.id)}" data-tooltip="Add a blank feature to this column">
                                <img src="${ICON_CODE_MAP}" alt="Add Feature">
                            </button>`
                         : '';
@@ -4747,7 +4747,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         : '';
                     // In backlog view, the CREATED column shows BACKLOG cards — a holding
                     // pen, not a pipeline stage. Suppress the four advance/prompt buttons
-                    // so only the epic-group button remains.
+                    // so only the feature-group button remains.
                     const pipelineButtons = (isCreated && showingBacklog) ? '' : `
                         <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
                             <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
@@ -4765,7 +4765,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         ${pipelineButtons}
                         ${julesBtn}
                         ${rePlanBtn}
-                        ${epicAddBtn}
+                        ${featureAddBtn}
                         ${testingFailBtn}
                     </div>`;
                 }
@@ -4871,7 +4871,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankEpic') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -4965,14 +4965,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
-                        case 'addBlankEpic': {
+                        case 'addBlankFeature': {
                             // Clear any existing selection so no cards are silently linked as subtasks.
                             selectedCards.clear();
                             document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                             updateReassignButtonVisibility();
-                            updateEpicActionButton();
-                            // Open the epic-create modal in blank-epic mode (no pre-selected subtasks).
-                            openEpicCreateModal({ blankEpic: true });
+                            updateFeatureActionButton();
+                            // Open the feature-create modal in blank-feature mode (no pre-selected subtasks).
+                            openFeatureCreateModal({ blankFeature: true });
                             break;
                         }
                         case 'testingFailed': {
@@ -4999,7 +4999,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     // Any case above that broke out of the switch may have mutated
                     // selectedCards (delete/clear after dispatch/move/complete). Recompute
-                    // the worktree indicator so a deselected epic's worktree hides at once,
+                    // the worktree indicator so a deselected feature's worktree hides at once,
                     // without waiting for the next updateBoard broadcast.
                     recomputeWorktreeIndicator();
                 });
@@ -5239,23 +5239,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         // Resolves the "active worktree" — the one prompts would reference given the current UI
-        // context — and updates the bottom-bar indicator. Routing: selected epic worktree → active
+        // context — and updates the bottom-bar indicator. Routing: selected feature worktree → active
         // project worktree → none. Does NOT use the prompt path's "sole active worktree" fallback,
-        // because the indicator is a persistent status display and must stay project/epic-scoped
-        // (an epic's worktree must not show when that epic isn't selected).
+        // because the indicator is a persistent status display and must stay project/feature-scoped
+        // (an feature's worktree must not show when that feature isn't selected).
         function recomputeWorktreeIndicator() {
             const worktrees = (lastWorktreeConfig && lastWorktreeConfig.worktrees) || [];
 
-            // 1. Selected epic(s) with a worktree.
-            const selectedEpics = Array.from(selectedCards.entries())
-                .filter(([, v]) => v && v.isEpic)
+            // 1. Selected feature(s) with a worktree.
+            const selectedFeatures = Array.from(selectedCards.entries())
+                .filter(([, v]) => v && v.isFeature)
                 .map(([id]) => id);
-            if (selectedEpics.length > 0) {
+            if (selectedFeatures.length > 0) {
                 const paths = new Set();
-                for (const epicPlanId of selectedEpics) {
-                    const fromMap = currentEpicWorktrees[epicPlanId];
+                for (const featurePlanId of selectedFeatures) {
+                    const fromMap = currentFeatureWorktrees[featurePlanId];
                     if (fromMap && fromMap.path) { paths.add(fromMap.path); continue; }
-                    const fromList = worktrees.find(w => String(w.epicId) === String(epicPlanId));
+                    const fromList = worktrees.find(w => String(w.featureId) === String(featurePlanId));
                     if (fromList && fromList.path) paths.add(fromList.path);
                 }
                 if (paths.size === 1) {
@@ -5324,8 +5324,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
             }
 
-            // Subtasks roll up into their epic card. Hide them from the main board.
-            displayCards = displayCards.filter(card => !card.epicId);
+            // Subtasks roll up into their feature card. Hide them from the main board.
+            displayCards = displayCards.filter(card => !card.featureId);
 
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
@@ -5401,7 +5401,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         // Cross-workspace guard: the board must never hold plans from two
                         // different parent workspaces at once — doing so breaks ASSIGN
                         // ("Cannot assign plans from multiple workspaces at once") and
-                        // silently drops subtasks during PROMOTE/GROUP INTO EPIC.
+                        // silently drops subtasks during PROMOTE/GROUP INTO FEATURE.
                         // When the incoming card belongs to a different workspace than ANY
                         // existing selection, clear the prior selection first. This clear
                         // happens ONLY on selecting a new plan, never on a workspace dropdown
@@ -5423,8 +5423,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         selectedCards.set(pid, {
                             workspaceRoot: incomingWorkspaceRoot,
                             project: el.dataset.project || '',
-                            isEpic: cardData?.isEpic || false,
-                            epicId: cardData?.epicId || ''
+                            isFeature: cardData?.isFeature || false,
+                            featureId: cardData?.featureId || ''
                         });
                         el.classList.add('selected');
                         // Sync sidebar dropdown on unmodified single clicks
@@ -5433,7 +5433,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }
                     }
                     updateReassignButtonVisibility();
-                    updateEpicActionButton();
+                    updateFeatureActionButton();
                     recomputeWorktreeIndicator();
                 });
 
@@ -5456,7 +5456,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         workspaceRoot: btn.dataset.workspaceRoot,
                         project: cardData?.project || btn.closest('.kanban-card')?.dataset.project || '',
                         column: cardData?.column || '',
-                        isEpic: cardData?.isEpic || false
+                        isFeature: cardData?.isFeature || false
                     });
                 });
             });
@@ -5539,7 +5539,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
-            updateEpicActionButton();
+            updateFeatureActionButton();
         }
         function scoreToCategory(scoreStr) {
             if (scoreStr === 'High') return 'High';
@@ -5613,11 +5613,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
                     : '';
 
-            const epicClass = card.isEpic ? ' epic-card' : '';
-            const epicBadge = ''; // Badge removed; epic identity shown via purple border + meta line
+            const featureClass = card.isFeature ? ' feature-card' : '';
+            const featureBadge = ''; // Badge removed; feature identity shown via purple border + meta line
             
-            const cardMetaContent = card.isEpic
-                ? `<span class="epic-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
+            const cardMetaContent = card.isFeature
+                ? `<span class="feature-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
                 : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`;
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
@@ -5625,10 +5625,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
                    </button>`;
             const cardId = escapeAttr(card.planId || card.sessionId || '');
-            const reviewTooltip = card.isEpic ? 'Review feature' : 'Review plan';
+            const reviewTooltip = card.isFeature ? 'Review feature' : 'Review plan';
             return `
-                <div class="kanban-card${completedClass}${epicClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
-                    <div class="card-topic">${epicBadge}${escapeHtml(shortTopic)}</div>
+                <div class="kanban-card${completedClass}${featureClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
+                    <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px; flex-wrap: wrap;">
@@ -5879,7 +5879,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const workspaceRoot = e.dataTransfer.getData('application/switchboard-workspace-root') || getActiveWorkspaceRoot();
 
             const targetDef = columnDefinitions.find(c => c.id === targetColumn);
-            if (targetDef && targetDef.epicOnly) {
+            if (targetDef && targetDef.featureOnly) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
                 recomputeWorktreeIndicator();
@@ -5902,7 +5902,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
                 updateReassignButtonVisibility();
-                updateEpicActionButton();
+                updateFeatureActionButton();
                 const targetBody = document.getElementById('col-' + targetColumn);
                 const dispatchGroups = new Map();
 
@@ -5972,7 +5972,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // Keep the render-guard signature in sync with the optimistic mutation.
                 // The forEach above mutated card.column for each dispatched card; without
                 // this, a subsequent stale updateBoard triggers a spurious full re-render
-                // that reverts the move and loses epic styling — same bug as the main
+                // that reverts the move and loses feature styling — same bug as the main
                 // validIds path below.
                 lastBoardSignature = buildBoardSignature(currentCards);
                 optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;  // arm/extend the render guard
@@ -6177,7 +6177,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
                 updateReassignButtonVisibility();
-                updateEpicActionButton();
+                updateFeatureActionButton();
                 setTimeout(() => {
                     if (forwardIds.length > 0) {
                         if (dropMode === 'prompt') {
@@ -6413,9 +6413,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'updateBoard':
                     const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
-                    const nextEpicWorktrees = msg.epicWorktrees || {};
-                    const epicWorktreesChanged = JSON.stringify(currentEpicWorktrees) !== JSON.stringify(nextEpicWorktrees);
-                    currentEpicWorktrees = nextEpicWorktrees;
+                    const nextFeatureWorktrees = msg.featureWorktrees || {};
+                    const featureWorktreesChanged = JSON.stringify(currentFeatureWorktrees) !== JSON.stringify(nextFeatureWorktrees);
+                    currentFeatureWorktrees = nextFeatureWorktrees;
                     recomputeWorktreeIndicator();
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
                     const nextBoardSignature = buildBoardSignature(nextCards);
@@ -6437,8 +6437,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             // nextCards is stale w.r.t. the user's intent. Absorb the data (so the next
                             // authoritative render — a moveCards delta or a post-window updateBoard —
                             // has the freshest baseline) but DO NOT renderBoard: a full DOM replacement
-                            // here would revert the optimistic move and strip epic styling/animation.
-                            // currentEpicWorktrees is already updated above; worktree visuals render
+                            // here would revert the optimistic move and strip feature styling/animation.
+                            // currentFeatureWorktrees is already updated above; worktree visuals render
                             // when the window expires.
                             currentCards = nextCards;
                             lastBoardSignature = buildBoardSignature(currentCards);
@@ -6449,8 +6449,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }
                     } else {
                         currentCards = nextCards;
-                        if (epicWorktreesChanged && !optimisticActive) {
-                            console.log('[Kanban WV] epicWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
+                        if (featureWorktreesChanged && !optimisticActive) {
+                            console.log('[Kanban WV] featureWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
                             renderBoard(currentCards);
                         }
                     }
@@ -6585,16 +6585,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     cliTriggersEnabled = msg.enabled !== false;
                     updateCliToggleUi();
                     break;
-                case 'epicWorkflowModeState':
+                case 'featureWorkflowModeState':
                     if (typeof msg.ultracode === 'boolean') {
-                        epicUltracodeEnabled = msg.ultracode;
-                        epicGoalEnabled = !!msg.goal;
+                        featureUltracodeEnabled = msg.ultracode;
+                        featureGoalEnabled = !!msg.goal;
                     } else {
                         // Legacy fallback: translate tri-state mode to booleans
-                        epicUltracodeEnabled = msg.mode === 'ultracode';
-                        epicGoalEnabled = msg.mode === 'goal';
+                        featureUltracodeEnabled = msg.mode === 'ultracode';
+                        featureGoalEnabled = msg.mode === 'goal';
                     }
-                    updateEpicWorkflowToggleUi();
+                    updateFeatureWorkflowToggleUi();
                     break;
                 case 'dynamicComplexityRoutingState':
                     dynamicComplexityRoutingEnabled = msg.enabled !== false;
@@ -7063,27 +7063,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
-        function updateEpicActionButton() {
+        function updateFeatureActionButton() {
             recomputeWorktreeIndicator();
-            const btn = document.getElementById('btn-epic-action');
+            const btn = document.getElementById('btn-feature-action');
             if (!btn) return;
             const selected = Array.from(selectedCards.values());
-            const epics = selected.filter(s => s.isEpic);
-            const nonEpics = selected.filter(s => !s.isEpic);
+            const features = selected.filter(s => s.isFeature);
+            const nonFeatures = selected.filter(s => !s.isFeature);
             if (selected.length === 0) {
                 btn.disabled = true;
                 btn.textContent = 'PROMOTE TO FEATURE';
-            } else if (epics.length === 1 && nonEpics.length === 0) {
-                // On-board epic management moved to the Epics tab — no lone-epic board action.
+            } else if (features.length === 1 && nonFeatures.length === 0) {
+                // On-board feature management moved to the Features tab — no lone-feature board action.
                 btn.disabled = true;
                 btn.textContent = 'PROMOTE TO FEATURE';
-            } else if (epics.length === 1 && nonEpics.length > 0) {
+            } else if (features.length === 1 && nonFeatures.length > 0) {
                 btn.disabled = false;
-                btn.textContent = `ADD ${nonEpics.length} TO FEATURE`;
-            } else if (epics.length === 0 && nonEpics.length === 1) {
+                btn.textContent = `ADD ${nonFeatures.length} TO FEATURE`;
+            } else if (features.length === 0 && nonFeatures.length === 1) {
                 btn.disabled = false;
                 btn.textContent = 'PROMOTE TO FEATURE';
-            } else if (epics.length === 0 && nonEpics.length > 1) {
+            } else if (features.length === 0 && nonFeatures.length > 1) {
                 btn.disabled = false;
                 btn.textContent = 'GROUP INTO FEATURE';
             } else {
@@ -7127,7 +7127,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // otherwise-invisible selection. No toast — clearing IS the feedback.
                     selectedCards.clear();
                     updateReassignButtonVisibility();
-                    updateEpicActionButton();
+                    updateFeatureActionButton();
                     document.querySelectorAll('.kanban-card.selected').forEach(el => {
                         el.classList.remove('selected');
                     });
@@ -7182,7 +7182,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Optimistically clear the selection
             selectedCards.clear();
             updateReassignButtonVisibility();
-            updateEpicActionButton();
+            updateFeatureActionButton();
 
             // Un-select visually on screen
             document.querySelectorAll('.kanban-card.selected').forEach(el => {
@@ -7256,8 +7256,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateCliToggleUi();
             postKanbanMessage({ type: 'toggleCliTriggers', enabled: cliTriggersEnabled });
         });
-        document.getElementById('btn-epic-ultracode')?.addEventListener('click', toggleEpicUltracode);
-        document.getElementById('btn-epic-goal')?.addEventListener('click', toggleEpicGoal);
+        document.getElementById('btn-feature-ultracode')?.addEventListener('click', toggleFeatureUltracode);
+        document.getElementById('btn-feature-goal')?.addEventListener('click', toggleFeatureGoal);
         document.getElementById('unknown-complexity-toggle')?.addEventListener('change', (event) => {
             const checked = !!event.target?.checked;
             allowUnknownComplexityAutoMove = checked;
@@ -7287,7 +7287,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         updateCliToggleUi();
-        updateEpicWorkflowToggleUi();
+        updateFeatureWorkflowToggleUi();
         renderColumns();
         renderBoard([]);
         updateAutobanButtonState();
@@ -7593,25 +7593,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             selectedCards.clear();
             document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
             updateReassignButtonVisibility();
-            updateEpicActionButton();
+            updateFeatureActionButton();
         });
 
-        // Epic modal helpers
-        function openEpicCreateModal(opts = {}) {
-            const modal = document.getElementById('epic-create-modal');
-            const planCount = document.getElementById('epic-create-plan-count');
-            const planList = document.getElementById('epic-create-plan-list');
-            const nameInput = document.getElementById('epic-create-name');
-            const titleText = document.getElementById('epic-create-title');
-            const descLabel = modal?.querySelector('label[for="epic-create-description"]');
-            const descInput = document.getElementById('epic-create-description');
-            const submitBtn = document.getElementById('epic-create-submit');
+        // Feature modal helpers
+        function openFeatureCreateModal(opts = {}) {
+            const modal = document.getElementById('feature-create-modal');
+            const planCount = document.getElementById('feature-create-plan-count');
+            const planList = document.getElementById('feature-create-plan-list');
+            const nameInput = document.getElementById('feature-create-name');
+            const titleText = document.getElementById('feature-create-title');
+            const descLabel = modal?.querySelector('label[for="feature-create-description"]');
+            const descInput = document.getElementById('feature-create-description');
+            const submitBtn = document.getElementById('feature-create-submit');
             // Clear any stale empty-name error indicator from a prior open
             if (nameInput) nameInput.style.borderColor = '';
 
-            // --- blank-epic mode (early return, existing flow unchanged below) ---
-            const isBlankEpic = opts.blankEpic === true;
-            if (isBlankEpic) {
+            // --- blank-feature mode (early return, existing flow unchanged below) ---
+            const isBlankFeature = opts.blankFeature === true;
+            if (isBlankFeature) {
                 if (planCount) planCount.style.display = 'none';
                 if (planList) planList.style.display = 'none';
                 if (nameInput) nameInput.value = '';
@@ -7622,7 +7622,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (modal) modal.classList.remove('hidden');
                 return;
             }
-            // --- END blank-epic mode ---
+            // --- END blank-feature mode ---
 
             const selectedIds = Array.from(selectedCards.keys());
             const selectedPlans = selectedIds.map(id => currentCards.find(c => (c.planId || c.sessionId) === id)).filter(Boolean);
@@ -7647,11 +7647,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
             if (modal) modal.classList.remove('hidden');
         }
-        function closeEpicCreateModal() {
-            document.getElementById('epic-create-modal')?.classList.add('hidden');
+        function closeFeatureCreateModal() {
+            document.getElementById('feature-create-modal')?.classList.add('hidden');
         }
-        // Epic management (delete, add/remove subtask, orchestration config) now lives in
-        // the Epics tab of the project view — the on-board epic-manage modal was removed.
+        // Feature management (delete, add/remove subtask, orchestration config) now lives in
+        // the Features tab of the project view — the on-board feature-manage modal was removed.
 
         // Close buttons (both × header and Cancel footer)
         document.querySelectorAll('[data-action="closeRoutingMap"]').forEach(btn => {
@@ -9772,9 +9772,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Chip mapping
             let chipText = '';
             let chipTitle = '';
-            if (w.epicTopic) {
-                chipText = `Feature: ${w.epicTopic}`;
-                chipTitle = w.epicProject ? `Project: ${w.epicProject}` : '';
+            if (w.featureTopic) {
+                chipText = `Feature: ${w.featureTopic}`;
+                chipTitle = w.featureProject ? `Project: ${w.featureProject}` : '';
             } else if (w.project) {
                 chipText = `Project: ${w.project}`;
                 chipTitle = `Bound to project ${w.project}`;
@@ -9853,8 +9853,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             detailsLine.style.cssText = 'display:flex; justify-content:space-between; align-items:center; font-size:10px; color:var(--text-muted); border-top:1px solid var(--border-subtle); padding-top:4px; margin-top:2px;';
 
             const scopeSpan = document.createElement('span');
-            if (w.epicTopic) {
-                scopeSpan.textContent = `Scope: Catches plans in feature '${w.epicTopic}' — overrides project worktree.`;
+            if (w.featureTopic) {
+                scopeSpan.textContent = `Scope: Catches plans in feature '${w.featureTopic}' — overrides project worktree.`;
             } else if (w.project) {
                 scopeSpan.textContent = `Scope: Catches '${w.project}' plans not claimed by a feature worktree.`;
             } else {
@@ -9993,31 +9993,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             const worktrees = (config && config.worktrees) || [];
-            const epicWTs = worktrees.filter(w => w.epicTopic);
-            const projectWTs = worktrees.filter(w => w.project && !w.epicTopic);
-            const unboundWTs = worktrees.filter(w => !w.project && !w.epicTopic);
+            const featureWTs = worktrees.filter(w => w.featureTopic);
+            const projectWTs = worktrees.filter(w => w.project && !w.featureTopic);
+            const unboundWTs = worktrees.filter(w => !w.project && !w.featureTopic);
 
             // ==========================================
-            // EPICS SECTION
+            // FEATURES SECTION
             // ==========================================
-            const epicsSection = createSubsection('FEATURES');
+            const featuresSection = createSubsection('FEATURES');
 
-            // EPICS -> Auto Mode
+            // FEATURES -> Auto Mode
             const autoModeHeader = document.createElement('div');
             autoModeHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0;';
             autoModeHeader.textContent = 'Auto Mode';
-            epicsSection.appendChild(autoModeHeader);
+            featuresSection.appendChild(autoModeHeader);
 
-            const epicsDesc = document.createElement('div');
-            epicsDesc.style.cssText = 'padding:4px 8px 0; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            epicsDesc.textContent = 'Auto Mode controls whether worktrees are provisioned automatically as features and subtasks are created. This never affects the manual "Create Feature Worktree" button below.';
-            epicsSection.appendChild(epicsDesc);
+            const featuresDesc = document.createElement('div');
+            featuresDesc.style.cssText = 'padding:4px 8px 0; font-size:10px; color:var(--text-secondary); line-height:1.4;';
+            featuresDesc.textContent = 'Auto Mode controls whether worktrees are provisioned automatically as features and subtasks are created. This never affects the manual "Create Feature Worktree" button below.';
+            featuresSection.appendChild(featuresDesc);
 
             const autoModeGroup = document.createElement('div');
             autoModeGroup.className = 'radio-group';
             autoModeGroup.style.cssText = 'padding:8px; margin-top:0;';
 
-            const currentEpicWorktreeMode = (config && config.epicWorktreeMode) || 'none';
+            const currentFeatureWorktreeMode = (config && config.featureWorktreeMode) || 'none';
             const AUTO_MODE_OPTIONS = [
                 { value: 'none', label: 'None', desc: 'No automatic worktrees — use the manual button below.' },
                 { value: 'per-subtask', label: 'Per Subtask', desc: 'Provision a dedicated worktree for every subtask added to a feature.' },
@@ -10030,13 +10030,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const radio = document.createElement('input');
                 radio.type = 'radio';
-                radio.name = 'epicWorktreeAutoMode';
+                radio.name = 'featureWorktreeAutoMode';
                 radio.value = opt.value;
-                radio.checked = currentEpicWorktreeMode === opt.value;
+                radio.checked = currentFeatureWorktreeMode === opt.value;
                 radio.addEventListener('change', () => {
                     if (!radio.checked) return;
                     postKanbanMessage({
-                        type: 'setEpicWorktreeMode',
+                        type: 'setFeatureWorktreeMode',
                         mode: opt.value,
                         workspaceRoot: currentWorkspaceRoot
                     });
@@ -10056,77 +10056,77 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 label.appendChild(textWrap);
                 autoModeGroup.appendChild(label);
             });
-            epicsSection.appendChild(autoModeGroup);
+            featuresSection.appendChild(autoModeGroup);
 
-            // EPICS -> Manual Creation
-            const manualEpicHeader = document.createElement('div');
-            manualEpicHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px; border-top: 1px solid var(--border-subtle);';
-            manualEpicHeader.textContent = 'Manual Creation';
-            epicsSection.appendChild(manualEpicHeader);
+            // FEATURES -> Manual Creation
+            const manualFeatureHeader = document.createElement('div');
+            manualFeatureHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px; border-top: 1px solid var(--border-subtle);';
+            manualFeatureHeader.textContent = 'Manual Creation';
+            featuresSection.appendChild(manualFeatureHeader);
 
-            const epicForm = document.createElement('div');
-            epicForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px 8px;';
-            const epicLabel = document.createElement('span');
-            epicLabel.style.fontSize = '11px';
-            epicLabel.textContent = 'Feature:';
-            const epicSelect = document.createElement('select');
-            epicSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
-            const epicDefaultOpt = document.createElement('option');
-            epicDefaultOpt.value = '';
-            epicDefaultOpt.textContent = '-- Choose a Feature --';
-            epicSelect.appendChild(epicDefaultOpt);
-            const epicCards = (Array.isArray(currentCards) ? currentCards : []).filter(c => c.isEpic);
-            epicCards.forEach(epic => {
-                if (currentEpicWorktrees[epic.planId]) return; // exclude epics that already have a worktree
+            const featureForm = document.createElement('div');
+            featureForm.style.cssText = 'display: flex; gap: 8px; align-items: center; padding: 4px 8px 8px;';
+            const featureLabel = document.createElement('span');
+            featureLabel.style.fontSize = '11px';
+            featureLabel.textContent = 'Feature:';
+            const featureSelect = document.createElement('select');
+            featureSelect.style.cssText = 'flex: 1; padding: 4px; font-size: 11px; background: var(--input-bg, #222); color: var(--text-normal, #ccc); border: 1px solid var(--border-color);';
+            const featureDefaultOpt = document.createElement('option');
+            featureDefaultOpt.value = '';
+            featureDefaultOpt.textContent = '-- Choose a Feature --';
+            featureSelect.appendChild(featureDefaultOpt);
+            const featureCards = (Array.isArray(currentCards) ? currentCards : []).filter(c => c.isFeature);
+            featureCards.forEach(feature => {
+                if (currentFeatureWorktrees[feature.planId]) return; // exclude features that already have a worktree
                 const opt = document.createElement('option');
-                opt.value = epic.planId;
-                opt.textContent = epic.topic;
-                epicSelect.appendChild(opt);
+                opt.value = feature.planId;
+                opt.textContent = feature.topic;
+                featureSelect.appendChild(opt);
             });
-            const createEpicBtn = document.createElement('button');
-            createEpicBtn.className = 'worktree-primary-btn';
-            createEpicBtn.style.padding = '4px 8px';
-            createEpicBtn.style.fontSize = '10px';
-            createEpicBtn.textContent = 'Create Feature Worktree';
+            const createFeatureBtn = document.createElement('button');
+            createFeatureBtn.className = 'worktree-primary-btn';
+            createFeatureBtn.style.padding = '4px 8px';
+            createFeatureBtn.style.fontSize = '10px';
+            createFeatureBtn.textContent = 'Create Feature Worktree';
             if (config && config.controlPlaneMode === 'explicit' && repos.length === 0) {
-                createEpicBtn.disabled = true;
-                createEpicBtn.title = 'No git repositories detected in control plane';
+                createFeatureBtn.disabled = true;
+                createFeatureBtn.title = 'No git repositories detected in control plane';
             }
-            createEpicBtn.addEventListener('click', () => {
-                const selectedEpicId = epicSelect.value;
-                if (!selectedEpicId) {
+            createFeatureBtn.addEventListener('click', () => {
+                const selectedFeatureId = featureSelect.value;
+                if (!selectedFeatureId) {
                     postKanbanMessage({ type: 'showWarning', message: 'Please select a feature first.' });
                     return;
                 }
-                const epic = epicCards.find(e => e.planId === selectedEpicId);
-                if (!epic) return;
-                createEpicBtn.disabled = true;
+                const feature = featureCards.find(e => e.planId === selectedFeatureId);
+                if (!feature) return;
+                createFeatureBtn.disabled = true;
                 postKanbanMessage({
-                    type: 'createWorktreeForEpic',
-                    epicId: selectedEpicId,
-                    epicTopic: epic.topic,
+                    type: 'createWorktreeForFeature',
+                    featureId: selectedFeatureId,
+                    featureTopic: feature.topic,
                     workspaceRoot: currentWorkspaceRoot,
                     repoName: selectedWorktreeRepo || undefined
                 });
-                setTimeout(() => { createEpicBtn.disabled = false; }, 5000);
+                setTimeout(() => { createFeatureBtn.disabled = false; }, 5000);
             });
-            epicForm.appendChild(epicLabel);
-            epicForm.appendChild(epicSelect);
-            epicForm.appendChild(createEpicBtn);
-            epicsSection.appendChild(epicForm);
+            featureForm.appendChild(featureLabel);
+            featureForm.appendChild(featureSelect);
+            featureForm.appendChild(createFeatureBtn);
+            featuresSection.appendChild(featureForm);
 
-            // EPICS -> Active Worktrees
-            const activeEpicHeader = document.createElement('div');
-            activeEpicHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle);';
-            activeEpicHeader.textContent = 'Active Feature Worktrees';
-            epicsSection.appendChild(activeEpicHeader);
+            // FEATURES -> Active Worktrees
+            const activeFeatureHeader = document.createElement('div');
+            activeFeatureHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0; border-top: 1px solid var(--border-subtle);';
+            activeFeatureHeader.textContent = 'Active Feature Worktrees';
+            featuresSection.appendChild(activeFeatureHeader);
 
-            const activeEpicListContainer = document.createElement('div');
-            activeEpicListContainer.style.cssText = 'padding: 0 8px 8px;';
-            activeEpicListContainer.appendChild(renderWorktreeList(epicWTs, 'No active feature worktrees.'));
-            epicsSection.appendChild(activeEpicListContainer);
+            const activeFeatureListContainer = document.createElement('div');
+            activeFeatureListContainer.style.cssText = 'padding: 0 8px 8px;';
+            activeFeatureListContainer.appendChild(renderWorktreeList(featureWTs, 'No active feature worktrees.'));
+            featuresSection.appendChild(activeFeatureListContainer);
 
-            container.appendChild(epicsSection);
+            container.appendChild(featuresSection);
 
             // ==========================================
             // PROJECTS SECTION
@@ -10283,43 +10283,43 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             });
 
-            // Epic button event listeners
-            document.getElementById('btn-epic-action')?.addEventListener('click', () => {
+            // Feature button event listeners
+            document.getElementById('btn-feature-action')?.addEventListener('click', () => {
                 const selected = Array.from(selectedCards.values());
-                const epics = selected.filter(s => s.isEpic);
-                const nonEpics = selected.filter(s => !s.isEpic);
-                if (epics.length === 1 && nonEpics.length === 0) {
-                    // On-board epic management was removed — manage epics from the Epics tab
-                    // (orchestrate, delete, add/remove subtask). The EPIC button is disabled
-                    // for a lone-epic selection (see updateEpicActionButton), so this is a no-op.
-                } else if (epics.length === 1 && nonEpics.length > 0) {
-                    const epicEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isEpic);
-                    const epicId = epicEntry ? epicEntry[0] : '';
-                    const epicCard = currentCards.find(c => (c.planId || c.sessionId) === epicId);
-                    const epicSessionId = epicCard ? (epicCard.planId || epicCard.sessionId) : '';
-                    nonEpics.forEach(sub => {
+                const features = selected.filter(s => s.isFeature);
+                const nonFeatures = selected.filter(s => !s.isFeature);
+                if (features.length === 1 && nonFeatures.length === 0) {
+                    // On-board feature management was removed — manage features from the Features tab
+                    // (orchestrate, delete, add/remove subtask). The FEATURE button is disabled
+                    // for a lone-feature selection (see updateFeatureActionButton), so this is a no-op.
+                } else if (features.length === 1 && nonFeatures.length > 0) {
+                    const featureEntry = Array.from(selectedCards.entries()).find(([, v]) => v.isFeature);
+                    const featureId = featureEntry ? featureEntry[0] : '';
+                    const featureCard = currentCards.find(c => (c.planId || c.sessionId) === featureId);
+                    const featureSessionId = featureCard ? (featureCard.planId || featureCard.sessionId) : '';
+                    nonFeatures.forEach(sub => {
                         const subEntry = Array.from(selectedCards.entries()).find(([, v]) => v === sub);
                         const subId = subEntry ? subEntry[0] : '';
                         const subCard = currentCards.find(c => (c.planId || c.sessionId) === subId);
                         if (subCard) {
-                            postKanbanMessage({ type: 'addSubtaskToEpic', epicSessionId, subtaskSessionId: subCard.planId || subCard.sessionId, workspaceRoot: epicCard.workspaceRoot });
+                            postKanbanMessage({ type: 'addSubtaskToFeature', featureSessionId, subtaskSessionId: subCard.planId || subCard.sessionId, workspaceRoot: featureCard.workspaceRoot });
                         }
                     });
                     selectedCards.clear();
                     document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                     updateReassignButtonVisibility();
-                    updateEpicActionButton();
-                } else if (epics.length === 0 && nonEpics.length === 1) {
-                    openEpicCreateModal({ singlePlanPromote: true });
-                } else if (epics.length === 0 && nonEpics.length > 1) {
-                    openEpicCreateModal({ singlePlanPromote: false });
+                    updateFeatureActionButton();
+                } else if (features.length === 0 && nonFeatures.length === 1) {
+                    openFeatureCreateModal({ singlePlanPromote: true });
+                } else if (features.length === 0 && nonFeatures.length > 1) {
+                    openFeatureCreateModal({ singlePlanPromote: false });
                 }
             });
-            document.getElementById('epic-create-close')?.addEventListener('click', closeEpicCreateModal);
-            document.getElementById('epic-create-cancel')?.addEventListener('click', closeEpicCreateModal);
-            document.getElementById('epic-create-submit')?.addEventListener('click', () => {
-                const nameInput = document.getElementById('epic-create-name');
-                const descInput = document.getElementById('epic-create-description');
+            document.getElementById('feature-create-close')?.addEventListener('click', closeFeatureCreateModal);
+            document.getElementById('feature-create-cancel')?.addEventListener('click', closeFeatureCreateModal);
+            document.getElementById('feature-create-submit')?.addEventListener('click', () => {
+                const nameInput = document.getElementById('feature-create-name');
+                const descInput = document.getElementById('feature-create-description');
                 const name = nameInput ? nameInput.value.trim() : '';
                 if (!name) {
                     if (nameInput) {
@@ -10334,17 +10334,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const subtaskPlanIds = Array.from(selectedCards.keys());
                 const workspaceRoot = getActiveWorkspaceRoot();
                 if (subtaskPlanIds.length === 1) {
-                    postKanbanMessage({ type: 'promoteToEpic', planId: subtaskPlanIds[0], name, workspaceRoot });
+                    postKanbanMessage({ type: 'promoteToFeature', planId: subtaskPlanIds[0], name, workspaceRoot });
                 } else {
-                    postKanbanMessage({ type: 'createEpic', name, description: descInput ? descInput.value.trim() : '', subtaskPlanIds, workspaceRoot });
+                    postKanbanMessage({ type: 'createFeature', name, description: descInput ? descInput.value.trim() : '', subtaskPlanIds, workspaceRoot });
                 }
-                closeEpicCreateModal();
+                closeFeatureCreateModal();
                 selectedCards.clear();
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 updateReassignButtonVisibility();
-                updateEpicActionButton();
+                updateFeatureActionButton();
             });
-            // Epic-manage modal listeners removed — management lives in the Epics tab.
+            // Feature-manage modal listeners removed — management lives in the Features tab.
         });
 
     </script>

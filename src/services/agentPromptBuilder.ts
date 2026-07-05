@@ -32,12 +32,12 @@ export interface BatchPromptPlan {
     workingDir?: string;
     sessionId?: string;
     worktreePath?: string;
-    epicId?: string;
+    featureId?: string;
     isSubtask?: boolean;
-    epicTopic?: string;
-    isEpic?: boolean;
+    featureTopic?: string;
+    isFeature?: boolean;
     // True when worktreePath is THIS subtask's own dedicated worktree (per-subtask mode),
-    // as opposed to an inherited epic-level/project-level worktree shared by all subtasks.
+    // as opposed to an inherited feature-level/project-level worktree shared by all subtasks.
     // Distinguishes the two so prompt selection doesn't mistake a shared fallback worktree
     // for per-subtask isolation.
     hasOwnWorktree?: boolean;
@@ -201,8 +201,8 @@ export interface PromptBuilderOptions {
     skipTests?: boolean;
     /** When true, instructs the planner to emit a research prompt for any assumption it is not 100% sure about. */
     adviseResearchIfUnsure?: boolean;
-    /** When true, instructs the planner to backfill Goal, How the Subtasks Achieve This, and Dependencies & sequencing sections in epic files if missing. */
-    writeEpicDescriptionIfEmpty?: boolean;
+    /** When true, instructs the planner to backfill Goal, How the Subtasks Achieve This, and Dependencies & sequencing sections in feature files if missing. */
+    writeFeatureDescriptionIfEmpty?: boolean;
     /** When true, instructs the agent to skip walkthrough.md artifact generation at task completion. */
     suppressWalkthroughEnabled?: boolean;
     /** When true, injects caveman communication style directive to reduce token usage. */
@@ -215,8 +215,8 @@ export interface PromptBuilderOptions {
     customSubagentName?: string;
     /** When true, instructs the agent to use native subagent/worktree capabilities to isolate each plan. */
     useWorktreesPerPlanEnabled?: boolean;
-    /** The epic doc's path/link. */
-    epicDocLink?: string;
+    /** The feature doc's path/link. */
+    featureDocLink?: string;
 
     /** Controls ticket update behavior: disabled, comment-only, refine-ticket, or research-and-refine */
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
@@ -232,14 +232,14 @@ export interface PromptBuilderOptions {
     workflowFilePath?: string;
     /** Resolved chat-plan write destination(s) for the chat role. One path per entry; the agent picks one. */
     chatPlanDestinations?: string[];
-    /** When true, the batch includes an epic and its subtasks. */
-    epicMode?: boolean;
-    /** The epic's topic/title for directive injection. */
-    epicTopic?: string;
-    /** Number of subtasks included in the epic batch. */
+    /** When true, the batch includes an feature and its subtasks. */
+    featureMode?: boolean;
+    /** The feature's topic/title for directive injection. */
+    featureTopic?: string;
+    /** Number of subtasks included in the feature batch. */
     subtaskCount?: number;
-    /** User-configured epic prompt template, injected after the epic directive. */
-    epicPromptTemplate?: string;
+    /** User-configured feature prompt template, injected after the feature directive. */
+    featurePromptTemplate?: string;
     /** §11 — when true, the dispatched card's board is under remote control; inject REMOTE_MODE_DIRECTIVE into all role prompts. */
     remoteControlActive?: boolean;
     /**
@@ -260,16 +260,16 @@ export interface PromptBuilderOptions {
      */
     prdReferences?: Array<{ projectName: string; prdLink: string }>;
     /**
-     * The epic's `epic_worktree_mode` snapshot ('none' | 'per-subtask' | 'high-low').
-     * Only meaningful when epicMode is true. Selection between the base/per-subtask/high-low
+     * The feature's `feature_worktree_mode` snapshot ('none' | 'per-subtask' | 'high-low').
+     * Only meaningful when featureMode is true. Selection between the base/per-subtask/high-low
      * orchestration directives is a NO-OP for 'none' and unset — those keep existing behavior.
      */
-    epicWorktreeMode?: string;
-    /** The epic's planId. Required for the high-low planner consolidation directive (assign-to-feature.js target) and the high-low executor directive. */
-    epicPlanId?: string;
-    /** Pre-provisioned tier worktrees for a `high-low`-mode epic, resolved from the worktrees table's `tier` column. Drives EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW. */
+    featureWorktreeMode?: string;
+    /** The feature's planId. Required for the high-low planner consolidation directive (assign-to-feature.js target) and the high-low executor directive. */
+    featurePlanId?: string;
+    /** Pre-provisioned tier worktrees for a `high-low`-mode feature, resolved from the worktrees table's `tier` column. Drives FEATURE_ORCHESTRATION_DIRECTIVE_HIGH_LOW. */
     tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
-    /** The epic's subtask plans (planId/topic/complexity), for the planner high-low consolidation directive. Only injected when epicWorktreeMode === 'high-low' and role === 'planner'. */
+    /** The feature's subtask plans (planId/topic/complexity), for the planner high-low consolidation directive. Only injected when featureWorktreeMode === 'high-low' and role === 'planner'. */
     subtaskPlansForConsolidation?: Array<{ planId: string; topic: string; complexity?: string }>;
     /** The active project name to pin into generated plan files. When set, emits a PROJECT PIN directive instructing the agent to write `**Project:** <name>` into each plan's metadata. */
     manifestProject?: string;
@@ -307,9 +307,9 @@ function buildReviewerExecutionIntro(planCount: number): string {
 }
 
 /** Build a plan-count-aware intro sentence. Fixes "1 plans" → "1 plan". */
-function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], epicMode?: boolean): string {
-    if (epicMode) {
-        return `Please ${verb} the epic described below.`;
+function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], featureMode?: boolean): string {
+    if (featureMode) {
+        return `Please ${verb} the feature described below.`;
     }
     if (plans.length <= 1) {
         return `Please ${verb} the plan below.`;
@@ -332,11 +332,11 @@ export function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDisp
         workingDir: (plan.workingDir || '').trim()
     }));
     const planList = normalizedPlans.map(plan => {
-        if (plan.isSubtask && plan.epicTopic) {
+        if (plan.isSubtask && plan.featureTopic) {
             return `  - [SUBTASK] ${plan.topic} Plan File: ${plan.absolutePath}`;
         }
-        if (plan.epicTopic && !plan.isSubtask) {
-            return `- [EPIC: ${plan.epicTopic}] Plan File: ${plan.absolutePath}`;
+        if (plan.featureTopic && !plan.isSubtask) {
+            return `- [FEATURE: ${plan.featureTopic}] Plan File: ${plan.absolutePath}`;
         }
         return `- [${plan.topic}] Plan File: ${plan.absolutePath}`;
     }).join('\n');
@@ -428,10 +428,10 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as p
 // via the skill file as canonical source.
 export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then, at the very end of your chat summary to the user (after everything else), supply the ready-to-run research prompt so they can trigger web research. If you are confident about everything, state that no research is needed and omit both the section and the prompt.`;
 
-export const WRITE_EPIC_DESCRIPTION_IF_EMPTY_DIRECTIVE = `EPIC DESCRIPTION BACKFILL: The epic file path is included in the plan list above (the entry tagged [EPIC: ...]). Read that file. If it is missing any of these three sections, write them now following this format:
-- ## Goal: 2-4 sentences describing what the epic achieves, what problem it solves, and why these plans are grouped together.
-- ## How the Subtasks Achieve This: one bullet per member plan (subtask) explaining what it does and how it contributes to the epic's goal. Format: "- **<Plan Name>**: <what it does and how it contributes>"
-- ## Dependencies & sequencing: bullet list covering (a) cross-epic dependencies — what must land first from other epics, if any; (b) shipping order within this epic — which subtask should be coded/merged before which, and why; (c) prerequisites or guards that must be in place. If there are no cross-epic dependencies and the subtasks are independent, state that explicitly (e.g. "No cross-epic dependencies; subtasks are independent and can land in any order"). If there is only one subtask, note "Single subtask — no internal ordering."
+export const WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE = `FEATURE DESCRIPTION BACKFILL: The feature file path is included in the plan list above (the entry tagged [FEATURE: ...]). Read that file. If it is missing any of these three sections, write them now following this format:
+- ## Goal: 2-4 sentences describing what the feature achieves, what problem it solves, and why these plans are grouped together.
+- ## How the Subtasks Achieve This: one bullet per member plan (subtask) explaining what it does and how it contributes to the feature's goal. Format: "- **<Plan Name>**: <what it does and how it contributes>"
+- ## Dependencies & sequencing: bullet list covering (a) cross-feature dependencies — what must land first from other features, if any; (b) shipping order within this feature — which subtask should be coded/merged before which, and why; (c) prerequisites or guards that must be in place. If there are no cross-feature dependencies and the subtasks are independent, state that explicitly (e.g. "No cross-feature dependencies; subtasks are independent and can land in any order"). If there is only one subtask, note "Single subtask — no internal ordering."
 If all three sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
@@ -441,8 +441,8 @@ export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
 export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
 
-export const EPIC_ORCHESTRATION_DIRECTIVE = (epicTopic: string, count: number) =>
-    `EPIC MODE: You are implementing the epic "${epicTopic}" which consists of ${count} subtask(s).\n` +
+export const FEATURE_ORCHESTRATION_DIRECTIVE = (featureTopic: string, count: number) =>
+    `FEATURE MODE: You are implementing the feature "${featureTopic}" which consists of ${count} subtask(s).\n` +
     `Use your native subagent or orchestration capabilities to handle each subtask. ` +
     `If your tool supports worktree-per-plan isolation, activate it now. ` +
     `If you do not support subagents, handle each subtask sequentially in the order listed below. ` +
@@ -451,62 +451,62 @@ export const EPIC_ORCHESTRATION_DIRECTIVE = (epicTopic: string, count: number) =
 
 /**
  * `per-subtask` worktree mode variant: the extension has ALREADY pre-provisioned one
- * worktree per subtask off the shared epic integration branch — this replaces the
+ * worktree per subtask off the shared feature integration branch — this replaces the
  * "create your own worktree" guidance from the base directive with "dispatch into the
  * path already assigned to you." Falls back to the base directive at the call site when
  * no subtask worktree paths resolved (mode mismatch / lazy-create failed) so the agent
  * always gets usable orchestration guidance either way.
  */
-export const EPIC_ORCHESTRATION_DIRECTIVE_PER_SUBTASK = (epicTopic: string, subtaskWorktrees: Array<{ topic: string; worktreePath: string }>) =>
-    `EPIC MODE (worktree-per-subtask): You are implementing the epic "${epicTopic}" which consists of ${subtaskWorktrees.length} subtask(s).\n` +
-    `Each subtask has ALREADY been assigned its own isolated git worktree, pre-created off the shared epic integration branch. Do NOT create your own worktrees for these subtasks. ` +
+export const FEATURE_ORCHESTRATION_DIRECTIVE_PER_SUBTASK = (featureTopic: string, subtaskWorktrees: Array<{ topic: string; worktreePath: string }>) =>
+    `FEATURE MODE (worktree-per-subtask): You are implementing the feature "${featureTopic}" which consists of ${subtaskWorktrees.length} subtask(s).\n` +
+    `Each subtask has ALREADY been assigned its own isolated git worktree, pre-created off the shared feature integration branch. Do NOT create your own worktrees for these subtasks. ` +
     `Use your native subagent or orchestration capabilities to dispatch one subagent per subtask into its assigned worktree path below, so subagents cannot collide on files:\n` +
     subtaskWorktrees.map(sw => `  - [SUBTASK] ${sw.topic} → Worktree: ${sw.worktreePath}`).join('\n') + '\n' +
     `If you do not support subagents, handle each subtask sequentially, running each one's changes from inside its assigned worktree path. ` +
-    `All subtasks are part of a single delivery unit — do not treat them as independent tickets. Do not merge branches yourself; the extension owns convergence into the epic integration branch and, later, into main.\n` +
+    `All subtasks are part of a single delivery unit — do not treat them as independent tickets. Do not merge branches yourself; the extension owns convergence into the feature integration branch and, later, into main.\n` +
     `Before starting, briefly tell the user how you are using the workflow to handle these subtasks (e.g. parallel vs sequential and why, how they are grouped, and any review/verification pass you plan to run).`;
 
 /**
  * `high-low` worktree mode variant: the extension has ALREADY pre-provisioned exactly two
- * tier worktrees (high/low complexity) off the shared epic integration branch. The planner
+ * tier worktrees (high/low complexity) off the shared feature integration branch. The planner
  * (dispatched separately, see PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE) is expected to have
- * consolidated the epic's subtask plans into two new plan files, but may not have produced
+ * consolidated the feature's subtask plans into two new plan files, but may not have produced
  * exactly two (a broken/partial planner run) — so this directive references the tier
  * worktrees by their `tier` column/label, not by an assumed count or order of plan files.
  */
-export const EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW = (epicTopic: string, tierWorktrees: Array<{ tier: 'high' | 'low'; worktreePath: string }>) =>
-    `EPIC MODE (high/low complexity split): You are implementing the epic "${epicTopic}".\n` +
-    `The epic's subtask plans have been consolidated into complexity tiers (high-complexity, low-complexity). Each tier has ALREADY been assigned its own isolated git worktree, pre-created off the shared epic integration branch. Do NOT create your own worktrees for these tiers.\n` +
+export const FEATURE_ORCHESTRATION_DIRECTIVE_HIGH_LOW = (featureTopic: string, tierWorktrees: Array<{ tier: 'high' | 'low'; worktreePath: string }>) =>
+    `FEATURE MODE (high/low complexity split): You are implementing the feature "${featureTopic}".\n` +
+    `The feature's subtask plans have been consolidated into complexity tiers (high-complexity, low-complexity). Each tier has ALREADY been assigned its own isolated git worktree, pre-created off the shared feature integration branch. Do NOT create your own worktrees for these tiers.\n` +
     `Use your native subagent or orchestration capabilities to dispatch one subagent per tier below, running IN PARALLEL, each from inside its assigned worktree path:\n` +
     tierWorktrees.map(tw => `  - [${tw.tier.toUpperCase()} TIER] Worktree: ${tw.worktreePath}`).join('\n') + '\n' +
     `Match each tier's subagent to the consolidated plan file(s) intended for that tier (check each plan's "Consolidated From" / tier marker in its metadata) — do not assume plan file order or count; a partial planner run may not have produced exactly one plan per tier. ` +
     `If you do not support subagents, process the high tier first, then the low tier, each fully from inside its assigned worktree path. ` +
-    `Do not merge branches yourself; the extension owns convergence into the epic integration branch and, later, into main.\n` +
+    `Do not merge branches yourself; the extension owns convergence into the feature integration branch and, later, into main.\n` +
     `Before starting, briefly tell the user how you are using the workflow to handle these tiers (parallel subagent assignment, which plan(s) map to which tier, and any review/verification pass you plan to run).`;
 
 /**
- * Injected into the PLANNER role's prompt only, only for `high-low`-mode epics. Additive to
+ * Injected into the PLANNER role's prompt only, only for `high-low`-mode features. Additive to
  * improve-plan.md, not a replacement — the planner still runs the full planning workflow, this
  * just adds a consolidation pass on top of it.
  *
  * LOAD-BEARING DETAIL: `GlobalPlanWatcherService._handlePlanFile` (src/services/GlobalPlanWatcherService.ts)
  * imports new/changed `.switchboard/plans/*.md` files via `KanbanDatabase.insertFileDerivedPlan`
- * (src/services/KanbanDatabase.ts:1387). That INSERT statement does NOT reference `epic_id` at
- * all — there is no `**Epic ID:**`-style marker the watcher parses to link a file-derived plan to
- * an epic. `epic_id` is a DB-owned column, only ever set imperatively via
- * `KanbanDatabase.updateEpicStatus(planId, isEpic, epicId)` — see `KanbanProvider.createEpicFromPlanIds`'s
+ * (src/services/KanbanDatabase.ts:1387). That INSERT statement does NOT reference `feature_id` at
+ * all — there is no `**Feature ID:**`-style marker the watcher parses to link a file-derived plan to
+ * an feature. `feature_id` is a DB-owned column, only ever set imperatively via
+ * `KanbanDatabase.updateFeatureStatus(planId, isFeature, featureId)` — see `KanbanProvider.createFeatureFromPlanIds`'s
  * subtask-linking loop, and `PlanFileImporter.ts`'s explicit comment that file-derived imports
- * have "no business setting DB-owned columns (is_epic, epic_id, ...)". So the two new consolidated
- * plans CANNOT be linked to the epic by embedding a marker in their file content — they must be
+ * have "no business setting DB-owned columns (is_feature, feature_id, ...)". So the two new consolidated
+ * plans CANNOT be linked to the feature by embedding a marker in their file content — they must be
  * linked via the `assign-to-feature.js` script (routes through the running extension's
- * `/kanban/feature/assign` endpoint, which calls updateEpicStatus + regenerates the feature file). The
+ * `/kanban/feature/assign` endpoint, which calls updateFeatureStatus + regenerates the feature file). The
  * directive below instructs the planner to write the files first (so they get a planId from the
  * watcher import) and then explicitly run assign-to-feature.js — this is the only correct linkage
  * path; a content marker would silently produce orphan CREATED cards.
  */
-export const PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE = (epicTopic: string, epicPlanId: string, subtaskPlans: Array<{ planId: string; topic: string; complexity?: string }>) =>
+export const PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE = (featureTopic: string, featurePlanId: string, subtaskPlans: Array<{ planId: string; topic: string; complexity?: string }>) =>
     `HIGH/LOW COMPLEXITY CONSOLIDATION (additive to the planning workflow above — run this AFTER completing the normal planning steps, not instead of them):\n` +
-    `This dispatch is for the epic "${epicTopic}" (epic planId: ${epicPlanId}), which has ${subtaskPlans.length} existing subtask plan(s):\n` +
+    `This dispatch is for the feature "${featureTopic}" (feature planId: ${featurePlanId}), which has ${subtaskPlans.length} existing subtask plan(s):\n` +
     subtaskPlans.map(sp => `  - [${sp.complexity ?? 'Unknown'}] ${sp.topic} — planId: ${sp.planId}`).join('\n') + '\n' +
     `1. Read all ${subtaskPlans.length} subtask plan files listed above in full.\n` +
     `2. Consolidate them into EXACTLY TWO new plan files, following the same section structure as the subtask plans (Goal, Metadata, Complexity Audit, Proposed Changes, Verification Plan, etc.):\n` +
@@ -516,55 +516,55 @@ export const PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE = (epicTopic: string, epic
     `3. Write the two new files to .switchboard/plans/ with descriptive filenames. Give each a "**Complexity:**" metadata line reflecting its tier (>=5 for the high plan, <=4 for the low plan) and a "**Consolidated From:**" metadata line listing the original subtask planIds, for human traceability.\n` +
     `4. Do NOT delete, edit, or replace the ${subtaskPlans.length} original subtask plan files — keep them as-is; the new files are additional, not replacements.\n` +
     `5. After writing both files, wait a few seconds for the file watcher to import them (they need to be picked up and assigned a planId before they can be linked), then run:\n` +
-    `   node .agents/skills/kanban_operations/assign-to-feature.js ${epicPlanId} '["<new-high-plan-planId>","<new-low-plan-planId>"]'\n` +
+    `   node .agents/skills/kanban_operations/assign-to-feature.js ${featurePlanId} '["<new-high-plan-planId>","<new-low-plan-planId>"]'\n` +
     `   Look up each new plan's planId via .agents/skills/kanban_operations/get-state.js (matched by plan_file/topic) before running assign-to-feature.js — do not guess the planId.\n` +
     `6. Report the two new plan file paths and their planIds at the end of your response so the executor dispatch can find them.`;
 
 /**
- * Context bundle for `resolveEpicOrchestrationDirective` — carries whatever the
+ * Context bundle for `resolveFeatureOrchestrationDirective` — carries whatever the
  * three variants each need. `subtaskWorktrees`/`tierWorktrees` are independent;
  * only the one matching the resolved mode is consulted.
  */
-interface EpicOrchestrationDirectiveContext {
+interface FeatureOrchestrationDirectiveContext {
     subtaskWorktrees?: Array<{ topic: string; worktreePath: string }>;
     tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
 }
 
 /**
  * Single selector for the three orchestration-directive variants, keyed on the
- * epic's `epic_worktree_mode`. Preserves the exact fallback semantics that
+ * feature's `feature_worktree_mode`. Preserves the exact fallback semantics that
  * previously lived inline in `buildKanbanBatchPrompt`:
  * - `high-low` tier worktrees are only consulted when mode === 'high-low' (gated).
  * - Subtask-own worktrees (per-subtask variant) are consulted whenever any resolved
  *   — independent of the live mode value, matching the pre-refactor `else` branch,
  *   which kept selecting the per-subtask variant off `hasOwnWorktree` data alone.
  *   This intentionally covers the case where worktree rows outlive a mode change
- *   (e.g. epic switched from `per-subtask` to `none`/`high-low` mid-lifecycle
+ *   (e.g. feature switched from `per-subtask` to `none`/`high-low` mid-lifecycle
  *   without deprovisioning existing per-subtask worktree rows).
  * - Otherwise falls back to the base directive.
  * Unknown mode values (not `none`/`per-subtask`/`high-low`) that don't resolve to
  * either variant above log a warning and fall back to the base directive.
  */
-export function resolveEpicOrchestrationDirective(
+export function resolveFeatureOrchestrationDirective(
     mode: string | undefined,
-    epicTopic: string,
+    featureTopic: string,
     subtaskCount: number,
-    context?: EpicOrchestrationDirectiveContext
+    context?: FeatureOrchestrationDirectiveContext
 ): string {
     const tierWorktrees = mode === 'high-low' ? (context?.tierWorktrees || []) : [];
     if (tierWorktrees.length > 0) {
-        return EPIC_ORCHESTRATION_DIRECTIVE_HIGH_LOW(epicTopic, tierWorktrees);
+        return FEATURE_ORCHESTRATION_DIRECTIVE_HIGH_LOW(featureTopic, tierWorktrees);
     }
 
     const subtaskWorktrees = context?.subtaskWorktrees || [];
     if (subtaskWorktrees.length > 0) {
-        return EPIC_ORCHESTRATION_DIRECTIVE_PER_SUBTASK(epicTopic, subtaskWorktrees);
+        return FEATURE_ORCHESTRATION_DIRECTIVE_PER_SUBTASK(featureTopic, subtaskWorktrees);
     }
 
     if (mode !== undefined && mode !== 'none' && mode !== 'per-subtask' && mode !== 'high-low') {
-        console.warn(`[agentPromptBuilder] Unknown epic_worktree_mode "${mode}" — falling back to base orchestration directive.`);
+        console.warn(`[agentPromptBuilder] Unknown feature_worktree_mode "${mode}" — falling back to base orchestration directive.`);
     }
-    return EPIC_ORCHESTRATION_DIRECTIVE(epicTopic, subtaskCount);
+    return FEATURE_ORCHESTRATION_DIRECTIVE(featureTopic, subtaskCount);
 }
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
@@ -657,8 +657,8 @@ Process:
 3. **Plan:** When the "What" and "Why" are clear, draft the implementation plan.
 4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
 
-Epic Grouping:
-When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under an epic once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the epic if the user confirms. See existing files in \`.switchboard/epics/\` for format.`;
+Feature Grouping:
+When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under an feature once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the feature if the user confirms. See existing files in \`.switchboard/features/\` for format.`;
 
 export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project regardless of what project is active when the file is imported. Omit the line only if no project name is given above.`;
@@ -714,14 +714,14 @@ export function buildKanbanBatchPrompt(
     const skipCompilation = options?.skipCompilation ?? false;
     const skipTests = options?.skipTests ?? false;
     const adviseResearchIfUnsure = options?.adviseResearchIfUnsure ?? true;
-    const writeEpicDescriptionIfEmpty = options?.writeEpicDescriptionIfEmpty ?? true;
+    const writeFeatureDescriptionIfEmpty = options?.writeFeatureDescriptionIfEmpty ?? true;
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
     const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? false;
     const noSubagentsEnabled = options?.noSubagentsEnabled ?? false;
     const customSubagentName = options?.customSubagentName?.replace(/[^a-zA-Z0-9_]/g, '').trim() || undefined;
     const useWorktreesPerPlanEnabled = options?.useWorktreesPerPlanEnabled ?? false;
-    const epicDocLink = options?.epicDocLink;
+    const featureDocLink = options?.featureDocLink;
 
     let subagentBlock = '';
     if (noSubagentsEnabled) {
@@ -756,13 +756,13 @@ export function buildKanbanBatchPrompt(
     // Replaces the four per-branch safetySessionBlock loops with one shared
     // line emitted via dispatchPrefixCore so every role gets it identically.
     const worktreePaths = [...new Set(plans.map(p => p.worktreePath).filter((p): p is string => !!p))];
-    // In epic mode, the per-subtask/high-low directive variants already list
+    // In feature mode, the per-subtask/high-low directive variants already list
     // worktree assignments — skip the generic worktree line to avoid duplication.
-    const epicDirectiveListsWorktrees = options?.epicMode === true
-        && (options?.epicWorktreeMode === 'per-subtask' || options?.epicWorktreeMode === 'high-low')
+    const featureDirectiveListsWorktrees = options?.featureMode === true
+        && (options?.featureWorktreeMode === 'per-subtask' || options?.featureWorktreeMode === 'high-low')
         && worktreePaths.length > 0;
     let worktreeBlock = '';
-    if (worktreePaths.length > 0 && !epicDirectiveListsWorktrees) {
+    if (worktreePaths.length > 0 && !featureDirectiveListsWorktrees) {
         worktreeBlock = worktreePaths
             .map(wt => `WORKTREE: You are working in a git worktree at ${wt} — an isolated sibling checkout of the main repository. Do all work inside it; the plan file paths below already point inside it.`)
             .join('\n');
@@ -784,34 +784,34 @@ export function buildKanbanBatchPrompt(
     const prdBlock = buildPrdReferenceBlock(options, role);
     const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
-    // §3 — Epic directive is separated from planList so it can be placed
+    // §3 — Feature directive is separated from planList so it can be placed
     // before the PLANS TO PROCESS heading rather than under it.
-    let epicDirectiveBlock = '';
-    if (options?.epicMode && options?.epicTopic) {
+    let featureDirectiveBlock = '';
+    if (options?.featureMode && options?.featureTopic) {
         // hasOwnWorktree distinguishes a subtask's OWN dedicated worktree (set by
-        // expandEpicSubtaskPlans only when a subtask_plan_id-bound row exists) from an
-        // inherited epic-level/project-level worktree shared by every subtask (the
+        // expandFeatureSubtaskPlans only when a subtask_plan_id-bound row exists) from an
+        // inherited feature-level/project-level worktree shared by every subtask (the
         // `none`-mode fallback, where worktreePath is set but not owned).
         const subtaskWorktrees = plans
             .filter(p => p.isSubtask && p.hasOwnWorktree && p.worktreePath)
             .map(p => ({ topic: p.topic, worktreePath: p.worktreePath as string }));
-        const directive = resolveEpicOrchestrationDirective(
-            options.epicWorktreeMode,
-            options.epicTopic,
+        const directive = resolveFeatureOrchestrationDirective(
+            options.featureWorktreeMode,
+            options.featureTopic,
             options.subtaskCount || 0,
             { subtaskWorktrees, tierWorktrees: options.tierWorktrees }
         );
-        epicDirectiveBlock = directive;
-        if (options?.epicPromptTemplate) {
-            epicDirectiveBlock = `${options.epicPromptTemplate}\n\n${epicDirectiveBlock}`;
+        featureDirectiveBlock = directive;
+        if (options?.featurePromptTemplate) {
+            featureDirectiveBlock = `${options.featurePromptTemplate}\n\n${featureDirectiveBlock}`;
         }
     }
 
-    // §3 — In epic mode, suppress batchExecutionRules (the epic directive owns
+    // §3 — In feature mode, suppress batchExecutionRules (the feature directive owns
     // grouping/sequencing and says the opposite), and suppress subagentBlock +
-    // WORKTREES_PER_PLAN_DIRECTIVE (the epic directive owns orchestration).
-    const effectiveBatchExecutionRules = (options?.epicMode === true) ? '' : batchExecutionRules;
-    const effectiveSubagentBlock = (options?.epicMode === true) ? '' : subagentBlock;
+    // WORKTREES_PER_PLAN_DIRECTIVE (the feature directive owns orchestration).
+    const effectiveBatchExecutionRules = (options?.featureMode === true) ? '' : batchExecutionRules;
+    const effectiveSubagentBlock = (options?.featureMode === true) ? '' : subagentBlock;
 
     const executionDirective = `AUTHORIZATION: These plans are pre-approved — begin implementation immediately; do not produce a separate planning document first.`;
 
@@ -839,7 +839,7 @@ export function buildKanbanBatchPrompt(
             plannerBase += `ROUTING MAP CONFIGURATION:\nThe user has configured the following custom routing map for complexity scores. When recommending an agent at the end of the plan, you MUST use these exact thresholds instead of any default thresholds:\n- Intern: Complexity ${options.routingMapConfig.intern.join(', ')}\n- Coder: Complexity ${options.routingMapConfig.coder.join(', ')}\n- Lead Coder: Complexity ${options.routingMapConfig.lead.join(', ')}\n\n`;
         }
 
-        // Include batch execution rules for multi-plan dispatches (§3: suppressed in epic mode)
+        // Include batch execution rules for multi-plan dispatches (§3: suppressed in feature mode)
         if (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules) {
             plannerBase += `${effectiveBatchExecutionRules}\n\n`;
         }
@@ -857,8 +857,8 @@ export function buildKanbanBatchPrompt(
         if (adviseResearchIfUnsure) {
             plannerBase += '\n\n' + ADVISE_RESEARCH_DIRECTIVE;
         }
-        if (writeEpicDescriptionIfEmpty && options?.epicMode) {
-            plannerBase += '\n\n' + WRITE_EPIC_DESCRIPTION_IF_EMPTY_DIRECTIVE;
+        if (writeFeatureDescriptionIfEmpty && options?.featureMode) {
+            plannerBase += '\n\n' + WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE;
         }
         if (cavemanOutputEnabled) {
             plannerBase += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE + '\nNote: Caveman style applies to reasoning and discussion only. Preserve the theatrical Grumpy Architect voice defined in the workflow for adversarial critique sections. The generated plan artifact (.md file) must remain fully detailed, well-structured, and complete.';
@@ -882,18 +882,18 @@ export function buildKanbanBatchPrompt(
             plannerPrompt += '\n\n' + suffixBlock;
         }
 
-        if (epicDirectiveBlock) {
-            plannerPrompt += `\n\n${epicDirectiveBlock}`;
+        if (featureDirectiveBlock) {
+            plannerPrompt += `\n\n${featureDirectiveBlock}`;
         }
         plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
 
         // `high-low` mode: additive consolidation pass, injected only for the planner role
-        // dispatched against a high-low-mode epic with subtask plans to consolidate. No-op
-        // for 'none'/'per-subtask' modes and for non-epic dispatches (subtaskPlansForConsolidation
+        // dispatched against a high-low-mode feature with subtask plans to consolidate. No-op
+        // for 'none'/'per-subtask' modes and for non-feature dispatches (subtaskPlansForConsolidation
         // is only populated by the caller for this exact case).
-        if (options?.epicWorktreeMode === 'high-low' && options?.epicTopic && options?.epicPlanId
+        if (options?.featureWorktreeMode === 'high-low' && options?.featureTopic && options?.featurePlanId
             && options.subtaskPlansForConsolidation && options.subtaskPlansForConsolidation.length > 0) {
-            plannerPrompt += '\n\n' + PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE(options.epicTopic, options.epicPlanId, options.subtaskPlansForConsolidation);
+            plannerPrompt += '\n\n' + PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE(options.featureTopic, options.featurePlanId, options.subtaskPlansForConsolidation);
         }
 
         const constitutionContent = options?.constitutionContent?.trim();
@@ -930,7 +930,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         // §7 — Merged reviewer framing: intro + short directive in one block.
         const reviewerExecutionBlock = `${buildReviewerExecutionIntro(plans.length)} Do not start any auxiliary workflow — assess the actual code changes against the plan requirements inline, fix valid material issues, then verify.`;
         const advancedReviewerBlock = advancedReviewerEnabled ? ADVANCED_REVIEWER_DIRECTIVE : '';
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? `${effectiveBatchExecutionRules}`
             : '';
@@ -981,7 +981,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             advancedReviewerBlock,
             baseInstructions,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
@@ -990,7 +990,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
 
     if (role === 'tester') {
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? `${effectiveBatchExecutionRules}`
             : '';
@@ -1049,7 +1049,7 @@ For each plan:
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             acceptanceBaselineBlock
         ].filter(Boolean).join('\n\n');
@@ -1058,7 +1058,7 @@ For each plan:
     }
 
     if (role === 'lead') {
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const batchRulesForLead = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? `${effectiveBatchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
@@ -1086,12 +1086,12 @@ For each plan:
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
-            buildExecutionIntro('execute', plans, options?.epicMode),
+            buildExecutionIntro('execute', plans, options?.featureMode),
             executionDirective,
             batchRulesForLead,
             baseInstructions,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
@@ -1100,18 +1100,18 @@ For each plan:
     }
 
     if (role === 'coder') {
-        // §10 — Epic-mode coder dispatch: single epic-file reference instead of
-        // per-subtask enumeration. The epic file's auto-generated SUBTASKS block
+        // §10 — Feature-mode coder dispatch: single feature-file reference instead of
+        // per-subtask enumeration. The feature file's auto-generated SUBTASKS block
         // already lists every subtask plan link, and its WORKTREES block lists
         // per-subtask/per-tier worktree assignments — the prompt's per-subtask
         // enumeration is pure duplication.
-        if (options?.epicMode) {
-            const epicPlan = plans.find(p => !p.isSubtask);
-            const epicFilePath = epicPlan?.absolutePath || '';
-            const epicFileBlock = epicFilePath
-                ? `EPIC FILE:\n${epicFilePath}\n\nRead the epic file above. Its Subtasks section lists all subtask plan files (relative paths resolve inside this worktree). Its Worktrees section lists any per-subtask or per-tier worktree assignments. Execute each subtask plan in full.`
+        if (options?.featureMode) {
+            const featurePlan = plans.find(p => !p.isSubtask);
+            const featureFilePath = featurePlan?.absolutePath || '';
+            const featureFileBlock = featureFilePath
+                ? `FEATURE FILE:\n${featureFilePath}\n\nRead the feature file above. Its Subtasks section lists all subtask plan files (relative paths resolve inside this worktree). Its Worktrees section lists any per-subtask or per-tier worktree assignments. Execute each subtask plan in full.`
                 : '';
-            const epicExecutionBlock = `EXECUTION MODE: The epic below is pre-approved — begin implementation immediately; do not produce a separate planning document. Execute each subtask plan in full before moving to the next; if a subtask hits an issue, report it clearly and continue with the remaining subtasks when safe. All subtasks are one delivery unit.`;
+            const featureExecutionBlock = `EXECUTION MODE: The feature below is pre-approved — begin implementation immediately; do not produce a separate planning document. Execute each subtask plan in full before moving to the next; if a subtask hits an issue, report it clearly and continue with the remaining subtasks when safe. All subtasks are one delivery unit.`;
 
             let coderBase = '';
             if (pairProgrammingEnabled) {
@@ -1124,7 +1124,7 @@ For each plan:
             }
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
-            // no subagent block, no epic directive (replaced by epicExecutionBlock).
+            // no subagent block, no feature directive (replaced by featureExecutionBlock).
             // gitBlock still included via assembleSuffix.
             const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
             const suffixBlock = assembleSuffix('coder', {
@@ -1133,11 +1133,11 @@ For each plan:
 
             const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
             const promptParts = [
-                buildExecutionIntro('execute', plans, options?.epicMode),
-                epicExecutionBlock,
+                buildExecutionIntro('execute', plans, options?.featureMode),
+                featureExecutionBlock,
                 baseInstructions,
                 suffixBlock,
-                epicFileBlock,
+                featureFileBlock,
                 suppressWalkthroughBlock
             ].filter(Boolean).join('\n\n');
 
@@ -1145,9 +1145,9 @@ For each plan:
             return normalizeNewlines(coderPrompt);
         }
 
-        // Non-epic coder dispatch — standard per-plan enumeration path.
-        const intro = buildExecutionIntro('execute', plans, options?.epicMode);
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode (handled above).
+        // Non-feature coder dispatch — standard per-plan enumeration path.
+        const intro = buildExecutionIntro('execute', plans, options?.featureMode);
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode (handled above).
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? `${effectiveBatchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
@@ -1177,7 +1177,7 @@ For each plan:
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
@@ -1199,7 +1199,7 @@ For each plan:
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -1210,11 +1210,11 @@ For each plan:
 
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
-            buildExecutionIntro('process', plans, options?.epicMode),
+            buildExecutionIntro('process', plans, options?.featureMode),
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
@@ -1229,7 +1229,7 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -1240,11 +1240,11 @@ For each plan:
         });
 
         const promptParts = [
-            buildExecutionIntro('process', plans, options?.epicMode),
+            buildExecutionIntro('process', plans, options?.featureMode),
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
@@ -1291,7 +1291,7 @@ fields above, no speculative implementation detail. Comment only.`;
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -1305,7 +1305,7 @@ fields above, no speculative implementation detail. Comment only.`;
             baseInstructions,
             safeguardsBlock,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
@@ -1342,7 +1342,7 @@ fields above, no speculative implementation detail. Comment only.`;
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
-        // §3/§4 — Gate batch rules on actual batches; suppress in epic mode.
+        // §3/§4 — Gate batch rules on actual batches; suppress in feature mode.
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -1356,7 +1356,7 @@ fields above, no speculative implementation detail. Comment only.`;
             baseInstructions,
             safeguardsBlock,
             suffixBlock,
-            epicDirectiveBlock,
+            featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 

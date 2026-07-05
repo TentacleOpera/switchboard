@@ -6,7 +6,7 @@ description: Create a Switchboard feature from a remote session by writing the f
 # Create Feature (Remote Session)
 
 Create a Switchboard feature by writing the feature file directly to
-`.switchboard/epics/`. Use this skill when you are in a **remote session**
+`.switchboard/features/`. Use this skill when you are in a **remote session**
 (Claude Code web, claude.ai) and the VS Code extension is not running —
 `create-feature.js` routes through the extension's LocalApiServer and has no
 direct-DB fallback, so it fails when the extension is unreachable.
@@ -28,7 +28,7 @@ direct-DB fallback, so it fails when the extension is unreachable.
 
 ## Feature File Format
 
-Feature files live in `.switchboard/epics/` and follow this structure:
+Feature files live in `.switchboard/features/` and follow this structure:
 
 ```markdown
 ---
@@ -44,7 +44,7 @@ description: '{Feature Name}'
 ## How the Subtasks Achieve This
 
 {Narrative connecting the subtasks to the goal. Written once by the agent;
-preserved by _regenerateEpicFile on subsequent subtask changes.}
+preserved by _regenerateFeatureFile on subsequent subtask changes.}
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
@@ -54,24 +54,24 @@ preserved by _regenerateEpicFile on subsequent subtask changes.}
 
 **Format notes (verified against source):**
 1. **YAML frontmatter** — the extension writes `---\ndescription: '{name}'\n---\n\n# {name}\n\n...`
-   (see `createEpicFromPlanIds` at `KanbanProvider.ts` line 8771). The `description` field is
+   (see `createFeatureFromPlanIds` at `KanbanProvider.ts` line 8771). The `description` field is
    quoted to prevent YAML breakage from names containing `:`, `---`, etc. The watcher extracts
    the topic from the H1 title, so frontmatter is not strictly required for import — but it IS
    the canonical format and should be included for consistency.
 2. **Full SUBTASKS marker** — use `<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->`
-   (see `_regenerateEpicFile` at `KanbanProvider.ts` line 8648), not the shorter
+   (see `_regenerateFeatureFile` at `KanbanProvider.ts` line 8648), not the shorter
    `<!-- BEGIN SUBTASKS -->`. The regeneration search uses the prefix `<!-- BEGIN SUBTASKS`,
    so the shorter marker would technically work — but use the full marker to match
    extension-generated files.
 3. **No `## Metadata` section** — the extension writes `complexity: 'Unknown'` and `tags: ''`
-   directly to the DB (`createEpicFromPlanIds` lines 8741–8742), NOT via a `## Metadata` section
+   directly to the DB (`createFeatureFromPlanIds` lines 8741–8742), NOT via a `## Metadata` section
    in the file. Real feature files do NOT contain a Metadata section. An optional `## Metadata`
    section MAY be added (the watcher will parse it if present), but it is not part of the
    extension-generated format.
 
 The `<!-- BEGIN SUBTASKS ... -->` / `<!-- END SUBTASKS -->` block is managed by the extension.
 Write it with the `## Subtasks` heading and `- [ ] (no subtasks)` placeholder — the extension
-replaces this when subtasks are linked via `_regenerateEpicFile`.
+replaces this when subtasks are linked via `_regenerateFeatureFile`.
 
 ## Filename Convention
 
@@ -82,7 +82,7 @@ replaces this when subtasks are linked via `_regenerateEpicFile`.
 - `slug`: lowercase, hyphens only, max 60 chars (e.g. `auth-refactor`)
 - `planId`: a fresh UUID v4 (generate with
   `node -e "const {randomUUID}=require('crypto');console.log(randomUUID())"`)
-- Full path: `.switchboard/epics/{slug}-{planId}.md`
+- Full path: `.switchboard/features/{slug}-{planId}.md`
 - **Never omit the planId from the filename** — the watcher derives the `plan_id` from this
   trailing UUID on re-import. A bare slug would mint a fresh random ID on re-import and orphan
   every subtask.
@@ -93,7 +93,7 @@ After writing the feature file, to link existing plans (identified by their `pla
 `kanban-board.md`):
 
 ```bash
-node .agents/skills/kanban_operations/assign-to-feature.js "{epicPlanId}" '["subtaskPlanId1","subtaskPlanId2"]' "{workspaceRoot}"
+node .agents/skills/kanban_operations/assign-to-feature.js "{featurePlanId}" '["subtaskPlanId1","subtaskPlanId2"]' "{workspaceRoot}"
 ```
 
 This also routes through the extension; in a remote session it will fail and the agent should
@@ -103,7 +103,7 @@ drag-and-drop in the kanban UI.
 ## Sourcing Existing Suggest-Feature Content
 
 The kanban UI's "Suggest Features" button generates a detailed prompt (see
-`_buildSuggestEpicsPrompt` in `KanbanProvider.ts`) that:
+`_buildSuggestFeaturesPrompt` in `KanbanProvider.ts`) that:
 - Scans `kanban-board.md` for ungrouped plans in pre-coding columns
 - Groups them by theme
 - Proposes feature names and goals for user approval
@@ -114,7 +114,7 @@ get approval, then create the feature files.
 
 ## After Writing
 
-- Commit the new file to git (the epics folder will be tracked once
-  `expose-epics-folder-in-gitignore.md` is deployed).
+- Commit the new file to git (the features folder will be tracked once
+  `expose-features-folder-in-gitignore.md` is deployed).
 - Note to the user that the extension will automatically import the feature into the kanban DB on
   next activation via the GlobalPlanWatcherService.

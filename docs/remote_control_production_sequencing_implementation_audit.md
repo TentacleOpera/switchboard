@@ -1,10 +1,10 @@
 # Remote Control Production Sequencing — Implementation Audit
 
 **Date:** 2026-07-03
-**Scope:** Verify whether `feature_plan_20260701_remote-control-production-sequencing.md` (the seven-epic coordination plan) has been fully implemented.
+**Scope:** Verify whether `feature_plan_20260701_remote-control-production-sequencing.md` (the seven-feature coordination plan) has been fully implemented.
 **Worktree audited:** `/Users/patrickvuleta/Documents/GitHub/worktrees/switchboard/remote-sync-2` (branch `remote-sync-2`)
 **HEAD at audit:** `2ec90db` ("remote-sync health: surface poll/push status, backoff, persistent failures")
-**Method:** Static code inspection — one verification pass per epic (reading each member plan, then locating and reading the actual implementation), followed by a dedicated shipping/distribution re-audit. One `tsc --noEmit` run. **No runtime end-to-end testing was performed** (see *Audit limitations*).
+**Method:** Static code inspection — one verification pass per feature (reading each member plan, then locating and reading the actual implementation), followed by a dedicated shipping/distribution re-audit. One `tsc --noEmit` run. **No runtime end-to-end testing was performed** (see *Audit limitations*).
 
 ---
 
@@ -12,43 +12,43 @@
 
 **The coordination plan is a planning input, not a binding spec.** The branches evolved past it, and some deviations are deliberate owner decisions — those are **not defects**. This audit originally treated every deviation from the coordination plan as a gap/violation; that was an over-anchoring error. Findings therefore come in two kinds, and only the second kind is a "problem":
 
-- **Deviations from the coordination plan** (e.g., ClickUp kept in Epic 5, outbound via a bespoke path, the `restoreFromConfig` vocabulary): may be intentional — flagged as "differs from plan, confirm intent," not as defects.
+- **Deviations from the coordination plan** (e.g., ClickUp kept in Feature 5, outbound via a bespoke path, the `restoreFromConfig` vocabulary): may be intentional — flagged as "differs from plan, confirm intent," not as defects.
 - **Plan-independent functional defects** (the 2 compile errors; skills advertised in `AGENTS.md` that never generate into user workspaces; the auto-archive dwell proxy; `boardStateExport:none` leaving mirror files tracked): real regardless of any plan.
 
-Read the per-epic sections with that lens.
+Read the per-feature sections with that lens.
 
 ---
 
-## ⚠️ Correction (2026-07-03): Epic 2 IS implemented — now merged into `remote-sync-2` and `main`
+## ⚠️ Correction (2026-07-03): Feature 2 IS implemented — now merged into `remote-sync-2` and `main`
 
-> **UPDATE (2026-07-03, later the same day): the trunk is no longer unmerged.** `remote-sync-refactor-implementation` was **merged into `remote-sync-2`** (merge commit `3a3dd7b`). The `RemoteProvider` interface was unioned (capabilities `{pull, push, projectContextPush, archive}`; verbs `pushState`/`pushContent` + `pushProjectContext`/`archiveCard`), the poll loop reconciled (description-pull + epic-mirror + health), and `ClickUpRemoteProvider`/`GitStateProvider` were brought onto the merged interface. `tsc` returned to the 6 pre-existing baseline errors (zero merge-introduced). The refactor's Remote-tab controls (Ingest/Full mode, push, comments, capability-gating) were then ported from `kanban.html` into `project.html`/`project.js` (commit `7d5e485`), since Epic 1 had moved that tab. **Sections below that describe Epic 2 as "unmerged" / "absent from remote-sync-2" now describe the pre-merge state and are retained as history.** The 2 pre-existing `tsc` errors (`epicIssueId`/`epicTaskId` scoping) and the 4 import-extension warnings were subsequently fixed (`tsc` now 0), the 5 unshipped skills were wired into `.agents/` + `MIRROR_MANIFEST`, and the auto-archive dwell / `boardStateExport` gitignore / `deleteEpic` unlink / control-plane cadence / git-push-health items were resolved. **Then `remote-sync-2` was merged into `main` (merge commit `22bf6e1`)** — 9 conflicts resolved favoring remote-sync-2 for the git-native / remote-sync / auto-archive subsystems, with `project.html`/`project.js` unioned so main's ARCHITECT tab survives alongside the Remote/DevDocs/NotebookLM tabs; `tsc` clean at 0. **`main` now carries the full Epic 1–7 program + trunk.** Remaining: the unproven 3/3 "clean-break" config consolidation (`realTimeSyncEnabled` still present), the status-mirror push-health sliver, and — importantly — **no runtime/UI exercise yet** (all verification is static: tsc + syntax + call-tracing).
+> **UPDATE (2026-07-03, later the same day): the trunk is no longer unmerged.** `remote-sync-refactor-implementation` was **merged into `remote-sync-2`** (merge commit `3a3dd7b`). The `RemoteProvider` interface was unioned (capabilities `{pull, push, projectContextPush, archive}`; verbs `pushState`/`pushContent` + `pushProjectContext`/`archiveCard`), the poll loop reconciled (description-pull + feature-mirror + health), and `ClickUpRemoteProvider`/`GitStateProvider` were brought onto the merged interface. `tsc` returned to the 6 pre-existing baseline errors (zero merge-introduced). The refactor's Remote-tab controls (Ingest/Full mode, push, comments, capability-gating) were then ported from `kanban.html` into `project.html`/`project.js` (commit `7d5e485`), since Feature 1 had moved that tab. **Sections below that describe Feature 2 as "unmerged" / "absent from remote-sync-2" now describe the pre-merge state and are retained as history.** The 2 pre-existing `tsc` errors (`featureIssueId`/`featureTaskId` scoping) and the 4 import-extension warnings were subsequently fixed (`tsc` now 0), the 5 unshipped skills were wired into `.agents/` + `MIRROR_MANIFEST`, and the auto-archive dwell / `boardStateExport` gitignore / `deleteFeature` unlink / control-plane cadence / git-push-health items were resolved. **Then `remote-sync-2` was merged into `main` (merge commit `22bf6e1`)** — 9 conflicts resolved favoring remote-sync-2 for the git-native / remote-sync / auto-archive subsystems, with `project.html`/`project.js` unioned so main's ARCHITECT tab survives alongside the Remote/DevDocs/NotebookLM tabs; `tsc` clean at 0. **`main` now carries the full Feature 1–7 program + trunk.** Remaining: the unproven 3/3 "clean-break" config consolidation (`realTimeSyncEnabled` still present), the status-mirror push-health sliver, and — importantly — **no runtime/UI exercise yet** (all verification is static: tsc + syntax + call-tracing).
 
-The original version of this audit concluded "Epic 2 (the trunk) largely not implemented as scoped." **That was wrong** and is corrected here. A second reviewer flagged it; the correction was then independently verified. (It was subsequently merged — see the UPDATE above.)
+The original version of this audit concluded "Feature 2 (the trunk) largely not implemented as scoped." **That was wrong** and is corrected here. A second reviewer flagged it; the correction was then independently verified. (It was subsequently merged — see the UPDATE above.)
 
-**The Epic 2 refactor was implemented — once — on branch `remote-sync-refactor-implementation`** (commits `6092e67` "Remote Sync Refactor 1/3 + Linear bidirectional description sync", `b0c6dc4` "2/3 — Notion Push Pipeline", `2d24100` "3/3 — Config Consolidation + Remote-Tab UX"). That branch is an ancestor of **neither `main` nor `remote-sync-2`** (`git merge-base --is-ancestor` returns false for both), so the work is real but **unmerged**.
+**The Feature 2 refactor was implemented — once — on branch `remote-sync-refactor-implementation`** (commits `6092e67` "Remote Sync Refactor 1/3 + Linear bidirectional description sync", `b0c6dc4` "2/3 — Notion Push Pipeline", `2d24100` "3/3 — Config Consolidation + Remote-Tab UX"). That branch is an ancestor of **neither `main` nor `remote-sync-2`** (`git merge-base --is-ancestor` returns false for both), so the work is real but **unmerged**.
 
 Verified contents on `remote-sync-refactor-implementation`:
 - `RemoteProvider.ts`: `RemoteProviderCapabilities { pull, push }` (`:45-49`), `readonly capabilities` (`:56`), `pushState(remoteId, column)` (`:101`), `pushContent(remoteId, markdown)` (`:108`), `RemoteStateDelta.description?` (`:27`).
 - `ClickUpRemoteProvider.ts` exists (`capabilities.pull = false`, push-only); push routes through `provider.pushState` (`KanbanProvider.ts:2191`) / `provider.pushContent` (`ContinuousSyncService.ts:999`) with `capabilities.push` gating.
 - Linear bidirectional description sync: `_pollDescriptions` (`RemoteControlService.ts:435`), description-sync cursors + `onDescriptionPulled` (`:83-88,498-499`), `_stripH1Header` promoted to `public` (`LinearSyncService.ts:505`).
 
-**Why the original audit missed it:** the audit was scoped to the `remote-sync-2` worktree (as asked) and then compared only against `main`. It never enumerated all branches. On `remote-sync-2` the Epic 2 symbols genuinely are absent — that observation was accurate — but the leap to "not implemented anywhere" was not checked and was wrong.
+**Why the original audit missed it:** the audit was scoped to the `remote-sync-2` worktree (as asked) and then compared only against `main`. It never enumerated all branches. On `remote-sync-2` the Feature 2 symbols genuinely are absent — that observation was accurate — but the leap to "not implemented anywhere" was not checked and was wrong.
 
 **Corrected framing:** the program is **fragmented across branches**, which is a worse integration problem than a missing trunk:
 
-| Branch | Epic 1 | Epic 2 (trunk) | Epics 3–7 | Notes |
+| Branch | Feature 1 | Feature 2 (trunk) | Features 3–7 | Notes |
 |---|---|---|---|---|
 | `main` | ✅ | ✅ | ✅ | **remote-sync-2 merged in — `22bf6e1`.** The release line now carries the full program (was: behind both feature branches, own parallel snapshots) |
-| `remote-sync-refactor-implementation` | partial (branched at `c49e1ea`, mid-Epic-1) | ✅ **full** | ❌ | 4 ahead of base, 24 behind `main` |
-| `remote-sync-2` | ✅ full | ✅ (merged in — `3a3dd7b`) | ✅ | The audited worktree — now carries Epics 1–7 **and** the trunk |
+| `remote-sync-refactor-implementation` | partial (branched at `c49e1ea`, mid-Feature-1) | ✅ **full** | ❌ | 4 ahead of base, 24 behind `main` |
+| `remote-sync-2` | ✅ full | ✅ (merged in — `3a3dd7b`) | ✅ | The audited worktree — now carries Features 1–7 **and** the trunk |
 
-So Epics 3–7 (on `remote-sync-2`) were built on top of a branch that lacks Epic 2's unified seam — which is exactly why, *on this worktree*, Epic 5's outbound rides a bespoke path and Epic 7's guard has only two of its "three" write paths. Those downstream observations remain accurate **for `remote-sync-2`**; they are consequences of the branch fragmentation, not of the trunk never being built.
+So Features 3–7 (on `remote-sync-2`) were built on top of a branch that lacks Feature 2's unified seam — which is exactly why, *on this worktree*, Feature 5's outbound rides a bespoke path and Feature 7's guard has only two of its "three" write paths. Those downstream observations remain accurate **for `remote-sync-2`**; they are consequences of the branch fragmentation, not of the trunk never being built.
 
 **Caveats on the correction:**
 - **Config consolidation (3/3) looks partial:** `realTimeSyncEnabled` occurrence count is `main` 30 / `remote-sync-2` 34 / `remote-sync-refactor-implementation` 35 — the legacy flag was **not** removed even on the refactor branch, so 3/3's "clean-break" config consolidation is unproven (it did add the consolidated contract + Remote-tab UX in `kanban.html`). Differing branch bases make the raw count only a rough proxy; verify directly before signing off 3/3.
-- **Merge will not be clean:** `remote-sync-refactor-implementation` predates `main`'s `GitStateProvider.ts` / Git-Native channel and the later Epic 3–7 work. Integrating it needs a rebase with conflicts concentrated in `src/services/remote/` and `RemoteControlService.ts` (both branches rewrite these).
+- **Merge will not be clean:** `remote-sync-refactor-implementation` predates `main`'s `GitStateProvider.ts` / Git-Native channel and the later Feature 3–7 work. Integrating it needs a rebase with conflicts concentrated in `src/services/remote/` and `RemoteControlService.ts` (both branches rewrite these).
 
-The per-epic Epic 2 section below is retained but should be read as **"state on `remote-sync-2`"** — not as a global "never built" claim.
+The per-feature Feature 2 section below is retained but should be read as **"state on `remote-sync-2`"** — not as a global "never built" claim.
 
 ---
 
@@ -56,15 +56,15 @@ The per-epic Epic 2 section below is retained but should be read as **"state on 
 
 **The plan is NOT fully implemented.**
 
-- **3 epics fully implemented:** Epic 1 (Project Context & Remote UI Hub), Epic 3 (Remote Planning Infrastructure — *with a shipping caveat, see below*), Epic 4 (Remote Epic Structure).
-- **1 epic largely NOT implemented as scoped:** Epic 2 (Remote Sync Refactor — *the trunk everything else was meant to build on*).
-- **1 epic substantially implemented with 3 gaps:** Epic 7 (Auto-Archive & Production Hardening).
-- **1 epic partially done:** Epic 6 (Git-Native Remote Control Channel — manifest fix ✅; board-state mirror has 2 gaps).
-- **1 epic implemented, with an intentional scope decision:** Epic 5 (Tracker-Structure Round-Trip — Linear + ClickUp both done; ClickUp was deliberately kept on this branch, overriding the coordination plan's "cut ClickUp" decision — not a defect).
+- **3 features fully implemented:** Feature 1 (Project Context & Remote UI Hub), Feature 3 (Remote Planning Infrastructure — *with a shipping caveat, see below*), Feature 4 (Remote Feature Structure).
+- **1 feature largely NOT implemented as scoped:** Feature 2 (Remote Sync Refactor — *the trunk everything else was meant to build on*).
+- **1 feature substantially implemented with 3 gaps:** Feature 7 (Auto-Archive & Production Hardening).
+- **1 feature partially done:** Feature 6 (Git-Native Remote Control Channel — manifest fix ✅; board-state mirror has 2 gaps).
+- **1 feature implemented, with an intentional scope decision:** Feature 5 (Tracker-Structure Round-Trip — Linear + ClickUp both done; ClickUp was deliberately kept on this branch, overriding the coordination plan's "cut ClickUp" decision — not a defect).
 
 Two structural findings dominate:
 
-1. **The trunk (Epic 2) is absent from this worktree — it lives on the unmerged branch `remote-sync-refactor-implementation`** (see Correction above). On `remote-sync-2`, only the two provider verbs downstream epics needed (`archive`, `projectContext`) exist; status/content push still run on the pre-refactor fragmented paths. So the Epic 3–7 work here was built against a unified seam it never received — which cascades into the divergences seen in Epics 5 and 7. The real issue is branch fragmentation, not a trunk that was never built.
+1. **The trunk (Feature 2) is absent from this worktree — it lives on the unmerged branch `remote-sync-refactor-implementation`** (see Correction above). On `remote-sync-2`, only the two provider verbs downstream features needed (`archive`, `projectContext`) exist; status/content push still run on the pre-refactor fragmented paths. So the Feature 3–7 work here was built against a unified seam it never received — which cascades into the divergences seen in Features 5 and 7. The real issue is branch fragmentation, not a trunk that was never built.
 
 2. **A distribution defect makes two of this plan's new skills unshippable** (plus three pre-existing skills of the same class). They exist only in the dev repo's generated `.claude/skills/` tree, are advertised in the shipped `AGENTS.md`, but are never generated onto a user's machine.
 
@@ -82,9 +82,9 @@ Understanding how skills reach users is prerequisite to the shipping finding:
 
 ---
 
-## Per-epic findings
+## Per-feature findings
 
-### Epic 1 — Project Context & Remote UI Hub — ✅ FULLY IMPLEMENTED
+### Feature 1 — Project Context & Remote UI Hub — ✅ FULLY IMPLEMENTED
 
 Members: `project-html-dev-docs-tab-and-ia`, `project-context-sync-to-notion-and-linear`, `linear-remote-agent-skill-copy-button`, `phase2-remote-plan-from-notion-docs`.
 
@@ -108,17 +108,17 @@ Members: `project-html-dev-docs-tab-and-ia`, `project-context-sync-to-notion-and
 
 **Awareness items (non-blocking):**
 - Linear GraphQL document mutations (`documentCreate`/`documentUpdate`, `LinearRemoteProvider.ts:239-268`) are structurally correct but **not statically verifiable against Linear's live schema** — needs one end-to-end confirmation.
-- Phase-2 skill was relocated by a later epic (`03fb102` → `6d40d30`); original `.agents/skills/switchboard_remote_notion.md` archived as `.migrated.bak`. Content is intact and live.
+- Phase-2 skill was relocated by a later feature (`03fb102` → `6d40d30`); original `.agents/skills/switchboard_remote_notion.md` archived as `.migrated.bak`. Content is intact and live.
 
 ---
 
-### Epic 2 — Remote Sync Refactor (the trunk) — ✅ IMPLEMENTED ON `remote-sync-refactor-implementation`; ❌ ABSENT FROM THIS WORKTREE
+### Feature 2 — Remote Sync Refactor (the trunk) — ✅ IMPLEMENTED ON `remote-sync-refactor-implementation`; ❌ ABSENT FROM THIS WORKTREE
 
 > **Read this table as "state on `remote-sync-2`," not "never built."** See the Correction at the top: all four member plans (1/3, 2/3, 3/3, Linear bidi) are implemented on the unmerged `remote-sync-refactor-implementation` branch. The table below documents what is present/absent on the audited worktree (`remote-sync-2`), which is what determines whether this worktree can ship the capability today. Every "❌ MISSING" row is present on the refactor branch.
 
 Members: `remote-sync-refactor-1-provider-capabilities-and-unified-push`, `remote-sync-refactor-2-notion-push-pipeline`, `remote-sync-refactor-3-config-consolidation-and-remote-tab-ux`, `linear-bidirectional-description-sync`.
 
-**On `remote-sync-2`,** the `RemoteProvider` seam has only `archive` + `projectContext` verbs (added here to serve Epics 7 and 1) and a git-native channel — the core unified-push trunk deliverables are absent from this branch (they live on the refactor branch).
+**On `remote-sync-2`,** the `RemoteProvider` seam has only `archive` + `projectContext` verbs (added here to serve Features 7 and 1) and a git-native channel — the core unified-push trunk deliverables are absent from this branch (they live on the refactor branch).
 
 | Deliverable (status = **on `remote-sync-2`**) | Status | Evidence |
 |---|---|---|
@@ -135,18 +135,18 @@ Members: `remote-sync-refactor-1-provider-capabilities-and-unified-push`, `remot
 | Consolidated single per-board config contract | ❌ MISSING | `RemoteControlService.ts:36-51` still `{ provider, boards, silentSync, pingFrequencySeconds }` — no `mode`/`push`/`comments` |
 | Old scattered config removed (clean break) | ❌ MISSING | `realTimeSyncEnabled`/`completeSyncEnabled` still live across 6+ files |
 | Ingest\|Full radio + push/comments toggles + capability-gated UI | ❌ MISSING | `project.html:1905-2011` has no mode radio / push toggle / comments toggle |
-| Remote-tab relocated to project.html | ✅ | `project.html:1476,1905` (driven by Epic 1's IA) |
+| Remote-tab relocated to project.html | ✅ | `project.html:1476,1905` (driven by Feature 1's IA) |
 | `linear-bidirectional-description-sync` (`RemoteStateDelta.description/updatedAt`, `_pollDescriptions`, cursors, loop-guard hash) | ❌ MISSING | Interface never extended; entire pull-back path absent; `_stripH1Header` still `private` (`LinearSyncService.ts:504`) |
 
-**Verdict (this worktree):** ~2 of ~16 trunk deliverables are present on `remote-sync-2`, and those two are the scope-update *additions* to plan 1/3, not its core. **The full trunk exists on `remote-sync-refactor-implementation` and needs to be merged/rebased into the line carrying Epics 3–7** — it is not new work to write, it is integration work. Verify 3/3's config consolidation directly during that merge (see Correction caveat — the legacy `realTimeSyncEnabled` flag was not removed on the refactor branch).
+**Verdict (this worktree):** ~2 of ~16 trunk deliverables are present on `remote-sync-2`, and those two are the scope-update *additions* to plan 1/3, not its core. **The full trunk exists on `remote-sync-refactor-implementation` and needs to be merged/rebased into the line carrying Features 3–7** — it is not new work to write, it is integration work. Verify 3/3's config consolidation directly during that merge (see Correction caveat — the legacy `realTimeSyncEnabled` flag was not removed on the refactor branch).
 
 **What is solid and reusable on `remote-sync-2` regardless:** the `archive`/`archiveCard` verb, the project-context bundle + `pushProjectContext`, and `notionOverwriteGuard` (append-by-default, verified-childless replace, fail-safe abort) — the last is exactly the append-safe contract the refactor branch's Notion `pushContent` should ride once the branches are combined.
 
 ---
 
-### Epic 3 — Remote Planning Infrastructure — ⚠️ FULLY CODED, BUT TWO SKILLS DON'T SHIP
+### Feature 3 — Remote Planning Infrastructure — ⚠️ FULLY CODED, BUT TWO SKILLS DON'T SHIP
 
-Members: `kanban-startup-reconciler`, `improve-remote-plan-skill`, `create-epic-skill`, `sw-remote-entry-skill`, `epic-grouping-awareness-in-chat-and-memo-skills`.
+Members: `kanban-startup-reconciler`, `improve-remote-plan-skill`, `create-feature-skill`, `sw-remote-entry-skill`, `feature-grouping-awareness-in-chat-and-memo-skills`.
 
 | Deliverable | Status | Evidence |
 |---|---|---|
@@ -156,61 +156,61 @@ Members: `kanban-startup-reconciler`, `improve-remote-plan-skill`, `create-epic-
 | Reuses existing cursors; **no new config keys** | ✅ | `RemoteControlService.ts:36-52,74-79` |
 | Reconciler wired at startup | ✅ | `KanbanProvider.ts:1898-1905` → `TaskViewerProvider.ts:2645-2649` |
 | `improve-remote-plan` skill (read→deepen→write→advance) | ✅ coded / ❌ **doesn't ship** | `.claude/skills/improve-remote-plan/SKILL.md` — see shipping finding |
-| `create-epic` skill (direct epic-file write for remote) | ✅ coded / ❌ **remote skill doesn't ship** | `.claude/skills/create-epic/SKILL.md` — see shipping finding |
+| `create-feature` skill (direct feature-file write for remote) | ✅ coded / ❌ **remote skill doesn't ship** | `.claude/skills/create-feature/SKILL.md` — see shipping finding |
 | Orientation skills collapsed to ONE | ✅ | Second skill archived `.migrated.bak`; only `sw-remote` remains |
 | `sw-remote` skill functional and **shipping** | ✅ | `.agents/workflows/sw-remote.md` + manifest entry `ClaudeCodeMirrorService.ts:47` |
-| Epic-grouping awareness in chat + memo (7 surfaces) | ✅ | chat SKILL `:77`, workflow `:76`; `agentPromptBuilder.ts:642`; memo SKILL `:54`, workflow `:53`; `TaskViewerProvider.ts:3004`; sw-remote `:204` |
+| Feature-grouping awareness in chat + memo (7 surfaces) | ✅ | chat SKILL `:77`, workflow `:76`; `agentPromptBuilder.ts:642`; memo SKILL `:54`, workflow `:53`; `TaskViewerProvider.ts:3004`; sw-remote `:204` |
 
-**Note on acceptance-criteria vocabulary:** the coordination plan's verification text names `restoreFromConfig()`, "Manual/Constant mode", and "epic-2 consolidated config." None of those exist as symbols. The equivalent behavior ships under `reconcileOnce()` and the pre-existing `silentSync` boolean — the member plan explicitly rejected the fabricated `restoreFromConfig`/mode-enum vocabulary, and the code faithfully implements the member plan. Behavioral criteria (one poll, no timer, no-op unconfigured, no new keys) are all met.
+**Note on acceptance-criteria vocabulary:** the coordination plan's verification text names `restoreFromConfig()`, "Manual/Constant mode", and "feature-2 consolidated config." None of those exist as symbols. The equivalent behavior ships under `reconcileOnce()` and the pre-existing `silentSync` boolean — the member plan explicitly rejected the fabricated `restoreFromConfig`/mode-enum vocabulary, and the code faithfully implements the member plan. Behavioral criteria (one poll, no timer, no-op unconfigured, no new keys) are all met.
 
 **Corrected verdict:** the reconciler and `sw-remote` are done and ship; **two of the three skills do not reach users** (see shipping finding). Not "minor."
 
 ---
 
-### Epic 4 — Remote Epic Structure (Notion + Linear) — ✅ FULLY IMPLEMENTED
+### Feature 4 — Remote Feature Structure (Notion + Linear) — ✅ FULLY IMPLEMENTED
 
-Members: `notion-backup-epic-schema-and-remote-orientation`, `remote-control-epic-aware-mirroring`. Implementing commit: `6d40d30`.
+Members: `notion-backup-feature-schema-and-remote-orientation`, `remote-control-feature-aware-mirroring`. Implementing commit: `6d40d30`.
 
 | Deliverable | Status | Evidence |
 |---|---|---|
-| Notion DB `Is Epic` + `Epic` (self-relation) props created | ✅ | `NotionBackupService.ts:243-246`, `_ensureEpicProperties:435-452` |
-| Epic props written (two-pass) via `epicIdToNotionPageId` | ✅ | `NotionBackupService.ts:538-567`, setup two-pass `:311-353` |
-| `restoreFromNotion` applies epic structure | ✅ | `NotionBackupService.ts:116,145-148,176-186` |
-| `RemoteStateDelta.parentRemoteId` + `isEpicCandidate` on **refactored** seam | ✅ | `remote/RemoteProvider.ts:19-30` (single interface, no old duplicate) |
+| Notion DB `Is Feature` + `Feature` (self-relation) props created | ✅ | `NotionBackupService.ts:243-246`, `_ensureFeatureProperties:435-452` |
+| Feature props written (two-pass) via `featureIdToNotionPageId` | ✅ | `NotionBackupService.ts:538-567`, setup two-pass `:311-353` |
+| `restoreFromNotion` applies feature structure | ✅ | `NotionBackupService.ts:116,145-148,176-186` |
+| `RemoteStateDelta.parentRemoteId` + `isFeatureCandidate` on **refactored** seam | ✅ | `remote/RemoteProvider.ts:19-30` (single interface, no old duplicate) |
 | Linear provider populates parent/children | ✅ | `LinearRemoteProvider.ts:52-77` |
-| Notion provider reads `Is Epic`/`Epic` with safe fallback | ✅ | `NotionRemoteProvider.ts:98-114` |
-| `_mirrorEpicStructure` called before `_applyStateMirror`; idempotent echo guard | ✅ | `RemoteControlService.ts:425-426,474-508` |
+| Notion provider reads `Is Feature`/`Feature` with safe fallback | ✅ | `NotionRemoteProvider.ts:98-114` |
+| `_mirrorFeatureStructure` called before `_applyStateMirror`; idempotent echo guard | ✅ | `RemoteControlService.ts:425-426,474-508` |
 | Insert-before-write planId-race fix intact | ✅ | `LinearSyncService.ts:2613-2716` (DB insert precedes `fs.writeFile`) |
 | Parent-with-subtasks round-trips both providers | ✅ | Notion out+in+restore; Linear in |
-| Orientation "Epics" section | ✅ (relocated) | `.claude/skills/sw-remote/SKILL.md:152-181` + `.agents/workflows/sw-remote.md` |
+| Orientation "Features" section | ✅ (relocated) | `.claude/skills/sw-remote/SKILL.md:152-181` + `.agents/workflows/sw-remote.md` |
 
-**Caveats (non-blocking):** restore cannot demote `is_epic=1`→0 (sticky upsert, `KanbanDatabase.ts:638,1630`) — documented, safe. **Adjacent (out of Epic 4 scope):** two real `tsc` errors in the outbound epic-push path (see Compile errors below).
+**Caveats (non-blocking):** restore cannot demote `is_feature=1`→0 (sticky upsert, `KanbanDatabase.ts:638,1630`) — documented, safe. **Adjacent (out of Feature 4 scope):** two real `tsc` errors in the outbound feature-push path (see Compile errors below).
 
 ---
 
-### Epic 5 — Tracker-Structure Round-Trip — ✅ IMPLEMENTED (Linear + ClickUp)
+### Feature 5 — Tracker-Structure Round-Trip — ✅ IMPLEMENTED (Linear + ClickUp)
 
-> **Reframed 2026-07-03 (owner correction):** the coordination plan's Locked Decision 1 said to cut ClickUp, but **that decision was intentionally reversed — the ClickUp epic code is meant to be on this branch.** So this is not a "scope violation"; it is a deliberate scope decision that simply differs from the (non-binding) coordination plan. The rows below are reclassified accordingly. See the note at the top of this document: the coordination plan is a planning input, not a binding spec.
+> **Reframed 2026-07-03 (owner correction):** the coordination plan's Locked Decision 1 said to cut ClickUp, but **that decision was intentionally reversed — the ClickUp feature code is meant to be on this branch.** So this is not a "scope violation"; it is a deliberate scope decision that simply differs from the (non-binding) coordination plan. The rows below are reclassified accordingly. See the note at the top of this document: the coordination plan is a planning input, not a binding spec.
 
-Members: `epic-sync-outbound`, `linear-import-epic-linking`, `clickup-import-epic-linking` (coordination plan marked CUT; **owner kept it in — intended on this branch**).
+Members: `feature-sync-outbound`, `linear-import-feature-linking`, `clickup-import-feature-linking` (coordination plan marked CUT; **owner kept it in — intended on this branch**).
 
 | Deliverable | Status | Evidence |
 |---|---|---|
 | Linear import: recursive 5-level hierarchy query | ✅ | `LinearSyncService.ts:2457-2511` |
 | Linear import: two-pass (filter→write+insert→link), insert-before-write | ✅ | `LinearSyncService.ts:2553-2819` |
 | Linear import: cycle-safe flatten walk | ✅ | `LinearSyncService.ts:2772-2819` |
-| Linear outbound: `syncEpicWithSubtasks` | ✅ | `LinearSyncService.ts:2837-2893` |
-| Linear outbound: `unlinkSubtasksFromEpic` | ✅ | `LinearSyncService.ts:2899-2928` |
-| `_syncEpicOutbound` fan-out wired into create/assign/promote | ✅ | `KanbanProvider.ts:10056-10095`, `:9979`, `:10044`, `:8800` |
-| **ClickUp import epic-linking** | ✅ IMPLEMENTED (intended) | `ClickUpSyncService.ts:2924,3042,3090-3123,3227` — complete two-pass import; kept on this branch by design |
-| **ClickUp `syncEpicWithSubtasks`/`unlinkSubtasksFromEpic`** | ✅ IMPLEMENTED (intended) | `ClickUpSyncService.ts:3251-3327,3333+`; wired at `KanbanProvider.ts:10081-10083` |
-| Outbound rides epic-2 **unified push seam** | 🔀 differs from coordination plan (likely intentional) | Built as bespoke `_syncEpicOutbound` fanning out to legacy services. Matches the `epic-sync-outbound.md` member plan; the unified seam isn't on this branch anyway (Epic 2 unmerged). Confirm whether re-pointing onto the seam post-merge is wanted. |
+| Linear outbound: `syncFeatureWithSubtasks` | ✅ | `LinearSyncService.ts:2837-2893` |
+| Linear outbound: `unlinkSubtasksFromFeature` | ✅ | `LinearSyncService.ts:2899-2928` |
+| `_syncFeatureOutbound` fan-out wired into create/assign/promote | ✅ | `KanbanProvider.ts:10056-10095`, `:9979`, `:10044`, `:8800` |
+| **ClickUp import feature-linking** | ✅ IMPLEMENTED (intended) | `ClickUpSyncService.ts:2924,3042,3090-3123,3227` — complete two-pass import; kept on this branch by design |
+| **ClickUp `syncFeatureWithSubtasks`/`unlinkSubtasksFromFeature`** | ✅ IMPLEMENTED (intended) | `ClickUpSyncService.ts:3251-3327,3333+`; wired at `KanbanProvider.ts:10081-10083` |
+| Outbound rides feature-2 **unified push seam** | 🔀 differs from coordination plan (likely intentional) | Built as bespoke `_syncFeatureOutbound` fanning out to legacy services. Matches the `feature-sync-outbound.md` member plan; the unified seam isn't on this branch anyway (Feature 2 unmerged). Confirm whether re-pointing onto the seam post-merge is wanted. |
 
-**Notes:** the ClickUp epic work (now committed on the branch — was ~328 lines of WIP at audit time in `ClickUpSyncService.ts`) is a **deliberate** addition, not a defect. **Genuine functional gap (plan-independent):** `deleteEpic` (`KanbanProvider.ts:~8875`) does not call `unlinkSubtasksFromEpic`, so external trackers retain the parent link to a deleted epic — worth fixing regardless of scope. **Compile error (plan-independent):** `ClickUpSyncService.ts:3326` TS18004 (see Compile errors) lives in this ClickUp path.
+**Notes:** the ClickUp feature work (now committed on the branch — was ~328 lines of WIP at audit time in `ClickUpSyncService.ts`) is a **deliberate** addition, not a defect. **Genuine functional gap (plan-independent):** `deleteFeature` (`KanbanProvider.ts:~8875`) does not call `unlinkSubtasksFromFeature`, so external trackers retain the parent link to a deleted feature — worth fixing regardless of scope. **Compile error (plan-independent):** `ClickUpSyncService.ts:3326` TS18004 (see Compile errors) lives in this ClickUp path.
 
 ---
 
-### Epic 6 — Git-Native Remote Control Channel — 🟡 MANIFEST FIX DONE; MIRROR HAS 2 GAPS
+### Feature 6 — Git-Native Remote Control Channel — 🟡 MANIFEST FIX DONE; MIRROR HAS 2 GAPS
 
 Members: `fix-manifest-silent-failure`, `board-state-remote-mirror-channels`. Commits `e1fd13a`, `1a3eb73`, `e48f1fe`.
 
@@ -221,7 +221,7 @@ Members: `fix-manifest-silent-failure`, `board-state-remote-mirror-channels`. Co
 | Bare filename auto-resolved to `.switchboard/plans/<name>` | ✅ | `PlanManifestService.ts:202-208` |
 | `'rejected'` return type; all 3 silent-skip paths return it | ✅ | `PlanManifestService.ts:192,195,223,232` |
 | Surface rejection then consume once (no re-toast loop) | ✅ | `:167-173`; watcher toast `GlobalPlanWatcherService.ts:848-851` (gated on `rejected>0 && consumed`) |
-| Epic-misroute warning tests ORIGINAL `entry.planFile` | ✅ | `PlanManifestService.ts:215` (the `e48f1fe` fix) |
+| Feature-misroute warning tests ORIGINAL `entry.planFile` | ✅ | `PlanManifestService.ts:215` (the `e48f1fe` fix) |
 | Doc examples use full plan paths | ✅ | improve-plan.md, switchboard-chat.md + mirrors |
 
 The two review commits (`1a3eb73` re-toast, `e48f1fe` regex) are coherent, not conflicting.
@@ -246,7 +246,7 @@ The two review commits (`1a3eb73` re-toast, `e48f1fe` regex) are coherent, not c
 
 ---
 
-### Epic 7 — Auto-Archive & Production Hardening — ✅ SUBSTANTIALLY IMPLEMENTED; 3 GAPS
+### Feature 7 — Auto-Archive & Production Hardening — ✅ SUBSTANTIALLY IMPLEMENTED; 3 GAPS
 
 Members: `linear-free-tier-auto-archive-on-completion`, `notion-overwrite-guard`, `remote-sync-health-surfacing`, `hide-triage-and-automation-setup-sections`. Commits `3fe0e84`, `3af85b8`, `2ec90db`, `8e05427`.
 
@@ -293,19 +293,19 @@ Five skills are committed to the dev repo's `.claude/skills/` but are **absent f
 
 | Skill | Advertised in `AGENTS.md`? | `.agents/` source? | In manifest? | Ships? | Origin |
 |---|---|---|---|---|---|
-| `improve-remote-plan` | ✅ ("use in remote sessions") | ❌ none | ❌ | **No** | **This plan** — Epic 3, commit `6d40d30` |
-| `create-epic` | ✅ ("when the extension is not running") | ❌ (only `kanban_operations/create-epic.js`) | ❌ | **No** (remote skill) | **This plan** — Epic 3, commit `6d40d30` |
+| `improve-remote-plan` | ✅ ("use in remote sessions") | ❌ none | ❌ | **No** | **This plan** — Feature 3, commit `6d40d30` |
+| `create-feature` | ✅ ("when the extension is not running") | ❌ (only `kanban_operations/create-feature.js`) | ❌ | **No** (remote skill) | **This plan** — Feature 3, commit `6d40d30` |
 | `clickup_move_task` | ✅ | ✅ `.agents/skills/clickup_move_task.md` | ❌ | **No** | Pre-existing — commit `74c362d` |
 | `linear_move_issue` | ✅ | ✅ `.agents/skills/linear_move_issue.md` | ❌ | **No** | Pre-existing — commit `74c362d` |
 | `sw` (`/sw` alias) | — (alias, not in table) | ❌ | ❌ | **No** | Pre-existing — commit `48e81c5` |
 
-**The cruelest detail:** `create-epic`'s advertised purpose is to be the fallback *"when `create-epic.js` is unreachable"* (i.e., in a remote session with the extension off) — and the fallback is precisely the copy that doesn't ship. `improve-remote-plan` is likewise a remote-session skill that never reaches remote sessions.
+**The cruelest detail:** `create-feature`'s advertised purpose is to be the fallback *"when `create-feature.js` is unreachable"* (i.e., in a remote session with the extension off) — and the fallback is precisely the copy that doesn't ship. `improve-remote-plan` is likewise a remote-session skill that never reaches remote sessions.
 
-**What this plan touched that DOES ship (re-verified):** `sw-remote`, `switchboard-chat`, `improve-plan`, `memo` (all manifest workflows — so Epic 3's grouping-awareness edits and Epic 6's manifest doc-example fixes landed in shipped sources), `kanban_operations` + its `create-epic.js`/`assign-to-epic.js`/`move-card.js`/`get-state.js` scripts (ship via the `.agents/` copy — so **local** epic creation works), and `group-into-epics`. Git status confirms the `.agents/` sources for the grouping and kanban_operations edits are modified.
+**What this plan touched that DOES ship (re-verified):** `sw-remote`, `switchboard-chat`, `improve-plan`, `memo` (all manifest workflows — so Feature 3's grouping-awareness edits and Feature 6's manifest doc-example fixes landed in shipped sources), `kanban_operations` + its `create-feature.js`/`assign-to-feature.js`/`move-card.js`/`get-state.js` scripts (ship via the `.agents/` copy — so **local** feature creation works), and `group-into-features`. Git status confirms the `.agents/` sources for the grouping and kanban_operations edits are modified.
 
 **Fix (all five are the same one-class bug):**
 - `clickup_move_task`, `linear_move_issue`: add a one-line `MIRROR_MANIFEST` entry each — `.agents/` sources already exist.
-- `improve-remote-plan`, `create-epic`: create the `.agents/` source from the existing `.claude/` body + add a manifest entry.
+- `improve-remote-plan`, `create-feature`: create the `.agents/` source from the existing `.claude/` body + add a manifest entry.
 - `sw`: add a manifest entry aliasing `switchboard-chat`, or drop the dead `.claude/sw` dir.
 - Then re-run the cross-reference to prove `.claude/skills/` regenerates to a superset of the manifest with zero orphans.
 
@@ -314,41 +314,41 @@ Five skills are committed to the dev repo's `.claude/skills/` but are **absent f
 ## Consolidated prioritized gaps
 
 **Blocking / correctness:**
-1. **Epic 2 trunk is on an unmerged branch, not integrated** — the unified push dispatch (`pushState`/`pushContent`), ClickUp-behind-seam, Linear description pull-back, and consolidated-config contract all exist on `remote-sync-refactor-implementation` but were never merged into the Epic 3–7 line (`remote-sync-2`) or `main`. The largest item, but it is **integration/merge work with expected conflicts** (`src/services/remote/`, `RemoteControlService.ts`), not greenfield implementation. Confirm 3/3's config clean-break during the merge (legacy `realTimeSyncEnabled` still present on all branches).
-2. **Two `tsc` compile errors (TS18004, `let`-in-`try` scoping)** in the outbound epic-push path: `LinearSyncService.ts:2892` and `ClickUpSyncService.ts:3326`. Now committed as WIP (`f4093e8`). Plan-independent — real bugs to fix.
-3. **Two of this plan's skills don't ship (Epic 3)** — `improve-remote-plan`, `create-epic` (remote). Advertised in `AGENTS.md`, never generated on user machines. Plan-independent (a functional shipping defect, not a plan-alignment issue) — but confirm these are meant to be user-facing skills.
+1. **Feature 2 trunk is on an unmerged branch, not integrated** — the unified push dispatch (`pushState`/`pushContent`), ClickUp-behind-seam, Linear description pull-back, and consolidated-config contract all exist on `remote-sync-refactor-implementation` but were never merged into the Feature 3–7 line (`remote-sync-2`) or `main`. The largest item, but it is **integration/merge work with expected conflicts** (`src/services/remote/`, `RemoteControlService.ts`), not greenfield implementation. Confirm 3/3's config clean-break during the merge (legacy `realTimeSyncEnabled` still present on all branches).
+2. **Two `tsc` compile errors (TS18004, `let`-in-`try` scoping)** in the outbound feature-push path: `LinearSyncService.ts:2892` and `ClickUpSyncService.ts:3326`. Now committed as WIP (`f4093e8`). Plan-independent — real bugs to fix.
+3. **Two of this plan's skills don't ship (Feature 3)** — `improve-remote-plan`, `create-feature` (remote). Advertised in `AGENTS.md`, never generated on user machines. Plan-independent (a functional shipping defect, not a plan-alignment issue) — but confirm these are meant to be user-facing skills.
 
 **Behavioral:**
-5. **Auto-archive dwell proxy (Epic 7)** — uses `plan.updatedAt`, not true time-in-column; needs a `columnEnteredAt` field.
-6. **`boardStateExport: none` still leaves mirror files git-tracked (Epic 6)** — `WorkspaceExcludeService.TARGETED_RULES:19-20` not gated on the setting.
-7. **Control-plane pull cadence (Epic 6)** — inherits 300s instead of the ~60s the plan sized for.
+5. **Auto-archive dwell proxy (Feature 7)** — uses `plan.updatedAt`, not true time-in-column; needs a `columnEnteredAt` field.
+6. **`boardStateExport: none` still leaves mirror files git-tracked (Feature 6)** — `WorkspaceExcludeService.TARGETED_RULES:19-20` not gated on the setting.
+7. **Control-plane pull cadence (Feature 6)** — inherits 300s instead of the ~60s the plan sized for.
 
 **Minor:**
-- `deleteEpic` doesn't unlink subtasks from the tracker (Epic 5).
-- Push-health doesn't cover status-mirror / git pushes (Epic 7).
-- Persistent-failure threshold hardcoded to 3 (Epic 7).
+- `deleteFeature` doesn't unlink subtasks from the tracker (Feature 5).
+- Push-health doesn't cover status-mirror / git pushes (Feature 7).
+- Persistent-failure threshold hardcoded to 3 (Feature 7).
 - Three pre-existing skills share the shipping trap (`clickup_move_task`, `linear_move_issue`, `sw`).
 
 ---
 
 ## Compile errors (verified via `tsc --noEmit`)
 
-- `LinearSyncService.ts:2892` — TS18004, `let` declared in `try` and returned outside scope, inside `syncEpicWithSubtasks`.
-- `ClickUpSyncService.ts:3326` — same class, inside the ClickUp `syncEpicWithSubtasks`.
+- `LinearSyncService.ts:2892` — TS18004, `let` declared in `try` and returned outside scope, inside `syncFeatureWithSubtasks`.
+- `ClickUpSyncService.ts:3326` — same class, inside the ClickUp `syncFeatureWithSubtasks`.
 - (Also 4× TS2835 import-extension artifacts on dynamic imports in `KanbanProvider`/`TaskViewerProvider`/`ClickUpSyncService` — pre-existing style artifacts, not new bugs.)
 
-Both real errors live in the Epic 5 outbound epic-push path (`syncEpicWithSubtasks` on both services). Plan-independent — worth fixing regardless of scope.
+Both real errors live in the Feature 5 outbound feature-push path (`syncFeatureWithSubtasks` on both services). Plan-independent — worth fixing regardless of scope.
 
 ---
 
 ## Audit limitations (stated honestly)
 
 - **Static inspection only.** No runtime end-to-end test was run (no live IDE session, no live Notion/Linear round-trip). The Linear GraphQL `documentCreate`/`documentUpdate` and archive mutations are structurally correct but unverified against Linear's live schema.
-- **Verdicts are against the member plans + the coordination contract.** Where the two disagree (e.g. Epic 3's `restoreFromConfig` vocabulary, Epic 5's outbound path), this is called out; the code often follows the member plan, which predates the re-pointing directive.
-- **This audit under-verified three times before landing.** (1) It initially treated "the file/service exists" as evidence of implementation. (2) It filed the Epic 3 skill-shipping issue as "minor" before tracing the distribution mechanism. (3) **It only inspected `remote-sync-2` and `main`, never enumerating all branches — so it wrongly concluded Epic 2 was "not implemented" when the full refactor lives on `remote-sync-refactor-implementation`** (caught by a second reviewer, then independently verified; see Correction). Lesson: "is X implemented?" for a multi-branch program requires a branch sweep (`git branch --contains`, `git log --all -- <path>`), not a single-worktree grep. All three were corrected in-document.
+- **Verdicts are against the member plans + the coordination contract.** Where the two disagree (e.g. Feature 3's `restoreFromConfig` vocabulary, Feature 5's outbound path), this is called out; the code often follows the member plan, which predates the re-pointing directive.
+- **This audit under-verified three times before landing.** (1) It initially treated "the file/service exists" as evidence of implementation. (2) It filed the Feature 3 skill-shipping issue as "minor" before tracing the distribution mechanism. (3) **It only inspected `remote-sync-2` and `main`, never enumerating all branches — so it wrongly concluded Feature 2 was "not implemented" when the full refactor lives on `remote-sync-refactor-implementation`** (caught by a second reviewer, then independently verified; see Correction). Lesson: "is X implemented?" for a multi-branch program requires a branch sweep (`git branch --contains`, `git log --all -- <path>`), not a single-worktree grep. All three were corrected in-document.
 
 ---
 
 ## Recurring risk worth internalizing
 
-The single decision that explains most divergences: **Epic 2 (the re-pointing trunk) was built on its own branch (`remote-sync-refactor-implementation`) and never merged into the line where Epics 3–7 were built (`remote-sync-2`).** Downstream epics were therefore developed against a seam their branch never received, so they either followed their pre-refactor member plans (Epic 5's bespoke outbound path) or referenced trunk deliverables absent from their branch (Epic 7's guard "three paths"; Linear bidi). The coordination plan flagged "re-pointing debt" as its highest risk — it materialized as **branch fragmentation**: the trunk and its dependents were built in parallel and never integrated. The remediation is a deliberate merge/rebase of `remote-sync-refactor-implementation` into the Epic 3–7 line (with conflict resolution in `src/services/remote/` and `RemoteControlService.ts`), followed by re-pointing Epics 5/7 onto the now-present unified seam.
+The single decision that explains most divergences: **Feature 2 (the re-pointing trunk) was built on its own branch (`remote-sync-refactor-implementation`) and never merged into the line where Features 3–7 were built (`remote-sync-2`).** Downstream features were therefore developed against a seam their branch never received, so they either followed their pre-refactor member plans (Feature 5's bespoke outbound path) or referenced trunk deliverables absent from their branch (Feature 7's guard "three paths"; Linear bidi). The coordination plan flagged "re-pointing debt" as its highest risk — it materialized as **branch fragmentation**: the trunk and its dependents were built in parallel and never integrated. The remediation is a deliberate merge/rebase of `remote-sync-refactor-implementation` into the Feature 3–7 line (with conflict resolution in `src/services/remote/` and `RemoteControlService.ts`), followed by re-pointing Features 5/7 onto the now-present unified seam.

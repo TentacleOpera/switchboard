@@ -5,7 +5,7 @@ import type { WorktreeRow } from './KanbanDatabase';
  * (CLI / batch / single-card-trigger / copy). Three-tier precedence:
  *
  *   1. per-subtask dedicated worktree — `planId` matches `subtask_plan_id`
- *   2. epic worktree — `epicId` matches `epic_id`
+ *   2. feature worktree — `featureId` matches `feature_id`
  *   3. project worktree — `project` matches `project`
  *
  * No sole-entry fallback. The board/map path owns the sole-entry fallback and
@@ -23,7 +23,7 @@ import type { WorktreeRow } from './KanbanDatabase';
  */
 export function matchWorktreePath(
     worktrees: WorktreeRow[],
-    plan: { epicId?: string | null; project?: string | null; planId?: string | null }
+    plan: { featureId?: string | null; project?: string | null; planId?: string | null }
 ): string | undefined {
     const active = worktrees.filter(w => w.status === 'active');
     if (plan.planId) {
@@ -32,10 +32,10 @@ export function matchWorktreePath(
             return subtaskWt.path;
         }
     }
-    if (plan.epicId) {
-        const epicWt = active.find(w => String(w.epic_id) === String(plan.epicId));
-        if (epicWt) {
-            return epicWt.path;
+    if (plan.featureId) {
+        const featureWt = active.find(w => String(w.feature_id) === String(plan.featureId));
+        if (featureWt) {
+            return featureWt.path;
         }
     }
     if (plan.project) {

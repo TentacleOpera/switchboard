@@ -1,13 +1,13 @@
 ---
 name: query-kanban-plans
-description: Query the Kanban database for plans by workspace name, project, and epics.
+description: Query the Kanban database for plans by workspace name, project, and features.
 allowed-tools: Bash
 user-invokable: false
 ---
 
 # Query Kanban Plans
 
-Ready-made SQL templates for querying the Switchboard Kanban `plans` table by workspace name, project, and epic/subtask relationships.
+Ready-made SQL templates for querying the Switchboard Kanban `plans` table by workspace name, project, and feature/subtask relationships.
 
 ## Discovering Workspace Names
 
@@ -52,32 +52,32 @@ WHERE project_id IS NULL AND workspace_name = 'Autism360App' AND status = 'activ
 
 ---
 
-## Epic and Subtask Queries
+## Feature and Subtask Queries
 
-### List all epics in a workspace
+### List all features in a workspace
 
 ```sql
 SELECT plan_id, topic, kanban_column
 FROM plans
-WHERE is_epic = 1 AND workspace_name = 'Autism360App' AND status = 'active';
+WHERE is_feature = 1 AND workspace_name = 'Autism360App' AND status = 'active';
 ```
 
-### Find all subtasks for a specific epic
+### Find all subtasks for a specific feature
 
 ```sql
 SELECT plan_id, topic, kanban_column, status
 FROM plans
-WHERE epic_id = '<epic_plan_id>' AND workspace_name = 'Autism360App' AND status = 'active';
+WHERE feature_id = '<feature_plan_id>' AND workspace_name = 'Autism360App' AND status = 'active';
 ```
 
-### Get all epics with their active subtask counts
+### Get all features with their active subtask counts
 
 ```sql
-SELECT epic.plan_id AS epic_id, epic.topic AS epic_topic, COUNT(sub.plan_id) AS subtask_count
-FROM plans epic
-LEFT JOIN plans sub ON sub.epic_id = epic.plan_id AND sub.status = 'active'
-WHERE epic.is_epic = 1 AND epic.workspace_name = 'Autism360App' AND epic.status = 'active'
-GROUP BY epic.plan_id, epic.topic;
+SELECT feature.plan_id AS feature_id, feature.topic AS feature_topic, COUNT(sub.plan_id) AS subtask_count
+FROM plans feature
+LEFT JOIN plans sub ON sub.feature_id = feature.plan_id AND sub.status = 'active'
+WHERE feature.is_feature = 1 AND feature.workspace_name = 'Autism360App' AND feature.status = 'active'
+GROUP BY feature.plan_id, feature.topic;
 ```
 
 ---

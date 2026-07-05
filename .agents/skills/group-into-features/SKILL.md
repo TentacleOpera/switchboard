@@ -26,13 +26,13 @@ Ignore BACKLOG and all post-coding columns.
 Each plan line ends with an HTML comment, e.g.:
 ```
 - [.switchboard/plans/foo.md](...) — Foo <!-- planId:abc-123 -->
-- [.switchboard/epics/epic-def.md](...) — Bar Feature <!-- planId:def-456 epic -->
+- [.switchboard/features/feature-def.md](...) — Bar Feature <!-- planId:def-456 feature -->
 - [.switchboard/plans/baz.md](...) — Baz <!-- planId:ghi-789 subtask-of:"Bar Feature" -->
 ```
 
-Skip lines tagged `epic` (they are features) or `subtask-of:...` (already assigned).
+Skip lines tagged `feature` (they are features) or `subtask-of:...` (already assigned).
 Use the `planId:` value from the comment — NOT the filename — when calling create-feature.js.
-(A path under .switchboard/epics/ also indicates a feature, but subtask detection
+(A path under .switchboard/features/ also indicates a feature, but subtask detection
 requires the subtask-of tag — do not rely on filenames alone.)
 
 ### 1a. DETERMINE PROJECT SCOPE
@@ -108,7 +108,7 @@ create-feature script only writes the Goal).
 Use the text from your step 3 proposal — paste the How the Subtasks Achieve This
 section between the Goal and the `<!-- BEGIN SUBTASKS -->` marker, then paste the
 Dependencies & sequencing section immediately after the Subtasks block. Both
-sections are preserved by _regenerateEpicFile on subsequent subtask changes, so
+sections are preserved by _regenerateFeatureFile on subsequent subtask changes, so
 they only need to be written once.
 
 To add more plans to a feature later, use assign-to-feature.js with the feature planId from the create-feature.js output.
@@ -122,6 +122,6 @@ If the user says no or does not respond, stop.
 
 ## Notes
 
-- Feature creation updates the Switchboard board and writes a `.switchboard/epics/` file. It does NOT sync to Linear/ClickUp.
+- Feature creation updates the Switchboard board and writes a `.switchboard/features/` file. It does NOT sync to Linear/ClickUp.
 - The `create-feature.js` / `assign-to-feature.js` verb scripts are documented in `.agents/skills/kanban_operations/SKILL.md`.
 - The confirm gate is load-bearing: never create any feature before the user approves.

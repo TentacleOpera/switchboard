@@ -16,11 +16,11 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const epicPlanId = process.argv[2];
+const featurePlanId = process.argv[2];
 const planIdsJson = process.argv[3];
 const workspaceRoot = process.argv[4] || '.';
 
-if (!epicPlanId || !planIdsJson) {
+if (!featurePlanId || !planIdsJson) {
   console.error("Usage: node assign-to-feature.js <feature_plan_id> <plan_ids_json> [workspace_root]");
   console.error('  plan_ids_json is a JSON array of planId values, e.g. \'["abc-123","def-456"]\'');
   process.exit(1);
@@ -97,7 +97,7 @@ async function tryViaExtension() {
   try {
     const resp = await httpJson('POST', port, '/kanban/feature/assign', {
       workspaceRoot,
-      epicPlanId,
+      featurePlanId,
       planIds
     }, 15000);
     let parsed = {};

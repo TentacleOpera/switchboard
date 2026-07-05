@@ -75,14 +75,14 @@
 
         /* Claudify: remove neon glow from base (non-cyber) interactive states */
         body.theme-claudify .kanban-plan-item.selected,
-        body.theme-claudify .epic-plan-item.selected,
+        body.theme-claudify .feature-plan-item.selected,
         body.theme-claudify .constitution-file-item.selected, body.theme-claudify .system-file-item.selected { box-shadow: none; }
 
         /* Claudify: cards/sidebar items = an exact copy of implementation.html's .secondary-btn
            (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
            --text-secondary text. NO terracotta — the accent is not in these buttons. */
         body.theme-claudify .kanban-plan-item,
-        body.theme-claudify .epic-plan-item,
+        body.theme-claudify .feature-plan-item,
         body.theme-claudify .constitution-file-item,
         body.theme-claudify .system-file-item,
         body.theme-claudify .insight-item {
@@ -92,7 +92,7 @@
             box-shadow: none !important;
         }
         body.theme-claudify .kanban-plan-item:hover,
-        body.theme-claudify .epic-plan-item:hover,
+        body.theme-claudify .feature-plan-item:hover,
         body.theme-claudify .constitution-file-item:hover,
         body.theme-claudify .system-file-item:hover,
         body.theme-claudify .insight-item:hover {
@@ -105,8 +105,8 @@
            The :hover variants keep the terracotta when a selected card is hovered. */
         body.theme-claudify .kanban-plan-item.selected,
         body.theme-claudify .kanban-plan-item.selected:hover,
-        body.theme-claudify .epic-plan-item.selected,
-        body.theme-claudify .epic-plan-item.selected:hover,
+        body.theme-claudify .feature-plan-item.selected,
+        body.theme-claudify .feature-plan-item.selected:hover,
         body.theme-claudify .constitution-file-item.selected,
         body.theme-claudify .system-file-item.selected,
         body.theme-claudify .constitution-file-item.selected:hover,
@@ -200,7 +200,7 @@
             height: 100%;
             min-height: 0;
         }
-        #kanban-list-pane, #epics-list-pane {
+        #kanban-list-pane, #features-list-pane {
             width: 320px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -228,7 +228,7 @@
             position: relative;
             min-height: 0;
         }
-        .kanban-preview-pane, .epics-preview-pane {
+        .kanban-preview-pane, .features-preview-pane {
             flex: 1;
             display: flex;
             flex-direction: column;
@@ -242,7 +242,7 @@
             background: var(--panel-bg);
             min-height: 0;
         }
-        #kanban-preview-content, #epics-preview-content {
+        #kanban-preview-content, #features-preview-content {
             padding: 16px;
             overflow-y: auto;
             flex: 1;
@@ -265,7 +265,7 @@
             display: block;
         }
         .edit-mode #kanban-preview-content, 
-        .edit-mode #epics-preview-content, 
+        .edit-mode #features-preview-content, 
         .edit-mode #constitution-preview-content,
         .edit-mode #system-preview-content,
         .edit-mode #tuning-preview-content,
@@ -306,16 +306,16 @@
             font-style: italic;
         }
         /* Kanban specific plan items */
-        .kanban-plan-item, .epic-plan-item, .constitution-file-item, .system-file-item, .insight-item {
+        .kanban-plan-item, .feature-plan-item, .constitution-file-item, .system-file-item, .insight-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
             transition: background 0.15s;
         }
-        .kanban-plan-item:hover, .epic-plan-item:hover, .constitution-file-item:hover, .system-file-item:hover, .insight-item:hover {
+        .kanban-plan-item:hover, .feature-plan-item:hover, .constitution-file-item:hover, .system-file-item:hover, .insight-item:hover {
             background: var(--card-bg-hover);
         }
-        .kanban-plan-item.selected, .epic-plan-item.selected, .constitution-file-item.selected, .system-file-item.selected, .insight-item.selected {
+        .kanban-plan-item.selected, .feature-plan-item.selected, .constitution-file-item.selected, .system-file-item.selected, .insight-item.selected {
             background: color-mix(in srgb, var(--accent-teal) 8%, #0f0f0f);
             border-left: 3px solid var(--accent-teal);
         }
@@ -352,8 +352,8 @@
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
         }
 
-        /* .epic-plan-item and .constitution-file-item mirror .kanban-plan-item styling */
-        .epic-plan-item {
+        /* .feature-plan-item and .constitution-file-item mirror .kanban-plan-item styling */
+        .feature-plan-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
@@ -364,13 +364,13 @@
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-left: 3px solid var(--accent-teal-dim);
         }
-        .epic-plan-item:hover {
+        .feature-plan-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }
-        .epic-plan-item.selected {
+        .feature-plan-item.selected {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
@@ -378,10 +378,10 @@
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
             color: var(--accent-teal);
         }
-        .cyber-theme-enabled .epic-plan-item:hover {
+        .cyber-theme-enabled .feature-plan-item:hover {
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
         }
-        .cyber-theme-enabled .epic-plan-item.selected {
+        .cyber-theme-enabled .feature-plan-item.selected {
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
                         inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
@@ -478,7 +478,7 @@
             background: #333;
             color: #fff;
         }
-        .kanban-plan-copy-link, .kanban-plan-copy-prompt, .epic-card-action {
+        .kanban-plan-copy-link, .kanban-plan-copy-prompt, .feature-card-action {
             font-size: 10px;
             background: transparent;
             border: 1px solid var(--border-color);
@@ -487,7 +487,7 @@
             border-radius: 3px;
             cursor: pointer;
         }
-        .kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .epic-card-action:hover {
+        .kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .feature-card-action:hover {
             border-color: var(--accent-teal);
             color: var(--text-primary);
         }
@@ -504,7 +504,7 @@
         .complexity-dot.very-high { background: #f44336; }
         .complexity-dot.unknown { background: #9e9e9e; }
         /* Metadata preview bar */
-        #kanban-preview-meta-bar, #epic-preview-meta-bar {
+        #kanban-preview-meta-bar, #feature-preview-meta-bar {
             display: flex;
             gap: 12px;
             padding: 6px 10px;
@@ -552,7 +552,7 @@
         }
 
         .content-row.collapsed #kanban-list-pane,
-        .content-row.collapsed #epics-list-pane,
+        .content-row.collapsed #features-list-pane,
         .content-row.collapsed #constitution-list-pane,
         .content-row.collapsed #system-list-pane,
         .content-row.collapsed #tuning-list-pane,
@@ -562,7 +562,7 @@
         }
 
         .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #epics-list-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #features-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #system-list-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row),
@@ -613,15 +613,15 @@
             text-align: right;
             border-top: 1px solid var(--border-color);
         }
-        /* Accordion for Epics */
-        .epic-accordion {
+        /* Accordion for Features */
+        .feature-accordion {
             margin-top: 6px;
         }
-        .epic-subtasks-list {
+        .feature-subtasks-list {
             padding-left: 12px;
             margin-top: 4px;
         }
-        .epic-subtask-item {
+        .feature-subtask-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -629,14 +629,14 @@
             color: var(--text-secondary);
             padding: 2px 0;
         }
-        .epic-remove-subtask-btn {
+        .feature-remove-subtask-btn {
             background: transparent;
             border: none;
             color: #ff6b6b;
             cursor: pointer;
             font-size: 11px;
         }
-        .epic-subtask-link:hover {
+        .feature-subtask-link:hover {
             color: var(--accent-teal);
             text-decoration: underline;
         }
@@ -788,7 +788,7 @@
         }
 
         .cyber-theme-enabled #kanban-list-pane,
-        .cyber-theme-enabled #epics-list-pane {
+        .cyber-theme-enabled #features-list-pane {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -810,7 +810,7 @@
         }
 
         .cyber-theme-enabled #kanban-preview-pane,
-        .cyber-theme-enabled #epics-preview-pane,
+        .cyber-theme-enabled #features-preview-pane,
         .cyber-theme-enabled #constitution-preview-pane,
         .cyber-theme-enabled #tuning-preview-pane,
         .cyber-theme-enabled #projects-preview-pane, .cyber-theme-enabled #devdocs-preview-pane {
@@ -828,7 +828,7 @@
 
         /* Inline code: neon glow */
         .cyber-theme-enabled #kanban-preview-content code,
-        .cyber-theme-enabled #epics-preview-content code,
+        .cyber-theme-enabled #features-preview-content code,
         .cyber-theme-enabled #constitution-preview-content code,
         .cyber-theme-enabled #system-preview-content code,
         .cyber-theme-enabled #tuning-preview-content code,
@@ -838,7 +838,7 @@
 
         /* Code blocks: subtle glow border */
         .cyber-theme-enabled #kanban-preview-content pre,
-        .cyber-theme-enabled #epics-preview-content pre,
+        .cyber-theme-enabled #features-preview-content pre,
         .cyber-theme-enabled #constitution-preview-content pre,
         .cyber-theme-enabled #system-preview-content pre,
         .cyber-theme-enabled #tuning-preview-content pre,
@@ -849,7 +849,7 @@
 
         /* Blockquotes: glowing left border */
         .cyber-theme-enabled #kanban-preview-content blockquote,
-        .cyber-theme-enabled #epics-preview-content blockquote,
+        .cyber-theme-enabled #features-preview-content blockquote,
         .cyber-theme-enabled #constitution-preview-content blockquote,
         .cyber-theme-enabled #system-preview-content blockquote,
         .cyber-theme-enabled #tuning-preview-content blockquote,
@@ -867,13 +867,13 @@
 
         /* Claudify: solid near-black surface + subtle warm grid (no translucency, no blur) */
         body.theme-claudify #kanban-content,
-        body.theme-claudify #epics-content,
+        body.theme-claudify #features-content,
         body.theme-claudify #constitution-content,
         body.theme-claudify #system-content,
         body.theme-claudify #tuning-content,
         body.theme-claudify #projects-content, body.theme-claudify #devdocs-content,
         body.theme-claudify #kanban-preview-pane,
-        body.theme-claudify #epics-preview-pane,
+        body.theme-claudify #features-preview-pane,
         body.theme-claudify #constitution-preview-pane,
         body.theme-claudify #system-preview-pane,
         body.theme-claudify #tuning-preview-pane,
@@ -887,7 +887,7 @@
 
         /* Claudify: h1 — pixel font, terracotta */
         body.theme-claudify #kanban-preview-content h1,
-        body.theme-claudify #epics-preview-content h1,
+        body.theme-claudify #features-preview-content h1,
         body.theme-claudify #constitution-preview-content h1,
         body.theme-claudify #system-preview-content h1,
         body.theme-claudify #tuning-preview-content h1,
@@ -899,7 +899,7 @@
         }
 
         body.theme-claudify.claudify-pixel-font-disabled #kanban-preview-content h1,
-        body.theme-claudify.claudify-pixel-font-disabled #epics-preview-content h1,
+        body.theme-claudify.claudify-pixel-font-disabled #features-preview-content h1,
         body.theme-claudify.claudify-pixel-font-disabled #constitution-preview-content h1,
         body.theme-claudify.claudify-pixel-font-disabled #system-preview-content h1,
         body.theme-claudify.claudify-pixel-font-disabled #tuning-preview-content h1,
@@ -911,7 +911,7 @@
 
         /* Claudify: h2-h6 — Hanken, terracotta */
         body.theme-claudify #kanban-preview-content h2, body.theme-claudify #kanban-preview-content h3, body.theme-claudify #kanban-preview-content h4, body.theme-claudify #kanban-preview-content h5, body.theme-claudify #kanban-preview-content h6,
-        body.theme-claudify #epics-preview-content h2, body.theme-claudify #epics-preview-content h3, body.theme-claudify #epics-preview-content h4, body.theme-claudify #epics-preview-content h5, body.theme-claudify #epics-preview-content h6,
+        body.theme-claudify #features-preview-content h2, body.theme-claudify #features-preview-content h3, body.theme-claudify #features-preview-content h4, body.theme-claudify #features-preview-content h5, body.theme-claudify #features-preview-content h6,
         body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6,
         body.theme-claudify #system-preview-content h2, body.theme-claudify #system-preview-content h3, body.theme-claudify #system-preview-content h4, body.theme-claudify #system-preview-content h5, body.theme-claudify #system-preview-content h6,
         body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6,
@@ -922,9 +922,9 @@
             color: #D97757;
         }
 
-        /* Unified Markdown Preview Styling (Kanban, Epics & Constitution) */
+        /* Unified Markdown Preview Styling (Kanban, Features & Constitution) */
         #kanban-preview-content,
-        #epics-preview-content,
+        #features-preview-content,
         #constitution-preview-content,
         #system-preview-content,
         #tuning-preview-content,
@@ -941,7 +941,7 @@
         }
 
         #kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6,
-        #epics-preview-content h1, #epics-preview-content h2, #epics-preview-content h3, #epics-preview-content h4, #epics-preview-content h5, #epics-preview-content h6,
+        #features-preview-content h1, #features-preview-content h2, #features-preview-content h3, #features-preview-content h4, #features-preview-content h5, #features-preview-content h6,
         #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6,
         #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6,
         #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6,
@@ -955,7 +955,7 @@
 
         /* Cyber theme — display heading typography */
         body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
-        body.cyber-theme-enabled #epics-preview-content h1, body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
+        body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6,
         body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
@@ -965,7 +965,7 @@
         }
         /* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
         body.cyber-theme-enabled #kanban-preview-content h1,
-        body.cyber-theme-enabled #epics-preview-content h1,
+        body.cyber-theme-enabled #features-preview-content h1,
         body.cyber-theme-enabled #constitution-preview-content h1,
         body.cyber-theme-enabled #system-preview-content h1,
         body.cyber-theme-enabled #tuning-preview-content h1,
@@ -974,7 +974,7 @@
         }
         /* Cyber theme — doc preview h2-h6 use accent color */
         body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
-        body.cyber-theme-enabled #epics-preview-content h2, body.cyber-theme-enabled #epics-preview-content h3, body.cyber-theme-enabled #epics-preview-content h4, body.cyber-theme-enabled #epics-preview-content h5, body.cyber-theme-enabled #epics-preview-content h6,
+        body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6,
         body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
         body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
         body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
@@ -983,7 +983,7 @@
         }
 
         #kanban-preview-content h1,
-        #epics-preview-content h1,
+        #features-preview-content h1,
         #constitution-preview-content h1,
         #system-preview-content h1,
         #tuning-preview-content h1,
@@ -998,7 +998,7 @@
         }
 
         #kanban-preview-content h2,
-        #epics-preview-content h2,
+        #features-preview-content h2,
         #constitution-preview-content h2,
         #system-preview-content h2,
         #tuning-preview-content h2,
@@ -1013,25 +1013,25 @@
         }
 
         #kanban-preview-content h3,
-        #epics-preview-content h3,
+        #features-preview-content h3,
         #constitution-preview-content h3,
         #system-preview-content h3,
         #tuning-preview-content h3,
         #projects-preview-content h3, #devdocs-preview-content h3,
         #kanban-preview-content h4,
-        #epics-preview-content h4,
+        #features-preview-content h4,
         #constitution-preview-content h4,
         #system-preview-content h4,
         #tuning-preview-content h4,
         #projects-preview-content h4, #devdocs-preview-content h4,
         #kanban-preview-content h5,
-        #epics-preview-content h5,
+        #features-preview-content h5,
         #constitution-preview-content h5,
         #system-preview-content h5,
         #tuning-preview-content h5,
         #projects-preview-content h5, #devdocs-preview-content h5,
         #kanban-preview-content h6,
-        #epics-preview-content h6,
+        #features-preview-content h6,
         #constitution-preview-content h6,
         #system-preview-content h6,
         #tuning-preview-content h6,
@@ -1041,7 +1041,7 @@
         }
 
         #kanban-preview-content h3,
-        #epics-preview-content h3,
+        #features-preview-content h3,
         #constitution-preview-content h3,
         #system-preview-content h3,
         #tuning-preview-content h3,
@@ -1050,7 +1050,7 @@
         }
 
         #kanban-preview-content h4,
-        #epics-preview-content h4,
+        #features-preview-content h4,
         #constitution-preview-content h4,
         #system-preview-content h4,
         #tuning-preview-content h4,
@@ -1059,7 +1059,7 @@
         }
 
         #kanban-preview-content h5,
-        #epics-preview-content h5,
+        #features-preview-content h5,
         #constitution-preview-content h5,
         #system-preview-content h5,
         #tuning-preview-content h5,
@@ -1068,7 +1068,7 @@
         }
 
         #kanban-preview-content h6,
-        #epics-preview-content h6,
+        #features-preview-content h6,
         #constitution-preview-content h6,
         #system-preview-content h6,
         #tuning-preview-content h6,
@@ -1077,7 +1077,7 @@
         }
 
         #kanban-preview-content p,
-        #epics-preview-content p,
+        #features-preview-content p,
         #constitution-preview-content p,
         #system-preview-content p,
         #tuning-preview-content p,
@@ -1089,7 +1089,7 @@
         }
 
         #kanban-preview-content li,
-        #epics-preview-content li,
+        #features-preview-content li,
         #constitution-preview-content li,
         #system-preview-content li,
         #tuning-preview-content li,
@@ -1101,7 +1101,7 @@
         }
 
         #kanban-preview-content li p,
-        #epics-preview-content li p,
+        #features-preview-content li p,
         #constitution-preview-content li p,
         #system-preview-content li p,
         #tuning-preview-content li p,
@@ -1110,7 +1110,7 @@
         }
 
         #kanban-preview-content pre,
-        #epics-preview-content pre,
+        #features-preview-content pre,
         #constitution-preview-content pre,
         #system-preview-content pre,
         #tuning-preview-content pre,
@@ -1124,7 +1124,7 @@
         }
 
         #kanban-preview-content pre code,
-        #epics-preview-content pre code,
+        #features-preview-content pre code,
         #constitution-preview-content pre code,
         #system-preview-content pre code,
         #tuning-preview-content pre code,
@@ -1138,7 +1138,7 @@
         }
 
         #kanban-preview-content code,
-        #epics-preview-content code,
+        #features-preview-content code,
         #constitution-preview-content code,
         #system-preview-content code,
         #tuning-preview-content code,
@@ -1154,7 +1154,7 @@
         }
 
         #kanban-preview-content blockquote,
-        #epics-preview-content blockquote,
+        #features-preview-content blockquote,
         #constitution-preview-content blockquote,
         #system-preview-content blockquote,
         #tuning-preview-content blockquote,
@@ -1168,7 +1168,7 @@
         }
 
         #kanban-preview-content ul, #kanban-preview-content ol,
-        #epics-preview-content ul, #epics-preview-content ol,
+        #features-preview-content ul, #features-preview-content ol,
         #constitution-preview-content ul, #constitution-preview-content ol,
         #system-preview-content ul, #system-preview-content ol,
         #tuning-preview-content ul, #tuning-preview-content ol,
@@ -1179,7 +1179,7 @@
 
         /* Table Styling */
         #kanban-preview-content table,
-        #epics-preview-content table,
+        #features-preview-content table,
         #constitution-preview-content table,
         #system-preview-content table,
         #tuning-preview-content table,
@@ -1190,7 +1190,7 @@
         }
 
         #kanban-preview-content th,
-        #epics-preview-content th,
+        #features-preview-content th,
         #constitution-preview-content th,
         #system-preview-content th,
         #tuning-preview-content th,
@@ -1202,7 +1202,7 @@
         }
 
         #kanban-preview-content td,
-        #epics-preview-content td,
+        #features-preview-content td,
         #constitution-preview-content td,
         #system-preview-content td,
         #tuning-preview-content td,
@@ -1213,7 +1213,7 @@
         }
 
         #kanban-preview-content tr:hover td,
-        #epics-preview-content tr:hover td,
+        #features-preview-content tr:hover td,
         #constitution-preview-content tr:hover td,
         #system-preview-content tr:hover td,
         #tuning-preview-content tr:hover td,
@@ -1222,7 +1222,7 @@
         }
 
         #kanban-preview-content .table-wrapper,
-        #epics-preview-content .table-wrapper,
+        #features-preview-content .table-wrapper,
         #constitution-preview-content .table-wrapper,
         #system-preview-content .table-wrapper,
         #tuning-preview-content .table-wrapper,
@@ -1234,7 +1234,7 @@
 
         /* Subtle, Interactive Links */
         #kanban-preview-content a,
-        #epics-preview-content a,
+        #features-preview-content a,
         #constitution-preview-content a,
         #system-preview-content a,
         #tuning-preview-content a,
@@ -1244,7 +1244,7 @@
         }
 
         #kanban-preview-content a:hover,
-        #epics-preview-content a:hover,
+        #features-preview-content a:hover,
         #constitution-preview-content a:hover,
         #system-preview-content a:hover,
         #tuning-preview-content a:hover,
@@ -1254,7 +1254,7 @@
         }
 
         #kanban-preview-content hr,
-        #epics-preview-content hr,
+        #features-preview-content hr,
         #constitution-preview-content hr,
         #system-preview-content hr,
         #tuning-preview-content hr,
@@ -1265,7 +1265,7 @@
         }
 
         #kanban-preview-content img,
-        #epics-preview-content img,
+        #features-preview-content img,
         #constitution-preview-content img,
         #system-preview-content img,
         #tuning-preview-content img,
@@ -1278,7 +1278,7 @@
         }
 
         #kanban-preview-content .empty-state,
-        #epics-preview-content .empty-state,
+        #features-preview-content .empty-state,
         #constitution-preview-content .empty-state,
         #system-preview-content .empty-state,
         #tuning-preview-content .empty-state,
@@ -1665,7 +1665,7 @@
 <body>
     <div class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN PLANS</button>
-        <button class="shared-tab-btn" data-tab="epics">FEATURES</button>
+        <button class="shared-tab-btn" data-tab="features">FEATURES</button>
         <button class="shared-tab-btn" data-tab="projects">PROJECTS</button>
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
@@ -1753,22 +1753,22 @@
             </div>
         </div>
 
-        <!-- Epics tab -->
-        <div id="epics-content" class="shared-tab-content">
+        <!-- Features tab -->
+        <div id="features-content" class="shared-tab-content">
             <div class="controls-strip">
-                <select id="epics-workspace-filter">
+                <select id="features-workspace-filter">
                     <option value="">All Workspaces</option>
                 </select>
-                <select id="epics-project-filter">
+                <select id="features-project-filter">
                     <option value="">All Projects</option>
                 </select>
-                <select id="epics-column-filter">
+                <select id="features-column-filter">
                     <option value="">All Columns</option>
                 </select>
-                <button id="btn-new-epic" class="strip-btn">+ New Feature</button>
+                <button id="btn-new-feature" class="strip-btn">+ New Feature</button>
             </div>
             <div class="content-row">
-                <div id="epics-list-pane">
+                <div id="features-list-pane">
                     <div class="sidebar-toggle-row">
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
@@ -1776,12 +1776,12 @@
                 </div>
                 <div class="preview-panel-wrapper">
                     <div class="cyber-scanlines"></div>
-                    <div id="epic-preview-meta-bar" style="display:none;"></div>
-                    <div id="epics-preview-pane" class="epics-preview-pane">
-                        <div id="epics-preview-content">
+                    <div id="feature-preview-meta-bar" style="display:none;"></div>
+                    <div id="features-preview-pane" class="features-preview-pane">
+                        <div id="features-preview-content">
                             <div class="kanban-empty-state">Select a feature to preview</div>
                         </div>
-                        <textarea id="epics-editor" class="markdown-editor"></textarea>
+                        <textarea id="features-editor" class="markdown-editor"></textarea>
                     </div>
                 </div>
             </div>
@@ -1901,43 +1901,43 @@
                 </div>
             </div>
         </div>
-    <div id="new-epic-modal" class="kanban-log-overlay" style="display: none;">
+    <div id="new-feature-modal" class="kanban-log-overlay" style="display: none;">
         <div class="kanban-log-modal" style="width: 400px;">
             <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
                 Create New Feature
             </div>
             <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="new-epic-name" style="font-size: 11px; color: var(--text-secondary);">Feature Name *</label>
-                    <input type="text" id="new-epic-name" placeholder="Enter feature name" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
+                    <label for="new-feature-name" style="font-size: 11px; color: var(--text-secondary);">Feature Name *</label>
+                    <input type="text" id="new-feature-name" placeholder="Enter feature name" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="new-epic-description" style="font-size: 11px; color: var(--text-secondary);">Description</label>
-                    <textarea id="new-epic-description" placeholder="Enter description" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px; height: 100px; resize: vertical; font-family: var(--font-family);"></textarea>
+                    <label for="new-feature-description" style="font-size: 11px; color: var(--text-secondary);">Description</label>
+                    <textarea id="new-feature-description" placeholder="Enter description" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px; height: 100px; resize: vertical; font-family: var(--font-family);"></textarea>
                 </div>
             </div>
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
-                <button id="btn-new-epic-cancel" class="strip-btn">Cancel</button>
-                <button id="btn-new-epic-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
+                <button id="btn-new-feature-cancel" class="strip-btn">Cancel</button>
+                <button id="btn-new-feature-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
             </div>
         </div>
     </div>
 
-    <!-- Add Subtask to Epic -->
-    <div id="epic-add-subtask-overlay" class="kanban-log-overlay" style="display: none;">
+    <!-- Add Subtask to Feature -->
+    <div id="feature-add-subtask-overlay" class="kanban-log-overlay" style="display: none;">
         <div class="kanban-log-modal" style="width: 420px;">
             <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
                 Add Subtask to Feature
             </div>
             <div style="padding: 16px; display: flex; flex-direction: column; gap: 10px;">
-                <label for="epic-add-subtask-select" style="font-size: 11px; color: var(--text-secondary);">Select a plan to add as a subtask</label>
-                <select id="epic-add-subtask-select" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;">
+                <label for="feature-add-subtask-select" style="font-size: 11px; color: var(--text-secondary);">Select a plan to add as a subtask</label>
+                <select id="feature-add-subtask-select" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;">
                     <option value="">Select a plan…</option>
                 </select>
             </div>
             <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
-                <button id="btn-epic-add-subtask-cancel" class="strip-btn">Cancel</button>
-                <button id="btn-epic-add-subtask-submit" class="strip-btn" style="border-color: var(--accent-teal);">Add</button>
+                <button id="btn-feature-add-subtask-cancel" class="strip-btn">Cancel</button>
+                <button id="btn-feature-add-subtask-submit" class="strip-btn" style="border-color: var(--accent-teal);">Add</button>
             </div>
         </div>
     </div>

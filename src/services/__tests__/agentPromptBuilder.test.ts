@@ -175,28 +175,28 @@ suite('agentPromptBuilder', () => {
         });
     });
 
-    suite('writeEpicDescriptionIfEmpty option', () => {
-        test('writeEpicDescriptionIfEmpty: true + epicMode includes epic description directive', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: true, epicMode: true });
-            assert.ok(prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should include epic description directive');
+    suite('writeFeatureDescriptionIfEmpty option', () => {
+        test('writeFeatureDescriptionIfEmpty: true + featureMode includes feature description directive', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeFeatureDescriptionIfEmpty: true, featureMode: true });
+            assert.ok(prompt.includes('FEATURE DESCRIPTION BACKFILL:'), 'Should include feature description directive');
             assert.ok(prompt.includes('## Goal'), 'Should reference Goal section');
             assert.ok(prompt.includes('## How the Subtasks Achieve This'), 'Should reference How the Subtasks Achieve This section');
             assert.ok(prompt.includes('## Dependencies & sequencing'), 'Should reference Dependencies & sequencing section');
         });
 
-        test('writeEpicDescriptionIfEmpty: false + epicMode omits epic description directive', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: false, epicMode: true });
-            assert.ok(!prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should NOT include epic description directive');
+        test('writeFeatureDescriptionIfEmpty: false + featureMode omits feature description directive', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeFeatureDescriptionIfEmpty: false, featureMode: true });
+            assert.ok(!prompt.includes('FEATURE DESCRIPTION BACKFILL:'), 'Should NOT include feature description directive');
         });
 
-        test('writeEpicDescriptionIfEmpty: true without epicMode omits directive (non-epic dispatch unaffected)', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeEpicDescriptionIfEmpty: true });
-            assert.ok(!prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should NOT include epic description directive for non-epic dispatch');
+        test('writeFeatureDescriptionIfEmpty: true without featureMode omits directive (non-feature dispatch unaffected)', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { writeFeatureDescriptionIfEmpty: true });
+            assert.ok(!prompt.includes('FEATURE DESCRIPTION BACKFILL:'), 'Should NOT include feature description directive for non-feature dispatch');
         });
 
-        test('writeEpicDescriptionIfEmpty: undefined + epicMode includes epic description directive (default ON)', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { epicMode: true });
-            assert.ok(prompt.includes('EPIC DESCRIPTION BACKFILL:'), 'Should include epic description directive by default in epic mode');
+        test('writeFeatureDescriptionIfEmpty: undefined + featureMode includes feature description directive (default ON)', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { featureMode: true });
+            assert.ok(prompt.includes('FEATURE DESCRIPTION BACKFILL:'), 'Should include feature description directive by default in feature mode');
         });
     });
 
@@ -247,20 +247,20 @@ suite('agentPromptBuilder', () => {
     });
 
     suite('§9 regression — lean dispatch prompts', () => {
-        const makeEpicPlans = () => [
-            { topic: 'Test Epic', absolutePath: '/workspace/.switchboard/epics/test-epic.md', isEpic: true, sessionId: 'epic-1' },
-            { topic: 'Subtask A', absolutePath: '/workspace/.switchboard/plans/sub-a.md', isSubtask: true, epicTopic: 'Test Epic', epicId: 'epic-1', sessionId: 'st-1' },
-            { topic: 'Subtask B', absolutePath: '/workspace/.switchboard/plans/sub-b.md', isSubtask: true, epicTopic: 'Test Epic', epicId: 'epic-1', sessionId: 'st-2' },
+        const makeFeaturePlans = () => [
+            { topic: 'Test Feature', absolutePath: '/workspace/.switchboard/features/test-feature.md', isFeature: true, sessionId: 'feature-1' },
+            { topic: 'Subtask A', absolutePath: '/workspace/.switchboard/plans/sub-a.md', isSubtask: true, featureTopic: 'Test Feature', featureId: 'feature-1', sessionId: 'st-1' },
+            { topic: 'Subtask B', absolutePath: '/workspace/.switchboard/plans/sub-b.md', isSubtask: true, featureTopic: 'Test Feature', featureId: 'feature-1', sessionId: 'st-2' },
         ];
 
-        test('no [SUBTASK] [SUBTASK] double-labelling in epic-mode planner prompt', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
-            assert.ok(!prompt.includes('[SUBTASK] [SUBTASK]'), 'Epic prompt must not contain double [SUBTASK] labelling');
+        test('no [SUBTASK] [SUBTASK] double-labelling in feature-mode planner prompt', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
+            assert.ok(!prompt.includes('[SUBTASK] [SUBTASK]'), 'Feature prompt must not contain double [SUBTASK] labelling');
         });
 
-        test('no [SUBTASK] [SUBTASK] double-labelling in epic-mode coder prompt', () => {
-            const prompt = buildKanbanBatchPrompt('coder', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
-            assert.ok(!prompt.includes('[SUBTASK] [SUBTASK]'), 'Epic coder prompt must not contain double [SUBTASK] labelling');
+        test('no [SUBTASK] [SUBTASK] double-labelling in feature-mode coder prompt', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
+            assert.ok(!prompt.includes('[SUBTASK] [SUBTASK]'), 'Feature coder prompt must not contain double [SUBTASK] labelling');
         });
 
         test('no batchExecutionRules in single-plan coder prompt', () => {
@@ -268,16 +268,16 @@ suite('agentPromptBuilder', () => {
             assert.ok(!prompt.includes('CRITICAL INSTRUCTIONS:'), 'Single-plan prompt must not include batch execution rules');
         });
 
-        test('no batchExecutionRules in epic-mode coder prompt', () => {
-            const prompt = buildKanbanBatchPrompt('coder', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
-            assert.ok(!prompt.includes('CRITICAL INSTRUCTIONS:'), 'Epic-mode coder prompt must not include batch execution rules');
+        test('no batchExecutionRules in feature-mode coder prompt', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
+            assert.ok(!prompt.includes('CRITICAL INSTRUCTIONS:'), 'Feature-mode coder prompt must not include batch execution rules');
         });
 
-        test('epic-mode coder prompt contains EPIC FILE reference and no per-subtask plan lines', () => {
-            const prompt = buildKanbanBatchPrompt('coder', makeEpicPlans(), { epicMode: true, epicTopic: 'Test Epic', subtaskCount: 2 });
-            assert.ok(prompt.includes('EPIC FILE:'), 'Epic-mode coder prompt should contain EPIC FILE reference');
-            assert.ok(!prompt.includes('Subtask A Plan File:'), 'Epic-mode coder prompt should not enumerate per-subtask plan lines');
-            assert.ok(!prompt.includes('Subtask B Plan File:'), 'Epic-mode coder prompt should not enumerate per-subtask plan lines');
+        test('feature-mode coder prompt contains FEATURE FILE reference and no per-subtask plan lines', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
+            assert.ok(prompt.includes('FEATURE FILE:'), 'Feature-mode coder prompt should contain FEATURE FILE reference');
+            assert.ok(!prompt.includes('Subtask A Plan File:'), 'Feature-mode coder prompt should not enumerate per-subtask plan lines');
+            assert.ok(!prompt.includes('Subtask B Plan File:'), 'Feature-mode coder prompt should not enumerate per-subtask plan lines');
         });
 
         test('single worktree path appears exactly once in worktree dispatch', () => {

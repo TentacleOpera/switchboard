@@ -70,11 +70,11 @@ export class LinearRemoteProvider implements RemoteProvider {
                     deltas.push({
                         remoteId,
                         stateKey,
-                        // Epic structure — parent/children are native Linear GraphQL fields.
+                        // Feature structure — parent/children are native Linear GraphQL fields.
                         // updatedAt bumps on parentId changes (issue property update), so a
                         // parent/child link change IS detected by this delta query.
                         parentRemoteId: String(node.parent?.id || ''),
-                        isEpicCandidate: (node.children?.nodes?.length || 0) > 0,
+                        isFeatureCandidate: (node.children?.nodes?.length || 0) > 0,
                         updatedAt: updatedAt || undefined,
                         description: description || undefined,
                     });
@@ -185,7 +185,7 @@ export class LinearRemoteProvider implements RemoteProvider {
             : { ok: false, error: result.error };
     }
 
-    // ── Project-context push (epic: Project Context & Remote UI Hub) ──────
+    // ── Project-context push (feature: Project Context & Remote UI Hub) ──────
     //
     // Upserts a "Switchboard Project Context" document (Dev Docs + PRDs +
     // constitution, markdown) on each Linear project matching a configured

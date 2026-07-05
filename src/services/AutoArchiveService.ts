@@ -5,7 +5,7 @@ import type { RemoteProviderKind } from './RemoteControlService';
 import { ArchiveManager } from './ArchiveManager';
 
 /**
- * Auto-Archive Rule (epic 7 — Auto-Archive & Production Hardening).
+ * Auto-Archive Rule (feature 7 — Auto-Archive & Production Hardening).
  *
  * After a configurable dwell in a **designated** column (default = the stage
  * immediately before Completed), a plan auto-moves to Completed and archives
@@ -50,7 +50,7 @@ export interface AutoArchiveDeps {
     getActiveProviderKind: () => Promise<RemoteProviderKind | null>;
     /** Resolve the column id that sits immediately before COMPLETED (default trigger). */
     getDefaultTriggerColumn: () => Promise<string>;
-    /** Record an outbound push outcome for the Remote tab health UI (epic 7). */
+    /** Record an outbound push outcome for the Remote tab health UI (feature 7). */
     recordPushResult?: (ok: boolean, error?: string) => void;
     log?: (msg: string) => void;
 }

@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
-import { appendEpicClobberDiag } from './epicClobberDiag'; // DIAGNOSTIC (is_epic clobber) — remove with the probes
+import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import { PlanManifestService } from './PlanManifestService';
@@ -56,18 +56,18 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     /**
-     * Live re-deriver into the KanbanProvider for an epic's kanban_column. Called
-     * after the is_epic re-assert in _handlePlanFile to self-heal the
+     * Live re-deriver into the KanbanProvider for an feature's kanban_column. Called
+     * after the is_feature re-assert in _handlePlanFile to self-heal the
      * kanban_column clobber from insertFileDerivedPlan's hardcoded 'CREATED' on
      * fresh INSERT (re-import after the 3000ms registerPendingCreation window, or
      * the atomic-write DELETE->re-INSERT race). Re-derives from DB state
      * (subtasks) so "new file" does NOT imply "CREATED column". No-op when the
-     * epic has no subtasks yet (the provider guards that case).
+     * feature has no subtasks yet (the provider guards that case).
      */
-    private _recomputeEpicColumn?: (epicPlanId: string, workspaceRoot: string) => Promise<void>;
+    private _recomputeFeatureColumn?: (featurePlanId: string, workspaceRoot: string) => Promise<void>;
 
-    public setEpicColumnRecomputer(fn: (epicPlanId: string, workspaceRoot: string) => Promise<void>): void {
-        this._recomputeEpicColumn = fn;
+    public setFeatureColumnRecomputer(fn: (featurePlanId: string, workspaceRoot: string) => Promise<void>): void {
+        this._recomputeFeatureColumn = fn;
     }
 
     constructor(
@@ -173,8 +173,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
     private async _scanForNewFiles(workspaceRoot: string): Promise<void> {
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
-        if (!fs.existsSync(plansDir) && !fs.existsSync(epicsDir)) { return; }
+        const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
+        if (!fs.existsSync(plansDir) && !fs.existsSync(featuresDir)) { return; }
 
         try {
             const currentPaths = new Set<string>();
@@ -194,8 +194,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             if (fs.existsSync(plansDir)) {
                 await collectPaths(plansDir);
             }
-            if (fs.existsSync(epicsDir)) {
-                await collectPaths(epicsDir);
+            if (fs.existsSync(featuresDir)) {
+                await collectPaths(featuresDir);
             }
 
             const prevPaths = this._scanSeenPaths.get(workspaceRoot);
@@ -349,7 +349,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         );
 
         if (workspaceFolderPaths.has(folder)) {
-            const pattern = new vscode.RelativePattern(folder, '.switchboard/{plans,epics}/**/*.md');
+            const pattern = new vscode.RelativePattern(folder, '.switchboard/{plans,features}/**/*.md');
             const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
 
             watcher.onDidCreate((uri) => {
@@ -391,11 +391,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             const nativeWatcher = fs.watch(watchPath, { recursive: true }, (eventType, filename) => {
                 if (!filename || !filename.endsWith('.md')) return;
                 
-                // Ensure it's in .switchboard/plans or .switchboard/epics
+                // Ensure it's in .switchboard/plans or .switchboard/features
                 const fullPath = path.resolve(path.join(watchPath, filename));
                 const plansDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'plans'));
-                const epicsDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'epics'));
-                if (!fullPath.startsWith(plansDir) && !fullPath.startsWith(epicsDir)) return;
+                const featuresDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'features'));
+                if (!fullPath.startsWith(plansDir) && !fullPath.startsWith(featuresDir)) return;
 
                 const uri = vscode.Uri.file(fullPath);
                 
@@ -453,14 +453,14 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
 
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-            // DIAGNOSTIC (is_epic clobber investigation): log which sql.js instance the watcher
-            // operates on when it handles an epic file. Compare against the provider=… /
-            // watcher=… line from createEpicFromPlanIds. Same instanceId ⇒ candidate ❷ is dead;
-            // different ⇒ this handler may persist a stale snapshot over the epic's is_epic=1.
-            // See docs/investigation-epic-is_epic-clobber.md. Remove once the clobber is fixed.
-            if (relativePath.startsWith('.switchboard/epics/')) {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] epic-file handle: instance ${db.instanceId} (dbPath=${db.dbPath}) for ${relativePath}`);
-                appendEpicClobberDiag(workspaceRoot, `watcher._handlePlanFile: instance=${db.instanceId} handling epic file ${relativePath}`);
+            // DIAGNOSTIC (is_feature clobber investigation): log which sql.js instance the watcher
+            // operates on when it handles an feature file. Compare against the provider=… /
+            // watcher=… line from createFeatureFromPlanIds. Same instanceId ⇒ candidate ❷ is dead;
+            // different ⇒ this handler may persist a stale snapshot over the feature's is_feature=1.
+            // See docs/investigation-feature-is_feature-clobber.md. Remove once the clobber is fixed.
+            if (relativePath.startsWith('.switchboard/features/')) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] feature-file handle: instance ${db.instanceId} (dbPath=${db.dbPath}) for ${relativePath}`);
+                appendFeatureClobberDiag(workspaceRoot, `watcher._handlePlanFile: instance=${db.instanceId} handling feature file ${relativePath}`);
             }
             if (isRuntimeMirrorPlanFile(path.basename(relativePath))) {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipped brain mirror file: ${relativePath}`);
@@ -536,22 +536,22 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 const project = metadata.project || activeProject;
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
                 //
-                // For epic files named `epic-<uuid>.md`, reuse the embedded UUID as the
-                // plan_id instead of minting a random one. Subtask→epic links are stored as
-                // subtask.epic_id = epic.plan_id (DB-only, not in the subtask file), so if a
+                // For feature files named `feature-<uuid>.md`, reuse the embedded UUID as the
+                // plan_id instead of minting a random one. Subtask→feature links are stored as
+                // subtask.feature_id = feature.plan_id (DB-only, not in the subtask file), so if a
                 // re-import (atomic save/rename, migration, transient delete+create) gives the
-                // epic a fresh random plan_id, every subtask is silently orphaned and the epic
+                // feature a fresh random plan_id, every subtask is silently orphaned and the feature
                 // shows 0 subtasks. Deriving the id from the stable filename keeps the link
                 // intact across re-imports.
                 let derivedPlanId = uuidv4();
-                if (relativePath.startsWith('.switchboard/epics/')) {
-                    // Matches both the legacy `epic-<uuid>.md` scheme and the current
-                    // `<slug>-<uuid>.md` scheme — any epic file whose name ends in a UUID.
-                    const epicUuidMatch = path.basename(relativePath).match(
+                if (relativePath.startsWith('.switchboard/features/')) {
+                    // Matches both the legacy `feature-<uuid>.md` scheme and the current
+                    // `<slug>-<uuid>.md` scheme — any feature file whose name ends in a UUID.
+                    const featureUuidMatch = path.basename(relativePath).match(
                         /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i
                     );
-                    if (epicUuidMatch) {
-                        derivedPlanId = epicUuidMatch[1];
+                    if (featureUuidMatch) {
+                        derivedPlanId = featureUuidMatch[1];
                     }
                 }
                 const newRecord: KanbanPlanRecord = {
@@ -579,21 +579,21 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     linearIssueId: importLinearIssueId
                 };
                 newRecord.sourceType = importSourceType;
-                if (relativePath.startsWith('.switchboard/epics/')) {
-                    newRecord.isEpic = 1;
+                if (relativePath.startsWith('.switchboard/features/')) {
+                    newRecord.isFeature = 1;
                 }
                 await db.insertFileDerivedPlan(newRecord);
-                if (relativePath.startsWith('.switchboard/epics/')) {
-                    await db.updateEpicStatus(newRecord.planId, 1, '');
+                if (relativePath.startsWith('.switchboard/features/')) {
+                    await db.updateFeatureStatus(newRecord.planId, 1, '');
                 }
                 // Restore the real pre-delete column from the delete-tombstone for ALL
-                // plans — epics included. insertFileDerivedPlan hardcodes 'CREATED' on a
+                // plans — features included. insertFileDerivedPlan hardcodes 'CREATED' on a
                 // fresh INSERT, so the atomic-write DELETE->re-INSERT race re-inserts the
                 // row at CREATED; the tombstone (captured for every plan in
-                // _handlePlanDelete) holds the column it actually had. An epic is a
+                // _handlePlanDelete) holds the column it actually had. An feature is a
                 // container whose column is authoritative — restoring its true (DB-owned)
                 // column is preferred over re-deriving it from subtasks, which only yields
-                // the least-progressed subtask and yanks an advanced epic backward.
+                // the least-progressed subtask and yanks an advanced feature backward.
                 const tombKey = `${relativePath}|${workspaceId}`;
                 const tomb = this._recentlyDeletedColumns.get(tombKey);
                 let restoredFromTombstone = false;
@@ -615,11 +615,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     }
                 }
                 this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
-                if (relativePath.startsWith('.switchboard/epics/') && !restoredFromTombstone) {
-                    // No tombstone (genuinely new epic, not a race re-insert): derive the
-                    // column from subtasks. recomputeEpicColumnFromSubtasks is itself guarded
+                if (relativePath.startsWith('.switchboard/features/') && !restoredFromTombstone) {
+                    // No tombstone (genuinely new feature, not a race re-insert): derive the
+                    // column from subtasks. recomputeFeatureColumnFromSubtasks is itself guarded
                     // to only touch a 'CREATED' column, so it never overrides a real one.
-                    await this._recomputeEpicColumn?.(newRecord.planId, workspaceRoot);
+                    await this._recomputeFeatureColumn?.(newRecord.planId, workspaceRoot);
                 }
                 plan = newRecord;
 
@@ -645,26 +645,26 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     project: resolvedProject,
                     updatedAt: fileMtime
                 };
-                if (relativePath.startsWith('.switchboard/epics/')) {
-                    updatedRecord.isEpic = 1;
+                if (relativePath.startsWith('.switchboard/features/')) {
+                    updatedRecord.isFeature = 1;
                 }
                 await db.insertFileDerivedPlan(updatedRecord);
-                // Always assert is_epic=1 for epic files. The conditional check on
-                // !plan.isEpic is unsafe: plan was fetched before insertFileDerivedPlan,
+                // Always assert is_feature=1 for feature files. The conditional check on
+                // !plan.isFeature is unsafe: plan was fetched before insertFileDerivedPlan,
                 // and a concurrent _handlePlanDelete (from an atomic write: temp+rename)
                 // can delete the row between the fetch and the insert. insertFileDerivedPlan
-                // then INSERTs a fresh row with is_epic=0 (column default), but the stale
-                // plan.isEpic=1 skips updateEpicStatus — leaving the new row stuck at 0.
+                // then INSERTs a fresh row with is_feature=0 (column default), but the stale
+                // plan.isFeature=1 skips updateFeatureStatus — leaving the new row stuck at 0.
                 // Unconditional update is idempotent and cheap.
-                if (relativePath.startsWith('.switchboard/epics/')) {
-                    await db.updateEpicStatus(updatedRecord.planId, 1, '');
+                if (relativePath.startsWith('.switchboard/features/')) {
+                    await db.updateFeatureStatus(updatedRecord.planId, 1, '');
                     // Same clobber vector as above (the atomic-write DELETE->re-INSERT
                     // race hits this branch: _handlePlanDelete deletes the row, then
                     // this branch's insertFileDerivedPlan re-INSERTs with
                     // kanban_column='CREATED'). Prefer the tombstoned (DB-owned) column —
-                    // the epic's authoritative position — over re-deriving from subtasks,
+                    // the feature's authoritative position — over re-deriving from subtasks,
                     // which only yields the least-progressed subtask and pulls an advanced
-                    // epic backward. Fall back to subtask-derivation (itself guarded to
+                    // feature backward. Fall back to subtask-derivation (itself guarded to
                     // only touch a 'CREATED' column) only when no tombstone is available.
                     const tombKey = `${relativePath}|${workspaceId}`;
                     const tomb = this._recentlyDeletedColumns.get(tombKey);
@@ -675,29 +675,29 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                             updatedRecord.kanbanColumn = tomb.column;
                             restoredFromTombstone = true;
                             this._outputChannel?.appendLine(
-                                `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for epic: ${relativePath}`
+                                `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for feature: ${relativePath}`
                             );
                         }
                     }
                     this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
                     if (!restoredFromTombstone) {
-                        await this._recomputeEpicColumn?.(updatedRecord.planId, workspaceRoot);
+                        await this._recomputeFeatureColumn?.(updatedRecord.planId, workspaceRoot);
                     }
-                } else if (updatedRecord.epicId) {
+                } else if (updatedRecord.featureId) {
                     // Subtask rescoring bubble-up: insertFileDerivedPlan writes the
                     // fresh complexity into the subtask's column (now full-fidelity
                     // via parsePlanMetadata → deriveComplexityFromContent), but it
-                    // does NOT recompute the parent epic's derived max — unlike
+                    // does NOT recompute the parent feature's derived max — unlike
                     // updateComplexityByPlanFile (KanbanDatabase.ts:1682), which
                     // bubbles up. Without this, a subtask whose audit section
-                    // changes would self-heal its own column but leave the epic
+                    // changes would self-heal its own column but leave the feature
                     // stale until a membership change or the one-time backfill.
-                    // Guard: only for non-epic plans with a non-empty epicId.
+                    // Guard: only for non-feature plans with a non-empty featureId.
                     try {
-                        await db.recomputeEpicComplexity(updatedRecord.epicId);
+                        await db.recomputeFeatureComplexity(updatedRecord.featureId);
                     } catch (bubbleErr) {
                         this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] recomputeEpicComplexity failed for ${updatedRecord.epicId}: ${bubbleErr}`
+                            `[GlobalPlanWatcher] recomputeFeatureComplexity failed for ${updatedRecord.featureId}: ${bubbleErr}`
                         );
                     }
                 }
@@ -791,9 +791,9 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     public async triggerScan(workspaceRoot: string): Promise<void> {
         this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manual scan triggered for ${workspaceRoot}`);
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
+        const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
 
-        if (!fs.existsSync(plansDir) && !fs.existsSync(epicsDir)) {
+        if (!fs.existsSync(plansDir) && !fs.existsSync(featuresDir)) {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Switchboard directories not found in ${workspaceRoot}`);
             return;
         }
@@ -816,8 +816,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             if (fs.existsSync(plansDir)) {
                 await scanDir(plansDir);
             }
-            if (fs.existsSync(epicsDir)) {
-                await scanDir(epicsDir);
+            if (fs.existsSync(featuresDir)) {
+                await scanDir(featuresDir);
             }
 
             // Manifest ingest: apply AFTER the .md import pass so rows exist.

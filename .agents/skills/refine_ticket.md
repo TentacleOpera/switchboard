@@ -24,7 +24,7 @@ Produces a complete best-practice ticket (acceptance criteria, user flow, flow d
 - `## Flow Diagram` — Mermaid flowchart rendered to inline PNG (for non-trivial flows)
 
 ## Agent Instructions
-- Read the existing ticket content; determine ticket type (feature, bugfix, epic, refactor).
+- Read the existing ticket content; determine ticket type (feature, bugfix, feature, refactor).
 - Identify what's missing or incomplete.
 - Fill gaps intelligently — don't blindly apply all sections.
 - Challenge assumptions: for each, ask "is this actually true?" and document.

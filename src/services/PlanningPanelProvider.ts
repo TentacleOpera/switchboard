@@ -60,8 +60,8 @@ interface KanbanPlanSummary {
     mtime: number;
     planFile: string;
     complexity: string;
-    isEpic?: number;
-    epicId?: string;
+    isFeature?: number;
+    featureId?: string;
     subtaskCount?: number;
     clickupTaskId?: string;
     linearIssueId?: string;
@@ -93,8 +93,8 @@ export class PlanningPanelProvider {
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
-    private _epicDocsWatchers: vscode.FileSystemWatcher[] = [];
-    private _epicDocsWatchDebounce: NodeJS.Timeout | undefined;
+    private _featureDocsWatchers: vscode.FileSystemWatcher[] = [];
+    private _featureDocsWatchDebounce: NodeJS.Timeout | undefined;
     private _constitutionWatchers: vscode.FileSystemWatcher[] = [];
     private _constitutionWatchDebounce: NodeJS.Timeout | undefined;
     private _insightsWatchers: vscode.FileSystemWatcher[] = [];
@@ -619,7 +619,7 @@ export class PlanningPanelProvider {
                 console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
                 this._ensureAdaptersRegistered();
                 this._setupKanbanPlansWatcher();
-                this._setupEpicDocsWatcher();
+                this._setupFeatureDocsWatcher();
                 this._setupConstitutionWatcher();
                 this._setupInsightsWatcher();
                 this._panel?.webview.postMessage({
@@ -636,7 +636,7 @@ export class PlanningPanelProvider {
 
         this._setupAntigravityWatcher();
         this._setupKanbanPlansWatcher();
-        this._setupEpicDocsWatcher();
+        this._setupFeatureDocsWatcher();
         this._setupConstitutionWatcher();
         this._setupInsightsWatcher();
 
@@ -764,7 +764,7 @@ export class PlanningPanelProvider {
                     console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
                     this._ensureAdaptersRegistered();
                     this._setupKanbanPlansWatcher();
-                    this._setupEpicDocsWatcher();
+                    this._setupFeatureDocsWatcher();
                     this._setupConstitutionWatcher();
                     this._setupInsightsWatcher();
                     this._panel?.webview.postMessage({
@@ -780,7 +780,7 @@ export class PlanningPanelProvider {
             this._setupLocalFolderWatchers();
             this._setupAntigravityWatcher();
             this._setupKanbanPlansWatcher();
-            this._setupEpicDocsWatcher();
+            this._setupFeatureDocsWatcher();
             this._setupConstitutionWatcher();
             this._setupInsightsWatcher();
         }
@@ -1033,13 +1033,13 @@ export class PlanningPanelProvider {
         }
     }
 
-    private _setupEpicDocsWatcher(): void {
-        for (const w of this._epicDocsWatchers) {
+    private _setupFeatureDocsWatcher(): void {
+        for (const w of this._featureDocsWatchers) {
             w.dispose();
             const idx = this._disposables.indexOf(w);
             if (idx !== -1) { this._disposables.splice(idx, 1); }
         }
-        this._epicDocsWatchers = [];
+        this._featureDocsWatchers = [];
 
         const allRoots = this._getWorkspaceRoots();
         const watchedPaths = new Set<string>();
@@ -1049,22 +1049,22 @@ export class PlanningPanelProvider {
             watchedPaths.add(root);
 
             const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(vscode.Uri.file(root), '.switchboard/epics/**/*.md')
+                new vscode.RelativePattern(vscode.Uri.file(root), '.switchboard/features/**/*.md')
             );
 
             const triggerRefresh = () => {
                 if (!this._projectPanel) { return; }
-                if (this._epicDocsWatchDebounce) {
-                    clearTimeout(this._epicDocsWatchDebounce);
+                if (this._featureDocsWatchDebounce) {
+                    clearTimeout(this._featureDocsWatchDebounce);
                 }
-                this._epicDocsWatchDebounce = setTimeout(() => {
-                    this._epicDocsWatchDebounce = undefined;
+                this._featureDocsWatchDebounce = setTimeout(() => {
+                    this._featureDocsWatchDebounce = undefined;
                     if (!this._projectPanel) { return; }
-                    // Epic files are imported into the kanban DB by GlobalPlanWatcherService;
-                    // refresh the DB-backed plans so the Epics list (DB-only) reflects the
+                    // Feature files are imported into the kanban DB by GlobalPlanWatcherService;
+                    // refresh the DB-backed plans so the Features list (DB-only) reflects the
                     // change. Longer debounce gives the import time to land before we re-read.
                     this._handleMessage({ type: 'fetchKanbanPlans', requestId: Date.now() }, true).catch(err => {
-                        console.error('[PlanningPanel] Error auto-refreshing epics after file change:', err);
+                        console.error('[PlanningPanel] Error auto-refreshing features after file change:', err);
                     });
                 }, 1200);
             };
@@ -1073,7 +1073,7 @@ export class PlanningPanelProvider {
             watcher.onDidChange(triggerRefresh);
             watcher.onDidDelete(triggerRefresh);
 
-            this._epicDocsWatchers.push(watcher);
+            this._featureDocsWatchers.push(watcher);
             this._disposables.push(watcher);
         }
     }
@@ -3559,7 +3559,7 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 break;
             }
-            case 'copyEpicPlannerPrompt': {
+            case 'copyFeaturePlannerPrompt': {
                 const sessionId = String(msg.sessionId || '');
                 const column = String(msg.column || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
@@ -3574,26 +3574,26 @@ Start by checking which documents exist, then present the menu.`;
                         this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this feature.' });
                         break;
                     }
-                    const epic = await db.getPlanByPlanId(sessionId);
-                    if (!epic || !epic.isEpic) {
+                    const feature = await db.getPlanByPlanId(sessionId);
+                    if (!feature || !feature.isFeature) {
                         this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this feature.' });
                         break;
                     }
 
-                    // Resolve effective column: explicit param > epic's DB column > CREATED
-                    const effectiveColumn = column || epic.kanbanColumn || 'CREATED';
+                    // Resolve effective column: explicit param > feature's DB column > CREATED
+                    const effectiveColumn = column || feature.kanbanColumn || 'CREATED';
                     // Resolve role from column (mirror _handleCopyPlanLink, TaskViewerProvider.ts:14303-14310)
                     let role: string;
                     if (effectiveColumn === 'PLAN REVIEWED') {
-                        const complexity = await kp.getComplexityFromPlan(wsRoot, (kp as any)._resolvePlanFilePath(wsRoot, epic.planFile));
+                        const complexity = await kp.getComplexityFromPlan(wsRoot, (kp as any)._resolvePlanFilePath(wsRoot, feature.planFile));
                         role = kp.resolveRoutedRole(parseComplexityScore(complexity));
                     } else {
                         role = columnToPromptRole(effectiveColumn) || 'coder';
                     }
 
                     // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
-                    // — do not hand-roll (epic subtasks get silently dropped otherwise).
-                    const plans = await kp.buildDispatchPlans(wsRoot, [epic]);
+                    // — do not hand-roll (feature subtasks get silently dropped otherwise).
+                    const plans = await kp.buildDispatchPlans(wsRoot, [feature]);
                     const prompt = await kp.generateUnifiedPrompt(role, plans, wsRoot);
                     await vscode.env.clipboard.writeText(prompt);
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
@@ -3735,59 +3735,59 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 break;
             }
-            case 'getEpicDetails': {
+            case 'getFeatureDetails': {
                 const sessionId = String(msg.sessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId || !wsRoot) {
-                    this._projectPanel?.webview.postMessage({ type: 'epicDetails', epic: null, subtasks: [] });
+                    this._projectPanel?.webview.postMessage({ type: 'featureDetails', feature: null, subtasks: [] });
                     break;
                 }
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const epic = await db.getPlanByPlanId(sessionId);
-                    const subtasks = epic && epic.isEpic ? await db.getSubtasksByEpicId(epic.planId) : [];
-                    this._projectPanel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
+                    const feature = await db.getPlanByPlanId(sessionId);
+                    const subtasks = feature && feature.isFeature ? await db.getSubtasksByFeatureId(feature.planId) : [];
+                    this._projectPanel?.webview.postMessage({ type: 'featureDetails', feature, subtasks });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'epicDetails', epic: null, subtasks: [], error: String(err) });
+                    this._projectPanel?.webview.postMessage({ type: 'featureDetails', feature: null, subtasks: [], error: String(err) });
                 }
                 break;
             }
-            case 'addSubtaskToEpic': {
-                const epicSessionId = String(msg.epicSessionId || '');
+            case 'addSubtaskToFeature': {
+                const featureSessionId = String(msg.featureSessionId || '');
                 const subtaskSessionId = String(msg.subtaskSessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
-                if (!epicSessionId || !subtaskSessionId || !wsRoot) break;
+                if (!featureSessionId || !subtaskSessionId || !wsRoot) break;
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const epic = await db.getPlanByPlanId(epicSessionId);
-                    if (!epic || !epic.isEpic) break;
+                    const feature = await db.getPlanByPlanId(featureSessionId);
+                    if (!feature || !feature.isFeature) break;
                     // Lock-column validation
-                    const lockColumnsRaw = await db.getConfig('epic_lock_columns');
+                    const lockColumnsRaw = await db.getConfig('feature_lock_columns');
                     const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
-                    if (lockColumns.includes(epic.kanbanColumn)) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot modify subtasks of a feature in a locked column.' });
+                    if (lockColumns.includes(feature.kanbanColumn)) {
+                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Cannot modify subtasks of a feature in a locked column.' });
                         break;
                     }
                     const subtask = await db.getPlanByPlanId(subtaskSessionId);
                     if (!subtask) break;
-                    if (subtask.isEpic) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Cannot add a feature as a subtask.' });
+                    if (subtask.isFeature) {
+                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Cannot add a feature as a subtask.' });
                         break;
                     }
-                    if (subtask.epicId && subtask.epicId !== epic.planId) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Subtask already belongs to another feature.' });
+                    if (subtask.featureId && subtask.featureId !== feature.planId) {
+                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Subtask already belongs to another feature.' });
                         break;
                     }
-                    await db.updateEpicStatus(subtask.planId, 0, epic.planId);
+                    await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
                     this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
-                    console.error('[PlanningPanelProvider] addSubtaskToEpic failed:', err);
+                    console.error('[PlanningPanelProvider] addSubtaskToFeature failed:', err);
                 }
                 break;
             }
-            case 'removeSubtaskFromEpic': {
+            case 'removeSubtaskFromFeature': {
                 const subtaskSessionId = String(msg.subtaskSessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!subtaskSessionId || !wsRoot) break;
@@ -3795,94 +3795,94 @@ Start by checking which documents exist, then present the menu.`;
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const subtask = await db.getPlanByPlanId(subtaskSessionId);
                     if (!subtask) break;
-                    await db.updateEpicStatus(subtask.planId, 0, '');
+                    await db.updateFeatureStatus(subtask.planId, 0, '');
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
                     this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
-                    console.error('[PlanningPanelProvider] removeSubtaskFromEpic failed:', err);
+                    console.error('[PlanningPanelProvider] removeSubtaskFromFeature failed:', err);
                 }
                 break;
             }
-            case 'deleteEpic': {
+            case 'deleteFeature': {
                 const sessionId = String(msg.sessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 const deleteSubtasks = !!msg.deleteSubtasks;
                 if (!sessionId || !wsRoot) break;
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const epic = await db.getPlanByPlanId(sessionId);
-                    if (!epic || !epic.isEpic) break;
+                    const feature = await db.getPlanByPlanId(sessionId);
+                    if (!feature || !feature.isFeature) break;
                     if (deleteSubtasks) {
-                        const subtasks = await db.getSubtasksByEpicId(epic.planId);
+                        const subtasks = await db.getSubtasksByFeatureId(feature.planId);
                         for (const st of subtasks) {
                             await db.tombstonePlan(st.planId);
                         }
                     } else {
-                        await db.clearEpicIdForEpic(epic.planId);
+                        await db.clearFeatureIdForFeature(feature.planId);
                     }
-                    await db.tombstonePlan(epic.planId);
+                    await db.tombstonePlan(feature.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
                     this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
                 } catch (err) {
-                    console.error('[PlanningPanelProvider] deleteEpic failed:', err);
+                    console.error('[PlanningPanelProvider] deleteFeature failed:', err);
                 }
                 break;
             }
-            case 'createEpic': {
+            case 'createFeature': {
                 try {
                     const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     if (!wsRoot) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'No workspace root resolved.' });
+                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'No workspace root resolved.' });
                         break;
                     }
                     const name = String(msg.name || '').trim();
                     if (!name) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Feature name is required.' });
+                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Feature name is required.' });
                         break;
                     }
                     const description = msg.description ? String(msg.description).trim() : undefined;
 
-                    // Delegate to the shared, hardened entry point so the Epics-tab path runs
+                    // Delegate to the shared, hardened entry point so the Features-tab path runs
                     // IDENTICAL logic to the Kanban board webview path and the LocalApiServer/
                     // agent path. This is the single choke point that: inherits project/
                     // project_id, embeds the full planId UUID in the filename, re-asserts
-                    // is_epic=1 as the final DB write, and calls _refreshBoard() so the Kanban
+                    // is_feature=1 as the final DB write, and calls _refreshBoard() so the Kanban
                     // board panel actually updates. The previous duplicated body here omitted all
-                    // three, which is why an Epics-tab epic never appeared on the board (and
+                    // three, which is why an Features-tab feature never appeared on the board (and
                     // showed up as a plain plan once a later refresh ran).
                     if (!this._kanbanProvider) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: 'Kanban provider not available.' });
+                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Kanban provider not available.' });
                         break;
                     }
-                    const result = await this._kanbanProvider.createEpicFromPlanIds(
+                    const result = await this._kanbanProvider.createFeatureFromPlanIds(
                         wsRoot,
                         name,
-                        [],            // blank epic from the "+ New Epic" modal
+                        [],            // blank feature from the "+ New Feature" modal
                         description
                     );
                     if (!result.success) {
-                        this._projectPanel?.webview.postMessage({ type: 'epicError', message: result.error || 'Failed to create feature.' });
+                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: result.error || 'Failed to create feature.' });
                         break;
                     }
 
-                    // createEpicFromPlanIds refreshed the Kanban board panel; still refresh the
-                    // Epics tab list (it reads from kanbanPlansReady, not the board push).
+                    // createFeatureFromPlanIds refreshed the Kanban board panel; still refresh the
+                    // Features tab list (it reads from kanbanPlansReady, not the board push).
                     this._handleMessage({
                         type: 'fetchKanbanPlans',
                         requestId: Date.now()
                     }, true).catch(err => {
-                        console.error('[PlanningPanelProvider] createEpic post-fetch failed:', err);
+                        console.error('[PlanningPanelProvider] createFeature post-fetch failed:', err);
                     });
                 } catch (err) {
-                    console.error('[PlanningPanelProvider] createEpic failed:', err);
-                    this._projectPanel?.webview.postMessage({ type: 'epicError', message: String(err) });
+                    console.error('[PlanningPanelProvider] createFeature failed:', err);
+                    this._projectPanel?.webview.postMessage({ type: 'featureError', message: String(err) });
                 }
                 break;
             }
-            case 'updateEpicConfig': {
-                // epic_prompt_template / epic_lock_columns / epic_max_subtasks writes are all
+            case 'updateFeatureConfig': {
+                // feature_prompt_template / feature_lock_columns / feature_max_subtasks writes are all
                 // removed: the cap is gone (every subtask dispatches), and the other two were
                 // already dormant. Legacy keys are never dropped — they are still READ as
                 // fallback (per CLAUDE.md); we simply stop writing them here.
@@ -4531,7 +4531,7 @@ Please format the updated output document strictly as follows:
                 const originalContent = String(msg.originalContent || '');
                 const tab = String(msg.tab || '');
                 const allRoots = this._getWorkspaceRoots();
-                const saveDestPanel = (tab === 'kanban' || tab === 'constitution' || tab === 'epics') ? this._projectPanel : this._panel;
+                const saveDestPanel = (tab === 'kanban' || tab === 'constitution' || tab === 'features') ? this._projectPanel : this._panel;
                 let resolved: string;
                 if (!path.isAbsolute(filePath)) {
                     const wsRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
@@ -4610,11 +4610,11 @@ Please format the updated output document strictly as follows:
                     // Rename plan file if the H1 has changed and produces a different slug
                     let renamedTo: string | undefined;
                     let renameWsRoot: string | undefined;  // track which workspace root was used for the rename
-                    if (tab === 'kanban' || tab === 'epics') {
+                    if (tab === 'kanban' || tab === 'features') {
                         try {
                             const currentBasename = path.basename(resolved);
                             // Only auto-rename files that follow the feature_plan_<YYYYMMDD>_<HHMMSS>_<slug>.md
-                            // convention. Epic files use hyphen slugs (.switchboard/epics/<slug>.md) and legacy
+                            // convention. Feature files use hyphen slugs (.switchboard/features/<slug>.md) and legacy
                             // hand-named plans do NOT round-trip through the slug logic — renaming them produces
                             // a corrupt `feature_plan__<slug>.md` (empty timestamp) and desyncs the preview path.
                             const isTimestampedPlan = /^feature_plan_\d{8}_\d{6}_/.test(currentBasename);
@@ -6215,7 +6215,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                 }
                 break;
             }
-            case 'refineEpic': {
+            case 'refineFeature': {
                 try {
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     const { planId, planFile, title, subtaskCount } = msg;
@@ -6243,10 +6243,10 @@ Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. 
                         }
                     }
 
-                    // Resolve the epic markdown file — use path.resolve to match existing codebase pattern.
-                    const epicFilePath = path.isAbsolute(planFile) ? planFile : path.resolve(workspaceRoot, planFile);
+                    // Resolve the feature markdown file — use path.resolve to match existing codebase pattern.
+                    const featureFilePath = path.isAbsolute(planFile) ? planFile : path.resolve(workspaceRoot, planFile);
                     let existingContent = '';
-                    try { existingContent = nfs.readFileSync(epicFilePath, 'utf8'); } catch { /* file may not exist yet */ }
+                    try { existingContent = nfs.readFileSync(featureFilePath, 'utf8'); } catch { /* file may not exist yet */ }
 
                     const prompt = `You are refining a Switchboard feature into a complete, decomposable specification.
 
@@ -6256,7 +6256,7 @@ ${skillContent}
 ## Feature to Refine
 - **Title:** ${title || ''}
 - **Existing subtask cards:** ${subtaskCount || 0}
-- **Local file path (write the refined content here):** ${epicFilePath}
+- **Local file path (write the refined content here):** ${featureFilePath}
 
 ## Current feature file content
 ${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete feature at the path above)'}
@@ -9331,14 +9331,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
             try { watcher.dispose(); } catch (e) {}
         }
         this._kanbanPlansWatchers = [];
-        if (this._epicDocsWatchDebounce) {
-            clearTimeout(this._epicDocsWatchDebounce);
-            this._epicDocsWatchDebounce = undefined;
+        if (this._featureDocsWatchDebounce) {
+            clearTimeout(this._featureDocsWatchDebounce);
+            this._featureDocsWatchDebounce = undefined;
         }
-        for (const watcher of this._epicDocsWatchers) {
+        for (const watcher of this._featureDocsWatchers) {
             try { watcher.dispose(); } catch (e) {}
         }
-        this._epicDocsWatchers = [];
+        this._featureDocsWatchers = [];
         if (this._insightsWatchDebounce) {
             clearTimeout(this._insightsWatchDebounce);
             this._insightsWatchDebounce = undefined;
@@ -9424,8 +9424,8 @@ Read the current content above. Determine what's missing. Produce a complete fea
         
         const subtaskCountMap = new Map<string, number>();
         for (const r of allRecords) {
-            if (r.epicId) {
-                subtaskCountMap.set(r.epicId, (subtaskCountMap.get(r.epicId) || 0) + 1);
+            if (r.featureId) {
+                subtaskCountMap.set(r.featureId, (subtaskCountMap.get(r.featureId) || 0) + 1);
             }
         }
 
@@ -9457,9 +9457,9 @@ Read the current content above. Determine what's missing. Produce a complete fea
             mtime: r.updatedAt ? new Date(r.updatedAt).getTime() : 0,
             planFile: r.planFile || '',
             complexity: r.complexity || 'Unknown',
-            isEpic: r.isEpic,
-            epicId: r.epicId || '',
-            subtaskCount: r.isEpic ? (subtaskCountMap.get(r.planId) || 0) : undefined,
+            isFeature: r.isFeature,
+            featureId: r.featureId || '',
+            subtaskCount: r.isFeature ? (subtaskCountMap.get(r.planId) || 0) : undefined,
             clickupTaskId: r.clickupTaskId || r.clickup_task_id || '',
             linearIssueId: r.linearIssueId || r.linear_issue_id || ''
         }));

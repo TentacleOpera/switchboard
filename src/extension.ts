@@ -512,14 +512,14 @@ export async function activate(context: vscode.ExtensionContext) {
     // constructor restore from workspaceState. No resolver wiring is needed — the DB is
     // the single source of truth, read back from the same DB the plan imports into.
 
-    // Let the watcher re-derive an epic's kanban_column from its subtasks after
-    // every epic-file import, self-healing the clobber where insertFileDerivedPlan
+    // Let the watcher re-derive an feature's kanban_column from its subtasks after
+    // every feature-file import, self-healing the clobber where insertFileDerivedPlan
     // hardcodes 'CREATED' on fresh INSERT (re-import after the 3000ms suppression
-    // window, or the atomic-write DELETE->re-INSERT race). Mirrors the is_epic
+    // window, or the atomic-write DELETE->re-INSERT race). Mirrors the is_feature
     // re-assert already in _handlePlanFile; "new file" must NOT imply "CREATED".
-    globalPlanWatcher.setEpicColumnRecomputer(
-        (epicPlanId: string, watchedRoot: string) =>
-            kanbanProvider?.recomputeEpicColumnFromSubtasks(epicPlanId, watchedRoot) ?? Promise.resolve()
+    globalPlanWatcher.setFeatureColumnRecomputer(
+        (featurePlanId: string, watchedRoot: string) =>
+            kanbanProvider?.recomputeFeatureColumnFromSubtasks(featurePlanId, watchedRoot) ?? Promise.resolve()
     );
 
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);

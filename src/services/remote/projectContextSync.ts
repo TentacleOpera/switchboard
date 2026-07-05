@@ -5,7 +5,7 @@ import { getProjectPrdPath } from '../prdUtils';
 import type { ProjectContextBundle, ProjectContextDocument, ProjectContextPushResult } from './RemoteProvider';
 
 /**
- * Project-context sync state (epic: Project Context & Remote UI Hub).
+ * Project-context sync state (feature: Project Context & Remote UI Hub).
  *
  * Assembles the workspace's curated planning context — Dev Docs + project PRDs +
  * constitution, all authored in project.html — into one bundle for the provider

@@ -4,12 +4,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { KanbanDatabase } from '../KanbanDatabase';
 
-suite('KanbanDatabase - Epic Status Update', () => {
+suite('KanbanDatabase - Feature Status Update', () => {
     let tempDir: string;
     let db: KanbanDatabase;
 
     setup(async () => {
-        tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-epic-status-test-'));
+        tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-feature-status-test-'));
         db = KanbanDatabase.forWorkspace(tempDir);
         await db.createIfMissing();
         await db.ensureReady();
@@ -21,18 +21,18 @@ suite('KanbanDatabase - Epic Status Update', () => {
         await fs.promises.rm(tempDir, { recursive: true, force: true });
     });
 
-    test('updateEpicStatus normalizes absolute paths to match relative database paths', async () => {
+    test('updateFeatureStatus normalizes absolute paths to match relative database paths', async () => {
         const now = new Date().toISOString();
-        const workspaceId = 'ws-epic-test';
-        const planId = 'plan-epic-test-id';
-        const sessionId = 'sess-epic-test-id';
-        const relativePlanFile = '.switchboard/plans/epic-test-plan.md';
+        const workspaceId = 'ws-feature-test';
+        const planId = 'plan-feature-test-id';
+        const sessionId = 'sess-feature-test-id';
+        const relativePlanFile = '.switchboard/plans/feature-test-plan.md';
 
         // Insert plan with relative path
         const upserted = await db.upsertPlans([{
             planId,
             sessionId,
-            topic: 'Epic Test Plan',
+            topic: 'Feature Test Plan',
             planFile: relativePlanFile,
             kanbanColumn: 'CREATED',
             status: 'active',
@@ -50,14 +50,14 @@ suite('KanbanDatabase - Epic Status Update', () => {
         assert.ok(plan, 'should find plan by plan_id');
         assert.ok(path.isAbsolute(plan.planFile), 'hydrated planFile should be absolute path');
 
-        // Update epic status using absolute path (which should be normalized internally to relative)
-        const updated = await db.updateEpicStatus(planId, 1, 'epic-parent-123');
-        assert.strictEqual(updated, true, 'updateEpicStatus should return true');
+        // Update feature status using absolute path (which should be normalized internally to relative)
+        const updated = await db.updateFeatureStatus(planId, 1, 'feature-parent-123');
+        assert.strictEqual(updated, true, 'updateFeatureStatus should return true');
 
         // Verify the database row was actually updated
         const planAfter = await db.getPlanByPlanId(planId);
         assert.ok(planAfter, 'should find plan after update');
-        assert.strictEqual(planAfter.isEpic, 1, 'isEpic should be 1');
-        assert.strictEqual(planAfter.epicId, 'epic-parent-123', 'epicId should be epic-parent-123');
+        assert.strictEqual(planAfter.isFeature, 1, 'isFeature should be 1');
+        assert.strictEqual(planAfter.featureId, 'feature-parent-123', 'featureId should be feature-parent-123');
     });
 });

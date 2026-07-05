@@ -20,8 +20,8 @@
             // Apply sidebar state for the active tab
             if (targetTab === 'kanban') {
                 applySidebarState('kanban', state.kanbanListCollapsed);
-            } else if (targetTab === 'epics') {
-                applySidebarState('epics', state.epicsListCollapsed);
+            } else if (targetTab === 'features') {
+                applySidebarState('features', state.featuresListCollapsed);
             } else if (targetTab === 'constitution') {
                 applySidebarState('constitution', state.constitutionListCollapsed);
             } else if (targetTab === 'system') {
@@ -40,9 +40,9 @@
                 // Ensure the workspace/project caches are fresh, then hydrate the PRD editor.
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 hydrateProjectsTab();
-            } else if (activeTab === 'epics') {
+            } else if (activeTab === 'features') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-                updateActiveEpicBanner();
+                updateActiveFeatureBanner();
             } else if (activeTab === 'constitution') {
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'system') {
@@ -57,13 +57,13 @@
 
     // Global state
     const state = {
-        editMode: { kanban: false, constitution: false, epics: false, system: false, projects: false },
-        editOriginalContent: { kanban: null, constitution: null, epics: null, system: null, projects: null },
-        dirtyFlags: { kanban: false, constitution: false, epics: false, system: false, projects: false },
-        externalChangePending: { kanban: false, constitution: false, epics: false, system: false, projects: false },
+        editMode: { kanban: false, constitution: false, features: false, system: false, projects: false },
+        editOriginalContent: { kanban: null, constitution: null, features: null, system: null, projects: null },
+        dirtyFlags: { kanban: false, constitution: false, features: false, system: false, projects: false },
+        externalChangePending: { kanban: false, constitution: false, features: false, system: false, projects: false },
         reviewMode: { kanban: false },
         kanbanListCollapsed: false,
-        epicsListCollapsed: false,
+        featuresListCollapsed: false,
         constitutionListCollapsed: false,
         systemListCollapsed: false,
         tuningListCollapsed: false,
@@ -75,7 +75,7 @@
     // Initialize from persisted state
     const persistedState = vscode.getState() || {};
     state.kanbanListCollapsed = persistedState.kanbanListCollapsed || false;
-    state.epicsListCollapsed = persistedState.epicsListCollapsed || false;
+    state.featuresListCollapsed = persistedState.featuresListCollapsed || false;
     state.constitutionListCollapsed = persistedState.constitutionListCollapsed || false;
     state.systemListCollapsed = persistedState.systemListCollapsed || false;
     state.tuningListCollapsed = persistedState.tuningListCollapsed || false;
@@ -113,9 +113,9 @@
         if (activeTab === 'kanban') {
             state.kanbanListCollapsed = !state.kanbanListCollapsed;
             applySidebarState('kanban', state.kanbanListCollapsed);
-        } else if (activeTab === 'epics') {
-            state.epicsListCollapsed = !state.epicsListCollapsed;
-            applySidebarState('epics', state.epicsListCollapsed);
+        } else if (activeTab === 'features') {
+            state.featuresListCollapsed = !state.featuresListCollapsed;
+            applySidebarState('features', state.featuresListCollapsed);
         } else if (activeTab === 'constitution') {
             state.constitutionListCollapsed = !state.constitutionListCollapsed;
             applySidebarState('constitution', state.constitutionListCollapsed);
@@ -138,7 +138,7 @@
         vscode.setState({
             ...currentPersisted,
             kanbanListCollapsed: state.kanbanListCollapsed,
-            epicsListCollapsed: state.epicsListCollapsed,
+            featuresListCollapsed: state.featuresListCollapsed,
             constitutionListCollapsed: state.constitutionListCollapsed,
             systemListCollapsed: state.systemListCollapsed,
             tuningListCollapsed: state.tuningListCollapsed,
@@ -182,16 +182,16 @@
     let _kanbanPreviewRequestId = 0;
     let uploadingPlanAttachment = false;
 
-    let _epicSelectedPlan = null;
-    let _epicSubtaskPreview = null; // holds the subtask plan object when a subtask is previewed in the epics pane
-    let _epicPreviewFilePath = null;
+    let _featureSelectedPlan = null;
+    let _featureSubtaskPreview = null; // holds the subtask plan object when a subtask is previewed in the features pane
+    let _featurePreviewFilePath = null;
     let _pendingKanbanSelection = null;
-    let _pendingEpicSelection = null;
+    let _pendingFeatureSelection = null;
     let _pendingAutoEdit = false;
     let _pendingKanbanFilterIntent = null;   // { workspaceRoot, project, column } — applied after dropdowns populate
     let _pendingKanbanSelectionRetries = 0;  // incremented on failed resolution; fallback to widest at 3
 
-    let _activeEpicFilePath = '';
+    let _activeFeatureFilePath = '';
 
     let _constitutionWorkspaces = [];
     let _constitutionSelectedWorkspace = null;
@@ -233,23 +233,23 @@
     const kanbanPreviewContent = document.getElementById('kanban-preview-content');
     const kanbanEditor = document.getElementById('kanban-editor');
  
-    const epicsWorkspaceFilter = document.getElementById('epics-workspace-filter');
-    const epicsColumnFilter = document.getElementById('epics-column-filter');
-    const epicsProjectFilter = document.getElementById('epics-project-filter');
+    const featuresWorkspaceFilter = document.getElementById('features-workspace-filter');
+    const featuresColumnFilter = document.getElementById('features-column-filter');
+    const featuresProjectFilter = document.getElementById('features-project-filter');
 
-    const btnNewEpic = document.getElementById('btn-new-epic');
-    const newEpicModal = document.getElementById('new-epic-modal');
-    const newEpicName = document.getElementById('new-epic-name');
-    const newEpicDescription = document.getElementById('new-epic-description');
-    const btnNewEpicCancel = document.getElementById('btn-new-epic-cancel');
-    const btnNewEpicSubmit = document.getElementById('btn-new-epic-submit');
-    const epicsListPane = document.getElementById('epics-list-pane');
-    const epicsPreviewPane = document.getElementById('epics-preview-pane');
-    const epicsPreviewContent = document.getElementById('epics-preview-content');
-    const epicsEditor = document.getElementById('epics-editor');
+    const btnNewFeature = document.getElementById('btn-new-feature');
+    const newFeatureModal = document.getElementById('new-feature-modal');
+    const newFeatureName = document.getElementById('new-feature-name');
+    const newFeatureDescription = document.getElementById('new-feature-description');
+    const btnNewFeatureCancel = document.getElementById('btn-new-feature-cancel');
+    const btnNewFeatureSubmit = document.getElementById('btn-new-feature-submit');
+    const featuresListPane = document.getElementById('features-list-pane');
+    const featuresPreviewPane = document.getElementById('features-preview-pane');
+    const featuresPreviewContent = document.getElementById('features-preview-content');
+    const featuresEditor = document.getElementById('features-editor');
 
 
-    // Intercept clicks on <a> tags inside the rendered epic markdown preview.
+    // Intercept clicks on <a> tags inside the rendered feature markdown preview.
     // Subtask links in the auto-generated "## Subtasks" section are rendered as
     // <a href="../plans/basename.md" data-href="../plans/basename.md"> by VS Code's
     // markdown renderer (markdown.api.render). In the sandboxed webview these do
@@ -259,14 +259,14 @@
     // NOTE: This listener is attached once (delegation). It is NOT re-attached on
     // each render — innerHTML replacement preserves the container's event listeners.
     // NOTE: Path resolution assumes forward-slash paths, which is guaranteed by the
-    // DB planFile format (.switchboard/epics/<file>).
+    // DB planFile format (.switchboard/features/<file>).
     // NOTE: Read getAttribute('data-href') first (pre-normalization value), then
     // fall back to getAttribute('href'). Never use the .href DOM property — it
     // resolves to an absolute CDN URL and loses the relative form (VS Code PR #228633).
     // NOTE: decodeURIComponent is needed because markdown-it's normalizeLink
     // percent-encodes special characters (e.g., spaces → %20).
-    if (epicsPreviewContent) {
-        epicsPreviewContent.addEventListener('click', (e) => {
+    if (featuresPreviewContent) {
+        featuresPreviewContent.addEventListener('click', (e) => {
             const anchor = e.target.closest('a');
             if (!anchor) return;
             // Prefer data-href (pre-normalization) over href; both are byte-identical
@@ -291,9 +291,9 @@
             e.stopPropagation();
 
             // Resolve the relative href against the directory of the currently-
-            // displayed file. The epic lives at .switchboard/epics/<file>, so
+            // displayed file. The feature lives at .switchboard/features/<file>, so
             // ../plans/foo.md resolves to .switchboard/plans/foo.md.
-            const basePath = _epicPreviewFilePath || (_epicSelectedPlan && _epicSelectedPlan.planFile) || '';
+            const basePath = _featurePreviewFilePath || (_featureSelectedPlan && _featureSelectedPlan.planFile) || '';
             if (!basePath) {
                 showToast('Cannot resolve subtask link — no file context.', 'error');
                 return;
@@ -309,16 +309,16 @@
             }
             const resolvedPath = resolved.join('/');
 
-            if (state.editMode.epics) exitEditMode('epics');
-            _epicPreviewFilePath = resolvedPath;
-            epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+            if (state.editMode.features) exitEditMode('features');
+            _featurePreviewFilePath = resolvedPath;
+            featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
             vscode.postMessage({
                 type: 'fetchKanbanPlanPreview',
                 filePath: resolvedPath,
                 requestId: ++_kanbanPreviewRequestId
             });
-            // Hide the Edit button while a subtask is previewed (not the epic itself).
-            const btnEdit = document.getElementById('btn-edit-epics');
+            // Hide the Edit button while a subtask is previewed (not the feature itself).
+            const btnEdit = document.getElementById('btn-edit-features');
             if (btnEdit) btnEdit.style.display = 'none';
         });
     }
@@ -392,7 +392,7 @@
 
 
     const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '', complexity: '' };
-    const epicsFilters = { workspaceRoot: '', column: '', project: '' };
+    const featuresFilters = { workspaceRoot: '', column: '', project: '' };
     const projectsFilters = { workspaceRoot: '' };
 
     // Initialize Webview Content
@@ -494,8 +494,8 @@
                     if (!kanbanFilters.workspaceRoot) {
                         kanbanFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
                     }
-                    if (!epicsFilters.workspaceRoot) {
-                        epicsFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
+                    if (!featuresFilters.workspaceRoot) {
+                        featuresFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
                     }
                 }
                 populateWorkspaceDropdowns();
@@ -512,15 +512,15 @@
                             kanbanWorkspaceFilter.value = intent.workspaceRoot;
                         }
                     }
-                    // Apply epics workspace filter intent (from epic Review Plan navigation).
-                    if (intent.epicWorkspaceRoot && epicsWorkspaceFilter) {
-                        const epicWs = intent.epicWorkspaceRoot;
-                        const opts = Array.from(epicsWorkspaceFilter.options).map(o => o.value);
-                        if (opts.includes(epicWs)) {
-                            epicsFilters.workspaceRoot = epicWs;
-                            epicsWorkspaceFilter.value = epicWs;
+                    // Apply features workspace filter intent (from feature Review Plan navigation).
+                    if (intent.featureWorkspaceRoot && featuresWorkspaceFilter) {
+                        const featureWs = intent.featureWorkspaceRoot;
+                        const opts = Array.from(featuresWorkspaceFilter.options).map(o => o.value);
+                        if (opts.includes(featureWs)) {
+                            featuresFilters.workspaceRoot = featureWs;
+                            featuresWorkspaceFilter.value = featureWs;
                         }
-                        intent.epicWorkspaceRoot = null;  // consume
+                        intent.featureWorkspaceRoot = null;  // consume
                     }
                 }
                 populateKanbanFilters();
@@ -546,15 +546,15 @@
                     _pendingKanbanFilterIntent = null;  // consume the intent
                 }
                 renderKanbanPlans();
-                renderEpicsList();
+                renderFeaturesList();
                 // Keep the Projects-tab editor in sync when fresh project data arrives.
                 if (activeTab === 'projects') {
                     renderProjectsList();
                     requestProjectContextEnabled();
                 }
                 tryResolvePendingKanbanSelection();
-                tryResolvePendingEpicSelection();
-                if (_epicSelectedPlan) renderEpicMetaBar(_epicSelectedPlan);
+                tryResolvePendingFeatureSelection();
+                if (_featureSelectedPlan) renderFeatureMetaBar(_featureSelectedPlan);
                 break;
             case 'projectContextEnabled':
                 // Host echo of the PROJECT CONTEXT toggle for the workspace this tab edits.
@@ -579,7 +579,7 @@
                         projectsPreviewContent.innerHTML = `
                             <div class="constitution-onboarding">
                                 <p class="constitution-onboarding-title">No PRD found for this project.</p>
-                                <p>A PRD (Product Requirements Document) is a loose set of product requirements respected across all plans in a project — independent of epics. When <strong>PROJECT CONTEXT</strong> is on, this PRD is injected into <em>every</em> dispatched prompt.</p>
+                                <p>A PRD (Product Requirements Document) is a loose set of product requirements respected across all plans in a project — independent of features. When <strong>PROJECT CONTEXT</strong> is on, this PRD is injected into <em>every</em> dispatched prompt.</p>
                                 <p>Use <strong>Build via Planner</strong> above to generate one, or <strong>Edit</strong> to write it yourself.</p>
                             </div>
                         `;
@@ -623,39 +623,39 @@
                         }
                     }
                 }
-                if (epicsPreviewContent && _epicPreviewFilePath && _epicPreviewFilePath === msg.filePath) {
-                    if (state.editMode.epics) {
-                        state.externalChangePending.epics = true;
+                if (featuresPreviewContent && _featurePreviewFilePath && _featurePreviewFilePath === msg.filePath) {
+                    if (state.editMode.features) {
+                        state.externalChangePending.features = true;
                     } else if (!msg.error) {
-                        epicsPreviewContent.innerHTML = msg.content || '';
-                        state.editOriginalContent.epics = msg.rawContent || '';
-                        const dynamicEditEpicsBtn = document.getElementById('btn-edit-epics');
-                        if (dynamicEditEpicsBtn) dynamicEditEpicsBtn.disabled = false;
+                        featuresPreviewContent.innerHTML = msg.content || '';
+                        state.editOriginalContent.features = msg.rawContent || '';
+                        const dynamicEditFeaturesBtn = document.getElementById('btn-edit-features');
+                        if (dynamicEditFeaturesBtn) dynamicEditFeaturesBtn.disabled = false;
                     }
                 }
                 break;
             case 'activateKanbanTabAndSelectPlan': {
-                if (msg.isEpic === true) {
-                    _pendingEpicSelection = {
+                if (msg.isFeature === true) {
+                    _pendingFeatureSelection = {
                         planId: msg.planId || '',
                         sessionId: msg.sessionId || '',
                         planFile: msg.planFile || '',
                         workspaceRoot: msg.workspaceRoot || ''
                     };
-                    // Clear epics filters to widest now; the epicsPlansReady / kanbanPlansReady
+                    // Clear features filters to widest now; the featuresPlansReady / kanbanPlansReady
                     // handler will narrow them if the intent workspace is in the dropdown.
-                    epicsFilters.workspaceRoot = '';
-                    epicsFilters.column = '';
-                    epicsFilters.project = '';
-                    if (epicsWorkspaceFilter) epicsWorkspaceFilter.value = '';
-                    if (epicsColumnFilter) epicsColumnFilter.value = '';
-                    if (epicsProjectFilter) epicsProjectFilter.value = '';
-                    // Stash intent for epics (reuse the same mechanism)
+                    featuresFilters.workspaceRoot = '';
+                    featuresFilters.column = '';
+                    featuresFilters.project = '';
+                    if (featuresWorkspaceFilter) featuresWorkspaceFilter.value = '';
+                    if (featuresColumnFilter) featuresColumnFilter.value = '';
+                    if (featuresProjectFilter) featuresProjectFilter.value = '';
+                    // Stash intent for features (reuse the same mechanism)
                     _pendingKanbanFilterIntent = _pendingKanbanFilterIntent || {};
-                    _pendingKanbanFilterIntent.epicWorkspaceRoot = msg.workspaceRoot || '';
-                    const epicsTabBtn = document.querySelector('.shared-tab-btn[data-tab="epics"]');
-                    if (epicsTabBtn) epicsTabBtn.click();
-                    tryResolvePendingEpicSelection();
+                    _pendingKanbanFilterIntent.featureWorkspaceRoot = msg.workspaceRoot || '';
+                    const featuresTabBtn = document.querySelector('.shared-tab-btn[data-tab="features"]');
+                    if (featuresTabBtn) featuresTabBtn.click();
+                    tryResolvePendingFeatureSelection();
                     break;
                 }
                 _pendingKanbanSelection = {
@@ -691,10 +691,10 @@
                 tryResolvePendingKanbanSelection();
                 break;
             }
-            case 'epicDetails':
-                renderEpicSubtasks(msg.epic, msg.subtasks);
+            case 'featureDetails':
+                renderFeatureSubtasks(msg.feature, msg.subtasks);
                 break;
-            case 'epicError':
+            case 'featureError':
                 showToast(msg.message || 'Error occurred', 'error');
                 break;
             case 'kanbanPlanColumnChanged':
@@ -824,7 +824,7 @@
                 // be consistent with the DB (no stale "advanced" state from a prior
                 // action). The fetchKanbanPlans handler in PlanningPanelProvider has a
                 // request-ID dedup guard so duplicate requests are safe.
-                if (activeTab === 'kanban' || activeTab === 'epics') {
+                if (activeTab === 'kanban' || activeTab === 'features') {
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 }
                 break;
@@ -1042,28 +1042,28 @@
                             exitEditMode('constitution');
                             if (_constitutionSelectedWorkspace) selectConstitutionDoc(_constitutionSelectedWorkspace);
                         }
-                    } else if (msg.tab === 'epics') {
-                        exitEditMode('epics');
-                        if (msg.renamedFilePath && _epicSelectedPlan) {
-                            _epicSelectedPlan.planFile = msg.renamedFilePath;
+                    } else if (msg.tab === 'features') {
+                        exitEditMode('features');
+                        if (msg.renamedFilePath && _featureSelectedPlan) {
+                            _featureSelectedPlan.planFile = msg.renamedFilePath;
                         }
-                        if (_epicSubtaskPreview) {
+                        if (_featureSubtaskPreview) {
                             if (msg.renamedFilePath) {
-                                _epicPreviewFilePath = msg.renamedFilePath;
-                                _epicSubtaskPreview.planFile = msg.renamedFilePath;
+                                _featurePreviewFilePath = msg.renamedFilePath;
+                                _featureSubtaskPreview.planFile = msg.renamedFilePath;
                             }
-                            if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+                            if (featuresPreviewContent) featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
                             vscode.postMessage({
                                 type: 'fetchKanbanPlanPreview',
-                                filePath: _epicPreviewFilePath,
+                                filePath: _featurePreviewFilePath,
                                 requestId: ++_kanbanPreviewRequestId
                             });
-                            renderEpicSubtaskMetaBar(_epicSubtaskPreview);
+                            renderFeatureSubtaskMetaBar(_featureSubtaskPreview);
                         } else {
-                            if (_epicSelectedPlan) selectEpic(_epicSelectedPlan);
+                            if (_featureSelectedPlan) selectFeature(_featureSelectedPlan);
                         }
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-                        vscode.postMessage({ type: 'fetchEpicDocuments' });
+                        vscode.postMessage({ type: 'fetchFeatureDocuments' });
                     }
                 } else {
                     showToast('Save failed: ' + (msg.error || 'Unknown error'), 'error');
@@ -1163,11 +1163,11 @@
 
     // Shared Tab/Workspace Population
     function populateWorkspaceDropdowns() {
-        if (!kanbanWorkspaceFilter || !epicsWorkspaceFilter) return;
+        if (!kanbanWorkspaceFilter || !featuresWorkspaceFilter) return;
 
         const currentWS = kanbanFilters.workspaceRoot;
         kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
-        epicsWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
+        featuresWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         if (tuningWorkspaceFilter) tuningWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         if (architectWorkspaceFilter) architectWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         if (projectsWorkspaceFilter) projectsWorkspaceFilter.innerHTML = '';
@@ -1177,14 +1177,14 @@
             opt.value = ws.workspaceRoot;
             opt.textContent = ws.label;
             kanbanWorkspaceFilter.appendChild(opt.cloneNode(true));
-            epicsWorkspaceFilter.appendChild(opt.cloneNode(true));
+            featuresWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (tuningWorkspaceFilter) tuningWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (architectWorkspaceFilter) architectWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (projectsWorkspaceFilter) projectsWorkspaceFilter.appendChild(opt.cloneNode(true));
         });
 
         kanbanWorkspaceFilter.value = currentWS;
-        epicsWorkspaceFilter.value = epicsFilters.workspaceRoot;
+        featuresWorkspaceFilter.value = featuresFilters.workspaceRoot;
         if (tuningWorkspaceFilter && currentWS) {
             tuningWorkspaceFilter.value = currentWS;
         }
@@ -1214,19 +1214,19 @@
                 kanbanColumnFilter.appendChild(opt);
             });
         }
-        if (epicsColumnFilter) {
-            const currentCol = epicsFilters.column;
-            epicsColumnFilter.innerHTML = '<option value="">All Columns</option>';
+        if (featuresColumnFilter) {
+            const currentCol = featuresFilters.column;
+            featuresColumnFilter.innerHTML = '<option value="">All Columns</option>';
             _kanbanAvailableColumns.forEach(c => {
                 const opt = document.createElement('option');
                 opt.value = c.id;
                 opt.textContent = c.label;
                 if (c.id === currentCol) opt.selected = true;
-                epicsColumnFilter.appendChild(opt);
+                featuresColumnFilter.appendChild(opt);
             });
         }
-        if (epicsProjectFilter) {
-            updateEpicsProjectFilter();
+        if (featuresProjectFilter) {
+            updateFeaturesProjectFilter();
         }
     }
 
@@ -1265,34 +1265,34 @@
         kanbanProjectFilter.value = kanbanFilters.project;
     }
 
-    function updateEpicsProjectFilter() {
-        if (!epicsProjectFilter) return;
-        const selectedRoot = epicsFilters.workspaceRoot;
-        const epicPlans = _kanbanPlansCache.filter(p =>
-            p.isEpic && (!selectedRoot || normalizeRoot(p.workspaceRoot) === normalizeRoot(selectedRoot))
+    function updateFeaturesProjectFilter() {
+        if (!featuresProjectFilter) return;
+        const selectedRoot = featuresFilters.workspaceRoot;
+        const featurePlans = _kanbanPlansCache.filter(p =>
+            p.isFeature && (!selectedRoot || normalizeRoot(p.workspaceRoot) === normalizeRoot(selectedRoot))
         );
         const projectSet = new Set();
-        epicPlans.forEach(p => { if (p.project) projectSet.add(p.project); });
-        const hasNoProject = epicPlans.some(p => !p.project);
+        featurePlans.forEach(p => { if (p.project) projectSet.add(p.project); });
+        const hasNoProject = featurePlans.some(p => !p.project);
 
-        epicsProjectFilter.innerHTML = '<option value="">All Projects</option>';
+        featuresProjectFilter.innerHTML = '<option value="">All Projects</option>';
         if (hasNoProject) {
             const optNone = document.createElement('option');
             optNone.value = '__none__';
             optNone.textContent = '(No Project)';
-            epicsProjectFilter.appendChild(optNone);
+            featuresProjectFilter.appendChild(optNone);
         }
         Array.from(projectSet).sort().forEach(proj => {
             const opt = document.createElement('option');
             opt.value = proj;
             opt.textContent = proj;
-            epicsProjectFilter.appendChild(opt);
+            featuresProjectFilter.appendChild(opt);
         });
         // If the current selection is no longer valid for the new option set, reset.
-        if (epicsFilters.project && epicsFilters.project !== '__none__' && !projectSet.has(epicsFilters.project)) {
-            epicsFilters.project = '';
+        if (featuresFilters.project && featuresFilters.project !== '__none__' && !projectSet.has(featuresFilters.project)) {
+            featuresFilters.project = '';
         }
-        epicsProjectFilter.value = epicsFilters.project;
+        featuresProjectFilter.value = featuresFilters.project;
     }
 
     // =========================================================================
@@ -1489,7 +1489,7 @@
     // =========================================================================
     function getFilteredKanbanPlans() {
         return _kanbanPlansCache.filter(plan => {
-            if (plan.isEpic) return false;
+            if (plan.isFeature) return false;
             if (kanbanFilters.column && plan.column !== kanbanFilters.column) return false;
             if (kanbanFilters.workspaceRoot && normalizeRoot(plan.workspaceRoot) !== normalizeRoot(kanbanFilters.workspaceRoot)) return false;
             if (kanbanFilters.project) {
@@ -1677,11 +1677,11 @@
         });
     }
 
-    function scrollEpicItemIntoView(planId) {
+    function scrollFeatureItemIntoView(planId) {
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                const el = epicsListPane && epicsListPane.querySelector(
-                    `.epic-plan-item[data-plan-id="${planId}"]`
+                const el = featuresListPane && featuresListPane.querySelector(
+                    `.feature-plan-item[data-plan-id="${planId}"]`
                 );
                 if (el) {
                     el.scrollIntoView({ behavior: 'instant', block: 'center' });
@@ -1759,24 +1759,24 @@
         _pendingKanbanSelection = null;
     }
 
-    function tryResolvePendingEpicSelection() {
-        if (!_pendingEpicSelection) return;
-        const sel = _pendingEpicSelection;
-        const pool = _kanbanPlansCache.filter(p => p.isEpic);
+    function tryResolvePendingFeatureSelection() {
+        if (!_pendingFeatureSelection) return;
+        const sel = _pendingFeatureSelection;
+        const pool = _kanbanPlansCache.filter(p => p.isFeature);
         const match = pool.find(p =>
             (sel.planFile && p.planFile === sel.planFile) ||
             (sel.planId && p.planId === sel.planId) ||
             (sel.sessionId && p.sessionId === sel.sessionId)
         );
         if (!match) return;
-        const itemDiv = epicsListPane &&
-            epicsListPane.querySelector(`.epic-plan-item[data-plan-id="${match.planId}"]`);
+        const itemDiv = featuresListPane &&
+            featuresListPane.querySelector(`.feature-plan-item[data-plan-id="${match.planId}"]`);
         if (!itemDiv) return;
-        scrollEpicItemIntoView(match.planId);
-        document.querySelectorAll('.epic-plan-item').forEach(el => el.classList.remove('selected'));
+        scrollFeatureItemIntoView(match.planId);
+        document.querySelectorAll('.feature-plan-item').forEach(el => el.classList.remove('selected'));
         itemDiv.classList.add('selected');
-        selectEpic(match);
-        _pendingEpicSelection = null;
+        selectFeature(match);
+        _pendingFeatureSelection = null;
     }
 
     function loadKanbanPlanPreview(plan) {
@@ -2079,30 +2079,30 @@
     }
 
     // =========================================================================
-    // EPICS TAB
+    // FEATURES TAB
     // =========================================================================
-    function renderEpicsList() {
-        if (!epicsListPane) return;
+    function renderFeaturesList() {
+        if (!featuresListPane) return;
 
-        // Epics list is DB-only — identical source to the Plans list. Epic files in
-        // .switchboard/epics/ are imported into the kanban DB by GlobalPlanWatcherService
-        // and appear here as normal DB-backed epics.
-        let filtered = _kanbanPlansCache.filter(plan => plan.isEpic);
-        if (epicsFilters.workspaceRoot) {
-            filtered = filtered.filter(plan => normalizeRoot(plan.workspaceRoot) === normalizeRoot(epicsFilters.workspaceRoot));
+        // Features list is DB-only — identical source to the Plans list. Feature files in
+        // .switchboard/features/ are imported into the kanban DB by GlobalPlanWatcherService
+        // and appear here as normal DB-backed features.
+        let filtered = _kanbanPlansCache.filter(plan => plan.isFeature);
+        if (featuresFilters.workspaceRoot) {
+            filtered = filtered.filter(plan => normalizeRoot(plan.workspaceRoot) === normalizeRoot(featuresFilters.workspaceRoot));
         }
-        if (epicsFilters.column) {
-            filtered = filtered.filter(plan => plan.column === epicsFilters.column);
+        if (featuresFilters.column) {
+            filtered = filtered.filter(plan => plan.column === featuresFilters.column);
         }
-        if (epicsFilters.project) {
-            if (epicsFilters.project === '__none__') {
+        if (featuresFilters.project) {
+            if (featuresFilters.project === '__none__') {
                 filtered = filtered.filter(plan => !plan.project);
             } else {
-                filtered = filtered.filter(plan => plan.project === epicsFilters.project);
+                filtered = filtered.filter(plan => plan.project === featuresFilters.project);
             }
         }
 
-        epicsListPane.innerHTML = '';
+        featuresListPane.innerHTML = '';
 
         // NEW: Create toggle button (present even when empty)
         const toggleRow = document.createElement('div');
@@ -2110,24 +2110,24 @@
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.epicsListCollapsed ? '»' : '«';
+        toggleBtn.textContent = state.featuresListCollapsed ? '»' : '«';
         toggleBtn.addEventListener('click', toggleSidebarCollapsed);
         toggleRow.appendChild(toggleBtn);
-        epicsListPane.appendChild(toggleRow);
+        featuresListPane.appendChild(toggleRow);
 
         if (filtered.length === 0) {
             const emptyState = document.createElement('div');
             emptyState.className = 'empty-state';
             emptyState.textContent = 'No features found. Use "+ New Feature" to create one.';
-            epicsListPane.appendChild(emptyState);
+            featuresListPane.appendChild(emptyState);
             return;
         }
 
         filtered.forEach(plan => {
             const itemDiv = document.createElement('div');
-            itemDiv.className = 'epic-plan-item';
+            itemDiv.className = 'feature-plan-item';
             itemDiv.dataset.planId = plan.planId || '';
-            if (_epicSelectedPlan && _epicSelectedPlan.planId === plan.planId) {
+            if (_featureSelectedPlan && _featureSelectedPlan.planId === plan.planId) {
                 itemDiv.classList.add('selected');
             }
 
@@ -2139,9 +2139,9 @@
                    </select>`
                 : '';
 
-            // Derive the copy-prompt button label from the epic's CURRENT column.
+            // Derive the copy-prompt button label from the feature's CURRENT column.
             // NOTE: the kanban board (kanban.html:5452) derives from the NEXT column's role;
-            // the epics tab is a management view, not a board column, so we derive from the
+            // the features tab is a management view, not a board column, so we derive from the
             // current column's stage. For standard columns both approaches yield identical
             // labels. Do NOT "align" this to next-column derivation without re-verifying
             // every label — it will silently flip them.
@@ -2149,7 +2149,7 @@
             // IMPORTANT: the webview payload (_kanbanAvailableColumns) does NOT include the
             // `role` field on standard columns (see planning-copy-labels-regression.test.js
             // mock). Derive from `id` + `kind` only — never from `role`.
-            function _epicCopyPromptLabel(plan) {
+            function _featureCopyPromptLabel(plan) {
                 if (!plan.column) return 'Copy Planning Prompt'; // no column = pre-planning
                 const colDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
                 const kind = colDef?.kind;
@@ -2173,15 +2173,15 @@
                 return 'Copy Prompt';
             }
 
-            const copyPromptLabel = _epicCopyPromptLabel(plan);
+            const copyPromptLabel = _featureCopyPromptLabel(plan);
             const showSendToPlanner = !plan.column || plan.column === 'CREATED'
                 || (_kanbanAvailableColumns.find(c => c.id === plan.column)?.kind === 'created');
             const actionButtons = `
                 <div class="kanban-plan-actions" style="margin-top: 6px;">
                     ${columnBadge}
-                    ${plan.planFile ? `<button class="kanban-plan-copy-link epic-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
-                    ${copyPromptLabel && (plan.sessionId || plan.planId) ? `<button class="kanban-plan-copy-prompt epic-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-column="${escapeHtml(plan.column || 'CREATED')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">${escapeHtml(copyPromptLabel)}</button>` : ''}
-                    ${showSendToPlanner && (plan.sessionId || plan.planId) ? `<button class="epic-send-to-planner epic-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
+                    ${plan.planFile ? `<button class="kanban-plan-copy-link feature-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
+                    ${copyPromptLabel && (plan.sessionId || plan.planId) ? `<button class="kanban-plan-copy-prompt feature-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-column="${escapeHtml(plan.column || 'CREATED')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">${escapeHtml(copyPromptLabel)}</button>` : ''}
+                    ${showSendToPlanner && (plan.sessionId || plan.planId) ? `<button class="feature-send-to-planner feature-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
                 </div>
             `;
 
@@ -2189,19 +2189,19 @@
             itemDiv.innerHTML = `
                 <div style="font-weight: 500;">${escapeHtml(plan.topic)}</div>
                 <div class="kanban-plan-meta" style="margin-top:4px;">${escapeHtml(plan.workspaceLabel)} · ${displayTime}</div>
-                <details class="epic-accordion" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}" style="margin-top: 6px; font-size: 11px;">
+                <details class="feature-accordion" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}" style="margin-top: 6px; font-size: 11px;">
                     <summary style="cursor: pointer; color: var(--text-secondary);">Subtasks (${plan.subtaskCount || 0})</summary>
-                    <div class="epic-subtasks-list" id="subtasks-${escapeHtml(plan.planId)}">Loading subtasks...</div>
+                    <div class="feature-subtasks-list" id="subtasks-${escapeHtml(plan.planId)}">Loading subtasks...</div>
                 </details>
                 ${actionButtons}
             `;
 
             itemDiv.addEventListener('click', e => {
-                if (e.target.tagName === 'SUMMARY' || e.target.closest('.epic-accordion') || e.target.closest('.epic-card-action') || e.target.closest('.kanban-column-badge') || e.target.closest('.kanban-column-dropdown')) return;
-                if (state.dirtyFlags.epics) exitEditMode('epics');
-                document.querySelectorAll('.epic-plan-item').forEach(el => el.classList.remove('selected'));
+                if (e.target.tagName === 'SUMMARY' || e.target.closest('.feature-accordion') || e.target.closest('.feature-card-action') || e.target.closest('.kanban-column-badge') || e.target.closest('.kanban-column-dropdown')) return;
+                if (state.dirtyFlags.features) exitEditMode('features');
+                document.querySelectorAll('.feature-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
-                selectEpic(plan);
+                selectFeature(plan);
             });
 
             // Column Badge & Dropdown Wiring
@@ -2210,7 +2210,7 @@
             if (badge && select) {
                 badge.addEventListener('click', e => {
                     e.stopPropagation();
-                    epicsListPane.querySelectorAll('.kanban-column-dropdown').forEach(s => s.style.display = 'none');
+                    featuresListPane.querySelectorAll('.kanban-column-dropdown').forEach(s => s.style.display = 'none');
                     select.style.display = 'block';
                     select.focus();
                 });
@@ -2230,22 +2230,22 @@
             }
 
             // Copy Link
-            const epicCopyLinkBtn = itemDiv.querySelector('.epic-card-action.kanban-plan-copy-link');
-            if (epicCopyLinkBtn) {
-                epicCopyLinkBtn.addEventListener('click', e => {
+            const featureCopyLinkBtn = itemDiv.querySelector('.feature-card-action.kanban-plan-copy-link');
+            if (featureCopyLinkBtn) {
+                featureCopyLinkBtn.addEventListener('click', e => {
                     e.stopPropagation();
-                    const filePath = epicCopyLinkBtn.dataset.planFile;
+                    const filePath = featureCopyLinkBtn.dataset.planFile;
                     navigator.clipboard.writeText(toAgentRef(filePath)).then(() => {
-                        epicCopyLinkBtn.textContent = 'Copied';
-                        setTimeout(() => epicCopyLinkBtn.textContent = 'Copy Link', 2000);
+                        featureCopyLinkBtn.textContent = 'Copied';
+                        setTimeout(() => featureCopyLinkBtn.textContent = 'Copy Link', 2000);
                     });
                 });
             }
 
             // Copy Planning Prompt
-            const epicCopyPromptBtn = itemDiv.querySelector('.epic-card-action.kanban-plan-copy-prompt');
-            if (epicCopyPromptBtn) {
-                epicCopyPromptBtn.addEventListener('click', e => {
+            const featureCopyPromptBtn = itemDiv.querySelector('.feature-card-action.kanban-plan-copy-prompt');
+            if (featureCopyPromptBtn) {
+                featureCopyPromptBtn.addEventListener('click', e => {
                     e.stopPropagation();
                     // No optimistic "Copied" text: the backend kanbanPlanPromptCopied
                     // response handler (project.js ~565) finds this button via
@@ -2255,21 +2255,21 @@
                     // "Copied". Matches the regular kanban Copy Prompt pattern (no optimistic
                     // update — see project.js ~1174).
                     vscode.postMessage({
-                        type: 'copyEpicPlannerPrompt',
-                        sessionId: epicCopyPromptBtn.dataset.sessionId,
-                        column: epicCopyPromptBtn.dataset.column,
-                        workspaceRoot: epicCopyPromptBtn.dataset.workspaceRoot
+                        type: 'copyFeaturePlannerPrompt',
+                        sessionId: featureCopyPromptBtn.dataset.sessionId,
+                        column: featureCopyPromptBtn.dataset.column,
+                        workspaceRoot: featureCopyPromptBtn.dataset.workspaceRoot
                     });
                 });
             }
 
             // Send to Planner
-            const epicSendPlannerBtn = itemDiv.querySelector('.epic-send-to-planner');
-            if (epicSendPlannerBtn) {
-                epicSendPlannerBtn.addEventListener('click', e => {
+            const featureSendPlannerBtn = itemDiv.querySelector('.feature-send-to-planner');
+            if (featureSendPlannerBtn) {
+                featureSendPlannerBtn.addEventListener('click', e => {
                     e.stopPropagation();
-                    const planFile = epicSendPlannerBtn.dataset.planFile;
-                    const wsRoot = epicSendPlannerBtn.dataset.workspaceRoot;
+                    const planFile = featureSendPlannerBtn.dataset.planFile;
+                    const wsRoot = featureSendPlannerBtn.dataset.workspaceRoot;
                     const plannerCol = typeof _kanbanAvailableColumns !== 'undefined'
                         ? _kanbanAvailableColumns.find(c => c.id === 'CREATED' || c.kind === 'created')
                         : null;
@@ -2283,125 +2283,125 @@
                         newColumn: plannerCol.id,
                         workspaceRoot: wsRoot
                     });
-                    epicSendPlannerBtn.textContent = 'Sent';
-                    setTimeout(() => epicSendPlannerBtn.textContent = 'Send to Planner', 2000);
+                    featureSendPlannerBtn.textContent = 'Sent';
+                    setTimeout(() => featureSendPlannerBtn.textContent = 'Send to Planner', 2000);
                 });
             }
 
-            const accordion = itemDiv.querySelector('.epic-accordion');
+            const accordion = itemDiv.querySelector('.feature-accordion');
             accordion.addEventListener('toggle', () => {
                 if (accordion.open) {
-                    vscode.postMessage({ type: 'getEpicDetails', sessionId: plan.sessionId || plan.planId, workspaceRoot: plan.workspaceRoot });
+                    vscode.postMessage({ type: 'getFeatureDetails', sessionId: plan.sessionId || plan.planId, workspaceRoot: plan.workspaceRoot });
                 }
             });
 
-            epicsListPane.appendChild(itemDiv);
+            featuresListPane.appendChild(itemDiv);
         });
     }
 
-    function selectEpic(plan) {
-        if (state.editMode.epics) exitEditMode('epics');
-        _epicSelectedPlan = plan;
-        _epicPreviewFilePath = plan.planFile || null;
-        _epicSubtaskPreview = null;
+    function selectFeature(plan) {
+        if (state.editMode.features) exitEditMode('features');
+        _featureSelectedPlan = plan;
+        _featurePreviewFilePath = plan.planFile || null;
+        _featureSubtaskPreview = null;
 
-        renderEpicMetaBar(plan);
+        renderFeatureMetaBar(plan);
 
         if (plan.planFile) {
-            if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+            if (featuresPreviewContent) featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
             vscode.postMessage({
                 type: 'fetchKanbanPlanPreview',
                 filePath: plan.planFile,
                 requestId: ++_kanbanPreviewRequestId
             });
         } else {
-            if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">No file linked</div>';
+            if (featuresPreviewContent) featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">No file linked</div>';
         }
     }
 
-    function renderEpicMetaBar(plan) {
-        const metaBar = document.getElementById('epic-preview-meta-bar');
+    function renderFeatureMetaBar(plan) {
+        const metaBar = document.getElementById('feature-preview-meta-bar');
         if (!metaBar) return;
         metaBar.style.display = 'flex';
-        // Every epic is DB-backed/manageable now — standalone epic documents are gone.
+        // Every feature is DB-backed/manageable now — standalone feature documents are gone.
         const isManageable = !!plan;
         const manageGroup = `
             <div class="kanban-meta-group" style="display:flex; gap:6px;">
-                <button class="strip-btn" id="btn-epic-refine" title="Refine this feature's description and propose a subtask breakdown — copies a prompt to the clipboard">Refine</button>
-                <button class="strip-btn" id="btn-epic-add-subtask" title="Add an existing plan to this feature as a subtask">+ Subtask</button>
-                <button class="strip-btn" id="btn-epic-delete" style="color:#ff6b6b;" title="Delete this feature (subtasks are detached)">Delete Feature</button>
+                <button class="strip-btn" id="btn-feature-refine" title="Refine this feature's description and propose a subtask breakdown — copies a prompt to the clipboard">Refine</button>
+                <button class="strip-btn" id="btn-feature-add-subtask" title="Add an existing plan to this feature as a subtask">+ Subtask</button>
+                <button class="strip-btn" id="btn-feature-delete" style="color:#ff6b6b;" title="Delete this feature (subtasks are detached)">Delete Feature</button>
             </div>
         `;
         metaBar.innerHTML = `
             ${manageGroup}
             <div class="kanban-meta-group" style="margin-left: auto;">
-                <button class="strip-btn" id="btn-edit-epics" style="${state.editMode.epics ? 'display:none;' : ''}">Edit</button>
-                <button class="strip-btn" id="btn-save-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Save</button>
-                <button class="strip-btn" id="btn-cancel-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Cancel</button>
+                <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
+                <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
+                <button class="strip-btn" id="btn-cancel-features" style="${state.editMode.features ? '' : 'display:none;'}">Cancel</button>
             </div>
         `;
 
         if (isManageable) {
-            const btnAddSub = document.getElementById('btn-epic-add-subtask');
-            const btnDelEpic = document.getElementById('btn-epic-delete');
-            const btnRefine = document.getElementById('btn-epic-refine');
+            const btnAddSub = document.getElementById('btn-feature-add-subtask');
+            const btnDelFeature = document.getElementById('btn-feature-delete');
+            const btnRefine = document.getElementById('btn-feature-refine');
             if (btnRefine) btnRefine.addEventListener('click', () => {
-                if (!_epicSelectedPlan) return;
+                if (!_featureSelectedPlan) return;
                 const original = btnRefine.textContent;
                 btnRefine.textContent = 'Copied ✓';
                 setTimeout(() => { btnRefine.textContent = original; }, 1200);
                 vscode.postMessage({
-                    type: 'refineEpic',
-                    planId: _epicSelectedPlan.planId || '',
-                    planFile: _epicSelectedPlan.planFile || '',
-                    title: _epicSelectedPlan.topic || _epicSelectedPlan.name || '',
-                    subtaskCount: _epicSelectedPlan.subtaskCount || 0,
-                    workspaceRoot: _epicSelectedPlan.workspaceRoot
+                    type: 'refineFeature',
+                    planId: _featureSelectedPlan.planId || '',
+                    planFile: _featureSelectedPlan.planFile || '',
+                    title: _featureSelectedPlan.topic || _featureSelectedPlan.name || '',
+                    subtaskCount: _featureSelectedPlan.subtaskCount || 0,
+                    workspaceRoot: _featureSelectedPlan.workspaceRoot
                 });
             });
-            if (btnAddSub) btnAddSub.addEventListener('click', openEpicAddSubtaskOverlay);
-            if (btnDelEpic) btnDelEpic.addEventListener('click', () => {
-                if (!_epicSelectedPlan) return;
+            if (btnAddSub) btnAddSub.addEventListener('click', openFeatureAddSubtaskOverlay);
+            if (btnDelFeature) btnDelFeature.addEventListener('click', () => {
+                if (!_featureSelectedPlan) return;
                 // No confirm dialog (project rule): delete executes immediately. Subtasks are
-                // detached (deleteSubtasks:false), matching the board's epic-as-unit model.
+                // detached (deleteSubtasks:false), matching the board's feature-as-unit model.
                 vscode.postMessage({
-                    type: 'deleteEpic',
-                    sessionId: _epicSelectedPlan.sessionId || _epicSelectedPlan.planId,
-                    workspaceRoot: _epicSelectedPlan.workspaceRoot,
+                    type: 'deleteFeature',
+                    sessionId: _featureSelectedPlan.sessionId || _featureSelectedPlan.planId,
+                    workspaceRoot: _featureSelectedPlan.workspaceRoot,
                     deleteSubtasks: false
                 });
-                _epicSelectedPlan = null;
-                if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a feature to preview</div>';
+                _featureSelectedPlan = null;
+                if (featuresPreviewContent) featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a feature to preview</div>';
                 metaBar.style.display = 'none';
             });
         }
 
-        const btnEditEpics = document.getElementById('btn-edit-epics');
-        const btnCancelEpics = document.getElementById('btn-cancel-epics');
-        const btnSaveEpics = document.getElementById('btn-save-epics');
+        const btnEditFeatures = document.getElementById('btn-edit-features');
+        const btnCancelFeatures = document.getElementById('btn-cancel-features');
+        const btnSaveFeatures = document.getElementById('btn-save-features');
 
-        if (btnEditEpics) btnEditEpics.addEventListener('click', () => enterEditMode('epics'));
-        if (btnCancelEpics) btnCancelEpics.addEventListener('click', () => exitEditMode('epics'));
-        if (btnSaveEpics) {
-            btnSaveEpics.addEventListener('click', () => {
-                const filePath = _epicSelectedPlan ? _epicSelectedPlan.planFile : null;
-                const content = epicsEditor ? epicsEditor.value : '';
-                const originalContent = state.editOriginalContent.epics;
+        if (btnEditFeatures) btnEditFeatures.addEventListener('click', () => enterEditMode('features'));
+        if (btnCancelFeatures) btnCancelFeatures.addEventListener('click', () => exitEditMode('features'));
+        if (btnSaveFeatures) {
+            btnSaveFeatures.addEventListener('click', () => {
+                const filePath = _featureSelectedPlan ? _featureSelectedPlan.planFile : null;
+                const content = featuresEditor ? featuresEditor.value : '';
+                const originalContent = state.editOriginalContent.features;
                 if (filePath) {
                     vscode.postMessage({
                         type: 'saveFileContent',
                         filePath,
                         content,
                         originalContent,
-                        tab: 'epics'
+                        tab: 'features'
                     });
                 }
             });
         }
     }
 
-    function renderEpicSubtaskMetaBar(plan) {
-        const metaBar = document.getElementById('epic-preview-meta-bar');
+    function renderFeatureSubtaskMetaBar(plan) {
+        const metaBar = document.getElementById('feature-preview-meta-bar');
         if (!metaBar) return;
         metaBar.style.display = 'flex';
 
@@ -2413,14 +2413,14 @@
             <div class="kanban-meta-group">
                 <span class="kanban-meta-label">Complexity:</span>
                 <span class="complexity-dot ${complexityClass}"></span>
-                <span class="kanban-meta-value" id="epic-subtask-meta-complexity">${complexityLabel}</span>
-                <select class="kanban-meta-dropdown" id="epic-subtask-meta-complexity-select" style="display:none;" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">
+                <span class="kanban-meta-value" id="feature-subtask-meta-complexity">${complexityLabel}</span>
+                <select class="kanban-meta-dropdown" id="feature-subtask-meta-complexity-select" style="display:none;" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">
                     ${['Unknown', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].map(v => `<option value="${v}" ${v === (plan.complexity || 'Unknown') ? 'selected' : ''}>${v}</option>`).join('')}
                 </select>
             </div>
         ` : '';
 
-        const deleteBtn = hasPlanId ? `<button class="strip-btn" id="epic-subtask-meta-delete-btn" style="color:#ff6b6b;">Delete</button>` : '';
+        const deleteBtn = hasPlanId ? `<button class="strip-btn" id="feature-subtask-meta-delete-btn" style="color:#ff6b6b;">Delete</button>` : '';
 
         metaBar.innerHTML = `
             <div class="kanban-meta-group">
@@ -2428,31 +2428,31 @@
             </div>
             ${complexityGroup}
             <div class="kanban-meta-group" style="margin-left: auto;">
-                <button class="strip-btn" id="btn-edit-epics" style="${state.editMode.epics ? 'display:none;' : ''}">Edit</button>
-                <button class="strip-btn" id="btn-save-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Save</button>
-                <button class="strip-btn" id="btn-cancel-epics" style="${state.editMode.epics ? '' : 'display:none;'}">Cancel</button>
+                <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
+                <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
+                <button class="strip-btn" id="btn-cancel-features" style="${state.editMode.features ? '' : 'display:none;'}">Cancel</button>
                 ${deleteBtn}
             </div>
         `;
 
-        // Edit / Save / Cancel — target _epicPreviewFilePath (the subtask file), not the epic
-        const btnEdit = document.getElementById('btn-edit-epics');
-        const btnCancel = document.getElementById('btn-cancel-epics');
-        const btnSave = document.getElementById('btn-save-epics');
-        if (btnEdit) btnEdit.addEventListener('click', () => enterEditMode('epics'));
-        if (btnCancel) btnCancel.addEventListener('click', () => exitEditMode('epics'));
+        // Edit / Save / Cancel — target _featurePreviewFilePath (the subtask file), not the feature
+        const btnEdit = document.getElementById('btn-edit-features');
+        const btnCancel = document.getElementById('btn-cancel-features');
+        const btnSave = document.getElementById('btn-save-features');
+        if (btnEdit) btnEdit.addEventListener('click', () => enterEditMode('features'));
+        if (btnCancel) btnCancel.addEventListener('click', () => exitEditMode('features'));
         if (btnSave) {
             btnSave.addEventListener('click', () => {
-                const filePath = _epicPreviewFilePath;
-                const content = epicsEditor ? epicsEditor.value : '';
-                const originalContent = state.editOriginalContent.epics;
+                const filePath = _featurePreviewFilePath;
+                const content = featuresEditor ? featuresEditor.value : '';
+                const originalContent = state.editOriginalContent.features;
                 if (filePath) {
                     vscode.postMessage({
                         type: 'saveFileContent',
                         filePath,
                         content,
                         originalContent,
-                        tab: 'epics'
+                        tab: 'features'
                     });
                 }
             });
@@ -2460,8 +2460,8 @@
 
         // Complexity dropdown toggle (mirror kanban pattern, project.js:1485-1498)
         if (hasPlanId) {
-            const compToggle = document.getElementById('epic-subtask-meta-complexity');
-            const compSelect = document.getElementById('epic-subtask-meta-complexity-select');
+            const compToggle = document.getElementById('feature-subtask-meta-complexity');
+            const compSelect = document.getElementById('feature-subtask-meta-complexity-select');
             if (compToggle && compSelect) {
                 compToggle.addEventListener('click', e => {
                     e.stopPropagation();
@@ -2476,36 +2476,36 @@
             }
 
             // Delete (mirror kanban pattern, project.js:1504-1506)
-            const delBtn = document.getElementById('epic-subtask-meta-delete-btn');
+            const delBtn = document.getElementById('feature-subtask-meta-delete-btn');
             if (delBtn) {
                 delBtn.addEventListener('click', () => {
                     vscode.postMessage({ type: 'deleteKanbanPlan', planId: plan.planId, planFile: plan.planFile, workspaceRoot: plan.workspaceRoot });
-                    _epicSubtaskPreview = null;
-                    _epicPreviewFilePath = _epicSelectedPlan ? _epicSelectedPlan.planFile : null;
-                    if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a feature to preview</div>';
-                    if (_epicSelectedPlan) renderEpicMetaBar(_epicSelectedPlan);
+                    _featureSubtaskPreview = null;
+                    _featurePreviewFilePath = _featureSelectedPlan ? _featureSelectedPlan.planFile : null;
+                    if (featuresPreviewContent) featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a feature to preview</div>';
+                    if (_featureSelectedPlan) renderFeatureMetaBar(_featureSelectedPlan);
                     else metaBar.style.display = 'none';
                 });
             }
         }
     }
 
-    function renderEpicSubtasks(epic, subtasks) {
-        const subtasksDiv = document.getElementById(`subtasks-${epic.planId}`);
+    function renderFeatureSubtasks(feature, subtasks) {
+        const subtasksDiv = document.getElementById(`subtasks-${feature.planId}`);
         if (!subtasksDiv) return;
         if (subtasks.length === 0) {
             subtasksDiv.innerHTML = '<div style="color:var(--text-secondary); font-style:italic;">No subtasks added yet.</div>';
             return;
         }
         subtasksDiv.innerHTML = subtasks.map(st => `
-            <div class="epic-subtask-item">
-                <span class="epic-subtask-link" data-plan-file="${escapeHtml(st.planFile || '')}" style="cursor: pointer; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">• ${escapeHtml(st.topic)} (${escapeHtml(st.kanbanColumn)})</span>
-                <button class="epic-remove-subtask-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" data-workspace-root="${escapeHtml(epic.workspaceRoot)}">Remove</button>
+            <div class="feature-subtask-item">
+                <span class="feature-subtask-link" data-plan-file="${escapeHtml(st.planFile || '')}" style="cursor: pointer; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">• ${escapeHtml(st.topic)} (${escapeHtml(st.kanbanColumn)})</span>
+                <button class="feature-remove-subtask-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" data-workspace-root="${escapeHtml(feature.workspaceRoot)}">Remove</button>
             </div>
         `).join('');
 
         // Wire subtask click → preview
-        subtasksDiv.querySelectorAll('.epic-subtask-link').forEach(link => {
+        subtasksDiv.querySelectorAll('.feature-subtask-link').forEach(link => {
             link.addEventListener('click', e => {
                 e.stopPropagation();
                 const planFile = link.dataset.planFile;
@@ -2513,11 +2513,11 @@
                     showToast('This subtask has no plan file to preview.', 'error');
                     return;
                 }
-                if (state.editMode.epics) exitEditMode('epics');
-                _epicPreviewFilePath = planFile;
-                _epicSubtaskPreview = _kanbanPlansCache.find(p => p.planFile === planFile) || { planFile, planId: '', workspaceRoot: '', complexity: 'Unknown' };
-                renderEpicSubtaskMetaBar(_epicSubtaskPreview);
-                if (epicsPreviewContent) epicsPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+                if (state.editMode.features) exitEditMode('features');
+                _featurePreviewFilePath = planFile;
+                _featureSubtaskPreview = _kanbanPlansCache.find(p => p.planFile === planFile) || { planFile, planId: '', workspaceRoot: '', complexity: 'Unknown' };
+                renderFeatureSubtaskMetaBar(_featureSubtaskPreview);
+                if (featuresPreviewContent) featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
                 vscode.postMessage({
                     type: 'fetchKanbanPlanPreview',
                     filePath: planFile,
@@ -2526,11 +2526,11 @@
             });
         });
 
-        subtasksDiv.querySelectorAll('.epic-remove-subtask-btn').forEach(btn => {
+        subtasksDiv.querySelectorAll('.feature-remove-subtask-btn').forEach(btn => {
             btn.addEventListener('click', e => {
                 e.stopPropagation();
                 vscode.postMessage({
-                    type: 'removeSubtaskFromEpic',
+                    type: 'removeSubtaskFromFeature',
                     subtaskSessionId: btn.dataset.subtaskSession,
                     workspaceRoot: btn.dataset.workspaceRoot
                 });
@@ -2538,17 +2538,17 @@
         });
     }
 
-    // ---- Add subtask to epic (Epics-tab) ----
-    function openEpicAddSubtaskOverlay() {
-        if (!_epicSelectedPlan) return;
-        const ov = document.getElementById('epic-add-subtask-overlay');
-        const select = document.getElementById('epic-add-subtask-select');
+    // ---- Add subtask to feature (Features-tab) ----
+    function openFeatureAddSubtaskOverlay() {
+        if (!_featureSelectedPlan) return;
+        const ov = document.getElementById('feature-add-subtask-overlay');
+        const select = document.getElementById('feature-add-subtask-select');
         if (!ov || !select) return;
-        // Candidates: plans in the same workspace that are not epics and not already a subtask.
-        const epicWs = _epicSelectedPlan.workspaceRoot;
+        // Candidates: plans in the same workspace that are not features and not already a subtask.
+        const featureWs = _featureSelectedPlan.workspaceRoot;
         const candidates = _kanbanPlansCache.filter(p =>
-            !p.isEpic && !p.epicId && p.workspaceRoot === epicWs &&
-            (p.planId !== _epicSelectedPlan.planId));
+            !p.isFeature && !p.featureId && p.workspaceRoot === featureWs &&
+            (p.planId !== _featureSelectedPlan.planId));
         select.innerHTML = '<option value="">Select a plan…</option>' + candidates.map(p =>
             `<option value="${escapeHtml(p.sessionId || p.planId)}">${escapeHtml(p.topic)}</option>`).join('');
         if (candidates.length === 0) {
@@ -2557,45 +2557,45 @@
         ov.style.display = 'flex';
     }
 
-    function closeEpicAddSubtaskOverlay() {
-        const ov = document.getElementById('epic-add-subtask-overlay');
+    function closeFeatureAddSubtaskOverlay() {
+        const ov = document.getElementById('feature-add-subtask-overlay');
         if (ov) ov.style.display = 'none';
     }
 
-    document.getElementById('btn-epic-add-subtask-cancel')?.addEventListener('click', closeEpicAddSubtaskOverlay);
-    document.getElementById('btn-epic-add-subtask-submit')?.addEventListener('click', () => {
-        const select = document.getElementById('epic-add-subtask-select');
+    document.getElementById('btn-feature-add-subtask-cancel')?.addEventListener('click', closeFeatureAddSubtaskOverlay);
+    document.getElementById('btn-feature-add-subtask-submit')?.addEventListener('click', () => {
+        const select = document.getElementById('feature-add-subtask-select');
         const subtaskSessionId = select ? select.value : '';
-        if (!subtaskSessionId || !_epicSelectedPlan) { closeEpicAddSubtaskOverlay(); return; }
+        if (!subtaskSessionId || !_featureSelectedPlan) { closeFeatureAddSubtaskOverlay(); return; }
         vscode.postMessage({
-            type: 'addSubtaskToEpic',
-            epicSessionId: _epicSelectedPlan.sessionId || _epicSelectedPlan.planId,
+            type: 'addSubtaskToFeature',
+            featureSessionId: _featureSelectedPlan.sessionId || _featureSelectedPlan.planId,
             subtaskSessionId,
-            workspaceRoot: _epicSelectedPlan.workspaceRoot
+            workspaceRoot: _featureSelectedPlan.workspaceRoot
         });
-        closeEpicAddSubtaskOverlay();
+        closeFeatureAddSubtaskOverlay();
     });
 
-    if (epicsWorkspaceFilter) {
-        epicsWorkspaceFilter.addEventListener('change', () => {
-            epicsFilters.workspaceRoot = epicsWorkspaceFilter.value;
-            epicsFilters.project = '';
-            updateEpicsProjectFilter();
-            renderEpicsList();
+    if (featuresWorkspaceFilter) {
+        featuresWorkspaceFilter.addEventListener('change', () => {
+            featuresFilters.workspaceRoot = featuresWorkspaceFilter.value;
+            featuresFilters.project = '';
+            updateFeaturesProjectFilter();
+            renderFeaturesList();
         });
     }
 
-    if (epicsColumnFilter) {
-        epicsColumnFilter.addEventListener('change', () => {
-            epicsFilters.column = epicsColumnFilter.value;
-            renderEpicsList();
+    if (featuresColumnFilter) {
+        featuresColumnFilter.addEventListener('change', () => {
+            featuresFilters.column = featuresColumnFilter.value;
+            renderFeaturesList();
         });
     }
 
-    if (epicsProjectFilter) {
-        epicsProjectFilter.addEventListener('change', () => {
-            epicsFilters.project = epicsProjectFilter.value;
-            renderEpicsList();
+    if (featuresProjectFilter) {
+        featuresProjectFilter.addEventListener('change', () => {
+            featuresFilters.project = featuresProjectFilter.value;
+            renderFeaturesList();
         });
     }
 
@@ -2604,7 +2604,7 @@
     // =========================================================================
     // CONSTITUTION TAB
     // =========================================================================
-    // The governance tabs (Constitution, System) follow the Kanban/Epics pattern:
+    // The governance tabs (Constitution, System) follow the Kanban/Features pattern:
     // the workspace dropdown is a pure filter, and the sidebar lists the DOCS. Each
     // sidebar row is one governance file — Constitution lists its single file per
     // workspace; System lists CLAUDE.md and AGENTS.md per workspace.
@@ -2978,39 +2978,39 @@
         state.dirtyFlags[tab] = false;
     }
 
-    // Wire up "+ New Epic" and Modal
-    if (btnNewEpic && newEpicModal) {
-        btnNewEpic.addEventListener('click', () => {
-            if (newEpicName) newEpicName.value = '';
-            if (newEpicDescription) newEpicDescription.value = '';
-            newEpicModal.style.display = 'flex';
-            if (newEpicName) newEpicName.focus();
+    // Wire up "+ New Feature" and Modal
+    if (btnNewFeature && newFeatureModal) {
+        btnNewFeature.addEventListener('click', () => {
+            if (newFeatureName) newFeatureName.value = '';
+            if (newFeatureDescription) newFeatureDescription.value = '';
+            newFeatureModal.style.display = 'flex';
+            if (newFeatureName) newFeatureName.focus();
         });
     }
 
-    if (btnNewEpicCancel && newEpicModal) {
-        btnNewEpicCancel.addEventListener('click', () => {
-            newEpicModal.style.display = 'none';
+    if (btnNewFeatureCancel && newFeatureModal) {
+        btnNewFeatureCancel.addEventListener('click', () => {
+            newFeatureModal.style.display = 'none';
         });
     }
 
-    if (btnNewEpicSubmit && newEpicModal) {
-        btnNewEpicSubmit.addEventListener('click', () => {
-            const name = newEpicName ? newEpicName.value.trim() : '';
-            const description = newEpicDescription ? newEpicDescription.value.trim() : '';
+    if (btnNewFeatureSubmit && newFeatureModal) {
+        btnNewFeatureSubmit.addEventListener('click', () => {
+            const name = newFeatureName ? newFeatureName.value.trim() : '';
+            const description = newFeatureDescription ? newFeatureDescription.value.trim() : '';
             if (!name) {
-                showToast('Epic name is required.', 'error');
+                showToast('Feature name is required.', 'error');
                 return;
             }
             vscode.postMessage({
-                type: 'createEpic',
+                type: 'createFeature',
                 name,
                 description,
-                workspaceRoot: epicsFilters.workspaceRoot,
+                workspaceRoot: featuresFilters.workspaceRoot,
                 subtaskPlanIds: [],
                 addToKanbanBoard: true
             });
-            newEpicModal.style.display = 'none';
+            newFeatureModal.style.display = 'none';
         });
     }
 
@@ -3020,9 +3020,9 @@
             state.dirtyFlags.kanban = true;
         });
     }
-    if (epicsEditor) {
-        epicsEditor.addEventListener('input', () => {
-            state.dirtyFlags.epics = true;
+    if (featuresEditor) {
+        featuresEditor.addEventListener('input', () => {
+            state.dirtyFlags.features = true;
         });
     }
     if (constitutionEditor) {
@@ -3346,7 +3346,7 @@
 
     // Initialize sidebar state on load
     applySidebarState('kanban', state.kanbanListCollapsed);
-    applySidebarState('epics', state.epicsListCollapsed);
+    applySidebarState('features', state.featuresListCollapsed);
     applySidebarState('constitution', state.constitutionListCollapsed);
     applySidebarState('tuning', state.tuningListCollapsed);
 

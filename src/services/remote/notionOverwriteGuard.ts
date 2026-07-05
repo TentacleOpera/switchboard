@@ -1,5 +1,5 @@
 /**
- * Notion Overwrite Data-Loss Guard (epic 7 — Auto-Archive & Production Hardening).
+ * Notion Overwrite Data-Loss Guard (feature 7 — Auto-Archive & Production Hardening).
  *
  * Enforces, **in code**, that no Notion body write can silently destroy user data.
  * A `replace_content` full overwrite (delete-all-children + append) permanently

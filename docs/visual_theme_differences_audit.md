@@ -101,7 +101,7 @@ The base `.kanban-card` rule is teal **by construction** and is *not* theme-gate
 ```
 
 - **Afterburner** → `--accent-teal` is cyan → teal cards, teal hover bloom (`kanban.html:939–946`), teal selected glow (`kanban.html:1395–1400`).
-- **Claudify** *replaces* the whole background with a grey gradient (`kanban.html:203–232`): `color-mix(in srgb, #ffffff 5%, var(--panel-bg2))`, `border: var(--border-color)`, `box-shadow: none`. Selected border = terracotta (`var(--accent-primary)`). Epic cards get a `#7c3aed` purple edge.
+- **Claudify** *replaces* the whole background with a grey gradient (`kanban.html:203–232`): `color-mix(in srgb, #ffffff 5%, var(--panel-bg2))`, `border: var(--border-color)`, `box-shadow: none`. Selected border = terracotta (`var(--accent-primary)`). Feature cards get a `#7c3aed` purple edge.
 - **Afterburner Pro** carries `theme-claudify`, so it matches the *same* grey override → grey cards too, with the selected border repainted cyan.
 
 This is why "Afterburner = teal cards, the other two = black."

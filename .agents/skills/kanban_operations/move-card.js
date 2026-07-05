@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 //
-// Move a kanban card to a target column. Epic-aware: when the card is an epic,
+// Move a kanban card to a target column. Feature-aware: when the card is an feature,
 // all of its subtasks cascade to the same column.
 //
 // Two paths, tried in order:
 //   1. Preferred — route through the running Switchboard extension's local API
 //      server. The extension performs the move via KanbanProvider, so it inherits
-//      the epic cascade, the Linear/ClickUp integration-sync fan-out, and the board
+//      the feature cascade, the Linear/ClickUp integration-sync fan-out, and the board
 //      refresh. This is the ONLY way external trackers stay in exact sync, because
 //      the integration token lives in VS Code secret storage and is unreachable
 //      from a standalone Node process.
@@ -136,16 +136,16 @@ async function viaDirectDb() {
   }
 
   let columnSuccess;
-  if (plan && plan.isEpic) {
-    // Prefer the atomic, race-free cascadeEpicByPlanId (Plan 2). Fall back to
-    // updateColumnWithEpicCascadeByPlanId only if it's missing — note the signatures
+  if (plan && plan.isFeature) {
+    // Prefer the atomic, race-free cascadeFeatureByPlanId (Plan 2). Fall back to
+    // updateColumnWithFeatureCascadeByPlanId only if it's missing — note the signatures
     // differ (the latter requires an explicit subtaskPlanIds[] array).
-    if (typeof db.cascadeEpicByPlanId === 'function') {
-      columnSuccess = await db.cascadeEpicByPlanId(plan.planId, targetColumn);
+    if (typeof db.cascadeFeatureByPlanId === 'function') {
+      columnSuccess = await db.cascadeFeatureByPlanId(plan.planId, targetColumn);
     } else {
-      const subtasks = await db.getSubtasksByEpicId(plan.planId);
+      const subtasks = await db.getSubtasksByFeatureId(plan.planId);
       const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean);
-      columnSuccess = await db.updateColumnWithEpicCascadeByPlanId(plan.planId, subtaskPlanIds, targetColumn);
+      columnSuccess = await db.updateColumnWithFeatureCascadeByPlanId(plan.planId, subtaskPlanIds, targetColumn);
     }
   } else if (plan) {
     columnSuccess = await db.updateColumnByPlanFile(plan.planFile, plan.workspaceId, targetColumn);

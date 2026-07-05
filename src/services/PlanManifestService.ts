@@ -11,8 +11,8 @@ import { KanbanDatabase, VALID_KANBAN_COLUMNS } from './KanbanDatabase';
  * `.md` files; the watcher ingests it (setting DB-owned state the `.md` can't
  * express), then deletes it so it never re-applies.
  *
- * Manifest carries, per plan: kanban column, status, epic relationships
- * (`is_epic` / `epic_id`), and project name. Plan *content* metadata (title,
+ * Manifest carries, per plan: kanban column, status, feature relationships
+ * (`is_feature` / `feature_id`), and project name. Plan *content* metadata (title,
  * complexity, tags) continues to come from the `.md` front-matter.
  *
  * Key design facts (verified against source):
@@ -22,7 +22,7 @@ import { KanbanDatabase, VALID_KANBAN_COLUMNS } from './KanbanDatabase';
  *    it. This is why consume-then-delete is safe and sufficient.
  *  - `upsertPlans` does NOT override `kanban_column` on existing rows, so the
  *    manifest uses the targeted methods: `movePlanByPlanFile` (column),
- *    `updateEpicStatus` (epic links), `updateStatusByPlanFile` (status),
+ *    `updateFeatureStatus` (feature links), `updateStatusByPlanFile` (status),
  *    `updatePlanProjectByPlanFile` (project).
  *  - The column move applies only when the plan is currently in the entry's
  *    `fromColumn` (default 'CREATED'). This supports fresh forward transitions
@@ -52,8 +52,8 @@ export interface ManifestEntry {
      */
     fromColumn?: string;
     status?: string;
-    isEpic?: boolean;
-    epicId?: string;
+    isFeature?: boolean;
+    featureId?: string;
     project?: string;
 }
 
@@ -127,25 +127,25 @@ export class PlanManifestService {
         }
 
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        const epicsDir = path.join(workspaceRoot, '.switchboard', 'epics');
+        const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
 
-        // Sort: epics first so subtask epic_id links resolve against in-batch epics.
+        // Sort: features first so subtask feature_id links resolve against in-batch features.
         const entries = [...parsed.plans].sort((a, b) => {
-            const ae = a.isEpic ? 0 : 1;
-            const be = b.isEpic ? 0 : 1;
+            const ae = a.isFeature ? 0 : 1;
+            const be = b.isFeature ? 0 : 1;
             return ae - be;
         });
 
-        // Track in-batch epic planIds for epic_id resolution.
-        const inBatchEpicIds = new Set<string>();
+        // Track in-batch feature planIds for feature_id resolution.
+        const inBatchFeatureIds = new Set<string>();
         let anyDeferred = false;
 
         for (const entry of entries) {
-            const r = await this._applyEntry(entry, db, workspaceId, workspaceRoot, plansDir, epicsDir, inBatchEpicIds, log);
+            const r = await this._applyEntry(entry, db, workspaceId, workspaceRoot, plansDir, featuresDir, inBatchFeatureIds, log);
             if (r === 'applied') {
                 result.applied++;
-                if (entry.isEpic && entry.planId) {
-                    inBatchEpicIds.add(entry.planId);
+                if (entry.isFeature && entry.planId) {
+                    inBatchFeatureIds.add(entry.planId);
                 }
             } else if (r === 'deferred') {
                 result.deferred++;
@@ -179,7 +179,7 @@ export class PlanManifestService {
         // so it is NOT retained for retry — retaining would cause an infinite
         // re-toast loop every 10s scan cycle.
         if (result.rejected > 0) {
-            log?.(`[PlanManifest] ⚠️ ${result.rejected} entr${result.rejected === 1 ? 'y' : 'ies'} REJECTED (invalid path/planFile). Manifest consumed (deleted) — rejected entries are permanent; fix the source planFile path. Valid forms: bare filename, .switchboard/plans/<name>.md, or .switchboard/epics/<name>.md.`);
+            log?.(`[PlanManifest] ⚠️ ${result.rejected} entr${result.rejected === 1 ? 'y' : 'ies'} REJECTED (invalid path/planFile). Manifest consumed (deleted) — rejected entries are permanent; fix the source planFile path. Valid forms: bare filename, .switchboard/plans/<name>.md, or .switchboard/features/<name>.md.`);
             await this._safeDelete(manifestPath, log);
             this._attempts.delete(workspaceRoot);
             result.consumed = true;
@@ -200,8 +200,8 @@ export class PlanManifestService {
         workspaceId: string,
         workspaceRoot: string,
         plansDir: string,
-        epicsDir: string,
-        inBatchEpicIds: Set<string>,
+        featuresDir: string,
+        inBatchFeatureIds: Set<string>,
         log?: (msg: string) => void
     ): Promise<'applied' | 'deferred' | 'rejected'> {
         if (!entry || !entry.planFile || typeof entry.planFile !== 'string') {
@@ -221,28 +221,28 @@ export class PlanManifestService {
             resolvedPlanFile = `.switchboard/plans/${resolvedPlanFile}`;
         }
 
-        // Defensive: warn when a bare epic-looking filename is auto-resolved to plans/,
-        // since epics live under .switchboard/epics/ and will likely defer-then-drop.
+        // Defensive: warn when a bare feature-looking filename is auto-resolved to plans/,
+        // since features live under .switchboard/features/ and will likely defer-then-drop.
         // Test against the ORIGINAL entry.planFile (before auto-resolve prepends
         // .switchboard/plans/), since resolvedPlanFile starts with '.switchboard/'
-        // and would never match /^epic-/i.
-        if (/^epic-/i.test(entry.planFile) && !resolvedPlanFile.startsWith('.switchboard/epics/')) {
-            log?.(`[PlanManifest] ⚠️ Bare epic-looking filename '${entry.planFile}' auto-resolved to plans/ — epics must use the full .switchboard/epics/ prefix. This entry will likely defer-then-drop.`);
+        // and would never match /^feature-/i.
+        if (/^feature-/i.test(entry.planFile) && !resolvedPlanFile.startsWith('.switchboard/features/')) {
+            log?.(`[PlanManifest] ⚠️ Bare feature-looking filename '${entry.planFile}' auto-resolved to plans/ — features must use the full .switchboard/features/ prefix. This entry will likely defer-then-drop.`);
         }
 
         // Security: reject path traversal / absolute paths. planFile must resolve
-        // strictly inside .switchboard/plans or .switchboard/epics for this workspace.
+        // strictly inside .switchboard/plans or .switchboard/features for this workspace.
         if (path.isAbsolute(resolvedPlanFile) || resolvedPlanFile.includes('..')) {
             log?.(`[PlanManifest] Rejected path-traversal/absolute planFile: ${entry.planFile}`);
             return 'rejected';
         }
         const resolved = path.resolve(workspaceRoot, resolvedPlanFile);
         const plansRoot = path.resolve(plansDir);
-        const epicsRoot = path.resolve(epicsDir);
+        const featuresRoot = path.resolve(featuresDir);
         const insidePlans = resolved === plansRoot || resolved.startsWith(plansRoot + path.sep);
-        const insideEpics = resolved === epicsRoot || resolved.startsWith(epicsRoot + path.sep);
-        if (!insidePlans && !insideEpics) {
-            log?.(`[PlanManifest] Rejected planFile outside plans/epics dir: ${entry.planFile}`);
+        const insideFeatures = resolved === featuresRoot || resolved.startsWith(featuresRoot + path.sep);
+        if (!insidePlans && !insideFeatures) {
+            log?.(`[PlanManifest] Rejected planFile outside plans/features dir: ${entry.planFile}`);
             return 'rejected';
         }
 
@@ -279,7 +279,7 @@ export class PlanManifestService {
                     log?.(`[PlanManifest] movePlanByPlanFile failed for ${resolvedPlanFile} → ${entry.kanbanColumn}`);
                 }
             } else if (plan.kanbanColumn !== expectedFrom && plan.kanbanColumn !== entry.kanbanColumn) {
-                log?.(`[PlanManifest] Stale-manifest guard: ${resolvedPlanFile} already at '${plan.kanbanColumn}' (expected '${expectedFrom}'), not overriding to '${entry.kanbanColumn}' (epic/project still applied).`);
+                log?.(`[PlanManifest] Stale-manifest guard: ${resolvedPlanFile} already at '${plan.kanbanColumn}' (expected '${expectedFrom}'), not overriding to '${entry.kanbanColumn}' (feature/project still applied).`);
             }
         }
 
@@ -308,32 +308,32 @@ export class PlanManifestService {
             }
         }
 
-        // ── isEpic / epicId ──
-        // Resolve epicId against in-batch epics first, then the DB.
-        let resolvedEpicId = '';
-        if (entry.epicId) {
-            if (inBatchEpicIds.has(entry.epicId)) {
-                resolvedEpicId = entry.epicId;
+        // ── isFeature / featureId ──
+        // Resolve featureId against in-batch features first, then the DB.
+        let resolvedFeatureId = '';
+        if (entry.featureId) {
+            if (inBatchFeatureIds.has(entry.featureId)) {
+                resolvedFeatureId = entry.featureId;
             } else {
-                const epicPlan = await db.getPlanByPlanId(entry.epicId);
-                if (epicPlan) {
-                    resolvedEpicId = entry.epicId;
+                const featurePlan = await db.getPlanByPlanId(entry.featureId);
+                if (featurePlan) {
+                    resolvedFeatureId = entry.featureId;
                 } else {
-                    log?.(`[PlanManifest] epicId '${entry.epicId}' does not resolve to an in-batch or DB epic; importing ${resolvedPlanFile} without the link.`);
+                    log?.(`[PlanManifest] featureId '${entry.featureId}' does not resolve to an in-batch or DB feature; importing ${resolvedPlanFile} without the link.`);
                 }
             }
         }
-        const isEpicVal = entry.isEpic ? 1 : 0;
-        // Only touch epic state when the manifest carries a positive epic payload
-        // (isEpic === true OR a resolved epicId link). A manifest that sets
-        // isEpic:false with no epicId — the default for Trigger A column-only
-        // manifests — must NOT clobber an existing subtask's epic_id link.
-        if (entry.isEpic === true || resolvedEpicId) {
-            const planIdForEpic = entry.planId || plan.planId;
-            if (planIdForEpic) {
-                const ok = await db.updateEpicStatus(planIdForEpic, isEpicVal, resolvedEpicId);
+        const isFeatureVal = entry.isFeature ? 1 : 0;
+        // Only touch feature state when the manifest carries a positive feature payload
+        // (isFeature === true OR a resolved featureId link). A manifest that sets
+        // isFeature:false with no featureId — the default for Trigger A column-only
+        // manifests — must NOT clobber an existing subtask's feature_id link.
+        if (entry.isFeature === true || resolvedFeatureId) {
+            const planIdForFeature = entry.planId || plan.planId;
+            if (planIdForFeature) {
+                const ok = await db.updateFeatureStatus(planIdForFeature, isFeatureVal, resolvedFeatureId);
                 if (!ok) {
-                    log?.(`[PlanManifest] updateEpicStatus failed for planId=${planIdForEpic}`);
+                    log?.(`[PlanManifest] updateFeatureStatus failed for planId=${planIdForFeature}`);
                 }
             }
         }

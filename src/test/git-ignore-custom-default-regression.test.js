@@ -39,8 +39,8 @@ function run() {
         'Expected setup.html hydration to fall back to an empty rules array when no saved rules exist.'
     );
     assert.ok(
-        setupSource.includes('Cloud coders (e.g., Jules) require .switchboard/plans/ and .switchboard/epics/ to be in the repository'),
-        'Expected setup.html warning copy to explain the cloud-agent .switchboard/plans/ and .switchboard/epics/ requirements.'
+        setupSource.includes('Cloud coders (e.g., Jules) require .switchboard/plans/ and .switchboard/features/ to be in the repository'),
+        'Expected setup.html warning copy to explain the cloud-agent .switchboard/plans/ and .switchboard/features/ requirements.'
     );
     assert.ok(
         setupSource.includes('avoid blanket .switchboard/* rules'),

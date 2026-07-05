@@ -725,7 +725,7 @@
         "switchboard.theme.ultracodeAnimation": {
           "type": "boolean",
           "default": false,
-          "description": "Afterburner only: play the full-screen ULTRACODE animation when Epic Ultracode is switched on in the kanban board.",
+          "description": "Afterburner only: play the full-screen ULTRACODE animation when Feature Ultracode is switched on in the kanban board.",
           "scope": "window"
         },
         "switchboard.theme.name": {

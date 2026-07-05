@@ -27,11 +27,11 @@ When the user references plans, columns, or board state (e.g. "plans in the Crea
 3. **Plan:** When the "What" and "Why" are clear, draft the implementation plan.
 4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
 
-## Plan-Import Manifest (Trigger B — epic grouping)
+## Plan-Import Manifest (Trigger B — feature grouping)
 
-Emit a **plan-import manifest** ONLY when you group plans into an epic (or otherwise create an epic + subtask set). Pure consultation that writes loose plans with no grouping → **no manifest** (cards stay `CREATED`, the user moves them). Epic grouping → manifest with `isEpic`/`epicId`/`planId` and `kanbanColumn: "CREATED"` (no transition; the payload is the epic relationships, which span multiple `.md` files and cannot live in any single file's front-matter).
+Emit a **plan-import manifest** ONLY when you group plans into an feature (or otherwise create an feature + subtask set). Pure consultation that writes loose plans with no grouping → **no manifest** (cards stay `CREATED`, the user moves them). Feature grouping → manifest with `isFeature`/`featureId`/`planId` and `kanbanColumn: "CREATED"` (no transition; the payload is the feature relationships, which span multiple `.md` files and cannot live in any single file's front-matter).
 
-**Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced). Write it **last**, after all `.md` files — this is an atomicity requirement: all epic `.md` rows must exist before links resolve.
+**Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced). Write it **last**, after all `.md` files — this is an atomicity requirement: all feature `.md` rows must exist before links resolve.
 
 **v1 schema:**
 ```json
@@ -39,12 +39,12 @@ Emit a **plan-import manifest** ONLY when you group plans into an epic (or other
   "version": 1,
   "plans": [
     {
-      "planFile": ".switchboard/epics/epic-77ac0000-aaaa-bbbb-cccc-dddddddddddd.md",
+      "planFile": ".switchboard/features/feature-77ac0000-aaaa-bbbb-cccc-dddddddddddd.md",
       "planId": "77ac0000-aaaa-bbbb-cccc-dddddddddddd",
       "kanbanColumn": "CREATED",
       "status": "active",
-      "isEpic": true,
-      "epicId": "",
+      "isFeature": true,
+      "featureId": "",
       "project": "Switchboard"
     },
     {
@@ -52,8 +52,8 @@ Emit a **plan-import manifest** ONLY when you group plans into an epic (or other
       "planId": "550e8400-e29b-41d4-a716-446655440000",
       "kanbanColumn": "CREATED",
       "status": "active",
-      "isEpic": false,
-      "epicId": "77ac0000-aaaa-bbbb-cccc-dddddddddddd",
+      "isFeature": false,
+      "featureId": "77ac0000-aaaa-bbbb-cccc-dddddddddddd",
       "project": "Switchboard"
     }
   ]
@@ -62,24 +62,24 @@ Emit a **plan-import manifest** ONLY when you group plans into an epic (or other
 
 **Field rules:**
 - `planFile` (**required**): path relative to workspace root, as stored in the DB.
-  Must be `.switchboard/plans/<name>.md` for plans or `.switchboard/epics/<name>.md` for epics.
+  Must be `.switchboard/plans/<name>.md` for plans or `.switchboard/features/<name>.md` for features.
   Bare filenames (e.g. `foo.md`) are auto-resolved to `.switchboard/plans/foo.md` but the
   full path is preferred. No `..` or absolute paths.
-- `planId` (**required for Trigger B**): must match the `**Plan ID:** <uuid>` embedded in the `.md` so `epicId` references resolve. Epics use the `epic-<uuid>.md` filename convention so the epic's `plan_id` is stable across re-imports.
+- `planId` (**required for Trigger B**): must match the `**Plan ID:** <uuid>` embedded in the `.md` so `featureId` references resolve. Features use the `feature-<uuid>.md` filename convention so the feature's `plan_id` is stable across re-imports.
 - `kanbanColumn`: typically `CREATED` for pure grouping; set a transition column only if a stage advance also applies.
 - `status`: `active` | `archived` | `completed` | `deleted`.
-- `isEpic` / `epicId`: `epicId` references another entry's `planId` (in-batch) or an existing DB epic. The ingestor processes epics before subtasks automatically.
+- `isFeature` / `featureId`: `featureId` references another entry's `planId` (in-batch) or an existing DB feature. The ingestor processes features before subtasks automatically.
 - `project`: project name; resolved to `project_id` at ingest (unknown project → kept as denormalized string).
 
-**`**Plan ID:**` embedding (required for Trigger B):** each plan `.md` must embed `**Plan ID:** <uuid>`, and epics use the `epic-<uuid>.md` filename, so `epicId` links resolve and identity is stable across re-imports.
+**`**Plan ID:**` embedding (required for Trigger B):** each plan `.md` must embed `**Plan ID:** <uuid>`, and features use the `feature-<uuid>.md` filename, so `featureId` links resolve and identity is stable across re-imports.
 
 **Stale-manifest guard:** the ingestor overrides the column only when the row is currently in the entry's `fromColumn` (default `CREATED`); manual board moves are never reverted. Set `fromColumn` to make a legitimate forward transition from a later stage (e.g. `PLAN REVIEWED` → `CODED`). The manifest is deleted after all entries apply; idempotent if a delete is missed.
 
-## Epic Grouping
+## Feature Grouping
 
 When the work described will span 3 or more plan files on a related topic (sharing a common feature area or root cause):
 
-- **Early (during Iterate):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under an epic?"* Do not create anything yet.
-- **Closing (at Gate):** When the user signals scoping is complete OR once 3+ related plans have been drafted, offer again: *"You now have [N] plans covering [topic] — want me to create an epic to group them?"*
+- **Early (during Iterate):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under an feature?"* Do not create anything yet.
+- **Closing (at Gate):** When the user signals scoping is complete OR once 3+ related plans have been drafted, offer again: *"You now have [N] plans covering [topic] — want me to create an feature to group them?"*
 
-Only create the epic if the user confirms. Refer to existing files in `.switchboard/epics/` for the expected format.
+Only create the feature if the user confirms. Refer to existing files in `.switchboard/features/` for the expected format.

@@ -303,11 +303,11 @@ For most roles the full PRD content is inlined; for the **Orchestrator** a link 
 Project state is stored in the Kanban database: the `projects` table (`id`, `name`, `workspace_id`, `created_at`) and the `project` / `project_id` columns on `plans` (see §26).
 
 ### Features
-A **Feature** groups several related plans (its *subtasks*) so they can be planned and shipped as one coordinated unit. Features are managed in the **FEATURES** tab of the Project Panel and stored as files in `.switchboard/epics/`.
+A **Feature** groups several related plans (its *subtasks*) so they can be planned and shipped as one coordinated unit. Features are managed in the **FEATURES** tab of the Project Panel and stored as files in `.switchboard/features/`.
 
 **Creating and managing features**
 - **+ New Feature** — Opens a dialog: *Feature Name* (required), *Description* (optional, markdown), and an *Add to Kanban board* checkbox (show the feature as a card immediately). Click **Create**.
-- **PROMOTE TO FEATURE** (Kanban board) — Select a plan on the board and promote it; its file moves from `.switchboard/plans/` to `.switchboard/epics/` and it becomes a feature.
+- **PROMOTE TO FEATURE** (Kanban board) — Select a plan on the board and promote it; its file moves from `.switchboard/plans/` to `.switchboard/features/` and it becomes a feature.
 - **+ Subtask** — Attach an existing plan to the selected feature. Subtasks are hidden from the main Kanban board (to avoid duplication) and reappear there if detached.
 - **Orchestrate** — Assemble the feature + all subtasks into an orchestrator prompt (preview modal with **Copy Prompt** / **Send to Orchestrator**).
 - **Delete Feature** — Deletes the feature only; its subtasks are **detached** (returned to the board), never destroyed.
@@ -321,7 +321,7 @@ A **Feature** groups several related plans (its *subtasks*) so they can be plann
 
 **Worktree dispatch routing** — A feature can be bound to a dedicated git worktree and branch so its agents work in isolation from your main checkout. Manage worktrees from the Kanban **WORKTREES** panel. Dispatched agents automatically `cd` into the worktree path and `git switch` to its branch before running; a worktree can later be marked `merged` (Switchboard removes it from disk) or `abandoned`. This makes it practical to run several features in parallel without branch churn.
 
-Feature state is stored in the Kanban database (`plans.is_epic`, `plans.epic_id`, `plans.worktree_id`, `plans.worktree_status`, and the `worktrees` table — see §26).
+Feature state is stored in the Kanban database (`plans.is_feature`, `plans.feature_id`, `plans.worktree_id`, `plans.worktree_status`, and the `worktrees` table — see §26).
 
 ### Constitution (Spec-Driven Governance)
 Set inviolate rules and invariants in the Project panel. Switchboard automatically injects them into Planner and Coder prompts using the verbatim header:
@@ -930,8 +930,8 @@ Stores one row per plan/card on the Kanban board.
 | `linear_issue_id` | TEXT | `''` | Linear issue ID for PM sync |
 | `worktree_id` | INTEGER | `NULL` | FK to `worktrees.id` for feature-based worktree dispatch |
 | `worktree_status` | TEXT | `'none'` | Worktree state: `none`, `active`, `merged`, `deleted` |
-| `is_epic` | INTEGER | `0` | `1` if this plan is a feature, `0` otherwise |
-| `epic_id` | TEXT | `''` | `plan_id` of the parent feature (empty if standalone) |
+| `is_feature` | INTEGER | `0` | `1` if this plan is a feature, `0` otherwise |
+| `feature_id` | TEXT | `''` | `plan_id` of the parent feature (empty if standalone) |
 | `workspace_name` | TEXT | `''` | Human-readable workspace name (backfilled from config) |
 | `project_id` | INTEGER | `NULL` | FK to `projects.id` for project-level grouping |
 
@@ -977,7 +977,7 @@ Git worktree registry for feature-based dispatch routing.
 | `id` | INTEGER (PK, AUTOINCREMENT) | Worktree ID |
 | `branch` | TEXT (UNIQUE) | Git branch name |
 | `path` | TEXT | Filesystem path to worktree |
-| `epic_id` | TEXT | `plan_id` of associated feature (nullable) |
+| `feature_id` | TEXT | `plan_id` of associated feature (nullable) |
 | `created_at` | TEXT | Creation timestamp |
 | `status` | TEXT | `active` or other lifecycle state |
 | `project` | TEXT | Project name (added V34) |
@@ -1103,8 +1103,8 @@ Stitch screen cache (promoted from config blob in V32).
 | `idx_plans_linear_issue` | `plans` | `(workspace_id, linear_issue_id)` | Non-unique |
 | `idx_plans_project` | `plans` | `(workspace_id, project)` | Non-unique |
 | `idx_plans_worktree` | `plans` | `worktree_id` | Non-unique |
-| `idx_plans_epic_id` | `plans` | `epic_id` | Non-unique |
-| `idx_plans_is_epic` | `plans` | `is_epic` | Non-unique |
+| `idx_plans_feature_id` | `plans` | `feature_id` | Non-unique |
+| `idx_plans_is_feature` | `plans` | `is_feature` | Non-unique |
 | `idx_projects_workspace` | `projects` | `workspace_id` | Non-unique |
 | `idx_worktrees_workspace` | `worktrees` | `workspace_id` | Non-unique |
 | `idx_events_plan` | `plan_events` | `(plan_id, timestamp)` | Non-unique |
@@ -1151,9 +1151,9 @@ The database uses a versioned migration system tracked in `migration_meta`. The 
 | V26 | Added `worktree_id` column to `plans` |
 | V27 | Added `worktree_status` column to `plans` |
 | V28 | Normalized `__unassigned__` sentinel values to empty string in `plans.project` |
-| V29 | Added `is_epic` and `epic_id` columns for feature support |
-| V30 | Recreated `worktrees` table with `epic_id` FK; migrated legacy meta keys |
-| V31 | Fixed `worktrees.epic_id` type from INTEGER to TEXT |
+| V29 | Added `is_feature` and `feature_id` columns for feature support |
+| V30 | Recreated `worktrees` table with `feature_id` FK; migrated legacy meta keys |
+| V31 | Fixed `worktrees.feature_id` type from INTEGER to TEXT |
 | V32 | Promoted Stitch manifest blob to `stitch_projects` and `stitch_screens` tables |
 | V33 | Added `content_type` column to `imported_docs` for unified ticket/doc registry |
 | V34 | Added `project` and `agents_open_with_grid` columns to `worktrees` |
@@ -1282,7 +1282,7 @@ Board-level configuration:
 
 ### Project Panel (`project.html`)
 
-Hosted by `PlanningPanelProvider` (project mode). Tabs: KANBAN PLANS, PROJECTS, EPICS, CONSTITUTION, SYSTEM, TUNING, **ARCHITECT**, and **REMOTE** (Remote Control config — see §30).
+Hosted by `PlanningPanelProvider` (project mode). Tabs: KANBAN PLANS, PROJECTS, FEATURES, CONSTITUTION, SYSTEM, TUNING, **ARCHITECT**, and **REMOTE** (Remote Control config — see §30).
 
 > Note: Project *creation*, plan-to-project *assignment*, and the **PROJECT CONTEXT** toggle live on the **Kanban panel** (`kanban.html`) board control strip — see its KANBAN tab above — because they act on the board. The per-project **PRD editor** lives on this Project Panel's PROJECTS tab.
 

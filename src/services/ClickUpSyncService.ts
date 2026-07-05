@@ -2908,8 +2908,8 @@ export class ClickUpSyncService {
 
   /**
    * Fetch tasks from a ClickUp list and write stub plan .md files.
-   * Two-pass import: parents with subtasks become Switchboard epics (written to
-   * .switchboard/epics/), children are linked via direct DB writes (epic_id).
+   * Two-pass import: parents with subtasks become Switchboard features (written to
+   * .switchboard/features/), children are linked via direct DB writes (feature_id).
    * Deeply nested hierarchies are flattened to one level. Standalone tasks
    * (no children, no in-batch parent) are written as regular plans.
    */
@@ -2926,8 +2926,8 @@ export class ClickUpSyncService {
       const tasks = await this.listTasksFromClickUp(listId);
 
       await fs.promises.mkdir(plansDir, { recursive: true });
-      const epicDir = path.join(this._workspaceRoot, '.switchboard', 'epics');
-      await fs.promises.mkdir(epicDir, { recursive: true });
+      const featureDir = path.join(this._workspaceRoot, '.switchboard', 'features');
+      await fs.promises.mkdir(featureDir, { recursive: true });
 
       // Dedup: skip tasks that correspond to a local session with an
       // in-flight _createTask HTTP call. ClickUp has no local sync map, so we
@@ -3038,7 +3038,7 @@ export class ClickUpSyncService {
       }
 
       // A top-level parent has children in the batch AND no in-batch parent.
-      // An intermediate parent has children AND an in-batch parent — it's a subtask, not an epic.
+      // An intermediate parent has children AND an in-batch parent — it's a subtask, not an feature.
       const isParent = (taskId: string) => childrenByParentId.has(taskId);
       const isChild = (task: any) => {
         const parentId = String(task.parent || '').trim();
@@ -3047,8 +3047,8 @@ export class ClickUpSyncService {
       const isTopLevelParent = (task: any) => isParent(task.id) && !isChild(task);
 
       // ── Pass 1: Write files + insert DB records ─────────────────
-      // For parents: write to .switchboard/epics/ with UUID in filename, insert
-      // DB record with known planId, mark as epic, persist clickup_task_id.
+      // For parents: write to .switchboard/features/ with UUID in filename, insert
+      // DB record with known planId, mark as feature, persist clickup_task_id.
       // For children: write to .switchboard/plans/, insert DB record, persist
       // clickup_task_id. Defer linking to Pass 2.
       // For standalone: write file only (same as today — watcher ingests).
@@ -3093,12 +3093,12 @@ export class ClickUpSyncService {
         ].join('\n');
 
         if (isTopLevelParent(task)) {
-          // Top-level parent → epic: insert DB, mark epic, persist clickup_task_id,
-          // THEN write to .switchboard/epics/ (insert-before-write to avoid planId race).
+          // Top-level parent → feature: insert DB, mark feature, persist clickup_task_id,
+          // THEN write to .switchboard/features/ (insert-before-write to avoid planId race).
           const uuid = crypto.randomUUID();
           uuidByTaskId.set(taskId, uuid);
-          const epicPlanFile = path.join('.switchboard', 'epics', `clickup_import_${task.id}_${uuid}.md`);
-          const epicPath = path.join(this._workspaceRoot, epicPlanFile);
+          const featurePlanFile = path.join('.switchboard', 'features', `clickup_import_${task.id}_${uuid}.md`);
+          const featurePath = path.join(this._workspaceRoot, featurePlanFile);
 
           if (dbReady && db && workspaceId) {
             try {
@@ -3106,7 +3106,7 @@ export class ClickUpSyncService {
                 planId: uuid,
                 sessionId: '',
                 topic: task.name || `ClickUp Task ${task.id}`,
-                planFile: epicPlanFile,
+                planFile: featurePlanFile,
                 kanbanColumn,
                 status: 'active' as any,
                 complexity: 'Unknown',
@@ -3122,17 +3122,17 @@ export class ClickUpSyncService {
                 routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
-                isEpic: 1,
-                epicId: ''
+                isFeature: 1,
+                featureId: ''
               } as any);
-              await db.updateEpicStatus(uuid, 1, '');
-              await db.updateClickUpTaskIdByPlanFile(epicPlanFile, workspaceId, task.id);
+              await db.updateFeatureStatus(uuid, 1, '');
+              await db.updateClickUpTaskIdByPlanFile(featurePlanFile, workspaceId, task.id);
             } catch (dbErr) {
-              console.warn(`[ClickUpSync] import: DB insert failed for epic ${task.id}, file will be written (watcher will ingest):`, dbErr);
+              console.warn(`[ClickUpSync] import: DB insert failed for feature ${task.id}, file will be written (watcher will ingest):`, dbErr);
             }
           }
 
-          await fs.promises.writeFile(epicPath, stub, 'utf8');
+          await fs.promises.writeFile(featurePath, stub, 'utf8');
           imported++;
         } else if (isChild(task)) {
           // Child (including intermediate parents) → subtask: insert DB record,
@@ -3142,11 +3142,11 @@ export class ClickUpSyncService {
           const childPlanFile = path.join(plansDir, `clickup_import_${task.id}.md`);
           const childRelPath = path.relative(this._workspaceRoot, childPlanFile);
 
-          // Add Epic Plan ID metadata line for debugging.
+          // Add Feature Plan ID metadata line for debugging.
           const parentTaskId = String(task.parent || '').trim();
           const parentUuid = uuidByTaskId.get(parentTaskId) || '';
           const childStub = parentUuid
-            ? stub.replace(metaLines, `${metaLines}\n> **Epic Plan ID:** ${parentUuid}`)
+            ? stub.replace(metaLines, `${metaLines}\n> **Feature Plan ID:** ${parentUuid}`)
             : stub;
 
           if (dbReady && db && workspaceId) {
@@ -3191,7 +3191,7 @@ export class ClickUpSyncService {
       // ── Pass 2: Link children to top-level parents (flatten) ────
       // For each child, walk up the parentId chain to find the top-level
       // in-batch parent (a task that has no in-batch parent itself). Link
-      // the child to that epic's planId via updateEpicStatus.
+      // the child to that feature's planId via updateFeatureStatus.
       if (dbReady && db) {
         for (const task of filteredTasks) {
           if (!isChild(task)) { continue; }
@@ -3229,9 +3229,9 @@ export class ClickUpSyncService {
             const topParentUuid = uuidByTaskId.get(topParentTaskId);
             if (topParentUuid) {
               try {
-                await db.updateEpicStatus(childUuid, 0, topParentUuid);
+                await db.updateFeatureStatus(childUuid, 0, topParentUuid);
               } catch (linkErr) {
-                console.warn(`[ClickUpSync] import: failed to link child ${task.id} to epic ${topParentTaskId}:`, linkErr);
+                console.warn(`[ClickUpSync] import: failed to link child ${task.id} to feature ${topParentTaskId}:`, linkErr);
               }
             }
           }
@@ -3244,22 +3244,22 @@ export class ClickUpSyncService {
     }
   }
 
-  // ── Epic Outbound Sync ───────────────────────────────────────
+  // ── Feature Outbound Sync ───────────────────────────────────────
 
   /**
-   * Sync a Switchboard epic + its subtasks to ClickUp as a parent task with
-   * child tasks linked via the `parent` field. Creates/updates the epic task
+   * Sync a Switchboard feature + its subtasks to ClickUp as a parent task with
+   * child tasks linked via the `parent` field. Creates/updates the feature task
    * first (await, not debounce), then links each subtask's existing ClickUp
    * task as a child. Subtasks without an existing ClickUp task are skipped
    * (added to `failed`).
    */
-  public async syncEpicWithSubtasks(params: {
-    epicPlanFile: string;
-    epicPlanId: string;
-    epicTopic: string;
-    epicColumn: string;
+  public async syncFeatureWithSubtasks(params: {
+    featurePlanFile: string;
+    featurePlanId: string;
+    featureTopic: string;
+    featureColumn: string;
     subtasks: Array<{ planFile: string; planId: string; topic: string; complexity: string }>;
-  }): Promise<{ epicTaskId?: string; linked: string[]; failed: string[] }> {
+  }): Promise<{ featureTaskId?: string; linked: string[]; failed: string[] }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
       return { linked: [], failed: params.subtasks.map(s => s.planFile) };
@@ -3270,23 +3270,23 @@ export class ClickUpSyncService {
 
     const linked: string[] = [];
     const failed: string[] = [];
-    let epicTaskId: string | null = null;
+    let featureTaskId: string | null = null;
 
     try {
-      // 1. Look up the epic's DB record for clickupTaskId and other fields.
+      // 1. Look up the feature's DB record for clickupTaskId and other fields.
       const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-      const epicRecord = await db.getPlanByPlanId(params.epicPlanId);
+      const featureRecord = await db.getPlanByPlanId(params.featurePlanId);
 
       // Build a KanbanPlanRecord for syncPlan. Use the DB record if available;
       // otherwise construct a minimal record.
-      const epicPlan: KanbanPlanRecord = epicRecord
-        ? { ...epicRecord, kanbanColumn: params.epicColumn }
+      const featurePlan: KanbanPlanRecord = featureRecord
+        ? { ...featureRecord, kanbanColumn: params.featureColumn }
         : {
-            planId: params.epicPlanId,
+            planId: params.featurePlanId,
             sessionId: '',
-            topic: params.epicTopic,
-            planFile: params.epicPlanFile,
-            kanbanColumn: params.epicColumn,
+            topic: params.featureTopic,
+            planFile: params.featurePlanFile,
+            kanbanColumn: params.featureColumn,
             status: 'active',
             complexity: 'Unknown',
             tags: '',
@@ -3295,48 +3295,48 @@ export class ClickUpSyncService {
             lastAction: ''
           };
 
-      // 2. Create/update the epic task first (await, bypass debounce).
-      await this.syncPlan(epicPlan);
+      // 2. Create/update the feature task first (await, bypass debounce).
+      await this.syncPlan(featurePlan);
 
-      // 3. Look up the epic's task ID from the DB record or by planId search.
-      const refreshedEpic = await db.getPlanByPlanId(params.epicPlanId);
-      epicTaskId = String(refreshedEpic?.clickupTaskId || '').trim()
-        || await this._findTaskByPlanId(params.epicPlanId, config);
-      if (!epicTaskId) {
-        console.warn(`[ClickUpSync] syncEpicWithSubtasks: epic task ID not resolved for ${params.epicPlanFile} — all subtasks failed`);
+      // 3. Look up the feature's task ID from the DB record or by planId search.
+      const refreshedFeature = await db.getPlanByPlanId(params.featurePlanId);
+      featureTaskId = String(refreshedFeature?.clickupTaskId || '').trim()
+        || await this._findTaskByPlanId(params.featurePlanId, config);
+      if (!featureTaskId) {
+        console.warn(`[ClickUpSync] syncFeatureWithSubtasks: feature task ID not resolved for ${params.featurePlanFile} — all subtasks failed`);
         return { linked: [], failed: params.subtasks.map(s => s.planFile) };
       }
 
-      // 4. Link each subtask's existing ClickUp task as a child of the epic.
+      // 4. Link each subtask's existing ClickUp task as a child of the feature.
       for (const sub of params.subtasks) {
         try {
           const subRecord = await db.getPlanByPlanId(sub.planId);
           let subTaskId = String(subRecord?.clickupTaskId || '').trim()
             || await this._findTaskByPlanId(sub.planId, config);
           if (subTaskId) {
-            await this.updateTask(subTaskId, { parent: epicTaskId });
+            await this.updateTask(subTaskId, { parent: featureTaskId });
             linked.push(sub.planFile);
           } else {
             failed.push(sub.planFile);
           }
         } catch (linkErr) {
-          console.warn(`[ClickUpSync] syncEpicWithSubtasks: failed to link subtask ${sub.planFile}:`, linkErr);
+          console.warn(`[ClickUpSync] syncFeatureWithSubtasks: failed to link subtask ${sub.planFile}:`, linkErr);
           failed.push(sub.planFile);
         }
       }
-    } catch (epicErr) {
-      console.warn(`[ClickUpSync] syncEpicWithSubtasks: epic sync failed:`, epicErr);
+    } catch (featureErr) {
+      console.warn(`[ClickUpSync] syncFeatureWithSubtasks: feature sync failed:`, featureErr);
       return { linked: [], failed: params.subtasks.map(s => s.planFile) };
     }
 
-    return { epicTaskId: epicTaskId ?? undefined, linked, failed };
+    return { featureTaskId: featureTaskId ?? undefined, linked, failed };
   }
 
   /**
-   * Unlink subtasks from their epic in ClickUp — clear each subtask's parent.
-   * Used when a subtask is removed from an epic or reassigned.
+   * Unlink subtasks from their feature in ClickUp — clear each subtask's parent.
+   * Used when a subtask is removed from an feature or reassigned.
    */
-  public async unlinkSubtasksFromEpic(subtaskPlanFiles: string[]): Promise<{ unlinked: string[]; failed: string[] }> {
+  public async unlinkSubtasksFromFeature(subtaskPlanFiles: string[]): Promise<{ unlinked: string[]; failed: string[] }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || config.realTimeSyncEnabled !== true) {
       return { unlinked: [], failed: subtaskPlanFiles };
@@ -3371,7 +3371,7 @@ export class ClickUpSyncService {
           unlinked.push(planFile);
         }
       } catch (err) {
-        console.warn(`[ClickUpSync] unlinkSubtasksFromEpic: failed for ${planFile}:`, err);
+        console.warn(`[ClickUpSync] unlinkSubtasksFromFeature: failed for ${planFile}:`, err);
         failed.push(planFile);
       }
     }

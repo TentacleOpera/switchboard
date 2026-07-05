@@ -7,7 +7,7 @@
 // inherits the DB upsert, subtask linking, feature-file write, and board refresh.
 //
 // NOTE on sync: feature creation does NOT fan out to Linear/ClickUp. The webview
-// createEpic flow has never synced to external trackers, and the new feature file is
+// createFeature flow has never synced to external trackers, and the new feature file is
 // deliberately skipped by the plan watcher. This script preserves that behavior.
 //
 // NOTE on fallback: unlike move-card.js, there is no direct-DB fallback. Feature creation
@@ -20,12 +20,12 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const epicName = process.argv[2];
+const featureName = process.argv[2];
 const planIdsJson = process.argv[3];
 const workspaceRoot = process.argv[4] || '.';
 const description = process.argv[5] || undefined;
 
-if (!epicName || !planIdsJson) {
+if (!featureName || !planIdsJson) {
   console.error("Usage: node create-feature.js <feature_name> <plan_ids_json> [workspace_root] [description]");
   console.error('  plan_ids_json is a JSON array of planId values, e.g. \'["abc-123","def-456"]\'');
   process.exit(1);
@@ -103,14 +103,14 @@ async function tryViaExtension() {
   try {
     const resp = await httpJson('POST', port, '/kanban/feature', {
       workspaceRoot,
-      name: epicName,
+      name: featureName,
       planIds,
       description
     }, 15000);
     let parsed = {};
     try { parsed = JSON.parse(resp.body); } catch { /* non-JSON body */ }
     if (resp.status >= 200 && resp.status < 300 && parsed.success) {
-      return { reachable: true, success: true, epicPlanId: parsed.epicPlanId, epicSessionId: parsed.epicSessionId };
+      return { reachable: true, success: true, featurePlanId: parsed.featurePlanId, featureSessionId: parsed.featureSessionId };
     }
     return { reachable: true, success: false, error: parsed.error || `HTTP ${resp.status}` };
   } catch (err) {
@@ -122,7 +122,7 @@ async function tryViaExtension() {
   const viaExt = await tryViaExtension();
   if (viaExt.reachable) {
     if (viaExt.success) {
-      console.log(JSON.stringify({ ok: true, epicPlanId: viaExt.epicPlanId, epicSessionId: viaExt.epicSessionId }));
+      console.log(JSON.stringify({ ok: true, featurePlanId: viaExt.featurePlanId, featureSessionId: viaExt.featureSessionId }));
       process.exit(0);
     }
     console.log(JSON.stringify({ ok: false, error: viaExt.error || 'unknown error' }));

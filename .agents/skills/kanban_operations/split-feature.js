@@ -4,7 +4,7 @@
 //
 // Routes through the running Switchboard extension's local API server
 // (POST /kanban/feature/split). The extension performs the split via
-// KanbanProvider.splitEpic: the original feature is deleted (subtasks
+// KanbanProvider.splitFeature: the original feature is deleted (subtasks
 // detached, not tombstoned), then two new features are created with their
 // respective subtask sets.
 //
@@ -16,13 +16,13 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const epicPlanId = process.argv[2];
+const featurePlanId = process.argv[2];
 const keptPlanIdsJson = process.argv[3];
-const firstEpicName = process.argv[4];
-const secondEpicName = process.argv[5];
+const firstFeatureName = process.argv[4];
+const secondFeatureName = process.argv[5];
 const workspaceRoot = process.argv[6] || '.';
 
-if (!epicPlanId || !keptPlanIdsJson || !firstEpicName || !secondEpicName) {
+if (!featurePlanId || !keptPlanIdsJson || !firstFeatureName || !secondFeatureName) {
   console.error("Usage: node split-feature.js <feature_plan_id> <kept_plan_ids_json> <first_feature_name> <second_feature_name> [workspace_root]");
   console.error("  kept_plan_ids_json: JSON array of planId values that go to the first new feature");
   process.exit(1);
@@ -97,15 +97,15 @@ async function tryViaExtension() {
   try {
     const resp = await httpJson('POST', port, '/kanban/feature/split', {
       workspaceRoot,
-      epicPlanId,
+      featurePlanId,
       keptPlanIds,
-      firstEpicName,
-      secondEpicName
+      firstFeatureName,
+      secondFeatureName
     }, 30000);
     let parsed = {};
     try { parsed = JSON.parse(resp.body); } catch { /* non-JSON body */ }
     if (resp.status >= 200 && resp.status < 300 && parsed.success) {
-      return { reachable: true, success: true, firstEpicPlanId: parsed.firstEpicPlanId, secondEpicPlanId: parsed.secondEpicPlanId };
+      return { reachable: true, success: true, firstFeaturePlanId: parsed.firstFeaturePlanId, secondFeaturePlanId: parsed.secondFeaturePlanId };
     }
     return { reachable: true, success: false, error: parsed.error || `HTTP ${resp.status}` };
   } catch (err) {
@@ -117,7 +117,7 @@ async function tryViaExtension() {
   const viaExt = await tryViaExtension();
   if (viaExt.reachable) {
     if (viaExt.success) {
-      console.log(JSON.stringify({ ok: true, firstEpicPlanId: viaExt.firstEpicPlanId, secondEpicPlanId: viaExt.secondEpicPlanId }));
+      console.log(JSON.stringify({ ok: true, firstFeaturePlanId: viaExt.firstFeaturePlanId, secondFeaturePlanId: viaExt.secondFeaturePlanId }));
       process.exit(0);
     }
     console.log(JSON.stringify({ ok: false, error: viaExt.error || 'unknown error' }));

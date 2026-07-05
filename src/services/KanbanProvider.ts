@@ -23,7 +23,7 @@ import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
-import { appendEpicClobberDiag } from './epicClobberDiag'; // DIAGNOSTIC (is_epic clobber) — remove with the probes
+import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
@@ -53,12 +53,12 @@ import { importPlanFiles } from './PlanFileImporter';
 import { matchWorktreePath } from './worktreeResolver';
 
 /**
- * Epic workflow mode directives, prepended at position-zero of an epic prompt
+ * Feature workflow mode directives, prepended at position-zero of an feature prompt
  * when the corresponding sticky board toggle is active. Distinct from the
  * legacy ULTRACODE_DIRECTIVE (deleted with the orchestrator role).
  */
-const ULTRACODE_EPIC_PREFIX = 'This is an epic with multiple subtasks. Activate your ultracode workflow.';
-const GOAL_EPIC_PREFIX = '/goal';
+const ULTRACODE_FEATURE_PREFIX = 'This is an feature with multiple subtasks. Activate your ultracode workflow.';
+const GOAL_FEATURE_PREFIX = '/goal';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -114,8 +114,8 @@ export interface KanbanCard {
     complexity: string;
     workspaceRoot: string;
     project?: string;
-    isEpic?: boolean;
-    epicId?: string;
+    isFeature?: boolean;
+    featureId?: string;
     subtaskCount?: number;
 }
 
@@ -163,7 +163,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _lastCards: KanbanCard[] = [];
     // Identical-snapshot skip cache (refresh-storm backstop). Keyed by
     // (workspaceId, projectFilter, repoScope) so a context switch always re-pushes.
-    // Stores a hash of the effective board snapshot (cards + epicWorktrees) so a static
+    // Stores a hash of the effective board snapshot (cards + featureWorktrees) so a static
     // board does not get re-posted on every refresh tick. Palliative — pairs with the
     // single-flight guard + mirror content no-op (the actual cure). Only gates the
     // `updateBoard` data push, not the auxiliary state messages refreshWithData posts.
@@ -411,23 +411,23 @@ export class KanbanProvider implements vscode.Disposable {
      * planner/coder prompts).
      *
      * This MUST mirror the webview's board-display contract (kanban.html: the
-     * main board renders `displayCards.filter(card => !card.epicId)`): an epic's
-     * subtasks are rolled up under the epic card and are NOT shown as standalone
+     * main board renders `displayCards.filter(card => !card.featureId)`): an feature's
+     * subtasks are rolled up under the feature card and are NOT shown as standalone
      * cards in their own `kanban_column`. A subtask carries its own column,
-     * independent of its epic's column, so without this exclusion a subtask whose
+     * independent of its feature's column, so without this exclusion a subtask whose
      * column happens to match (e.g. CREATED) gets swept into the operation even
-     * though the user only sees it nested under an epic that may live in a
+     * though the user only sees it nested under an feature that may live in a
      * different column (e.g. BACKLOG). That divergence is exactly what made
-     * "Advance All" on CREATED dispatch a BACKLOG epic's subtasks instead of the
+     * "Advance All" on CREATED dispatch a BACKLOG feature's subtasks instead of the
      * loose plans the user could actually see in the column.
      *
      * Selection-based operations (explicit `msg.sessionIds` / `_cardMatchesIds`)
      * deliberately do NOT use this — there the user picked specific cards (a
-     * subtask can be selected from epic-focus mode) and the IDs are trusted.
+     * subtask can be selected from feature-focus mode) and the IDs are trusted.
      */
     private _visibleColumnCards(workspaceRoot: string, column: string): KanbanCard[] {
         return this._lastCards.filter(card =>
-            card.workspaceRoot === workspaceRoot && card.column === column && !card.epicId
+            card.workspaceRoot === workspaceRoot && card.column === column && !card.featureId
         );
     }
 
@@ -1361,8 +1361,8 @@ export class KanbanProvider implements vscode.Disposable {
             // Subtask counts must be computed workspace-wide (unfiltered), NOT from the
             // project-filtered rows above — otherwise subtasks in a different project (or
             // any assigned project while the board shows "__unassigned__") are excluded and
-            // every epic renders "0 SUBTASKS". See getSubtaskCountsByEpic.
-            const subtaskCountMap = await db.getSubtaskCountsByEpic(workspaceId ?? '');
+            // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
+            const subtaskCountMap = await db.getSubtaskCountsByFeature(workspaceId ?? '');
 
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
@@ -1377,9 +1377,9 @@ export class KanbanProvider implements vscode.Disposable {
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
                     project: row.project || '',
-                    isEpic: !!row.isEpic,
-                    epicId: row.epicId || undefined,
-                    subtaskCount: row.isEpic ? (subtaskCountMap.get(row.planId) || 0) : undefined
+                    isFeature: !!row.isFeature,
+                    featureId: row.featureId || undefined,
+                    subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined
                 };
             });
 
@@ -1394,9 +1394,9 @@ export class KanbanProvider implements vscode.Disposable {
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
                 project: rec.project || '',
-                isEpic: !!rec.isEpic,
-                epicId: rec.epicId || undefined,
-                subtaskCount: rec.isEpic ? (subtaskCountMap.get(rec.planId) || 0) : undefined
+                isFeature: !!rec.isFeature,
+                featureId: rec.featureId || undefined,
+                subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined
             })));
 
             this._lastCards = cards;
@@ -1446,12 +1446,12 @@ export class KanbanProvider implements vscode.Disposable {
 
             // THE critical message — sends cards to webview
             const allWorktrees = await db.getWorktrees();
-            const epicWorktrees = allWorktrees
-                .filter(w => w.epic_id !== null && w.status === 'active')
-                .reduce((acc, w) => { acc[w.epic_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
+            const featureWorktrees = allWorktrees
+                .filter(w => w.feature_id !== null && w.status === 'active')
+                .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
 
             // Identical-snapshot skip (refresh-storm backstop): when the effective board
-            // snapshot (cards + epicWorktrees) is byte-identical to the last push AND the
+            // snapshot (cards + featureWorktrees) is byte-identical to the last push AND the
             // (workspaceId, projectFilter, repoScope) context has not changed, skip the
             // `updateBoard` post. A static board no longer gets re-posted on every refresh
             // tick. Context switches always re-push because the key changes. This only
@@ -1459,14 +1459,14 @@ export class KanbanProvider implements vscode.Disposable {
             // webview stays in sync on config/column/agent state.
             const snapshotKey = `${workspaceId}|${this._projectFilter ?? ''}|${this._repoScopeFilter ?? ''}`;
             const snapshotHash = crypto.createHash('sha256')
-                .update(JSON.stringify({ cards, epicWorktrees }))
+                .update(JSON.stringify({ cards, featureWorktrees }))
                 .digest('hex');
             const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
                 && snapshotHash === this._lastBoardSnapshotHash;
             this._lastBoardSnapshotKey = snapshotKey;
             this._lastBoardSnapshotHash = snapshotHash;
             if (!snapshotUnchanged) {
-                this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, epicWorktrees });
+                this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees });
             }
 
             // Hydrate worktree state (indicator + WORKTREES tab) on every board refresh so it
@@ -1476,7 +1476,7 @@ export class KanbanProvider implements vscode.Disposable {
             await this._sendWorktreeConfig(resolvedWorkspaceRoot);
 
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
-            await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
+            await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
 
             this._panel.webview.postMessage({
                 type: 'dynamicComplexityRoutingState',
@@ -2002,7 +2002,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
-     * Remote-sync health snapshot for the Remote tab UI (epic 7). Returns
+     * Remote-sync health snapshot for the Remote tab UI (feature 7). Returns
      * last poll/push status, rate-limit/backoff state, and consecutive-failure
      * count so silent failures are visible instead of console-only.
      */
@@ -2068,7 +2068,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return { text };
     }
 
-    // ── Project-context sync (epic: Project Context & Remote UI Hub) ──────
+    // ── Project-context sync (feature: Project Context & Remote UI Hub) ──────
     // Dev Docs + PRDs + constitution → Notion context page + Linear project
     // docs, via the providers' pushProjectContext capability. Switchboard is
     // the source of truth; the providers receive a mirror.
@@ -2169,7 +2169,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             .pushProjectContext(assembled.bundle)
             .catch((e: unknown) => ({ ok: false, skipped: false, detail: e instanceof Error ? e.message : String(e) }));
 
-        // Record push health for the Remote tab health UI (epic 7).
+        // Record push health for the Remote tab health UI (feature 7).
         const healthRc = this._remoteControls.get(effective);
         if (healthRc) {
             const pushOk = (notionResult.ok && !notionResult.skipped) || (linearResult.ok && !linearResult.skipped);
@@ -2900,10 +2900,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
                 const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
                     .filter(rec => rec.planFile);
-                // Workspace-wide (unfiltered) subtask counts — an epic's count is intrinsic
+                // Workspace-wide (unfiltered) subtask counts — an feature's count is intrinsic
                 // and must not shrink to 0 when its subtasks fall outside the board's
-                // project/repo filter. See getSubtaskCountsByEpic.
-                const subtaskCountMap2 = await db.getSubtaskCountsByEpic(workspaceId);
+                // project/repo filter. See getSubtaskCountsByFeature.
+                const subtaskCountMap2 = await db.getSubtaskCountsByFeature(workspaceId);
 
                 cards = activeRows.map(row => {
                     return {
@@ -2918,9 +2918,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         workspaceRoot: resolvedWorkspaceRoot,
                         project: row.project || '',
                         worktreeId: row.worktreeId,
-                        isEpic: !!row.isEpic,
-                        epicId: row.epicId || undefined,
-                        subtaskCount: row.isEpic ? (subtaskCountMap2.get(row.planId) || 0) : undefined
+                        isFeature: !!row.isFeature,
+                        featureId: row.featureId || undefined,
+                        subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined
                     };
                 });
 
@@ -2937,9 +2937,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     complexity: rec.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
                     project: rec.project || '',
-                    isEpic: !!rec.isEpic,
-                    epicId: rec.epicId || undefined,
-                    subtaskCount: rec.isEpic ? (subtaskCountMap2.get(rec.planId) || 0) : undefined
+                    isFeature: !!rec.isFeature,
+                    featureId: rec.featureId || undefined,
+                    subtaskCount: rec.isFeature ? (subtaskCountMap2.get(rec.planId) || 0) : undefined
                 })));
             } else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
@@ -2981,19 +2981,19 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             });
             this._lastCards = cards;
             const allWorktrees = dbReady ? await db.getWorktrees() : [];
-            const epicWorktrees = allWorktrees
-                .filter(w => w.epic_id !== null && w.status === 'active')
-                .reduce((acc, w) => { acc[w.epic_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
+            const featureWorktrees = allWorktrees
+                .filter(w => w.feature_id !== null && w.status === 'active')
+                .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
             this._panel.webview.postMessage({
                 type: 'updateBoard',
                 cards,
                 dbUnavailable,
                 showingBacklog: this._showingBacklog,
                 routingConfig: this._routingMapConfig,
-                epicWorktrees
+                featureWorktrees
             });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
-            await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
+            await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
@@ -3141,7 +3141,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
-            await this._postEpicWorkflowModeState(resolvedWorkspaceRoot);
+            await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
@@ -3191,7 +3191,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     ): KanbanColumnDefinition[] {
         const occupiedColumns = new Set(cards.map(c => c.column));
         return columns.filter(col => {
-            if (col.epicOnly) return occupiedColumns.has(col.id);
+            if (col.featureOnly) return occupiedColumns.has(col.id);
             if (!col.hideWhenNoAgent) return true;
             if (col.role && visibleAgents[col.role] !== false) return true;
             if (occupiedColumns.has(col.id)) return true;
@@ -3217,20 +3217,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * `**Complexity:**` metadata line, not the Complexity Audit / Agent
      * Recommendation sections agent-authored plans actually use. The watcher
      * only re-parses on file change, so without this pass those rows stay
-     * 'Unknown' until touched — and epic complexity rollups over them yield
+     * 'Unknown' until touched — and feature complexity rollups over them yield
      * 'Unknown'.
      *
      * Discipline:
      *  - Guarded once-per-workspace by `kanban.complexityBackfillV1Done` in the
      *    DB `config` table. A crash mid-pass simply re-runs next launch
      *    (idempotent — writes only on `Unknown` → real-score mismatch).
-     *  - Targets only active, non-epic rows (`getUnscoredActivePlans`). Epics
+     *  - Targets only active, non-feature rows (`getUnscoredActivePlans`). Features
      *    are derived; writing a file-parsed 'Unknown' would clobber the max.
      *  - `updateComplexityByPlanFile` already bubbles up to
-     *    `recomputeEpicComplexity`, so epics re-derive as their subtasks score.
-     *  - After the pass, every distinct epic touched is recomputed once more
+     *    `recomputeFeatureComplexity`, so features re-derive as their subtasks score.
+     *  - After the pass, every distinct feature touched is recomputed once more
      *    (belt-and-suspenders, matching the explicit recompute at
-     *    `createEpicFromPlanIds:8571`).
+     *    `createFeatureFromPlanIds:8571`).
      *  - Reads short-circuit on the now-populated DB column afterward, so
      *    steady-state refreshes do zero extra writes (no churn).
      */
@@ -3250,7 +3250,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 return;
             }
 
-            const touchedEpics = new Set<string>();
+            const touchedFeatures = new Set<string>();
             let scoredCount = 0;
             for (const row of unscored) {
                 if (!row.planFile) continue;
@@ -3259,22 +3259,22 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const ok = await db.updateComplexityByPlanFile(row.planFile, workspaceId, score);
                 if (ok) {
                     scoredCount++;
-                    if (row.epicId) touchedEpics.add(row.epicId);
+                    if (row.featureId) touchedFeatures.add(row.featureId);
                 }
             }
 
-            // Belt-and-suspenders: recompute every distinct parent epic once
-            // more after the pass, mirroring createEpicFromPlanIds' explicit
+            // Belt-and-suspenders: recompute every distinct parent feature once
+            // more after the pass, mirroring createFeatureFromPlanIds' explicit
             // recompute. updateComplexityByPlanFile already bubbled up per
             // subtask, but a single consolidated pass guards against any
             // intermediate recompute seeing a partially-scored subtask set.
-            for (const epicId of touchedEpics) {
-                try { await db.recomputeEpicComplexity(epicId); } catch { /* best-effort */ }
+            for (const featureId of touchedFeatures) {
+                try { await db.recomputeFeatureComplexity(featureId); } catch { /* best-effort */ }
             }
 
             await db.setConfig('kanban.complexityBackfillV1Done', 'true');
             this._outputChannel?.appendLine(
-                `[KanbanProvider] complexity backfill V1 complete: scored ${scoredCount}/${unscored.length} row(s), recomputed ${touchedEpics.size} epic(s) for ${workspaceRoot}`
+                `[KanbanProvider] complexity backfill V1 complete: scored ${scoredCount}/${unscored.length} row(s), recomputed ${touchedFeatures.size} feature(s) for ${workspaceRoot}`
             );
             this._scheduleBoardRefresh(workspaceRoot);
         } catch (err) {
@@ -3309,7 +3309,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const db = this._getKanbanDb(workspaceRoot);
         if (!(db && await db.ensureReady())) { return []; }
         // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
-        // — do not hand-roll (epic subtasks get silently dropped otherwise).
+        // — do not hand-roll (feature subtasks get silently dropped otherwise).
         const { worktreePathMap, subtaskWorktreePathMap } = await this._buildActiveWorktreePathMap(workspaceRoot);
         const records: KanbanPlanRecord[] = [];
         for (const card of cards) {
@@ -3320,32 +3320,32 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
-     * Shared epic-subtask expansion helper. Returns a new array of subtask
-     * BatchPromptPlan entries for the given epic — every active subtask is
+     * Shared feature-subtask expansion helper. Returns a new array of subtask
+     * BatchPromptPlan entries for the given feature — every active subtask is
      * included (no cap, no truncation warning). Used by both the copy/board path
      * (_cardsToPromptPlans, which passes a worktreePathMap) and the CLI-dispatch
      * path (_resolveKanbanDispatchPlans in TaskViewerProvider, which passes only
      * a resolved worktreePath). Does not mutate any caller array.
      *
      * Precedence for each subtask's worktree: its own subtask-bound worktree (per-subtask
-     * mode) -> the caller-supplied epic worktreePathMap/worktreePath -> undefined. When
+     * mode) -> the caller-supplied feature worktreePathMap/worktreePath -> undefined. When
      * subtaskWorktreePathMap is omitted (callers not yet threading it through), it is
      * fetched from the DB here so every call site benefits without a signature change.
      */
-    public async expandEpicSubtaskPlans(
+    public async expandFeatureSubtaskPlans(
         workspaceRoot: string,
-        epicPlanId: string,
-        epicTopic: string,
-        epicColumn: string,
+        featurePlanId: string,
+        featureTopic: string,
+        featureColumn: string,
         worktreePath?: string,
         worktreePathMap?: Map<string, string>,
         subtaskWorktreePathMap?: Map<string, string>,
-        epicProject?: string
+        featureProject?: string
     ): Promise<BatchPromptPlan[]> {
         const out: BatchPromptPlan[] = [];
         const db = this._getKanbanDb(workspaceRoot);
-        if (!db || !(await db.ensureReady()) || !epicPlanId) { return out; }
-        const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+        if (!db || !(await db.ensureReady()) || !featurePlanId) { return out; }
+        const subtasks = await db.getSubtasksByFeatureId(featurePlanId);
         let stWtMap = subtaskWorktreePathMap;
         if (!stWtMap) {
             stWtMap = new Map<string, string>();
@@ -3357,7 +3357,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         for (const st of subtasks) {
             const ownWorktreePath = stWtMap.get(String(st.planId));
             const stWorktreePath = ownWorktreePath
-                ?? (st.epicId ? (worktreePathMap?.get(String(st.epicId)) ?? worktreePath) : worktreePath);
+                ?? (st.featureId ? (worktreePathMap?.get(String(st.featureId)) ?? worktreePath) : worktreePath);
             const resolvedAbsolutePath = resolvePlanPathForWorktree(
                 this._resolvePlanFilePath(workspaceRoot, st.planFile),
                 workspaceRoot,
@@ -3377,9 +3377,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 worktreePath: stWorktreePath,
                 hasOwnWorktree: !!ownWorktreePath,
                 isSubtask: true,
-                epicTopic,
-                epicId: epicPlanId,
-                project: st.project || epicProject || undefined
+                featureTopic,
+                featureId: featurePlanId,
+                project: st.project || featureProject || undefined
             });
         }
         return out;
@@ -3389,24 +3389,24 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * THE single place that turns plan records into the `BatchPromptPlan[]`
      * array passed to `generateUnifiedPrompt`. Resolves plan-file path (with
      * mirror/brain fallbacks), working dir (repoScope), worktree path,
-     * `isEpic`, `project`, and — for epics — appends the full active-subtask
-     * bundle so `generateUnifiedPrompt` enters epic mode.
+     * `isFeature`, `project`, and — for features — appends the full active-subtask
+     * bundle so `generateUnifiedPrompt` enters feature mode.
      *
      * Every dispatch/copy entry point MUST funnel through this. Do not build a
-     * `BatchPromptPlan` array anywhere else (epic subtasks get silently
+     * `BatchPromptPlan` array anywhere else (feature subtasks get silently
      * dropped otherwise). The two intentionally-excluded sites
      * (`chatCopyPrompt`, `handleGetDefaultPromptPreviews`) bypass
      * `generateUnifiedPrompt` entirely and are documented in the plan.
      *
      * Worktree resolution is mode-selected to preserve each path exactly:
      *   - `worktreePathMap` provided (board adapter) → map heuristic
-     *     (`planId` → `epicId` → sole-entry, no `project` match). Byte-identical
+     *     (`planId` → `featureId` → sole-entry, no `project` match). Byte-identical
      *     to today's board path. The `subtaskWorktreePathMap` is threaded
-     *     through to `expandEpicSubtaskPlans` for per-subtask dedicated-worktree
+     *     through to `expandFeatureSubtaskPlans` for per-subtask dedicated-worktree
      *     resolution (handled inside the expander, not here).
      *   - `worktreePathMap` absent (CLI / batch / single-card-trigger / copy) →
      *     record heuristic via `matchWorktreePath`: `planId` vs
-     *     `subtask_plan_id` → `epicId` → `project`. No sole-entry fallback.
+     *     `subtask_plan_id` → `featureId` → `project`. No sole-entry fallback.
      *     Byte-identical to today's `resolveWorktreePathForPlan` consumers.
      */
     public async buildDispatchPlans(
@@ -3425,7 +3425,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
             const absolutePath = this._resolvePlanFilePath(workspaceRoot, planFileRel);
             const worktreePath = await this._resolveWorktreeForRecord(workspaceRoot, rec, opts?.worktreePathMap);
-            const isEpic = !!rec.isEpic;
+            const isFeature = !!rec.isFeature;
             const resolvedAbsolutePath = resolvePlanPathForWorktree(absolutePath, workspaceRoot, worktreePath);
             const resolvedWorkingDir = resolveWorkingDirForWorktree(
                 resolveWorkingDir(workspaceRoot, rec.repoScope || ''),
@@ -3438,14 +3438,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 complexity: rec.complexity,
                 workingDir: resolvedWorkingDir,
                 worktreePath,
-                epicId: rec.epicId ?? undefined,
-                isEpic,
+                featureId: rec.featureId ?? undefined,
+                isFeature,
                 project: rec.project || undefined,   // REQUIRED — drives per-project PRD injection in generateUnifiedPrompt
-                ...(isEpic ? { epicTopic: rec.topic || 'Untitled' } : {}),   // primary epic gets [EPIC: …] label
+                ...(isFeature ? { featureTopic: rec.topic || 'Untitled' } : {}),   // primary feature gets [FEATURE: …] label
             });
-            if (isEpic && hasDb && rec.planId) {
+            if (isFeature && hasDb && rec.planId) {
                 try {
-                    const subs = await this.expandEpicSubtaskPlans(
+                    const subs = await this.expandFeatureSubtaskPlans(
                         workspaceRoot, rec.planId, rec.topic || 'Untitled', rec.kanbanColumn || '',
                         worktreePath, opts?.worktreePathMap, opts?.subtaskWorktreePathMap, rec.project || undefined
                     );
@@ -3453,7 +3453,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         out.push({ ...sp, sessionId: sp.sessionId || rec.sessionId || rec.planId });
                     }
                 } catch (err) {
-                    console.warn(`[KanbanProvider] epic subtask expansion failed for ${rec.planId}:`, err);
+                    console.warn(`[KanbanProvider] feature subtask expansion failed for ${rec.planId}:`, err);
                     // keep primary + any already-pushed subtasks; do not abort
                 }
             }
@@ -3498,14 +3498,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     /**
      * Resolve the worktree path for a primary (non-subtask) record, selecting
      * mode by the presence of `map`:
-     *   - map provided (board) → map heuristic: `planId` → `epicId` →
+     *   - map provided (board) → map heuristic: `planId` → `featureId` →
      *     sole-entry. No `project` match. Byte-identical to today's board path.
      *   - map absent (CLI/batch/trigger/copy) → record heuristic via
-     *     `matchWorktreePath` (`planId` vs `subtask_plan_id` → `epicId` →
+     *     `matchWorktreePath` (`planId` vs `subtask_plan_id` → `featureId` →
      *     `project`). No sole-entry fallback.
      *
      * Subtask entries' own dedicated-worktree resolution happens inside
-     * `expandEpicSubtaskPlans` via the separately-threaded
+     * `expandFeatureSubtaskPlans` via the separately-threaded
      * `subtaskWorktreePathMap`, not here — this function is only ever called
      * for the primary/non-subtask entry.
      */
@@ -3520,9 +3520,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const byPlanId = map.get(rec.planId);
                 if (byPlanId) { return byPlanId; }
             }
-            if (rec.epicId) {
-                const byEpicId = map.get(String(rec.epicId));
-                if (byEpicId) { return byEpicId; }
+            if (rec.featureId) {
+                const byFeatureId = map.get(String(rec.featureId));
+                if (byFeatureId) { return byFeatureId; }
             }
             if (map.size === 1) {
                 return map.values().next().value;
@@ -3536,7 +3536,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (!db || !(await db.ensureReady())) { return undefined; }
         const worktrees = await db.getWorktrees();
         return matchWorktreePath(worktrees, {
-            epicId: rec.epicId,
+            featureId: rec.featureId,
             project: rec.project,
             planId: rec.planId
         });
@@ -3544,11 +3544,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
     /**
      * Build the two worktree maps over active worktrees for the board adapter:
-     *   - `worktreePathMap`: `epic_id` → path (used for the primary card's own
+     *   - `worktreePathMap`: `feature_id` → path (used for the primary card's own
      *     resolution in map mode).
      *   - `subtaskWorktreePathMap`: `subtask_plan_id` → path (threaded into
-     *     `expandEpicSubtaskPlans` so each subtask can resolve to its own
-     *     dedicated worktree ahead of the shared epic fallback).
+     *     `expandFeatureSubtaskPlans` so each subtask can resolve to its own
+     *     dedicated worktree ahead of the shared feature fallback).
      *
      * Straight extraction of the inline map-building that previously lived in
      * `_cardsToPromptPlans`. No filter change (already active-only in SQL).
@@ -3562,8 +3562,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (db && await db.ensureReady()) {
             const wts = await db.getWorktrees();
             for (const wt of wts) {
-                if (wt.epic_id) {
-                    worktreePathMap.set(String(wt.epic_id), wt.path);
+                if (wt.feature_id) {
+                    worktreePathMap.set(String(wt.feature_id), wt.path);
                 }
                 if (wt.subtask_plan_id) {
                     subtaskWorktreePathMap.set(String(wt.subtask_plan_id), wt.path);
@@ -3574,20 +3574,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
-     * Read the epic workflow toggle state (epic_ultracode_enabled /
-     * epic_goal_enabled) from the per-workspace DB config table and push
+     * Read the feature workflow toggle state (feature_ultracode_enabled /
+     * feature_goal_enabled) from the per-workspace DB config table and push
      * the current state to the webview so the sticky toggle buttons reflect
      * the persisted booleans on board load/refresh. On first load (or after a
-     * partial-migration crash) the legacy epic_workflow_mode tri-state key is
+     * partial-migration crash) the legacy feature_workflow_mode tri-state key is
      * used as the source of truth and the new boolean keys are persisted.
      */
-    private async _postEpicWorkflowModeState(workspaceRoot: string): Promise<void> {
+    private async _postFeatureWorkflowModeState(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
         let ultracode = false;
         let goal = false;
         if (db && await db.ensureReady()) {
-            const ucRaw = await db.getConfig('epic_ultracode_enabled');
-            const goalRaw = await db.getConfig('epic_goal_enabled');
+            const ucRaw = await db.getConfig('feature_ultracode_enabled');
+            const goalRaw = await db.getConfig('feature_goal_enabled');
             if (ucRaw !== null && goalRaw !== null) {
                 // New keys already present — use them directly
                 ultracode = ucRaw === 'true';
@@ -3595,15 +3595,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             } else {
                 // Migration needed: either first load or partial-write crash recovery.
                 // The legacy tri-state key is the source of truth.
-                const legacy = (await db.getConfig('epic_workflow_mode')) || 'none';
+                const legacy = (await db.getConfig('feature_workflow_mode')) || 'none';
                 ultracode = legacy === 'ultracode';
                 goal = legacy === 'goal';
                 // Persist migrated values so future loads skip this branch
-                await db.setConfig('epic_ultracode_enabled', ultracode ? 'true' : 'false');
-                await db.setConfig('epic_goal_enabled', goal ? 'true' : 'false');
+                await db.setConfig('feature_ultracode_enabled', ultracode ? 'true' : 'false');
+                await db.setConfig('feature_goal_enabled', goal ? 'true' : 'false');
             }
         }
-        this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', ultracode, goal });
+        this._panel?.webview.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
     }
 
     private async _getDefaultPromptOverrides(
@@ -3695,10 +3695,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 let plans: BatchPromptPlan[] = [];
                 const cards = this._lastCards.filter(c => {
                     if (c.workspaceRoot !== workspaceRoot) return false;
-                    // Epic subtasks roll up under their epic and are not loose column
+                    // Feature subtasks roll up under their feature and are not loose column
                     // cards — exclude them so the preview matches what a column-batch
                     // dispatch would actually send (see _visibleColumnCards).
-                    if (c.epicId) return false;
+                    if (c.featureId) return false;
                     switch (role) {
                         case 'planner':
                             return c.column === 'CREATED';
@@ -3918,16 +3918,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return { designSystemDocLink };
     }
 
-    private async _buildEpicDirectivePrefix(workspaceRoot: string): Promise<string> {
+    private async _buildFeatureDirectivePrefix(workspaceRoot: string): Promise<string> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return '';
-        const ultracode = (await db.getConfig('epic_ultracode_enabled')) === 'true';
-        const goal = (await db.getConfig('epic_goal_enabled')) === 'true';
+        const ultracode = (await db.getConfig('feature_ultracode_enabled')) === 'true';
+        const goal = (await db.getConfig('feature_goal_enabled')) === 'true';
         if (!goal && !ultracode) return '';
         let prefix = '';
         // /goal must be position-zero for the host to parse it as a slash command.
-        if (goal) { prefix += `${GOAL_EPIC_PREFIX}\n`; }
-        if (ultracode) { prefix += `${ULTRACODE_EPIC_PREFIX}\n\n`; }
+        if (goal) { prefix += `${GOAL_FEATURE_PREFIX}\n`; }
+        if (ultracode) { prefix += `${ULTRACODE_FEATURE_PREFIX}\n\n`; }
         return prefix;
     }
 
@@ -3952,7 +3952,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     public async generateUnifiedPrompt(
         role: string,
         // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
-        // — do not hand-roll (epic subtasks get silently dropped otherwise).
+        // — do not hand-roll (feature subtasks get silently dropped otherwise).
         plans: BatchPromptPlan[],
         workspaceRoot: string,
         overrides?: Partial<PromptBuilderOptions>
@@ -3994,12 +3994,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 mergedAddons,
                 workspaceRoot
             );
-            // This branch returns early, before the built-in epic-directive block
+            // This branch returns early, before the built-in feature-directive block
             // below — so custom agents must have their own opt-in prepend here or
             // they'd never receive the directive regardless of the toggle.
             const primaryPlan = plans[0];
-            if (primaryPlan?.isEpic && mergedAddons.applyEpicDirectives === true) {
-                const prefix = await this._buildEpicDirectivePrefix(workspaceRoot);
+            if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
+                const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot);
                 return `${prefix}${customBuilt}`;
             }
             return customBuilt;
@@ -4049,7 +4049,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (role === 'planner') {
             resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
             resolvedOptions.adviseResearchIfUnsure = promptsConfig.adviseResearchIfUnsure;
-            resolvedOptions.writeEpicDescriptionIfEmpty = promptsConfig.writeEpicDescriptionIfEmpty;
+            resolvedOptions.writeFeatureDescriptionIfEmpty = promptsConfig.writeFeatureDescriptionIfEmpty;
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
             resolvedOptions.workflowFilePathEnabled = promptsConfig.workflowFilePathEnabledByRole?.planner !== false;
 
@@ -4097,35 +4097,35 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
         const hasSubtasks = plans.some(p => p.isSubtask);
         if (hasSubtasks) {
-            const epicPlan = plans.find(p => !p.isSubtask);
+            const featurePlan = plans.find(p => !p.isSubtask);
             const subtaskPlans = plans.filter(p => p.isSubtask);
             const subtaskCount = subtaskPlans.length;
-            resolvedOptions.epicMode = true;
-            resolvedOptions.epicTopic = epicPlan?.topic || '';
+            resolvedOptions.featureMode = true;
+            resolvedOptions.featureTopic = featurePlan?.topic || '';
             resolvedOptions.subtaskCount = subtaskCount;
-            // Epic prompt template: read the legacy `epic_prompt_template` DB key
-            // (shipped — read as fallback, never dropped) and prepend it for epic
+            // Feature prompt template: read the legacy `feature_prompt_template` DB key
+            // (shipped — read as fallback, never dropped) and prepend it for feature
             // dispatches routed through any role.
             const db = this._getKanbanDb(workspaceRoot);
             if (db && await db.ensureReady()) {
-                const template = (await db.getConfig('epic_prompt_template')) || undefined;
-                if (template) resolvedOptions.epicPromptTemplate = template;
+                const template = (await db.getConfig('feature_prompt_template')) || undefined;
+                if (template) resolvedOptions.featurePromptTemplate = template;
 
-                // `high-low` mode: resolve the epic's planId, its worktree mode, its two
+                // `high-low` mode: resolve the feature's planId, its worktree mode, its two
                 // tier worktree paths (for the executor directive, any role), and its
                 // subtask plan list (for the planner consolidation directive only — cheap
                 // to always resolve here since subtaskPlans is already in hand from
                 // the plans array, no extra DB round-trip beyond the worktree lookup).
-                // No-op unless epic_worktree_mode is explicitly 'high-low'.
-                const epicPlanId = epicPlan?.sessionId;
-                if (epicPlanId) {
-                    resolvedOptions.epicPlanId = epicPlanId;
-                    const mode = (await db.getConfig('epic_worktree_mode')) || 'none';
-                    resolvedOptions.epicWorktreeMode = mode;
+                // No-op unless feature_worktree_mode is explicitly 'high-low'.
+                const featurePlanId = featurePlan?.sessionId;
+                if (featurePlanId) {
+                    resolvedOptions.featurePlanId = featurePlanId;
+                    const mode = (await db.getConfig('feature_worktree_mode')) || 'none';
+                    resolvedOptions.featureWorktreeMode = mode;
                     if (mode === 'high-low') {
                         const allWorktrees = await db.getWorktrees();
                         const tierWorktrees = allWorktrees
-                            .filter(w => String(w.epic_id) === String(epicPlanId) && (w.tier === 'high' || w.tier === 'low'))
+                            .filter(w => String(w.feature_id) === String(featurePlanId) && (w.tier === 'high' || w.tier === 'low'))
                             .map(w => ({ tier: w.tier as 'high' | 'low', worktreePath: w.path }));
                         if (tierWorktrees.length > 0) {
                             resolvedOptions.tierWorktrees = tierWorktrees;
@@ -4142,16 +4142,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
         }
 
-        // §10 — REQUIRED pre-dispatch step for epic-mode coder dispatch: regenerate
-        // the epic file so its SUBTASKS/WORKTREES blocks reflect the current subtask
+        // §10 — REQUIRED pre-dispatch step for feature-mode coder dispatch: regenerate
+        // the feature file so its SUBTASKS/WORKTREES blocks reflect the current subtask
         // set before the coder reads it. Without this, a stale block would make the
         // coder execute a wrong plan list — a silent data-integrity bug. The call is
         // cheap and idempotent. Only needed for the coder role (which uses the
-        // single-epic-file-reference path); other roles enumerate subtasks directly.
-        if (role === 'coder' && resolvedOptions.epicMode && resolvedOptions.epicPlanId) {
+        // single-feature-file-reference path); other roles enumerate subtasks directly.
+        if (role === 'coder' && resolvedOptions.featureMode && resolvedOptions.featurePlanId) {
             const db = this._getKanbanDb(workspaceRoot);
             if (db && await db.ensureReady()) {
-                await this._regenerateEpicFile(workspaceRoot, resolvedOptions.epicPlanId, db);
+                await this._regenerateFeatureFile(workspaceRoot, resolvedOptions.featurePlanId, db);
             }
         }
 
@@ -4162,7 +4162,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
         const built = buildKanbanBatchPrompt(role, plans, mergedOptions);
 
-        // Epic workflow mode prepend: when the primary plan is an epic and a
+        // Feature workflow mode prepend: when the primary plan is an feature and a
         // board-level workflow toggle (ultracode / goal) is active, prepend the
         // directive at position-zero of the prompt. Covers both copy and CLI
         // dispatch paths since both funnel through generateUnifiedPrompt.
@@ -4170,8 +4170,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // execution-mode directives that would hijack reviewer/tester/planner
         // (and other non-execution) prompts.
         const primaryPlan = plans[0];
-        if (primaryPlan && primaryPlan.isEpic && ['lead', 'coder', 'intern'].includes(role)) {
-            const prefix = await this._buildEpicDirectivePrefix(workspaceRoot);
+        if (primaryPlan && primaryPlan.isFeature && ['lead', 'coder', 'intern'].includes(role)) {
+            const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot);
             if (prefix) {
                 return `${prefix}${built}`;
             }
@@ -4236,7 +4236,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 return hasNew ? config.get<boolean>('pairProgramming.aggressive', false) : config.get<boolean>('aggressivePairProgramming.enabled', false);
             })(),
             adviseResearchIfUnsure: plannerConfig?.addons?.adviseResearch ?? true,
-            writeEpicDescriptionIfEmpty: plannerConfig?.addons?.writeEpicDescriptionIfEmpty ?? true,
+            writeFeatureDescriptionIfEmpty: plannerConfig?.addons?.writeFeatureDescriptionIfEmpty ?? true,
 
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
@@ -4746,7 +4746,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
         /** Returns true if the column should NOT be considered a next step. */
         const shouldSkip = (col: typeof allColumns[0]): boolean => {
-            if (col.epicOnly) {
+            if (col.featureOnly) {
                 return true;
             }
             if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
@@ -5042,11 +5042,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return null;
         }
 
-        if (column.epicOnly) {
-            // epicOnly columns are never a configured drag/integration dispatch target.
+        if (column.featureOnly) {
+            // featureOnly columns are never a configured drag/integration dispatch target.
             // This null return only strips the spec-driven (custom-user) dispatch config;
             // it is defense-in-depth, not the gate (the webview handleDrop guard rejects
-            // every drop onto an epicOnly column, and auto-advance never enters one).
+            // every drop onto an featureOnly column, and auto-advance never enters one).
             return null;
         }
 
@@ -5565,10 +5565,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     /**
-     * Re-derive an epic's kanban_column from its subtasks (minimum ordinal /
-     * weakest-link: the epic is only as far along as its least-complete subtask)
-     * and persist it. Mirrors createEpicFromPlanIds' resolution exactly so the
-     * two never disagree. No-op (returns without writing) when the epic has zero
+     * Re-derive an feature's kanban_column from its subtasks (minimum ordinal /
+     * weakest-link: the feature is only as far along as its least-complete subtask)
+     * and persist it. Mirrors createFeatureFromPlanIds' resolution exactly so the
+     * two never disagree. No-op (returns without writing) when the feature has zero
      * subtasks or all subtasks have empty kanbanColumn — in those cases there is
      * nothing to derive and we must NOT overwrite an existing column with the
      * new-file default.
@@ -5576,23 +5576,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * Used by the file watcher to self-heal the kanban_column clobber from
      * insertFileDerivedPlan's hardcoded 'CREATED' on fresh INSERT: a re-import
      * after the 3000ms registerPendingCreation window, or the atomic-write
-     * DELETE->re-INSERT race, forces kanban_column='CREATED' on the epic. The
-     * is_epic re-assert already survives that race; this is the matching
+     * DELETE->re-INSERT race, forces kanban_column='CREATED' on the feature. The
+     * is_feature re-assert already survives that race; this is the matching
      * kanban_column re-assert. Re-deriving from DB state (subtasks) rather than
      * from the file is what makes "new file" NOT imply "CREATED column".
      */
-    public async recomputeEpicColumnFromSubtasks(epicPlanId: string, workspaceRoot: string): Promise<void> {
+    public async recomputeFeatureColumnFromSubtasks(featurePlanId: string, workspaceRoot: string): Promise<void> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
             if (!db || !(await db.ensureReady())) return;
-            const epic = await db.getPlanByPlanId(epicPlanId);
-            if (!epic || !epic.isEpic) return;
-            const subtasks = await db.getSubtasksByEpicId(epicPlanId);
+            const feature = await db.getPlanByPlanId(featurePlanId);
+            if (!feature || !feature.isFeature) return;
+            const subtasks = await db.getSubtasksByFeatureId(featurePlanId);
             const columns = subtasks
                 .map((st: any) => this._normalizeLegacyKanbanColumn(st.kanbanColumn))
                 .filter((col: string | null): col is string => !!col);
             // No subtask columns to derive from — leave the existing column alone.
-            // This guard is load-bearing: without it, a brand-new epic with no
+            // This guard is load-bearing: without it, a brand-new feature with no
             // linked subtasks yet would itself be forced to 'CREATED'.
             if (columns.length === 0) return;
             const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
@@ -5606,23 +5606,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 (a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity)
             )[0];
             if (resolved === 'BACKLOG') resolved = 'CREATED';
-            const current = this._normalizeLegacyKanbanColumn(epic.kanbanColumn) || 'CREATED';
-            // An epic is a container: once it has a real column, that column is
+            const current = this._normalizeLegacyKanbanColumn(feature.kanbanColumn) || 'CREATED';
+            // An feature is a container: once it has a real column, that column is
             // authoritative and must NOT be re-derived from its subtasks. This
             // function's ONLY job is to self-heal the 'CREATED' clobber that
             // insertFileDerivedPlan forces on a fresh INSERT (re-import after the
             // registerPendingCreation window, or the atomic-write DELETE->re-INSERT
-            // race). Re-deriving a non-'CREATED' column yanks an epic the user
+            // race). Re-deriving a non-'CREATED' column yanks an feature the user
             // advanced (e.g. to CODE REVIEWED) back down to its least-progressed
-            // subtask on every epic-file re-import — the exact regression this guard
-            // prevents. Subtask progress never drags the epic backward.
+            // subtask on every feature-file re-import — the exact regression this guard
+            // prevents. Subtask progress never drags the feature backward.
             if (current !== 'CREATED') return;
             if (resolved === current) return; // already correct, skip the write
             const workspaceId = await db.getWorkspaceId();
             if (!workspaceId) return;
-            await db.updateColumnByPlanFile(epic.planFile, workspaceId, resolved);
+            await db.updateColumnByPlanFile(feature.planFile, workspaceId, resolved);
         } catch (err) {
-            console.warn(`[KanbanProvider] recomputeEpicColumnFromSubtasks failed for ${epicPlanId}:`, err);
+            console.warn(`[KanbanProvider] recomputeFeatureColumnFromSubtasks failed for ${featurePlanId}:`, err);
         }
     }
 
@@ -5743,12 +5743,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const plan = await db.getPlanBySessionId(sessionId);
             let moved: boolean;
             let subtaskSessionIds: string[] = [];
-            if (plan && plan.isEpic) {
-                // Atomic: move epic + all subtasks in one transaction, keyed by plan_id (Class 2).
+            if (plan && plan.isFeature) {
+                // Atomic: move feature + all subtasks in one transaction, keyed by plan_id (Class 2).
                 // session_id-keyed cascade silently no-ops for file-based plans (session_id='').
-                const subtasks = await db.getSubtasksByEpicId(plan.planId);
+                const subtasks = await db.getSubtasksByFeatureId(plan.planId);
                 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
-                moved = await db.cascadeEpicByPlanId(plan.planId, targetColumn);
+                moved = await db.cascadeFeatureByPlanId(plan.planId, targetColumn);
             } else {
                 moved = await db.updateColumn(sessionId, targetColumn);
             }
@@ -5764,10 +5764,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     );
                 }
                 if (plan) {
-                    if (plan.isEpic) {
-                        await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
-                    } else if (plan.epicId) {
-                        await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                    if (plan.isFeature) {
+                        await this._regenerateFeatureFile(workspaceRoot, plan.planId, db);
+                    } else if (plan.featureId) {
+                        await this._regenerateFeatureFile(workspaceRoot, plan.featureId, db);
                     }
                 }
             }
@@ -5782,8 +5782,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const db = this._getKanbanDb(workspaceRoot);
         if (db && await db.ensureReady()) {
             const plan = await db.getPlanBySessionId(sessionId);
-            if (plan && !!plan.isEpic) {
-                const subtasks = await db.getSubtasksByEpicId(plan.planId);
+            if (plan && !!plan.isFeature) {
+                const subtasks = await db.getSubtasksByFeatureId(plan.planId);
                 const subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
                 return [sessionId, ...subtaskSessionIds];
             }
@@ -5812,12 +5812,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
             let moved: boolean;
             let subtaskSessionIds: string[] = [];
-            if (previousRecord && previousRecord.isEpic) {
-                // plan_id-keyed cascade (Class 2): works for file-based epics (session_id='')
+            if (previousRecord && previousRecord.isFeature) {
+                // plan_id-keyed cascade (Class 2): works for file-based features (session_id='')
                 // where the old session_id-keyed path + updateColumnTransaction fallback no-opped.
-                const subtasks = await db.getSubtasksByEpicId(previousRecord.planId);
+                const subtasks = await db.getSubtasksByFeatureId(previousRecord.planId);
                 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean) as string[];
-                moved = await db.cascadeEpicByPlanId(previousRecord.planId, targetColumn);
+                moved = await db.cascadeFeatureByPlanId(previousRecord.planId, targetColumn);
             } else {
                 moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
             }
@@ -5832,10 +5832,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     );
                 }
                 if (previousRecord) {
-                    if (previousRecord.isEpic) {
-                        await this._regenerateEpicFile(workspaceRoot, previousRecord.planId, db);
-                    } else if (previousRecord.epicId) {
-                        await this._regenerateEpicFile(workspaceRoot, previousRecord.epicId, db);
+                    if (previousRecord.isFeature) {
+                        await this._regenerateFeatureFile(workspaceRoot, previousRecord.planId, db);
+                    } else if (previousRecord.featureId) {
+                        await this._regenerateFeatureFile(workspaceRoot, previousRecord.featureId, db);
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
@@ -6782,7 +6782,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._markConfigDirty();
                 await this._updateSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
                 break;
-            case 'setEpicWorkflowMode': {
+            case 'setFeatureWorkflowMode': {
                 // New shape: { ultracode: boolean, goal: boolean }
                 // Legacy shape: { mode: 'none'|'ultracode'|'goal' } — tolerated for back-compat
                 let ultracode: boolean;
@@ -6798,10 +6798,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const db = wsRoot ? this._getKanbanDb(wsRoot) : undefined;
                 if (db && await db.ensureReady()) {
-                    await db.setConfig('epic_ultracode_enabled', ultracode ? 'true' : 'false');
-                    await db.setConfig('epic_goal_enabled', goal ? 'true' : 'false');
+                    await db.setConfig('feature_ultracode_enabled', ultracode ? 'true' : 'false');
+                    await db.setConfig('feature_goal_enabled', goal ? 'true' : 'false');
                 }
-                this._panel?.webview.postMessage({ type: 'epicWorkflowModeState', ultracode, goal });
+                this._panel?.webview.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
                 break;
             }
             case 'toggleDynamicComplexityRouting':
@@ -6934,36 +6934,36 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 
-                // Epic guard: check if any selected plan is an epic with subtasks
+                // Feature guard: check if any selected plan is an feature with subtasks
                 let archived = 0;
-                const epicPlans = plansToArchive.filter(p => p.isEpic);
-                if (epicPlans.length > 0) {
+                const featurePlans = plansToArchive.filter(p => p.isFeature);
+                if (featurePlans.length > 0) {
                     let totalSubtasks = 0;
-                    for (const ep of epicPlans) {
-                        const subs = await db.getSubtasksByEpicId(ep.planId);
+                    for (const ep of featurePlans) {
+                        const subs = await db.getSubtasksByFeatureId(ep.planId);
                         totalSubtasks += subs.length;
                     }
                     if (totalSubtasks > 0) {
                         const choice = await vscode.window.showWarningMessage(
-                            `${epicPlans.length} epic(s) with ${totalSubtasks} subtask(s) selected. Archive subtasks too?`,
+                            `${featurePlans.length} feature(s) with ${totalSubtasks} subtask(s) selected. Archive subtasks too?`,
                             { modal: true },
-                            'Archive all (epics + subtasks)',
+                            'Archive all (features + subtasks)',
                             'Orphan subtasks',
                             'Cancel'
                         );
                         if (!choice || choice === 'Cancel') break;
-                        if (choice === 'Archive all (epics + subtasks)') {
-                            for (const ep of epicPlans) {
-                                const subs = await db.getSubtasksByEpicId(ep.planId);
+                        if (choice === 'Archive all (features + subtasks)') {
+                            for (const ep of featurePlans) {
+                                const subs = await db.getSubtasksByFeatureId(ep.planId);
                                 for (const st of subs) {
                                     const success = await archiveMgr.archivePlan(st);
                                     if (success) archived++;
                                 }
                             }
                         } else {
-                            // Orphan: clear epic_id on subtasks
-                            for (const ep of epicPlans) {
-                                await db.clearEpicIdForEpic(ep.planId);
+                            // Orphan: clear feature_id on subtasks
+                            for (const ep of featurePlans) {
+                                await db.clearFeatureIdForFeature(ep.planId);
                             }
                         }
                     }
@@ -7674,10 +7674,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         for (const [role, sids] of groups) {
                             if (sids.length === 0) { continue; }
                             const targetCol = this._targetColumnForDispatchRole(role);
-                            // Persist via moveCardToColumn (DB-first, epic-cascade aware) — matches the
+                            // Persist via moveCardToColumn (DB-first, feature-cascade aware) — matches the
                             // pre-conversion kanbanForwardMove path which routed through moveCardToColumn.
-                            // A direct db.updateColumn would skip the epic subtask cascade and orphan
-                            // subtasks in the source column when an epic parent is advanced.
+                            // A direct db.updateColumn would skip the feature subtask cascade and orphan
+                            // subtasks in the source column when an feature parent is advanced.
                             const movedSids: string[] = [];
                             for (const sid of sids) {
                                 await this.moveCardToColumn(workspaceRoot, sid, targetCol);
@@ -7699,9 +7699,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     this._notifySkippedUnknownComplexity(skippedCount, knownIds.length);
                 } else {
-                    // Persist via moveCardToColumn (DB-first, epic-cascade aware) — matches the
+                    // Persist via moveCardToColumn (DB-first, feature-cascade aware) — matches the
                     // pre-conversion kanbanForwardMove path. A direct db.updateColumn would skip the
-                    // epic subtask cascade and orphan subtasks when an epic parent is advanced.
+                    // feature subtask cascade and orphan subtasks when an feature parent is advanced.
                     const allMovedIds: string[] = [];
                     for (const sid of sessionIds) {
                         await this.moveCardToColumn(workspaceRoot, sid, nextCol);
@@ -7747,15 +7747,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (workspaceRoot) {
                         const db = this._getKanbanDb(workspaceRoot);
                         if (await db.ensureReady()) {
-                            // Epic-aware completion: cascade subtasks to COMPLETED (Class 3).
+                            // Feature-aware completion: cascade subtasks to COMPLETED (Class 3).
                             const plan = await db.getPlanByPlanId(resolvedSessionId) ?? await db.getPlanBySessionId(resolvedSessionId);
-                            if (plan && plan.isEpic) {
-                                await db.cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed');
-                                await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
+                            if (plan && plan.isFeature) {
+                                await db.cascadeFeatureByPlanId(plan.planId, 'COMPLETED', 'completed');
+                                await this._regenerateFeatureFile(workspaceRoot, plan.planId, db);
                             } else {
                                 await db.updateColumn(resolvedSessionId, 'COMPLETED');
-                                if (plan && plan.epicId) {
-                                    await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                                if (plan && plan.featureId) {
+                                    await this._regenerateFeatureFile(workspaceRoot, plan.featureId, db);
                                 }
                             }
                             _schedulePlanStateWrite(db, workspaceRoot, resolvedSessionId, 'COMPLETED',
@@ -7775,15 +7775,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const db = this._getKanbanDb(workspaceRoot);
                 if (await db.ensureReady()) {
                     for (const sessionId of msg.sessionIds) {
-                        // Epic-aware completion: cascade subtasks to COMPLETED (Class 3).
+                        // Feature-aware completion: cascade subtasks to COMPLETED (Class 3).
                         const plan = await db.getPlanByPlanId(sessionId) ?? await db.getPlanBySessionId(sessionId);
-                        if (plan && plan.isEpic) {
-                            await db.cascadeEpicByPlanId(plan.planId, 'COMPLETED', 'completed');
-                            await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
+                        if (plan && plan.isFeature) {
+                            await db.cascadeFeatureByPlanId(plan.planId, 'COMPLETED', 'completed');
+                            await this._regenerateFeatureFile(workspaceRoot, plan.planId, db);
                         } else {
                             await db.updateColumn(sessionId, 'COMPLETED');
-                            if (plan && plan.epicId) {
-                                    await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                            if (plan && plan.featureId) {
+                                    await this._regenerateFeatureFile(workspaceRoot, plan.featureId, db);
                             }
                         }
                         _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
@@ -7814,18 +7814,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (await dbAll.ensureReady()) {
                     for (const card of reviewedCards) {
                         const cardKey = this._cardId(card);
-                        // Cascade column update for epics so subtasks follow to COMPLETED
-                        // (same rigid-unit model as moveCardToColumn — an epic's subtasks
+                        // Cascade column update for features so subtasks follow to COMPLETED
+                        // (same rigid-unit model as moveCardToColumn — an feature's subtasks
                         // always share its column on every move). A direct db.updateColumn
-                        // would orphan subtasks in CODE REVIEWED when the epic completes.
-                        if (card.isEpic) {
-                            // plan_id-keyed cascade (Class 2): works for file-based epics (session_id='').
-                            await dbAll.cascadeEpicByPlanId(card.planId, 'COMPLETED', 'completed');
-                            await this._regenerateEpicFile(workspaceRoot, card.planId, dbAll);
+                        // would orphan subtasks in CODE REVIEWED when the feature completes.
+                        if (card.isFeature) {
+                            // plan_id-keyed cascade (Class 2): works for file-based features (session_id='').
+                            await dbAll.cascadeFeatureByPlanId(card.planId, 'COMPLETED', 'completed');
+                            await this._regenerateFeatureFile(workspaceRoot, card.planId, dbAll);
                         } else {
                             await dbAll.updateColumn(cardKey, 'COMPLETED');
-                            if (card.epicId) {
-                                await this._regenerateEpicFile(workspaceRoot, card.epicId, dbAll);
+                            if (card.featureId) {
+                                await this._regenerateFeatureFile(workspaceRoot, card.featureId, dbAll);
                             }
                         }
                         _schedulePlanStateWrite(dbAll, workspaceRoot, cardKey, 'COMPLETED',
@@ -7851,14 +7851,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 for (const sessionId of msg.sessionIds) {
                     const db = this._getKanbanDb(workspaceRoot);
                     let planId: string | null = null;
-                    // Epic-aware recovery (Class 7): recovering an epic must pull its subtasks back too.
-                    let epicPlanId: string | null = null;
+                    // Feature-aware recovery (Class 7): recovering an feature must pull its subtasks back too.
+                    let featurePlanId: string | null = null;
                     if (await db.ensureReady()) {
                         const record = await db.getPlanBySessionId(sessionId);
                         if (record) {
                             planId = record.planId;
-                            if (record.isEpic) {
-                                epicPlanId = record.planId;
+                            if (record.isFeature) {
+                                featurePlanId = record.planId;
                             }
                         }
                     }
@@ -7869,14 +7869,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // restorePlanFromKanban may trigger intermediate refreshes (via _mirrorBrainPlan)
                     // that could see stale 'completed' status and re-sync a duplicate entry.
                     await db.updateStatus(sessionId, 'active');
-                    if (epicPlanId) {
-                        await db.cascadeEpicByPlanId(epicPlanId, targetColumn, 'active', true);
-                        await this._regenerateEpicFile(workspaceRoot, epicPlanId, db);
+                    if (featurePlanId) {
+                        await db.cascadeFeatureByPlanId(featurePlanId, targetColumn, 'active', true);
+                        await this._regenerateFeatureFile(workspaceRoot, featurePlanId, db);
                     } else {
                         await db.updateColumn(sessionId, targetColumn);
                         const record = await db.getPlanBySessionId(sessionId);
-                        if (record && record.epicId) {
-                            await this._regenerateEpicFile(workspaceRoot, record.epicId, db);
+                        if (record && record.featureId) {
+                            await this._regenerateFeatureFile(workspaceRoot, record.featureId, db);
                         }
                     }
                     _schedulePlanStateWrite(db, workspaceRoot, sessionId, targetColumn,
@@ -7886,16 +7886,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         await vscode.commands.executeCommand('switchboard.kanbanBackwardMove', [sessionId], targetColumn, workspaceRoot);
                         successCount++;
                     } else {
-                        // Rollback DB changes if restore failed (re-cascade epic subtasks to COMPLETED).
+                        // Rollback DB changes if restore failed (re-cascade feature subtasks to COMPLETED).
                         await db.updateStatus(sessionId, 'completed');
-                        if (epicPlanId) {
-                            await db.cascadeEpicByPlanId(epicPlanId, 'COMPLETED', 'completed');
-                            await this._regenerateEpicFile(workspaceRoot, epicPlanId, db);
+                        if (featurePlanId) {
+                            await db.cascadeFeatureByPlanId(featurePlanId, 'COMPLETED', 'completed');
+                            await this._regenerateFeatureFile(workspaceRoot, featurePlanId, db);
                         } else {
                             await db.updateColumn(sessionId, 'COMPLETED');
                             const record = await db.getPlanBySessionId(sessionId);
-                            if (record && record.epicId) {
-                                await this._regenerateEpicFile(workspaceRoot, record.epicId, db);
+                            if (record && record.featureId) {
+                                await this._regenerateFeatureFile(workspaceRoot, record.featureId, db);
                             }
                         }
                         _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
@@ -7932,7 +7932,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         workspaceRoot: reviewEffectiveRoot,
                         project: msg.project || '',
                         column: msg.column || '',
-                        isEpic: msg.isEpic === true
+                        isFeature: msg.isFeature === true
                     });
                 }
                 break;
@@ -8117,15 +8117,15 @@ ${FOCUS_DIRECTIVE}`;
                     const db = this._getKanbanDb(workspaceRoot);
                     if (await db.ensureReady()) {
                         for (const sid of msg.sessionIds) {
-                            // Epic-aware (Class 7): an epic sent back for fixes must take its subtasks too.
+                            // Feature-aware (Class 7): an feature sent back for fixes must take its subtasks too.
                             const plan = await db.getPlanByPlanId(sid) ?? await db.getPlanBySessionId(sid);
-                            if (plan && plan.isEpic) {
-                                await db.cascadeEpicByPlanId(plan.planId, 'LEAD CODED');
-                                await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
+                            if (plan && plan.isFeature) {
+                                await db.cascadeFeatureByPlanId(plan.planId, 'LEAD CODED');
+                                await this._regenerateFeatureFile(workspaceRoot, plan.planId, db);
                             } else {
                                 await db.updateColumn(sid, 'LEAD CODED');
-                                if (plan && plan.epicId) {
-                                    await this._regenerateEpicFile(workspaceRoot, plan.epicId, db);
+                                if (plan && plan.featureId) {
+                                    await this._regenerateFeatureFile(workspaceRoot, plan.featureId, db);
                                 }
                             }
                             _schedulePlanStateWrite(db, workspaceRoot, sid, 'LEAD CODED',
@@ -8304,10 +8304,10 @@ ${FOCUS_DIRECTIVE}`;
                     } else {
                         const cards = this._lastCards.filter(c => {
                             if (c.workspaceRoot !== workspaceRoot) return false;
-                            // Epic subtasks roll up under their epic and are not loose
+                            // Feature subtasks roll up under their feature and are not loose
                             // column cards — exclude them so the preview matches what a
                             // column-batch dispatch would actually send.
-                            if (c.epicId) return false;
+                            if (c.featureId) return false;
                             switch (role) {
                                 case 'planner':
                                     return c.column === 'CREATED';
@@ -8642,11 +8642,11 @@ ${FOCUS_DIRECTIVE}`;
                 if (!db || !await db.ensureReady()) break;
 
                 try {
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic, msg.repoName);
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.featureTopic, msg.repoName);
 
                     // Add to worktrees database table
-                    const epicId = msg.epicId ? String(msg.epicId) : undefined;
-                    await db.addWorktree(branch, wtPath, epicId, msg.project);
+                    const featureId = msg.featureId ? String(msg.featureId) : undefined;
+                    await db.addWorktree(branch, wtPath, featureId, msg.project);
 
                     // Force-create new terminals in worktree
                     if (this._taskViewerProvider) {
@@ -8666,23 +8666,23 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 break;
             }
-            case 'createWorktreeForEpic': {
+            case 'createWorktreeForFeature': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !await db.ensureReady()) break;
 
-                // Block if epic already has an active linked worktree
+                // Block if feature already has an active linked worktree
                 const allWorktrees = await db.getWorktrees();
-                const existing = allWorktrees.find(w => String(w.epic_id) === msg.epicId && w.status === 'active');
+                const existing = allWorktrees.find(w => String(w.feature_id) === msg.featureId && w.status === 'active');
                 if (existing) {
                     vscode.window.showInformationMessage(`Feature already has worktree: ${existing.branch}`);
                     break;
                 }
 
                 try {
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.epicTopic, msg.repoName);
-                    await db.addWorktree(branch, wtPath, msg.epicId ? String(msg.epicId) : undefined);
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.featureTopic, msg.repoName);
+                    await db.addWorktree(branch, wtPath, msg.featureId ? String(msg.featureId) : undefined);
 
                     // Force-create terminals in worktree using shared ensureWorktreeTerminals
                     if (this._taskViewerProvider) {
@@ -8759,13 +8759,13 @@ ${FOCUS_DIRECTIVE}`;
                 await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }
-            case 'getEpicWorktreeMode': {
+            case 'getFeatureWorktreeMode': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
                 await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }
-            case 'setEpicWorktreeMode': {
+            case 'setFeatureWorktreeMode': {
                 const { mode, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
                 if (!workspaceRoot) break;
@@ -8777,7 +8777,7 @@ ${FOCUS_DIRECTIVE}`;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !await db.ensureReady()) break;
 
-                await db.setConfig('epic_worktree_mode', mode);
+                await db.setConfig('feature_worktree_mode', mode);
                 await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }
@@ -8813,38 +8813,38 @@ ${FOCUS_DIRECTIVE}`;
                 if (!db || !await db.ensureReady()) break;
 
                 // Per-subtask mode changes the merge TARGET for two of the three worktree
-                // kinds: a subtask worktree merges into its epic's integration worktree
+                // kinds: a subtask worktree merges into its feature's integration worktree
                 // (not main), and merging the integration worktree itself into main also
                 // requires cleaning up its now-converged subtask children. Plain/project
-                // worktrees (no subtask_plan_id, no epic_id, or an epic worktree from
+                // worktrees (no subtask_plan_id, no feature_id, or an feature worktree from
                 // `none` mode with no subtask children) keep the original main-merge path.
                 const allWorktrees = await db.getWorktrees();
                 const wtRow = allWorktrees.find(w => w.id === Number(worktreeId));
 
-                if (wtRow?.subtask_plan_id && wtRow.epic_id) {
+                if (wtRow?.subtask_plan_id && wtRow.feature_id) {
                     await this._mergeSubtaskIntoIntegration(workspaceRoot, db, wtRow);
                     await this._sendWorktreeConfig(workspaceRoot);
                     break;
                 }
-                // `high-low` mode: a tier worktree converges into the epic integration
+                // `high-low` mode: a tier worktree converges into the feature integration
                 // branch first (same path as a per-subtask subtask worktree), NOT straight
                 // into main — otherwise the integration branch is bypassed, the tier branch
                 // lands on main directly, and the tier worktree is never cleaned up by the
-                // epic-level merge.
-                if (wtRow?.tier && wtRow.epic_id) {
+                // feature-level merge.
+                if (wtRow?.tier && wtRow.feature_id) {
                     await this._mergeSubtaskIntoIntegration(workspaceRoot, db, wtRow);
                     await this._sendWorktreeConfig(workspaceRoot);
                     break;
                 }
 
-                // The epic integration worktree itself merges into main, then cleans up
+                // The feature integration worktree itself merges into main, then cleans up
                 // every remaining child (subtask worktrees in per-subtask mode, tier
                 // worktrees in high-low mode). Excludes tier so a tier worktree isn't
                 // mistaken for the integration worktree it branched off of.
-                const isIntegrationWorktree = !!wtRow && !!wtRow.epic_id && !wtRow.subtask_plan_id && !wtRow.tier
-                    && allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.epic_id) === String(wtRow.epic_id));
+                const isIntegrationWorktree = !!wtRow && !!wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier
+                    && allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.feature_id) === String(wtRow.feature_id));
                 if (isIntegrationWorktree && wtRow) {
-                    await this._mergeEpicIntegrationIntoMain(workspaceRoot, db, wtRow);
+                    await this._mergeFeatureIntegrationIntoMain(workspaceRoot, db, wtRow);
                     await this._sendWorktreeConfig(workspaceRoot);
                     break;
                 }
@@ -8905,47 +8905,47 @@ ${FOCUS_DIRECTIVE}`;
                 });
                 break;
             }
-            case 'addSubtaskToEpic': {
+            case 'addSubtaskToFeature': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot || !msg.epicSessionId || !msg.subtaskSessionId) break;
+                if (!workspaceRoot || !msg.featureSessionId || !msg.subtaskSessionId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                const epic = await db.getPlanByPlanId(msg.epicSessionId);
-                if (!epic || !epic.isEpic) {
+                const feature = await db.getPlanByPlanId(msg.featureSessionId);
+                if (!feature || !feature.isFeature) {
                     vscode.window.showWarningMessage('Target is not a valid feature.');
                     break;
                 }
-                const lockColumnsRaw = await db.getConfig('epic_lock_columns');
+                const lockColumnsRaw = await db.getConfig('feature_lock_columns');
                 const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
-                if (lockColumns.includes(epic.kanbanColumn)) {
+                if (lockColumns.includes(feature.kanbanColumn)) {
                     vscode.window.showWarningMessage('Cannot modify subtasks of a feature in a locked column.');
                     break;
                 }
                 const subtask = await db.getPlanByPlanId(msg.subtaskSessionId);
                 if (!subtask) break;
-                if (subtask.isEpic) {
+                if (subtask.isFeature) {
                     vscode.window.showWarningMessage('Cannot add a feature as a subtask.');
                     break;
                 }
-                if (subtask.epicId && subtask.epicId !== epic.planId) {
+                if (subtask.featureId && subtask.featureId !== feature.planId) {
                     vscode.window.showWarningMessage('Subtask already belongs to another feature.');
                     break;
                 }
-                await db.updateEpicStatus(subtask.planId, 0, epic.planId);
-                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, epic.planId, epic.topic, subtask.planId, subtask.topic);
-                await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
+                await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
+                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, feature.planId, feature.topic, subtask.planId, subtask.topic);
+                await this._regenerateFeatureFile(workspaceRoot, feature.planId, db);
                 await this._refreshBoard(workspaceRoot);
                 break;
             }
-            case 'promoteToEpic': {
-                // Single-plan promotion: mark the existing plan as is_epic=1 and move its file to epics/
+            case 'promoteToFeature': {
+                // Single-plan promotion: mark the existing plan as is_feature=1 and move its file to features/
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.planId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
                 const plan = await db.getPlanByPlanId(String(msg.planId));
                 if (!plan) { vscode.window.showWarningMessage('Plan not found.'); break; }
-                if (plan.isEpic) { vscode.window.showWarningMessage('Plan is already a feature.'); break; }
+                if (plan.isFeature) { vscode.window.showWarningMessage('Plan is already a feature.'); break; }
 
                 // If a custom name is provided, persist it to BOTH the DB topic and the file's
                 // # H1 heading. DB-only is NOT durable: the next re-import re-derives topic from
@@ -8965,27 +8965,27 @@ ${FOCUS_DIRECTIVE}`;
                             : `# ${customName}\n\n${content}`;
                         await fs.promises.writeFile(curAbsPath, rewritten, 'utf8');
                     } catch (titleErr) {
-                        console.warn(`[KanbanProvider] promoteToEpic: H1 rewrite failed (DB topic still updated): ${titleErr}`);
+                        console.warn(`[KanbanProvider] promoteToFeature: H1 rewrite failed (DB topic still updated): ${titleErr}`);
                     }
                 }
 
-                // Move file to epics/ directory for unified architecture.
-                // Embed the full planId in the filename so the subtask→epic link survives
+                // Move file to features/ directory for unified architecture.
+                // Embed the full planId in the filename so the subtask→feature link survives
                 // re-import (the watcher derives plan_id back from this trailing UUID).
-                const effectiveTopic = customName || plan.topic || 'epic';
-                const slug = effectiveTopic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic';
-                const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
+                const effectiveTopic = customName || plan.topic || 'feature';
+                const slug = effectiveTopic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'feature';
+                const featureDir = path.join(workspaceRoot, '.switchboard', 'features');
                 const oldAbsPath = path.resolve(workspaceRoot, plan.planFile);
-                await fs.promises.mkdir(epicDir, { recursive: true });
-                const newRelPath = path.join('.switchboard', 'epics', `${slug}-${plan.planId}.md`);
+                await fs.promises.mkdir(featureDir, { recursive: true });
+                const newRelPath = path.join('.switchboard', 'features', `${slug}-${plan.planId}.md`);
                 const newAbsPath = path.join(workspaceRoot, newRelPath);
 
                 // 1. Update DB plan_file BEFORE moving the file — so the watcher's delete
                 //    handler for the old path finds no matching record (already updated).
                 await db.updatePlanFileByPlanId(plan.planId, newRelPath);
 
-                // 2. Clear epic_id (plan is now an epic, not a subtask) and set is_epic=1
-                await db.updateEpicStatus(plan.planId, 1, '');
+                // 2. Clear feature_id (plan is now an feature, not a subtask) and set is_feature=1
+                await db.updateFeatureStatus(plan.planId, 1, '');
 
                 // 3. Register watcher suppression for both paths
                 GlobalPlanWatcherService.registerPendingCreation(newAbsPath);
@@ -8995,25 +8995,25 @@ ${FOCUS_DIRECTIVE}`;
                 try {
                     await fs.promises.rename(oldAbsPath, newAbsPath);
                 } catch (moveErr) {
-                    console.warn(`[KanbanProvider] promoteToEpic: file move failed, reverting DB path: ${moveErr}`);
+                    console.warn(`[KanbanProvider] promoteToFeature: file move failed, reverting DB path: ${moveErr}`);
                     await db.updatePlanFileByPlanId(plan.planId, plan.planFile);
                 }
 
-                await this._regenerateEpicFile(workspaceRoot, plan.planId, db);
+                await this._regenerateFeatureFile(workspaceRoot, plan.planId, db);
                 this._markConfigDirty(); // defense-in-depth: ensure the post-promotion refresh isn't skipped by the no-op guard
                 await this._refreshBoard(workspaceRoot);
                 // Sync the promoted plan's external issue (best-effort, no children to link yet).
-                await this._syncEpicOutbound(workspaceRoot, newRelPath, plan.planId, effectiveTopic, plan.kanbanColumn, []);
+                await this._syncFeatureOutbound(workspaceRoot, newRelPath, plan.planId, effectiveTopic, plan.kanbanColumn, []);
                 break;
             }
-            case 'createEpic': {
+            case 'createFeature': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
                 // Delegate to the shared public method so the webview path and the
-                // agent/API path (LocalApiServer → createEpicFromPlanIds) run identical
+                // agent/API path (LocalApiServer → createFeatureFromPlanIds) run identical
                 // logic. No upsert/link/file-write code lives here — it would double-execute.
                 const subtaskPlanIds = Array.isArray(msg.subtaskPlanIds) ? msg.subtaskPlanIds : [];
-                const result = await this.createEpicFromPlanIds(
+                const result = await this.createFeatureFromPlanIds(
                     workspaceRoot,
                     msg.name ? String(msg.name) : '',
                     subtaskPlanIds,
@@ -9024,61 +9024,61 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 break;
             }
-            case 'suggestEpics': {
+            case 'suggestFeatures': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
                 const projectFilter = (msg.projectFilter === undefined ? null : msg.projectFilter) as string | null;
                 // Pre-coding columns are the only place loose plans worth grouping live.
-                // Exclude existing epics and already-assigned subtasks.
+                // Exclude existing features and already-assigned subtasks.
                 const preCodingColumns = ['CREATED', 'PLAN REVIEWED'];
                 const candidateCards = this._lastCards.filter(card =>
                     card.workspaceRoot === workspaceRoot &&
                     preCodingColumns.includes(card.column) &&
-                    !card.isEpic && !card.epicId &&
+                    !card.isFeature && !card.featureId &&
                     this._cardMatchesProjectFilter(card, projectFilter)
                 );
                 if (candidateCards.length === 0) {
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into epics (in the current project scope).', isError: true });
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into features (in the current project scope).', isError: true });
                     break;
                 }
-                const prompt = this._buildSuggestEpicsPrompt(workspaceRoot, projectFilter);
+                const prompt = this._buildSuggestFeaturesPrompt(workspaceRoot, projectFilter);
                 await vscode.env.clipboard.writeText(prompt);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-epics prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-features prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
                 break;
             }
-            case 'removeSubtaskFromEpic': {
+            case 'removeSubtaskFromFeature': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.subtaskSessionId) break;
-                await this._removeSubtaskFromEpic(workspaceRoot, msg.subtaskSessionId);
+                await this._removeSubtaskFromFeature(workspaceRoot, msg.subtaskSessionId);
                 break;
             }
-            case 'deleteEpic': {
+            case 'deleteFeature': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.sessionId) break;
-                await this._deleteEpic(workspaceRoot, msg.sessionId, !!msg.deleteSubtasks);
+                await this._deleteFeature(workspaceRoot, msg.sessionId, !!msg.deleteSubtasks);
                 break;
             }
-            case 'getEpicDetails': {
+            case 'getFeatureDetails': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.sessionId) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !(await db.ensureReady())) break;
-                const epic = await db.getPlanByPlanId(msg.sessionId);
-                if (!epic || !epic.isEpic) {
-                    this._panel?.webview.postMessage({ type: 'epicDetails', epic: null, subtasks: [] });
+                const feature = await db.getPlanByPlanId(msg.sessionId);
+                if (!feature || !feature.isFeature) {
+                    this._panel?.webview.postMessage({ type: 'featureDetails', feature: null, subtasks: [] });
                     break;
                 }
-                const subtasks = await db.getSubtasksByEpicId(epic.planId);
-                this._panel?.webview.postMessage({ type: 'epicDetails', epic, subtasks });
-                // The legacy `source:'kanban'` branch (which sent kanbanEpicDetails to the
-                // removed on-board epic-manage modal) is gone. epic_prompt_template is
-                // read as a fallback in generateUnifiedPrompt, never surfaced for per-epic
+                const subtasks = await db.getSubtasksByFeatureId(feature.planId);
+                this._panel?.webview.postMessage({ type: 'featureDetails', feature, subtasks });
+                // The legacy `source:'kanban'` branch (which sent kanbanFeatureDetails to the
+                // removed on-board feature-manage modal) is gone. feature_prompt_template is
+                // read as a fallback in generateUnifiedPrompt, never surfaced for per-feature
                 // editing here.
                 break;
             }
-            case 'updateEpicConfig': {
-                // No remaining kanban caller — the on-board epic-manage modal was removed.
-                // epic_prompt_template / epic_lock_columns / epic_max_subtasks writes are all
+            case 'updateFeatureConfig': {
+                // No remaining kanban caller — the on-board feature-manage modal was removed.
+                // feature_prompt_template / feature_lock_columns / feature_max_subtasks writes are all
                 // removed: the cap is gone (every subtask dispatches), and the other two were
                 // already dormant. Legacy keys are never dropped — they are still READ as
                 // fallback (per CLAUDE.md); we simply stop writing them here.
@@ -9293,7 +9293,7 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Resolve the repo's default branch (what the epic integration worktree branches
+     * Resolve the repo's default branch (what the feature integration worktree branches
      * off). Prefers the remote HEAD symref (works even when main/master isn't checked
      * out locally); falls back to checking for local main/master; falls back to the
      * currently checked-out branch so worktree creation never hard-fails on an unusual
@@ -9321,30 +9321,30 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Lazy-create (idempotent) the epic integration worktree for `per-subtask` mode.
-     * Mirrors the "epic already has an active worktree" guard from `createWorktreeForEpic`
+     * Lazy-create (idempotent) the feature integration worktree for `per-subtask` mode.
+     * Mirrors the "feature already has an active worktree" guard from `createWorktreeForFeature`
      * (check-then-create against `getWorktrees()`) so two near-simultaneous subtask-adds
      * racing to provision the integration worktree converge on the same row instead of
      * creating two. Returns the existing or newly-created worktree row.
      */
-    private async _ensureEpicIntegrationWorktree(
+    private async _ensureFeatureIntegrationWorktree(
         workspaceRoot: string,
         db: KanbanDatabase,
-        epicPlanId: string,
-        epicTopic: string
+        featurePlanId: string,
+        featureTopic: string
     ): Promise<WorktreeRow | undefined> {
         const allWorktrees = await db.getWorktrees();
         // The integration worktree is the one with neither subtask_plan_id (per-subtask mode's
         // per-subtask worktrees) nor tier (high-low mode's tier worktrees) set — excluding both
         // keeps this lookup correct in both modes rather than mistaking a tier worktree for the
         // integration worktree it was itself branched off of.
-        const existing = allWorktrees.find(w => String(w.epic_id) === String(epicPlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+        const existing = allWorktrees.find(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
         if (existing) return existing;
 
         try {
             const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
-            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, epicTopic, undefined, defaultBranch);
-            await db.addWorktree(branch, wtPath, epicPlanId, undefined, undefined, defaultBranch);
+            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, featureTopic, undefined, defaultBranch);
+            await db.addWorktree(branch, wtPath, featurePlanId, undefined, undefined, defaultBranch);
             if (this._taskViewerProvider) {
                 const visibleAgents = await this._getVisibleAgents(workspaceRoot);
                 const activeAgents = Object.entries(visibleAgents)
@@ -9354,42 +9354,42 @@ ${FOCUS_DIRECTIVE}`;
             }
             return await db.getWorktreeByBranch(branch);
         } catch (e: any) {
-            console.error(`[KanbanProvider] _ensureEpicIntegrationWorktree: failed to create integration worktree for epic ${epicPlanId}:`, e);
+            console.error(`[KanbanProvider] _ensureFeatureIntegrationWorktree: failed to create integration worktree for feature ${featurePlanId}:`, e);
             // Race fallback: another near-simultaneous call may have created it first.
             const retried = await db.getWorktrees();
-            return retried.find(w => String(w.epic_id) === String(epicPlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+            return retried.find(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
         }
     }
 
     /**
-     * `high-low` mode: provision the epic integration worktree, then exactly two tier
+     * `high-low` mode: provision the feature integration worktree, then exactly two tier
      * worktrees branched off it — `tier='high'` and `tier='low'`. Idempotent (checks
-     * existing tier worktrees first, same guard style as `_ensureEpicIntegrationWorktree`).
+     * existing tier worktrees first, same guard style as `_ensureFeatureIntegrationWorktree`).
      *
      * All-or-nothing: if either tier worktree fails to create, the one that DID succeed
      * (plus the integration worktree, since it has no purpose without both tiers) is torn
-     * down so a failed `createEpicFromPlanIds` call never leaves a half-provisioned epic
+     * down so a failed `createFeatureFromPlanIds` call never leaves a half-provisioned feature
      * behind. Best-effort logs on rollback failure — a lingering worktree row is a lesser
-     * problem than throwing out of epic creation after the DB/file writes above already
+     * problem than throwing out of feature creation after the DB/file writes above already
      * committed.
      */
     private async _provisionHighLowTierWorktrees(
         workspaceRoot: string,
         db: KanbanDatabase,
-        epicPlanId: string,
-        epicTopic: string
+        featurePlanId: string,
+        featureTopic: string
     ): Promise<void> {
         const allWorktrees = await db.getWorktrees();
-        const existingHigh = allWorktrees.find(w => String(w.epic_id) === String(epicPlanId) && w.tier === 'high' && w.status === 'active');
-        const existingLow = allWorktrees.find(w => String(w.epic_id) === String(epicPlanId) && w.tier === 'low' && w.status === 'active');
+        const existingHigh = allWorktrees.find(w => String(w.feature_id) === String(featurePlanId) && w.tier === 'high' && w.status === 'active');
+        const existingLow = allWorktrees.find(w => String(w.feature_id) === String(featurePlanId) && w.tier === 'low' && w.status === 'active');
         if (existingHigh && existingLow) return;
 
         // Track whether THIS call created the integration worktree (vs. it already existing
         // from a prior partial run) so rollback only removes what this call is responsible for.
-        const integrationPreexisted = allWorktrees.some(w => String(w.epic_id) === String(epicPlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
-        const integration = await this._ensureEpicIntegrationWorktree(workspaceRoot, db, epicPlanId, epicTopic);
+        const integrationPreexisted = allWorktrees.some(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+        const integration = await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, featurePlanId, featureTopic);
         if (!integration) {
-            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: no integration worktree available for epic ${epicPlanId}, skipping tier worktrees.`);
+            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: no integration worktree available for feature ${featurePlanId}, skipping tier worktrees.`);
             return;
         }
 
@@ -9401,17 +9401,17 @@ ${FOCUS_DIRECTIVE}`;
         let lowResult: { branch: string; path: string } | undefined;
         try {
             if (!existingHigh) {
-                highResult = await this._createSafetyWorktree(workspaceRoot, `${epicTopic}-high`, undefined, integration.branch);
-                await db.addWorktree(highResult.branch, highResult.path, epicPlanId, undefined, undefined, integration.branch, 'high');
+                highResult = await this._createSafetyWorktree(workspaceRoot, `${featureTopic}-high`, undefined, integration.branch);
+                await db.addWorktree(highResult.branch, highResult.path, featurePlanId, undefined, undefined, integration.branch, 'high');
                 if (this._taskViewerProvider) await this._taskViewerProvider.ensureWorktreeTerminals(highResult.path, activeAgents);
             }
             if (!existingLow) {
-                lowResult = await this._createSafetyWorktree(workspaceRoot, `${epicTopic}-low`, undefined, integration.branch);
-                await db.addWorktree(lowResult.branch, lowResult.path, epicPlanId, undefined, undefined, integration.branch, 'low');
+                lowResult = await this._createSafetyWorktree(workspaceRoot, `${featureTopic}-low`, undefined, integration.branch);
+                await db.addWorktree(lowResult.branch, lowResult.path, featurePlanId, undefined, undefined, integration.branch, 'low');
                 if (this._taskViewerProvider) await this._taskViewerProvider.ensureWorktreeTerminals(lowResult.path, activeAgents);
             }
         } catch (e: any) {
-            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: failed to create tier worktrees for epic ${epicPlanId}, rolling back:`, e);
+            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: failed to create tier worktrees for feature ${featurePlanId}, rolling back:`, e);
             const execFileAsync = promisify(cp.execFile);
             const toRemove: Array<{ branch: string; path: string }> = [highResult, lowResult].filter((r): r is { branch: string; path: string } => !!r);
             // Neither tier survived (both failed, or one failed before the other was even
@@ -9441,14 +9441,14 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Create a per-subtask worktree branched off the epic integration branch, when the
-     * epic's mode is `per-subtask`. Lazy-creates the integration worktree first if it
+     * Create a per-subtask worktree branched off the feature integration branch, when the
+     * feature's mode is `per-subtask`. Lazy-creates the integration worktree first if it
      * doesn't exist yet. Guards against duplicate creation (subtask already has an active
      * worktree). No-op (returns undefined) when mode isn't `per-subtask` or the subtask
      * already has one.
      *
-     * `modeSnapshot` lets a caller that already read `epic_worktree_mode` once for the
-     * whole operation (e.g. the subtask loop in `createEpicFromPlanIds`) pass it through,
+     * `modeSnapshot` lets a caller that already read `feature_worktree_mode` once for the
+     * whole operation (e.g. the subtask loop in `createFeatureFromPlanIds`) pass it through,
      * so a mode toggle mid-loop can't split one create/assign call between two behaviors.
      * Callers that haven't already read it (single-subtask entry points) omit it and this
      * reads it fresh.
@@ -9456,28 +9456,28 @@ ${FOCUS_DIRECTIVE}`;
     private async _provisionSubtaskWorktreeIfNeeded(
         workspaceRoot: string,
         db: KanbanDatabase,
-        epicPlanId: string,
-        epicTopic: string,
+        featurePlanId: string,
+        featureTopic: string,
         subtaskPlanId: string,
         subtaskTopic: string,
         modeSnapshot?: string
     ): Promise<void> {
-        const mode = modeSnapshot ?? ((await db.getConfig('epic_worktree_mode')) || 'none');
+        const mode = modeSnapshot ?? ((await db.getConfig('feature_worktree_mode')) || 'none');
         if (mode !== 'per-subtask') return;
 
         const allWorktrees = await db.getWorktrees();
         const existingForSubtask = allWorktrees.find(w => w.subtask_plan_id === subtaskPlanId && w.status === 'active');
         if (existingForSubtask) return;
 
-        const integration = await this._ensureEpicIntegrationWorktree(workspaceRoot, db, epicPlanId, epicTopic);
+        const integration = await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, featurePlanId, featureTopic);
         if (!integration) {
-            console.error(`[KanbanProvider] _provisionSubtaskWorktreeIfNeeded: no integration worktree available for epic ${epicPlanId}, skipping subtask worktree for ${subtaskPlanId}`);
+            console.error(`[KanbanProvider] _provisionSubtaskWorktreeIfNeeded: no integration worktree available for feature ${featurePlanId}, skipping subtask worktree for ${subtaskPlanId}`);
             return;
         }
 
         try {
             const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, subtaskTopic, undefined, integration.branch);
-            await db.addWorktree(branch, wtPath, epicPlanId, undefined, subtaskPlanId, integration.branch);
+            await db.addWorktree(branch, wtPath, featurePlanId, undefined, subtaskPlanId, integration.branch);
             if (this._taskViewerProvider) {
                 const visibleAgents = await this._getVisibleAgents(workspaceRoot);
                 const activeAgents = Object.entries(visibleAgents)
@@ -9493,7 +9493,7 @@ ${FOCUS_DIRECTIVE}`;
     /**
      * Remove a worktree's on-disk directory + branch and mark it abandoned/merged in the
      * DB. Log-and-continue on failure rather than throwing — callers that walk multiple
-     * worktrees (epic merge/abandon cleanup) must not let one failure abort the rest.
+     * worktrees (feature merge/abandon cleanup) must not let one failure abort the rest.
      * Still marks the DB row even if the filesystem removal fails, so a dangling worktree
      * doesn't also show as "active" on the board; `git worktree prune` (called separately
      * by the caller after the walk) catches the filesystem straggler.
@@ -9529,16 +9529,16 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Walk every child worktree of an epic (integration + all subtask worktrees) and
-     * remove them. Used by both epic abandon (all children discarded) and epic merge
+     * Walk every child worktree of an feature (integration + all subtask worktrees) and
+     * remove them. Used by both feature abandon (all children discarded) and feature merge
      * (children cleaned up after their branches have already been merged into the
      * integration branch, and the integration branch into main). Partial failures are
      * logged and skipped, not thrown — see `_removeWorktreeRow`. Always ends with a prune.
      */
-    private async _cleanupEpicWorktrees(workspaceRoot: string, db: KanbanDatabase, epicPlanId: string, finalStatus: 'merged' | 'abandoned'): Promise<void> {
+    private async _cleanupFeatureWorktrees(workspaceRoot: string, db: KanbanDatabase, featurePlanId: string, finalStatus: 'merged' | 'abandoned'): Promise<void> {
         const allWorktrees = await db.getWorktrees();
-        const epicWorktrees = allWorktrees.filter(w => String(w.epic_id) === String(epicPlanId));
-        for (const wt of epicWorktrees) {
+        const featureWorktrees = allWorktrees.filter(w => String(w.feature_id) === String(featurePlanId));
+        for (const wt of featureWorktrees) {
             await this._removeWorktreeRow(workspaceRoot, db, wt, finalStatus);
         }
         await this._pruneWorktrees(workspaceRoot);
@@ -9546,17 +9546,17 @@ ${FOCUS_DIRECTIVE}`;
 
     /**
      * Convergence merge step 1 (per-subtask AND high-low modes): merge a subtask or tier
-     * worktree's branch into the epic integration worktree's OWN checkout
+     * worktree's branch into the feature integration worktree's OWN checkout
      * (`git -C <integrationPath> merge <branch>`), not into the main repo checkout. The
      * integration worktree is the convergence point — main only sees the result once the
-     * epic-level merge (`_mergeEpicIntegrationIntoMain`) runs. Resolves the integration
-     * worktree from the row's `epic_id`, excluding both subtask and tier rows so a sibling
+     * feature-level merge (`_mergeFeatureIntegrationIntoMain`) runs. Resolves the integration
+     * worktree from the row's `feature_id`, excluding both subtask and tier rows so a sibling
      * tier worktree (high-low mode) isn't mistaken for the integration worktree it branched
      * off of.
      */
     private async _mergeSubtaskIntoIntegration(workspaceRoot: string, db: KanbanDatabase, subtaskWt: WorktreeRow): Promise<void> {
         const allWorktrees = await db.getWorktrees();
-        const integrationWt = allWorktrees.find(w => String(w.epic_id) === String(subtaskWt.epic_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+        const integrationWt = allWorktrees.find(w => String(w.feature_id) === String(subtaskWt.feature_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
         if (!integrationWt) {
             vscode.window.showErrorMessage(`Merge failed: no active feature integration worktree found for this branch.`);
             return;
@@ -9573,19 +9573,19 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Per-subtask mode merge step 2: merge the epic integration branch into the main repo
+     * Per-subtask mode merge step 2: merge the feature integration branch into the main repo
      * checkout, then walk and clean up every remaining child subtask worktree (their
      * branches are already folded into the integration branch by step 1; any that were
      * never individually merged are folded in here via the integration branch itself, so
      * removing their worktrees at this point does not lose work).
      */
-    private async _mergeEpicIntegrationIntoMain(workspaceRoot: string, db: KanbanDatabase, integrationWt: WorktreeRow): Promise<void> {
+    private async _mergeFeatureIntegrationIntoMain(workspaceRoot: string, db: KanbanDatabase, integrationWt: WorktreeRow): Promise<void> {
         try {
             const execFileAsync = promisify(cp.execFile);
             await execFileAsync('git', ['-C', workspaceRoot, 'merge', integrationWt.branch], { timeout: 30000 });
             await this._removeWorktreeRow(workspaceRoot, db, integrationWt, 'merged');
-            if (integrationWt.epic_id) {
-                await this._cleanupEpicWorktrees(workspaceRoot, db, integrationWt.epic_id, 'merged');
+            if (integrationWt.feature_id) {
+                await this._cleanupFeatureWorktrees(workspaceRoot, db, integrationWt.feature_id, 'merged');
             } else {
                 await this._pruneWorktrees(workspaceRoot);
             }
@@ -9595,7 +9595,7 @@ ${FOCUS_DIRECTIVE}`;
         }
     }
 
-    private async _createSafetyWorktree(workspaceRoot: string, epicTopic?: string, repoName?: string, baseBranch?: string): Promise<{ branch: string; path: string }> {
+    private async _createSafetyWorktree(workspaceRoot: string, featureTopic?: string, repoName?: string, baseBranch?: string): Promise<{ branch: string; path: string }> {
         const execFileAsync = promisify(cp.execFile);
 
         // Resolve workspace root first — getControlPlaneSelectionStatus returns garbage if this is empty.
@@ -9646,7 +9646,7 @@ ${FOCUS_DIRECTIVE}`;
         }
 
         const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
-        const baseName = epicTopic ? slugify(epicTopic) : `worktree-${new Date().toISOString().slice(0, 10)}`;
+        const baseName = featureTopic ? slugify(featureTopic) : `worktree-${new Date().toISOString().slice(0, 10)}`;
         let branch = baseName;
         let suffix = 2;
         while (true) {
@@ -9677,35 +9677,35 @@ ${FOCUS_DIRECTIVE}`;
         
         const workspaceId = await db.getWorkspaceId() || '';
         const suppressMainTerminals = (await db.getMeta('worktree_suppress_main_terminals')) === 'true';
-        const epicWorktreeMode = (await db.getConfig('epic_worktree_mode')) || 'none';
+        const featureWorktreeMode = (await db.getConfig('feature_worktree_mode')) || 'none';
         const projects = await db.getProjects(workspaceId);
         
-        // Fetch all active epic plans to pass to webview for selection and mapping
-        const epicPlans = await db.getEpicPlans(workspaceId);
-        const epics = epicPlans.map(p => ({ planId: p.planId, topic: p.topic }));
+        // Fetch all active feature plans to pass to webview for selection and mapping
+        const featurePlans = await db.getFeaturePlans(workspaceId);
+        const features = featurePlans.map(p => ({ planId: p.planId, topic: p.topic }));
 
-        // Map worktrees and resolve epicTopic + epicProject
+        // Map worktrees and resolve featureTopic + featureProject
         const mappedWorktrees = [];
         for (const w of worktrees) {
-            let epicTopic: string | undefined = undefined;
-            let epicProject: string | undefined = undefined;
-            if (w.epic_id) {
-                const epicPlan = await db.getPlanByPlanId(w.epic_id);
-                if (epicPlan) {
-                    epicTopic = epicPlan.topic;
-                    epicProject = epicPlan.project || undefined;
+            let featureTopic: string | undefined = undefined;
+            let featureProject: string | undefined = undefined;
+            if (w.feature_id) {
+                const featurePlan = await db.getPlanByPlanId(w.feature_id);
+                if (featurePlan) {
+                    featureTopic = featurePlan.topic;
+                    featureProject = featurePlan.project || undefined;
                 }
             }
             mappedWorktrees.push({
                 id: w.id,
                 branch: w.branch,
                 path: w.path,
-                epicId: w.epic_id,
+                featureId: w.feature_id,
                 createdAt: w.created_at,
                 project: w.project,
                 agentsOpenWithGrid: w.agentsOpenWithGrid,
-                epicTopic,
-                epicProject,
+                featureTopic,
+                featureProject,
             });
         }
 
@@ -9733,9 +9733,9 @@ ${FOCUS_DIRECTIVE}`;
             worktrees: mappedWorktrees,
             controlPlaneMode: cpStatus.mode,
             suppressMainTerminals,
-            epicWorktreeMode,
+            featureWorktreeMode,
             projects,
-            epics,
+            features,
             availableRepos,
             activeRepoFilter: this._repoScopeFilter,
         });
@@ -9815,22 +9815,22 @@ ${FOCUS_DIRECTIVE}`;
         };
     }
 
-    private async _regenerateEpicFile(workspaceRoot: string, epicPlanId: string, db: KanbanDatabase): Promise<void> {
-        const epic = await db.getPlanByPlanId(epicPlanId);
-        if (!epic) {
-            console.warn(`[KanbanProvider] _regenerateEpicFile: epic not found for planId=${epicPlanId}, aborting.`);
+    private async _regenerateFeatureFile(workspaceRoot: string, featurePlanId: string, db: KanbanDatabase): Promise<void> {
+        const feature = await db.getPlanByPlanId(featurePlanId);
+        if (!feature) {
+            console.warn(`[KanbanProvider] _regenerateFeatureFile: feature not found for planId=${featurePlanId}, aborting.`);
             return;
         }
-        if (!epic.isEpic) {
-            console.warn(`[KanbanProvider] _regenerateEpicFile: epic.isEpic is falsy (${epic.isEpic}) for planId=${epicPlanId}, aborting.`);
+        if (!feature.isFeature) {
+            console.warn(`[KanbanProvider] _regenerateFeatureFile: feature.isFeature is falsy (${feature.isFeature}) for planId=${featurePlanId}, aborting.`);
             return;
         }
-        const subtasks = await db.getSubtasksByEpicId(epicPlanId);
-        console.log(`[KanbanProvider] _regenerateEpicFile: epicPlanId=${epicPlanId}, subtasks found=${subtasks.length}`);
-        const epicAbsPath = path.resolve(workspaceRoot, epic.planFile);
+        const subtasks = await db.getSubtasksByFeatureId(featurePlanId);
+        console.log(`[KanbanProvider] _regenerateFeatureFile: featurePlanId=${featurePlanId}, subtasks found=${subtasks.length}`);
+        const featureAbsPath = path.resolve(workspaceRoot, feature.planFile);
         let existingContent = '';
         try {
-            existingContent = await fs.promises.readFile(epicAbsPath, 'utf8');
+            existingContent = await fs.promises.readFile(featureAbsPath, 'utf8');
         } catch { /* file may not exist yet */ }
         const subtaskLines = subtasks.map(st => {
             const basename = path.basename(st.planFile);
@@ -9850,22 +9850,22 @@ ${FOCUS_DIRECTIVE}`;
             newContent = existingContent.replace(/\n*$/, '') + '\n\n' + subtaskSection + '\n';
         }
 
-        // WORKTREES block: only emitted when the epic actually has worktrees (per-subtask
-        // or high-low mode) — `none`-mode epics see no change to their file. Mirrors the
+        // WORKTREES block: only emitted when the feature actually has worktrees (per-subtask
+        // or high-low mode) — `none`-mode features see no change to their file. Mirrors the
         // SUBTASKS block's begin/end marker replace-or-append shape exactly, including the
         // byte-identical no-op skip below, so this doesn't cause the file watcher to
         // re-fire on every regen.
         const allWorktrees = await db.getWorktrees();
-        const epicWorktrees = allWorktrees.filter(w => String(w.epic_id) === String(epicPlanId));
-        if (epicWorktrees.length > 0) {
+        const featureWorktrees = allWorktrees.filter(w => String(w.feature_id) === String(featurePlanId));
+        if (featureWorktrees.length > 0) {
             // The true integration worktree has neither subtask_plan_id (per-subtask mode's
             // per-subtask worktrees) nor tier (high-low mode's tier worktrees) set.
-            const integrationWt = epicWorktrees.find(w => !w.subtask_plan_id && !w.tier);
-            const subtaskWtByPlanId = new Map(epicWorktrees.filter(w => w.subtask_plan_id).map(w => [String(w.subtask_plan_id), w]));
-            const tierWts = epicWorktrees.filter(w => w.tier);
+            const integrationWt = featureWorktrees.find(w => !w.subtask_plan_id && !w.tier);
+            const subtaskWtByPlanId = new Map(featureWorktrees.filter(w => w.subtask_plan_id).map(w => [String(w.subtask_plan_id), w]));
+            const tierWts = featureWorktrees.filter(w => w.tier);
             const worktreeLines: string[] = [];
             if (integrationWt) {
-                worktreeLines.push(`- **Epic integration**: \`${integrationWt.branch}\` → \`${integrationWt.path}\``);
+                worktreeLines.push(`- **Feature integration**: \`${integrationWt.branch}\` → \`${integrationWt.path}\``);
             }
             for (const wt of tierWts) {
                 worktreeLines.push(`- **${wt.tier === 'high' ? 'High' : 'Low'}-complexity tier**: \`${wt.branch}\` → \`${wt.path}\``);
@@ -9888,15 +9888,15 @@ ${FOCUS_DIRECTIVE}`;
             }
         }
         // Embed/refresh a derived **Complexity:** marker (= max active-subtask score) in the
-        // epic file. Epic complexity is derived in the DB, but the plan watcher's
+        // feature file. Feature complexity is derived in the DB, but the plan watcher's
         // insertFileDerivedPlan re-parses the FILE on every rescan and overwrites the derived
-        // value with whatever the file says — so a markerless epic file clobbers its own
+        // value with whatever the file says — so a markerless feature file clobbers its own
         // complexity to 'Unknown' on the next restart. Writing the score the watcher will read
-        // back makes the derived value survive a rescan. Derived from subtasks (not the epic's
+        // back makes the derived value survive a rescan. Derived from subtasks (not the feature's
         // own column) so it's correct even if that column is mid-clobber.
-        const epicMaxScore = subtasks.reduce((m, s) => Math.max(m, parseComplexityScore(s.complexity || '')), 0);
-        if (epicMaxScore >= 1) {
-            const complexityLine = `**Complexity:** ${epicMaxScore}`;
+        const featureMaxScore = subtasks.reduce((m, s) => Math.max(m, parseComplexityScore(s.complexity || '')), 0);
+        if (featureMaxScore >= 1) {
+            const complexityLine = `**Complexity:** ${featureMaxScore}`;
             const complexityRe = /^[ \t>*\-]*\*\*Complexity:\*\*[^\n]*$/im;
             newContent = complexityRe.test(newContent)
                 ? newContent.replace(complexityRe, complexityLine)
@@ -9904,8 +9904,8 @@ ${FOCUS_DIRECTIVE}`;
         }
         // Content no-op: skip the write (and the registerPendingCreation guard) when the
         // generated content is byte-identical to what's already on disk. This breaks the
-        // epic-regen self-write loop at its source — an identical rewrite re-fires the plan
-        // watcher, which re-enters the refresh path, which re-regenerates the epic file.
+        // feature-regen self-write loop at its source — an identical rewrite re-fires the plan
+        // watcher, which re-enters the refresh path, which re-regenerates the feature file.
         // The comparison is exact string equality; existingContent was read with the same
         // utf8 encoding used to build newContent, so there is no encoding/newline drift.
         // Must run BEFORE registerPendingCreation so no stale pending-creation entry is set
@@ -9914,40 +9914,40 @@ ${FOCUS_DIRECTIVE}`;
         if (newContent === existingContent) {
             return;
         }
-        GlobalPlanWatcherService.registerPendingCreation(epicAbsPath);
-        await fs.promises.writeFile(epicAbsPath, newContent, 'utf8');
+        GlobalPlanWatcherService.registerPendingCreation(featureAbsPath);
+        await fs.promises.writeFile(featureAbsPath, newContent, 'utf8');
     }
 
     /**
-     * Self-heal pass: regenerate every epic file in the workspace so the subtask
+     * Self-heal pass: regenerate every feature file in the workspace so the subtask
      * list stays in sync with the DB. Called once on startup after the board is
-     * first activated. This catches epic files that got out of sync due to bugs,
+     * first activated. This catches feature files that got out of sync due to bugs,
      * manual edits, watcher races, or extension upgrades — none of which trigger
-     * the per-subtask-mutation path that normally keeps epic files current.
+     * the per-subtask-mutation path that normally keeps feature files current.
      */
-    public async regenerateAllEpicFiles(workspaceRoot: string): Promise<void> {
+    public async regenerateAllFeatureFiles(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return;
         const workspaceId = await db.getWorkspaceId();
         if (!workspaceId) return;
-        const epics = await db.getEpicPlans(workspaceId);
-        for (const epic of epics) {
+        const features = await db.getFeaturePlans(workspaceId);
+        for (const feature of features) {
             try {
-                await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
+                await this._regenerateFeatureFile(workspaceRoot, feature.planId, db);
             } catch (err) {
-                console.warn(`[KanbanProvider] regenerateAllEpicFiles: failed for ${epic.planId} (${epic.topic}):`, err);
+                console.warn(`[KanbanProvider] regenerateAllFeatureFiles: failed for ${feature.planId} (${feature.topic}):`, err);
             }
         }
     }
 
     /**
-     * Remove a single subtask from its parent epic. Shared entry point for BOTH the
-     * webview `removeSubtaskFromEpic` message and the agent/API path (LocalApiServer
+     * Remove a single subtask from its parent feature. Shared entry point for BOTH the
+     * webview `removeSubtaskFromFeature` message and the agent/API path (LocalApiServer
      * `/kanban/feature/remove` → TaskViewerProvider → here). Detaches the subtask,
-     * abandons its per-subtask worktree, regenerates the epic file, refreshes the
+     * abandons its per-subtask worktree, regenerates the feature file, refreshes the
      * board, and unlinks the subtask from external trackers (best-effort).
      */
-    public async _removeSubtaskFromEpic(
+    public async _removeSubtaskFromFeature(
         workspaceRoot: string,
         subtaskSessionId: string
     ): Promise<{ success: boolean; error?: string }> {
@@ -9959,10 +9959,10 @@ ${FOCUS_DIRECTIVE}`;
         if (!subtask) {
             return { success: false, error: 'Subtask not found.' };
         }
-        const epicId = subtask.epicId;
-        await db.updateEpicStatus(subtask.planId, 0, '');
-        // per-subtask mode: a subtask removed from its epic gets its worktree
-        // abandoned (discarded, not merged) — it's no longer part of the epic's
+        const featureId = subtask.featureId;
+        await db.updateFeatureStatus(subtask.planId, 0, '');
+        // per-subtask mode: a subtask removed from its feature gets its worktree
+        // abandoned (discarded, not merged) — it's no longer part of the feature's
         // convergence, so its branch shouldn't land in the integration branch.
         const subtaskWorktrees = (await db.getWorktrees()).filter(w => w.subtask_plan_id === subtask.planId);
         for (const wt of subtaskWorktrees) {
@@ -9971,148 +9971,148 @@ ${FOCUS_DIRECTIVE}`;
         if (subtaskWorktrees.length > 0) {
             await this._pruneWorktrees(workspaceRoot);
         }
-        if (epicId) {
-            await this._regenerateEpicFile(workspaceRoot, epicId, db);
+        if (featureId) {
+            await this._regenerateFeatureFile(workspaceRoot, featureId, db);
         }
         await this._refreshBoard(workspaceRoot);
         // Unlink the removed subtask from external trackers (best-effort).
         const linearSvc = this._getLinearService(workspaceRoot);
         const clickupSvc = this._getClickUpService(workspaceRoot);
         await Promise.allSettled([
-            linearSvc.unlinkSubtasksFromEpic([subtask.planFile]),
-            clickupSvc.unlinkSubtasksFromEpic([subtask.planFile])
+            linearSvc.unlinkSubtasksFromFeature([subtask.planFile]),
+            clickupSvc.unlinkSubtasksFromFeature([subtask.planFile])
         ]);
         return { success: true };
     }
 
     /**
-     * Delete an epic and optionally its subtasks. Shared entry point for BOTH the
-     * webview `deleteEpic` message and the agent/API path (LocalApiServer
+     * Delete an feature and optionally its subtasks. Shared entry point for BOTH the
+     * webview `deleteFeature` message and the agent/API path (LocalApiServer
      * `/kanban/feature/delete` → TaskViewerProvider → here). Abandons all child
      * worktrees, either tombstones the subtasks or detaches them, tombstones the
-     * epic, refreshes the board, and unlinks subtasks from external trackers
+     * feature, refreshes the board, and unlinks subtasks from external trackers
      * (best-effort).
      */
-    public async _deleteEpic(
+    public async _deleteFeature(
         workspaceRoot: string,
-        epicSessionId: string,
+        featureSessionId: string,
         deleteSubtasks: boolean
     ): Promise<{ success: boolean; error?: string }> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban database not available.' };
         }
-        const epic = await db.getPlanByPlanId(epicSessionId);
-        if (!epic || !epic.isEpic) {
-            return { success: false, error: 'Epic not found.' };
+        const feature = await db.getPlanByPlanId(featureSessionId);
+        if (!feature || !feature.isFeature) {
+            return { success: false, error: 'Feature not found.' };
         }
         // Capture the subtasks up front — after tombstone/clear we can no longer
         // enumerate them, and we need their plan files to unlink them from the
         // external trackers below.
-        const epicSubtasks = await db.getSubtasksByEpicId(epic.planId);
-        // Epic abandon: remove every child worktree (subtask + integration) —
+        const featureSubtasks = await db.getSubtasksByFeatureId(feature.planId);
+        // Feature abandon: remove every child worktree (subtask + integration) —
         // discarded, not merged. Runs regardless of deleteSubtasks: even when
-        // subtasks are kept on the board (unlinked from the epic), their
+        // subtasks are kept on the board (unlinked from the feature), their
         // per-subtask worktrees no longer have a convergence point to target.
-        await this._cleanupEpicWorktrees(workspaceRoot, db, epic.planId, 'abandoned');
+        await this._cleanupFeatureWorktrees(workspaceRoot, db, feature.planId, 'abandoned');
         if (deleteSubtasks) {
-            for (const st of epicSubtasks) {
+            for (const st of featureSubtasks) {
                 await db.tombstonePlan(st.planId);
             }
         } else {
-            await db.clearEpicIdForEpic(epic.planId);
+            await db.clearFeatureIdForFeature(feature.planId);
         }
-        await db.tombstonePlan(epic.planId);
+        await db.tombstonePlan(feature.planId);
         await this._refreshBoard(workspaceRoot);
         // Unlink the subtasks from external trackers (best-effort) so no Linear
-        // issue / ClickUp task is left parented to the now-deleted epic.
-        if (epicSubtasks.length > 0) {
+        // issue / ClickUp task is left parented to the now-deleted feature.
+        if (featureSubtasks.length > 0) {
             const linearSvc = this._getLinearService(workspaceRoot);
             const clickupSvc = this._getClickUpService(workspaceRoot);
-            const subtaskFiles = epicSubtasks.map(st => st.planFile);
+            const subtaskFiles = featureSubtasks.map(st => st.planFile);
             await Promise.allSettled([
-                linearSvc.unlinkSubtasksFromEpic(subtaskFiles),
-                clickupSvc.unlinkSubtasksFromEpic(subtaskFiles)
+                linearSvc.unlinkSubtasksFromFeature(subtaskFiles),
+                clickupSvc.unlinkSubtasksFromFeature(subtaskFiles)
             ]);
         }
         return { success: true };
     }
 
     /**
-     * Create an epic from a set of subtask plan IDs and link those subtasks to it.
-     * Shared entry point for BOTH the webview `createEpic` message and the agent/API
-     * path (LocalApiServer `/kanban/epic` → TaskViewerProvider → here). Mirrors the
-     * webview behaviour exactly: DB upsert + epic file write + subtask linking +
-     * board refresh. Syncs the epic + subtasks outbound to Linear/ClickUp as parent
+     * Create an feature from a set of subtask plan IDs and link those subtasks to it.
+     * Shared entry point for BOTH the webview `createFeature` message and the agent/API
+     * path (LocalApiServer `/kanban/feature` → TaskViewerProvider → here). Mirrors the
+     * webview behaviour exactly: DB upsert + feature file write + subtask linking +
+     * board refresh. Syncs the feature + subtasks outbound to Linear/ClickUp as parent
      * issue/task + child issues/tasks IF real-time sync is enabled (best-effort,
      * does not block on failure). `registerPendingCreation` makes the watcher skip
      * the new file. Returns a result object instead of showing VS Code dialogs so the
      * caller decides how to surface failures.
      */
-    public async createEpicFromPlanIds(
+    public async createFeatureFromPlanIds(
         workspaceRoot: string,
         name: string,
         planIds: string[],
         description?: string
-    ): Promise<{ success: boolean; epicPlanId?: string; epicSessionId?: string; error?: string }> {
+    ): Promise<{ success: boolean; featurePlanId?: string; featureSessionId?: string; error?: string }> {
         // Strip newlines so a multi-line name cannot inject a second YAML key or H1 heading.
-        const epicName = (name || '').replace(/[\r\n]+/g, ' ').trim();
+        const featureName = (name || '').replace(/[\r\n]+/g, ' ').trim();
         const subtaskPlanIds = Array.isArray(planIds) ? planIds : [];
-        if (!epicName) {
-            return { success: false, error: 'Epic name is required.' };
+        if (!featureName) {
+            return { success: false, error: 'Feature name is required.' };
         }
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban database not available.' };
         }
-        // DIAGNOSTIC (is_epic clobber investigation): is the Provider writing is_epic=1 to the
+        // DIAGNOSTIC (is_feature clobber investigation): is the Provider writing is_feature=1 to the
         // SAME in-memory sql.js instance the GlobalPlanWatcherService reads/persists? The watcher
         // resolves its DB via KanbanDatabase.forWorkspace(workspaceRoot) (GlobalPlanWatcherService.ts:451).
         // If these two are NOT ===, the watcher can flush a stale snapshot over this write —
         // clobber candidate ❷. If they ARE ===, ❷ is dead and the clobber is an explicit demotion
-        // (watch for the EPIC CLOBBER log). See docs/investigation-epic-is_epic-clobber.md.
+        // (watch for the FEATURE CLOBBER log). See docs/investigation-feature-is_feature-clobber.md.
         const watcherDb = KanbanDatabase.forWorkspace(workspaceRoot);
         const instanceCheck =
-            `createEpicFromPlanIds DB-instance check: provider=${db.instanceId} (dbPath=${db.dbPath}), ` +
+            `createFeatureFromPlanIds DB-instance check: provider=${db.instanceId} (dbPath=${db.dbPath}), ` +
             `watcher=${watcherDb.instanceId} (dbPath=${watcherDb.dbPath}), sameInstance=${db === watcherDb}`;
         console.log(`[KanbanProvider] ${instanceCheck}`);
-        appendEpicClobberDiag(workspaceRoot, instanceCheck);
+        appendFeatureClobberDiag(workspaceRoot, instanceCheck);
         const workspaceId = await db.getWorkspaceId();
         if (!workspaceId) {
-            return { success: false, error: 'Workspace ID not found. Cannot create epic.' };
+            return { success: false, error: 'Workspace ID not found. Cannot create feature.' };
         }
         const subtasks: any[] = [];
         for (const pid of subtaskPlanIds) {
             const plan = await db.getPlanByPlanId(pid);
             if (plan) subtasks.push(plan);
         }
-        // Zero subtasks is now valid — creates a blank epic. The "No valid subtasks"
-        // guard is removed; callers that pass invalid IDs simply get an epic with
+        // Zero subtasks is now valid — creates a blank feature. The "No valid subtasks"
+        // guard is removed; callers that pass invalid IDs simply get an feature with
         // fewer linked subtasks than requested.
         // WARNING: if the caller expected subtasks but none resolved (stale IDs),
         // emit a warning so the silent failure is visible.
         if (subtaskPlanIds.length > 0 && subtasks.length === 0) {
-            console.warn(`[KanbanProvider] createEpicFromPlanIds: ${subtaskPlanIds.length} subtask IDs provided but 0 resolved to valid plans. Creating blank epic anyway.`);
+            console.warn(`[KanbanProvider] createFeatureFromPlanIds: ${subtaskPlanIds.length} subtask IDs provided but 0 resolved to valid plans. Creating blank feature anyway.`);
         }
-        // Inherit project from subtasks so the epic appears on the same project-filtered
-        // board as its children. Without this, the new epic record has project='' /
+        // Inherit project from subtasks so the feature appears on the same project-filtered
+        // board as its children. Without this, the new feature record has project='' /
         // project_id=NULL and is filtered off any project-specific board view — the
-        // epic card never appears, which is the reported "not appearing as epic" bug.
-        // For blank epics (zero subtasks), fall back to the board's active project filter
-        // (the DB config key setProjectFilter writes on every dropdown switch) so the epic
+        // feature card never appears, which is the reported "not appearing as feature" bug.
+        // For blank features (zero subtasks), fall back to the board's active project filter
+        // (the DB config key setProjectFilter writes on every dropdown switch) so the feature
         // shows up on the board the user was looking at when they created it. This mirrors
         // how the file watcher stamps imported plans (GlobalPlanWatcherService._handlePlanFile).
-        let epicProject = subtasks.find(st => st.project)?.project || '';
-        let epicProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
-        if (!epicProject) {
+        let featureProject = subtasks.find(st => st.project)?.project || '';
+        let featureProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
+        if (!featureProject) {
             const activeProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
-            if (activeProject) epicProject = activeProject;
+            if (activeProject) featureProject = activeProject;
         }
         // upsertPlan does NOT resolve project_id from the project name (unlike
-        // insertFileDerivedPlan). Resolve it here so the epic appears on the
+        // insertFileDerivedPlan). Resolve it here so the feature appears on the
         // project-filtered board, which JOINs on project_id.
-        if (epicProjectId === null && epicProject) {
-            epicProjectId = await db.getProjectIdByName(workspaceId, epicProject);
+        if (featureProjectId === null && featureProject) {
+            featureProjectId = await db.getProjectIdByName(workspaceId, featureProject);
         }
         const customColumns = await this._getCustomKanbanColumns(workspaceRoot);
         const columnDefs = await this._buildKanbanColumns([], customColumns);
@@ -10123,7 +10123,7 @@ ${FOCUS_DIRECTIVE}`;
         }
         let resolvedColumn: string;
         if (subtasks.length === 0) {
-            // Blank epic: no subtasks to derive from — default to CREATED.
+            // Blank feature: no subtasks to derive from — default to CREATED.
             resolvedColumn = 'CREATED';
         } else {
             resolvedColumn = subtasks
@@ -10132,32 +10132,32 @@ ${FOCUS_DIRECTIVE}`;
                  .sort((a: string, b: string) => (ordinalMap.get(a) ?? Infinity) - (ordinalMap.get(b) ?? Infinity))[0] || this._normalizeLegacyKanbanColumn(subtasks[0].kanbanColumn) || 'CREATED';
         }
         const effectiveColumn = resolvedColumn === 'BACKLOG' ? 'CREATED' : resolvedColumn;
-        console.log(`[KanbanProvider] createEpicFromPlanIds: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
+        console.log(`[KanbanProvider] createFeatureFromPlanIds: subtask columns = [${subtasks.map(st => st.kanbanColumn).join(', ')}], resolvedColumn=${resolvedColumn}, effectiveColumn=${effectiveColumn}`);
         const planId = crypto.randomUUID();
         const sessionId = crypto.randomUUID();
 
-        const slug = (epicName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'epic');
-        const epicDir = path.join(workspaceRoot, '.switchboard', 'epics');
-        await fs.promises.mkdir(epicDir, { recursive: true });
+        const slug = (featureName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'feature');
+        const featureDir = path.join(workspaceRoot, '.switchboard', 'features');
+        await fs.promises.mkdir(featureDir, { recursive: true });
         // Embed the full planId in the filename so the link survives re-import:
-        // subtask→epic links are keyed on the epic's plan_id, and the watcher derives
+        // subtask→feature links are keyed on the feature's plan_id, and the watcher derives
         // the plan_id back from this trailing UUID (see GlobalPlanWatcherService). A
         // bare slug would let a re-import mint a fresh random id and orphan every subtask.
-        const epicPlanFile = path.join('.switchboard', 'epics', `${slug}-${planId}.md`);
-        const epicPath = path.join(workspaceRoot, epicPlanFile);
+        const featurePlanFile = path.join('.switchboard', 'features', `${slug}-${planId}.md`);
+        const featurePath = path.join(workspaceRoot, featurePlanFile);
 
         const now = new Date().toISOString();
         const upsertOk = await db.upsertPlan({
             planId,
             sessionId,
-            topic: epicName,
-            planFile: epicPlanFile,
+            topic: featureName,
+            planFile: featurePlanFile,
             kanbanColumn: effectiveColumn,
             status: 'active',
             complexity: 'Unknown',
             tags: '',
             repoScope: '',
-            project: epicProject,
+            project: featureProject,
             workspaceId,
             createdAt: now,
             updatedAt: now,
@@ -10168,107 +10168,107 @@ ${FOCUS_DIRECTIVE}`;
             routedTo: '',
             dispatchedAgent: '',
             dispatchedIde: '',
-            isEpic: 1,
-            epicId: '',
-            projectId: epicProjectId
+            isFeature: 1,
+            featureId: '',
+            projectId: featureProjectId
         });
 
         if (!upsertOk) {
-            return { success: false, error: 'Failed to create epic: DB upsert failed. The epic file was not written.' };
+            return { success: false, error: 'Failed to create feature: DB upsert failed. The feature file was not written.' };
         }
 
         // Verify the record is findable by the new planId. If ON CONFLICT kept an old
         // plan_id (pre-existing record for the same plan_file), use the actual DB plan_id
         // for all downstream operations.
-        let effectiveEpicPlanId: string = planId;
+        let effectiveFeaturePlanId: string = planId;
         const verifyRecord = await db.getPlanByPlanId(planId);
         if (!verifyRecord) {
             // ON CONFLICT kept an old plan_id — look up by plan_file
-            const existingByFile = await db.getPlanByPlanFile(epicPlanFile, workspaceId);
+            const existingByFile = await db.getPlanByPlanFile(featurePlanFile, workspaceId);
             if (existingByFile) {
-                effectiveEpicPlanId = existingByFile.planId;
-                console.warn(`[KanbanProvider] createEpicFromPlanIds: planId mismatch — upsert kept old plan_id ${effectiveEpicPlanId}, expected ${planId}. Using DB plan_id for all downstream operations.`);
+                effectiveFeaturePlanId = existingByFile.planId;
+                console.warn(`[KanbanProvider] createFeatureFromPlanIds: planId mismatch — upsert kept old plan_id ${effectiveFeaturePlanId}, expected ${planId}. Using DB plan_id for all downstream operations.`);
             } else {
-                return { success: false, error: 'Failed to create epic: record not found after upsert.' };
+                return { success: false, error: 'Failed to create feature: record not found after upsert.' };
             }
         }
 
         // The description lives in the markdown body under ## Goal, so newlines are safe
         // and preserve the agent's multi-line goal formatting. Only normalize CRLF and
         // trim — no flattening. No frontmatter is emitted — the file begins with the H1.
-        const epicDesc = (description ? String(description).replace(/\r\n/g, '\n').trim() : '');
-        const goalSection = epicDesc ? `## Goal\n\n${epicDesc}\n` : '';
-        const epicContent = `# ${epicName}\n\n${goalSection}`;
+        const featureDesc = (description ? String(description).replace(/\r\n/g, '\n').trim() : '');
+        const goalSection = featureDesc ? `## Goal\n\n${featureDesc}\n` : '';
+        const featureContent = `# ${featureName}\n\n${goalSection}`;
 
         // Register before writing so the file watcher skips this file —
-        // the DB record is already committed above with is_epic=1.
-        GlobalPlanWatcherService.registerPendingCreation(epicPath);
-        await fs.promises.writeFile(epicPath, epicContent, 'utf8');
+        // the DB record is already committed above with is_feature=1.
+        GlobalPlanWatcherService.registerPendingCreation(featurePath);
+        await fs.promises.writeFile(featurePath, featureContent, 'utf8');
 
-        // per-subtask mode: provision the epic integration worktree up front (even for a
-        // blank epic with zero subtasks yet) so it exists as soon as the epic does — the
+        // per-subtask mode: provision the feature integration worktree up front (even for a
+        // blank feature with zero subtasks yet) so it exists as soon as the feature does — the
         // convergence point subtasks branch off. Read the mode once and snapshot it for
-        // the rest of this call so a mode toggle mid-creation can't split the epic between
+        // the rest of this call so a mode toggle mid-creation can't split the feature between
         // two provisioning behaviors.
-        const epicWorktreeModeSnapshot = (await db.getConfig('epic_worktree_mode')) || 'none';
-        if (epicWorktreeModeSnapshot === 'per-subtask') {
-            await this._ensureEpicIntegrationWorktree(workspaceRoot, db, effectiveEpicPlanId, epicName);
-        } else if (epicWorktreeModeSnapshot === 'high-low') {
-            await this._provisionHighLowTierWorktrees(workspaceRoot, db, effectiveEpicPlanId, epicName);
+        const featureWorktreeModeSnapshot = (await db.getConfig('feature_worktree_mode')) || 'none';
+        if (featureWorktreeModeSnapshot === 'per-subtask') {
+            await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, effectiveFeaturePlanId, featureName);
+        } else if (featureWorktreeModeSnapshot === 'high-low') {
+            await this._provisionHighLowTierWorktrees(workspaceRoot, db, effectiveFeaturePlanId, featureName);
         }
 
         for (const st of subtasks) {
             // Use planId (not sessionId) — file-watcher-imported plans have session_id=''
             // and getPlanBySessionId('') would find an arbitrary other plan instead.
-            const linkOk = await db.updateEpicStatus(st.planId || st.sessionId, 0, effectiveEpicPlanId);
+            const linkOk = await db.updateFeatureStatus(st.planId || st.sessionId, 0, effectiveFeaturePlanId);
             if (!linkOk) {
-                console.warn(`[KanbanProvider] createEpicFromPlanIds: updateEpicStatus failed for subtask ${st.planId}`);
+                console.warn(`[KanbanProvider] createFeatureFromPlanIds: updateFeatureStatus failed for subtask ${st.planId}`);
             } else {
-                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, effectiveEpicPlanId, epicName, st.planId || st.sessionId, st.topic, epicWorktreeModeSnapshot);
+                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, effectiveFeaturePlanId, featureName, st.planId || st.sessionId, st.topic, featureWorktreeModeSnapshot);
             }
         }
-        await this._regenerateEpicFile(workspaceRoot, effectiveEpicPlanId, db);
-        // Re-assert is_epic=1 as the FINAL DB write before refresh — defensive hardening
+        await this._regenerateFeatureFile(workspaceRoot, effectiveFeaturePlanId, db);
+        // Re-assert is_feature=1 as the FINAL DB write before refresh — defensive hardening
         // so any intermediate file-watcher/scan event that might touch the record leaves
-        // is_epic=1 as the last-write-wins state.
-        await db.updateEpicStatus(effectiveEpicPlanId, 1, '');
-        // Epic complexity is derived = max of active subtask scores. The link loop above
-        // drove recomputeEpicComplexity via updateEpicStatus; this explicit call guarantees
-        // the epic carries the true max once all subtasks are linked, regardless of the
-        // order of intermediate is_epic/epic_id writes.
-        await db.recomputeEpicComplexity(effectiveEpicPlanId);
-        const verifyEpic = await db.getPlanByPlanId(effectiveEpicPlanId);
-        console.log(`[KanbanProvider] createEpicFromPlanIds: verify is_epic=${verifyEpic?.isEpic}, kanbanColumn=${verifyEpic?.kanbanColumn}, project=${verifyEpic?.project}, projectId=${(verifyEpic as any)?.projectId}, planFile=${verifyEpic?.planFile}, activeProjectFilter=${this._projectFilter}`);
+        // is_feature=1 as the last-write-wins state.
+        await db.updateFeatureStatus(effectiveFeaturePlanId, 1, '');
+        // Feature complexity is derived = max of active subtask scores. The link loop above
+        // drove recomputeFeatureComplexity via updateFeatureStatus; this explicit call guarantees
+        // the feature carries the true max once all subtasks are linked, regardless of the
+        // order of intermediate is_feature/feature_id writes.
+        await db.recomputeFeatureComplexity(effectiveFeaturePlanId);
+        const verifyFeature = await db.getPlanByPlanId(effectiveFeaturePlanId);
+        console.log(`[KanbanProvider] createFeatureFromPlanIds: verify is_feature=${verifyFeature?.isFeature}, kanbanColumn=${verifyFeature?.kanbanColumn}, project=${verifyFeature?.project}, projectId=${(verifyFeature as any)?.projectId}, planFile=${verifyFeature?.planFile}, activeProjectFilter=${this._projectFilter}`);
         this._markConfigDirty(); // defense-in-depth: ensure the post-creation refresh isn't skipped by the no-op guard
         await this._refreshBoard(workspaceRoot);
-        // Sync the epic + subtasks outbound to Linear/ClickUp (best-effort, does not block on failure).
+        // Sync the feature + subtasks outbound to Linear/ClickUp (best-effort, does not block on failure).
         const subtaskSyncParams = subtasks.map((st: any) => ({
             planFile: st.planFile,
             planId: st.planId,
             topic: st.topic,
             complexity: st.complexity
         }));
-        await this._syncEpicOutbound(workspaceRoot, epicPlanFile, effectiveEpicPlanId, epicName, effectiveColumn, subtaskSyncParams);
-        return { success: true, epicPlanId: effectiveEpicPlanId, epicSessionId: sessionId };
+        await this._syncFeatureOutbound(workspaceRoot, featurePlanFile, effectiveFeaturePlanId, featureName, effectiveColumn, subtaskSyncParams);
+        return { success: true, featurePlanId: effectiveFeaturePlanId, featureSessionId: sessionId };
     }
 
     /**
-     * Batch-assign existing plans to an existing epic. Batch form of the single-card
-     * `addSubtaskToEpic` webview handler — but where that handler aborts on the first
+     * Batch-assign existing plans to an existing feature. Batch form of the single-card
+     * `addSubtaskToFeature` webview handler — but where that handler aborts on the first
      * already-assigned plan, this one skips-and-reports so one bad id doesn't sink the
-     * whole batch. Re-checks each plan's `epicId` immediately before writing to narrow
+     * whole batch. Re-checks each plan's `featureId` immediately before writing to narrow
      * (not eliminate) the check-then-act race with concurrent webview edits. Honors the
-     * same `epic_lock_columns` guard, evaluated once up-front for the whole batch.
-     * Regenerates the epic file + refreshes the board ONCE after the loop.
+     * same `feature_lock_columns` guard, evaluated once up-front for the whole batch.
+     * Regenerates the feature file + refreshes the board ONCE after the loop.
      */
-    public async assignPlansToEpic(
+    public async assignPlansToFeature(
         workspaceRoot: string,
-        epicPlanId: string,
+        featurePlanId: string,
         planIds: string[]
     ): Promise<{ success: boolean; assigned: string[]; skipped: string[]; error?: string }> {
         const ids = Array.isArray(planIds) ? planIds : [];
-        if (!epicPlanId) {
-            return { success: false, assigned: [], skipped: [], error: 'Epic planId is required.' };
+        if (!featurePlanId) {
+            return { success: false, assigned: [], skipped: [], error: 'Feature planId is required.' };
         }
         if (ids.length === 0) {
             return { success: false, assigned: [], skipped: [], error: 'No planIds provided.' };
@@ -10277,34 +10277,34 @@ ${FOCUS_DIRECTIVE}`;
         if (!db || !(await db.ensureReady())) {
             return { success: false, assigned: [], skipped: [], error: 'Kanban database not available.' };
         }
-        const epic = await db.getPlanByPlanId(epicPlanId);
-        if (!epic || !epic.isEpic) {
-            return { success: false, assigned: [], skipped: [], error: 'Epic not found.' };
+        const feature = await db.getPlanByPlanId(featurePlanId);
+        if (!feature || !feature.isFeature) {
+            return { success: false, assigned: [], skipped: [], error: 'Feature not found.' };
         }
-        const lockColumnsRaw = await db.getConfig('epic_lock_columns');
+        const lockColumnsRaw = await db.getConfig('feature_lock_columns');
         const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
-        if (lockColumns.includes(epic.kanbanColumn)) {
-            return { success: false, assigned: [], skipped: [], error: 'Cannot modify subtasks of an epic in a locked column.' };
+        if (lockColumns.includes(feature.kanbanColumn)) {
+            return { success: false, assigned: [], skipped: [], error: 'Cannot modify subtasks of an feature in a locked column.' };
         }
         // Snapshot the mode once for the whole batch — see _provisionSubtaskWorktreeIfNeeded's
-        // modeSnapshot doc: a toggle mid-batch must not split one assignPlansToEpic call
+        // modeSnapshot doc: a toggle mid-batch must not split one assignPlansToFeature call
         // between two provisioning behaviors.
-        const epicWorktreeModeSnapshot = (await db.getConfig('epic_worktree_mode')) || 'none';
+        const featureWorktreeModeSnapshot = (await db.getConfig('feature_worktree_mode')) || 'none';
         const assigned: string[] = [];
         const skipped: string[] = [];
         const assignedRecords: any[] = [];
         for (const pid of ids) {
             const subtask = await db.getPlanByPlanId(pid);
-            // Skip-and-report: missing, itself an epic, or already on a different epic.
-            if (!subtask || subtask.isEpic) { skipped.push(pid); continue; }
-            if (subtask.epicId && subtask.epicId !== epic.planId) { skipped.push(pid); continue; }
-            await db.updateEpicStatus(subtask.planId, 0, epic.planId);
-            await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, epic.planId, epic.topic, subtask.planId, subtask.topic, epicWorktreeModeSnapshot);
+            // Skip-and-report: missing, itself an feature, or already on a different feature.
+            if (!subtask || subtask.isFeature) { skipped.push(pid); continue; }
+            if (subtask.featureId && subtask.featureId !== feature.planId) { skipped.push(pid); continue; }
+            await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
+            await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, feature.planId, feature.topic, subtask.planId, subtask.topic, featureWorktreeModeSnapshot);
             assigned.push(pid);
             assignedRecords.push(subtask);
         }
         if (assigned.length > 0) {
-            await this._regenerateEpicFile(workspaceRoot, epic.planId, db);
+            await this._regenerateFeatureFile(workspaceRoot, feature.planId, db);
             await this._refreshBoard(workspaceRoot);
             // Sync the newly assigned subtasks outbound to Linear/ClickUp (best-effort).
             const subtaskSyncParams = assignedRecords.map((st: any) => ({
@@ -10313,36 +10313,36 @@ ${FOCUS_DIRECTIVE}`;
                 topic: st.topic,
                 complexity: st.complexity
             }));
-            await this._syncEpicOutbound(workspaceRoot, epic.planFile, epic.planId, epic.topic, epic.kanbanColumn, subtaskSyncParams);
+            await this._syncFeatureOutbound(workspaceRoot, feature.planFile, feature.planId, feature.topic, feature.kanbanColumn, subtaskSyncParams);
         }
         return { success: true, assigned, skipped };
     }
 
     /**
-     * Split an epic into two new epics, partitioning its subtasks by a planId
+     * Split an feature into two new features, partitioning its subtasks by a planId
      * list. Shared entry point for the agent/API path (LocalApiServer
-     * `/kanban/feature/split` → TaskViewerProvider → here). The original epic is
+     * `/kanban/feature/split` → TaskViewerProvider → here). The original feature is
      * deleted (subtasks detached, not tombstoned); `keptPlanIds` go to the first
-     * new epic, the rest go to the second. Returns the two new epic planIds.
+     * new feature, the rest go to the second. Returns the two new feature planIds.
      */
-    public async splitEpic(
+    public async splitFeature(
         workspaceRoot: string,
-        epicPlanId: string,
+        featurePlanId: string,
         keptPlanIds: string[],
-        firstEpicName: string,
-        secondEpicName: string
-    ): Promise<{ success: boolean; firstEpicPlanId?: string; secondEpicPlanId?: string; error?: string }> {
+        firstFeatureName: string,
+        secondFeatureName: string
+    ): Promise<{ success: boolean; firstFeaturePlanId?: string; secondFeaturePlanId?: string; error?: string }> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban database not available.' };
         }
-        const epic = await db.getPlanByPlanId(epicPlanId);
-        if (!epic || !epic.isEpic) {
-            return { success: false, error: 'Epic not found.' };
+        const feature = await db.getPlanByPlanId(featurePlanId);
+        if (!feature || !feature.isFeature) {
+            return { success: false, error: 'Feature not found.' };
         }
-        const allSubtasks = await db.getSubtasksByEpicId(epic.planId);
+        const allSubtasks = await db.getSubtasksByFeatureId(feature.planId);
         if (allSubtasks.length < 2) {
-            return { success: false, error: 'Cannot split an epic with fewer than 2 subtasks.' };
+            return { success: false, error: 'Cannot split an feature with fewer than 2 subtasks.' };
         }
         const keptSet = new Set(keptPlanIds);
         const firstIds = allSubtasks.filter(st => keptSet.has(st.planId)).map(st => st.planId);
@@ -10350,38 +10350,38 @@ ${FOCUS_DIRECTIVE}`;
         if (firstIds.length === 0 || secondIds.length === 0) {
             return { success: false, error: 'Split partition must be non-empty on both sides.' };
         }
-        // Detach all subtasks from the original epic (no tombstone), then delete
-        // the original epic. This mirrors _deleteEpic with deleteSubtasks=false.
-        await this._deleteEpic(workspaceRoot, epic.planId, false);
-        // Create the two new epics with their respective subtask sets.
-        const firstResult = await this.createEpicFromPlanIds(workspaceRoot, firstEpicName, firstIds);
+        // Detach all subtasks from the original feature (no tombstone), then delete
+        // the original feature. This mirrors _deleteFeature with deleteSubtasks=false.
+        await this._deleteFeature(workspaceRoot, feature.planId, false);
+        // Create the two new features with their respective subtask sets.
+        const firstResult = await this.createFeatureFromPlanIds(workspaceRoot, firstFeatureName, firstIds);
         if (!firstResult.success) {
-            return { success: false, error: `Failed to create first epic: ${firstResult.error}` };
+            return { success: false, error: `Failed to create first feature: ${firstResult.error}` };
         }
-        const secondResult = await this.createEpicFromPlanIds(workspaceRoot, secondEpicName, secondIds);
+        const secondResult = await this.createFeatureFromPlanIds(workspaceRoot, secondFeatureName, secondIds);
         if (!secondResult.success) {
-            return { success: false, error: `Failed to create second epic: ${secondResult.error}` };
+            return { success: false, error: `Failed to create second feature: ${secondResult.error}` };
         }
         return {
             success: true,
-            firstEpicPlanId: firstResult.epicPlanId,
-            secondEpicPlanId: secondResult.epicPlanId
+            firstFeaturePlanId: firstResult.featurePlanId,
+            secondFeaturePlanId: secondResult.featurePlanId
         };
     }
 
     /**
-     * Best-effort outbound sync of an epic + its subtasks to Linear and ClickUp.
-     * Creates/updates the epic as a parent issue/task, then links subtasks as
+     * Best-effort outbound sync of an feature + its subtasks to Linear and ClickUp.
+     * Creates/updates the feature as a parent issue/task, then links subtasks as
      * children via the tracker's native parent/child fields. Does NOT block on
-     * sync failure — the epic is already created locally; sync is diagnostic-only.
+     * sync failure — the feature is already created locally; sync is diagnostic-only.
      * Uses Promise.allSettled so one service failing doesn't affect the other.
      */
-    private async _syncEpicOutbound(
+    private async _syncFeatureOutbound(
         workspaceRoot: string,
-        epicPlanFile: string,
-        epicPlanId: string,
-        epicTopic: string,
-        epicColumn: string,
+        featurePlanFile: string,
+        featurePlanId: string,
+        featureTopic: string,
+        featureColumn: string,
         subtasks: Array<{ planFile: string; planId: string; topic: string; complexity: string }>
     ): Promise<void> {
         const linear = this._getLinearService(workspaceRoot);
@@ -10398,23 +10398,23 @@ ${FOCUS_DIRECTIVE}`;
         const clickupSubtasks = subtasks.map(s => ({ planFile: s.planFile, planId: s.planId, topic: s.topic, complexity: s.complexity }));
 
         const results = await Promise.allSettled([
-            linearEnabled ? linear.syncEpicWithSubtasks({
-                epicPlanFile, epicTopic, epicColumn, subtasks: linearSubtasks
+            linearEnabled ? linear.syncFeatureWithSubtasks({
+                featurePlanFile, featureTopic, featureColumn, subtasks: linearSubtasks
             }) : Promise.resolve(null),
-            clickupEnabled ? clickup.syncEpicWithSubtasks({
-                epicPlanFile, epicPlanId, epicTopic, epicColumn, subtasks: clickupSubtasks
+            clickupEnabled ? clickup.syncFeatureWithSubtasks({
+                featurePlanFile, featurePlanId, featureTopic, featureColumn, subtasks: clickupSubtasks
             }) : Promise.resolve(null)
         ]);
 
         const linearResult = results[0].status === 'fulfilled' ? results[0].value : null;
         const clickupResult = results[1].status === 'fulfilled' ? results[1].value : null;
         if (results[0].status === 'rejected') {
-            console.warn(`[KanbanProvider] epic sync: linear rejected — ${results[0].reason}`);
+            console.warn(`[KanbanProvider] feature sync: linear rejected — ${results[0].reason}`);
         }
         if (results[1].status === 'rejected') {
-            console.warn(`[KanbanProvider] epic sync: clickup rejected — ${results[1].reason}`);
+            console.warn(`[KanbanProvider] feature sync: clickup rejected — ${results[1].reason}`);
         }
-        console.log(`[KanbanProvider] epic sync: linear linked=${linearResult?.linked.length ?? 0} failed=${linearResult?.failed.length ?? 0}, clickup linked=${clickupResult?.linked.length ?? 0} failed=${clickupResult?.failed.length ?? 0}`);
+        console.log(`[KanbanProvider] feature sync: linear linked=${linearResult?.linked.length ?? 0} failed=${linearResult?.failed.length ?? 0}, clickup linked=${clickupResult?.linked.length ?? 0} failed=${clickupResult?.failed.length ?? 0}`);
     }
 
     /**
@@ -10426,7 +10426,7 @@ ${FOCUS_DIRECTIVE}`;
      * agent can also load the skill directly by description without clicking the button.
      * Falls back to an embedded copy if the skill file is missing (older install / dev).
      */
-    private _buildSuggestEpicsPrompt(workspaceRoot: string, projectFilter: string | null = null): string {
+    private _buildSuggestFeaturesPrompt(workspaceRoot: string, projectFilter: string | null = null): string {
         const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'group-into-features', 'SKILL.md');
         let skillBody = '';
         try {
@@ -10442,7 +10442,7 @@ ${FOCUS_DIRECTIVE}`;
    Read the board snapshot:
      cat {{WORKSPACE_ROOT}}/.switchboard/kanban-board.md
    Scope: CREATED and PLAN REVIEWED columns only. Ignore BACKLOG and all post-coding columns.
-   Each plan line ends with an HTML comment with a planId: value — use that (not the filename) when calling create-feature.js. Skip lines tagged epic or subtask-of:...
+   Each plan line ends with an HTML comment with a planId: value — use that (not the filename) when calling create-feature.js. Skip lines tagged feature or subtask-of:...
 
 2. READ PLAN BODIES — extract goal/problem/dependencies/tags; cluster by capability theme.
 
@@ -10456,7 +10456,7 @@ ${FOCUS_DIRECTIVE}`;
 
 6. BACKLOG (optional) — ask the user; only proceed if they say yes.
 
-Note: feature creation updates the Switchboard board and writes a .switchboard/epics/ file. Feature creation syncs the feature as a parent issue/task and links subtasks as children in Linear/ClickUp IF real-time sync is enabled.`;
+Note: feature creation updates the Switchboard board and writes a .switchboard/features/ file. Feature creation syncs the feature as a parent issue/task and links subtasks as children in Linear/ClickUp IF real-time sync is enabled.`;
             }
         }
         // Strip YAML frontmatter (the skill description is for model-invocation discovery,

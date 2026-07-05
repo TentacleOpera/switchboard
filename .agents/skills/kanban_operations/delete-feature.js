@@ -4,7 +4,7 @@
 //
 // Routes through the running Switchboard extension's local API server
 // (POST /kanban/feature/delete). The extension performs the deletion via
-// KanbanProvider._deleteEpic, so it inherits the worktree cleanup, subtask
+// KanbanProvider._deleteFeature, so it inherits the worktree cleanup, subtask
 // detach/tombstone, feature tombstone, board refresh, and external tracker
 // unlinking.
 //
@@ -15,11 +15,11 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const epicPlanId = process.argv[2];
+const featurePlanId = process.argv[2];
 const deleteSubtasksArg = process.argv[3] || 'false';
 const workspaceRoot = process.argv[4] || '.';
 
-if (!epicPlanId) {
+if (!featurePlanId) {
   console.error("Usage: node delete-feature.js <feature_plan_id> [delete_subtasks] [workspace_root]");
   console.error("  delete_subtasks: 'true' or 'false' (default: false — subtasks are detached, not deleted)");
   process.exit(1);
@@ -84,7 +84,7 @@ async function tryViaExtension() {
   try {
     const resp = await httpJson('POST', port, '/kanban/feature/delete', {
       workspaceRoot,
-      epicPlanId,
+      featurePlanId,
       deleteSubtasks
     }, 15000);
     let parsed = {};

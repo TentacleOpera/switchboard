@@ -24,7 +24,7 @@ export interface CustomAgentAddons {
     customSubagentName?: string;
     useWorktreesPerPlan?: boolean;
 
-    // Design doc (planning epic)
+    // Design doc (planning feature)
 
 
     // Design System Doc
@@ -46,9 +46,9 @@ export interface CustomAgentAddons {
     workflowFilePathEnabled?: boolean;
     workflowFilePath?: string;
 
-    // Epic ultracode/goal directive opt-in (built-in lead/coder/intern get this
+    // Feature ultracode/goal directive opt-in (built-in lead/coder/intern get this
     // automatically; custom roles must opt in)
-    applyEpicDirectives?: boolean;
+    applyFeatureDirectives?: boolean;
 
     // Prompt override (applied LAST, after all directives)
     defaultPromptOverride?: DefaultPromptOverride;
@@ -86,7 +86,7 @@ export interface KanbanColumnDefinition {
     dragDropMode: 'cli' | 'prompt' | 'disabled';
     hideWhenNoAgent?: boolean;
     triggerPrompt?: string;
-    epicOnly?: boolean;
+    featureOnly?: boolean;
 }
 
 export interface KanbanColumnBuildOverrides {
@@ -211,7 +211,7 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     }
     if (s.workflowFilePathEnabled === true) a.workflowFilePathEnabled = true;
     if (typeof s.workflowFilePath === 'string' && s.workflowFilePath.trim()) a.workflowFilePath = s.workflowFilePath.trim();
-    if (s.applyEpicDirectives === true) a.applyEpicDirectives = true;
+    if (s.applyFeatureDirectives === true) a.applyFeatureDirectives = true;
     if (s.defaultPromptOverride && typeof s.defaultPromptOverride === 'object') {
         const o = s.defaultPromptOverride as Record<string, unknown>;
         const mode = String(o.mode || '');

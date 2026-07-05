@@ -4,7 +4,7 @@
 //
 // Routes through the running Switchboard extension's local API server
 // (POST /kanban/feature/remove). The extension performs the removal via
-// KanbanProvider._removeSubtaskFromEpic, so it inherits the subtask detach,
+// KanbanProvider._removeSubtaskFromFeature, so it inherits the subtask detach,
 // worktree abandon, feature-file regeneration, board refresh, and external
 // tracker unlinking.
 //

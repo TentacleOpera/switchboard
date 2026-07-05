@@ -50,8 +50,8 @@ function upsertRecord(db, record) {
         record.clickupTaskId,
         record.linearIssueId,
         record.worktreeId ?? null,
-        record.isEpic ?? null,
-        record.epicId || ''
+        record.isFeature ?? null,
+        record.featureId || ''
     ]);
 }
 
@@ -68,7 +68,7 @@ function queryOne(db, sql, params = []) {
 }
 
 async function runFunctionalChecks() {
-    const workspaceId = 'ws-epic-upsert';
+    const workspaceId = 'ws-feature-upsert';
     const SQL = await initSqlJs({
         locateFile: (file) => require.resolve(`sql.js/dist/${file}`)
     });
@@ -100,18 +100,18 @@ async function runFunctionalChecks() {
                 clickup_task_id TEXT DEFAULT '',
                 linear_issue_id TEXT DEFAULT '',
                 worktree_id TEXT,
-                is_epic INTEGER,
-                epic_id TEXT DEFAULT '',
+                is_feature INTEGER,
+                feature_id TEXT DEFAULT '',
                 UNIQUE(plan_file, workspace_id)
             );
         `);
 
-        // Step 1: Insert an epic plan with explicit epic fields
+        // Step 1: Insert an feature plan with explicit feature fields
         upsertRecord(db, {
-            planId: 'plan-epic-1',
-            sessionId: 'sess-epic-1',
-            topic: 'Epic One',
-            planFile: '.switchboard/plans/epic-1.md',
+            planId: 'plan-feature-1',
+            sessionId: 'sess-feature-1',
+            topic: 'Feature One',
+            planFile: '.switchboard/plans/feature-1.md',
             kanbanColumn: 'CREATED',
             status: 'active',
             complexity: 'Unknown',
@@ -131,20 +131,20 @@ async function runFunctionalChecks() {
             clickupTaskId: '',
             linearIssueId: '',
             worktreeId: null,
-            isEpic: 1,
-            epicId: ''
+            isFeature: 1,
+            featureId: ''
         });
 
-        const afterInsert = queryOne(db, `SELECT is_epic, epic_id FROM plans WHERE session_id = ?`, ['sess-epic-1']);
-        assert.strictEqual(afterInsert?.is_epic, 1, 'Expected initial insert to set is_epic = 1.');
-        assert.strictEqual(afterInsert?.epic_id, '', 'Expected initial insert to set epic_id = "".');
+        const afterInsert = queryOne(db, `SELECT is_feature, feature_id FROM plans WHERE session_id = ?`, ['sess-feature-1']);
+        assert.strictEqual(afterInsert?.is_feature, 1, 'Expected initial insert to set is_feature = 1.');
+        assert.strictEqual(afterInsert?.feature_id, '', 'Expected initial insert to set feature_id = "".');
 
-        // Step 2: Re-import same plan without epic fields (simulates generic metadata re-import)
+        // Step 2: Re-import same plan without feature fields (simulates generic metadata re-import)
         upsertRecord(db, {
-            planId: 'plan-epic-1',
-            sessionId: 'sess-epic-1',
-            topic: 'Epic One Updated',
-            planFile: '.switchboard/plans/epic-1.md',
+            planId: 'plan-feature-1',
+            sessionId: 'sess-feature-1',
+            topic: 'Feature One Updated',
+            planFile: '.switchboard/plans/feature-1.md',
             kanbanColumn: 'CREATED',
             status: 'active',
             complexity: 'Unknown',
@@ -164,32 +164,32 @@ async function runFunctionalChecks() {
             clickupTaskId: '',
             linearIssueId: '',
             worktreeId: null,
-            isEpic: undefined,
-            epicId: undefined
+            isFeature: undefined,
+            featureId: undefined
         });
 
-        const afterConflict = queryOne(db, `SELECT is_epic, epic_id FROM plans WHERE session_id = ?`, ['sess-epic-1']);
-        assert.strictEqual(afterConflict?.is_epic, 1, 'Expected conflict update to preserve is_epic.');
-        assert.strictEqual(afterConflict?.epic_id, '', 'Expected conflict update to preserve epic_id.');
+        const afterConflict = queryOne(db, `SELECT is_feature, feature_id FROM plans WHERE session_id = ?`, ['sess-feature-1']);
+        assert.strictEqual(afterConflict?.is_feature, 1, 'Expected conflict update to preserve is_feature.');
+        assert.strictEqual(afterConflict?.feature_id, '', 'Expected conflict update to preserve feature_id.');
     } finally {
         db.close();
     }
 }
 
 async function run() {
-    console.log('\nRunning epic upsert regression tests\n');
+    console.log('\nRunning feature upsert regression tests\n');
 
-    await test('UPSERT_PLAN_SQL does not overwrite is_epic on conflict', async () => {
+    await test('UPSERT_PLAN_SQL does not overwrite is_feature on conflict', async () => {
         assert.ok(
-            !UPSERT_PLAN_SQL.includes('is_epic = excluded.is_epic'),
-            'Expected upsert conflict clause NOT to overwrite is_epic.'
+            !UPSERT_PLAN_SQL.includes('is_feature = excluded.is_feature'),
+            'Expected upsert conflict clause NOT to overwrite is_feature.'
         );
     });
 
-    await test('UPSERT_PLAN_SQL does not overwrite epic_id on conflict', async () => {
+    await test('UPSERT_PLAN_SQL does not overwrite feature_id on conflict', async () => {
         assert.ok(
-            !UPSERT_PLAN_SQL.includes('epic_id = excluded.epic_id'),
-            'Expected upsert conflict clause NOT to overwrite epic_id.'
+            !UPSERT_PLAN_SQL.includes('feature_id = excluded.feature_id'),
+            'Expected upsert conflict clause NOT to overwrite feature_id.'
         );
     });
 
@@ -198,7 +198,7 @@ async function run() {
         assert.strictEqual(placeholderCount, 25, 'Expected exactly 25 placeholders in UPSERT_PLAN_SQL.');
     });
 
-    await test('functional DB checks preserve epic fields across conflict re-import', runFunctionalChecks);
+    await test('functional DB checks preserve feature fields across conflict re-import', runFunctionalChecks);
 
     console.log(`\nResult: ${passed} passed, ${failed} failed`);
     if (failed > 0) {
@@ -207,6 +207,6 @@ async function run() {
 }
 
 run().catch((error) => {
-    console.error('epic upsert regression test failed:', error);
+    console.error('feature upsert regression test failed:', error);
     process.exit(1);
 });

@@ -67,18 +67,18 @@ export class NotionBackupService {
         let backedUp = 0;
         const total = allPlans.length;
 
-        // Build planId → notionPageId map for epics so subtasks can set their Epic relation.
-        // Uses existing notionPageId values (set by a prior setup sync). If an epic has no
+        // Build planId → notionPageId map for features so subtasks can set their Feature relation.
+        // Uses existing notionPageId values (set by a prior setup sync). If an feature has no
         // page id yet, its subtasks get an empty relation — filled on a later backup.
-        const epicIdToNotionPageId = new Map<string, string>();
+        const featureIdToNotionPageId = new Map<string, string>();
         for (const p of allPlans) {
-            if (p.isEpic && p.notionPageId) { epicIdToNotionPageId.set(p.planId, p.notionPageId); }
+            if (p.isFeature && p.notionPageId) { featureIdToNotionPageId.set(p.planId, p.notionPageId); }
         }
 
         for (let i = 0; i < allPlans.length; i++) {
             const plan = allPlans[i];
             progress?.report({ message: `Backing up plan ${i + 1} of ${total}...` });
-            const result = await this._upsertPlanToNotion(config.databaseId, plan, epicIdToNotionPageId);
+            const result = await this._upsertPlanToNotion(config.databaseId, plan, featureIdToNotionPageId);
             if (result.success) { backedUp++; }
             if (total > 1) { await this._delay(350); }
         }
@@ -112,8 +112,8 @@ export class NotionBackupService {
 
         const toRestore: KanbanPlanRecord[] = [];
         const columnUpdates: Array<{ planId: string; column: string }> = [];
-        // Collect epic relation targets for second-pass resolution (notionPageId → planId).
-        const epicLinks: Array<{ plan: KanbanPlanRecord; epicNotionPageId: string }> = [];
+        // Collect feature relation targets for second-pass resolution (notionPageId → planId).
+        const featureLinks: Array<{ plan: KanbanPlanRecord; featureNotionPageId: string }> = [];
         let skipped = 0;
 
         for (let i = 0; i < notionPages.length; i++) {
@@ -142,9 +142,9 @@ export class NotionBackupService {
                 }
             }
             toRestore.push(plan);
-            if (parsed.epicNotionPageId && parsed.epicNotionPageId !== String(page.id || '')) {
+            if (parsed.featureNotionPageId && parsed.featureNotionPageId !== String(page.id || '')) {
                 // Guard against self-relations (a page pointing to itself).
-                epicLinks.push({ plan, epicNotionPageId: parsed.epicNotionPageId });
+                featureLinks.push({ plan, featureNotionPageId: parsed.featureNotionPageId });
             }
             if (notionPages.length > 1) { await this._delay(10); }
         }
@@ -154,34 +154,34 @@ export class NotionBackupService {
         }
         // Post-restore: apply column updates using planId-based lookup (never sessionId,
         // which is '' for file-based plans and would match a random row).
-        // For epics, cascadeEpicByPlanId handles the epic's own column + subtasks atomically.
-        // For non-epics, use getPlanByPlanId → updateColumnByPlanFile.
+        // For features, cascadeFeatureByPlanId handles the feature's own column + subtasks atomically.
+        // For non-features, use getPlanByPlanId → updateColumnByPlanFile.
         for (const { planId, column } of columnUpdates) {
             if (!planId) continue;
             const dbPlan = await kanbanDb.getPlanByPlanId(planId);
             if (!dbPlan) continue;
-            if (dbPlan.isEpic) {
+            if (dbPlan.isFeature) {
                 const targetStatus = dbPlan.status === 'completed' ? 'completed' : undefined;
                 // includeAllSubtasks=true: restore should re-align ALL subtasks (including
-                // completed/deleted), not just active ones, to match the epic's restored column.
-                await kanbanDb.cascadeEpicByPlanId(dbPlan.planId, column, targetStatus, true);
+                // completed/deleted), not just active ones, to match the feature's restored column.
+                await kanbanDb.cascadeFeatureByPlanId(dbPlan.planId, column, targetStatus, true);
             } else {
                 await kanbanDb.updateColumnByPlanFile(dbPlan.planFile, dbPlan.workspaceId, column);
             }
         }
 
-        // Post-restore: resolve Epic relations (Notion page id → local planId) and apply
-        // epic structure. Build a notionPageId → planId map from the restored records
-        // (each has both). Then for each subtask with an Epic relation, set its epicId.
-        if (epicLinks.length > 0) {
+        // Post-restore: resolve Feature relations (Notion page id → local planId) and apply
+        // feature structure. Build a notionPageId → planId map from the restored records
+        // (each has both). Then for each subtask with an Feature relation, set its featureId.
+        if (featureLinks.length > 0) {
             const notionPageIdToPlanId = new Map<string, string>();
             for (const r of toRestore) {
                 if (r.notionPageId && r.planId) { notionPageIdToPlanId.set(r.notionPageId, r.planId); }
             }
-            for (const { plan, epicNotionPageId } of epicLinks) {
-                const epicPlanId = notionPageIdToPlanId.get(epicNotionPageId);
-                if (!epicPlanId || epicPlanId === plan.planId) { continue; } // untracked or self-relation
-                await kanbanDb.updateEpicStatus(plan.planId, 0, epicPlanId);
+            for (const { plan, featureNotionPageId } of featureLinks) {
+                const featurePlanId = notionPageIdToPlanId.get(featureNotionPageId);
+                if (!featurePlanId || featurePlanId === plan.planId) { continue; } // untracked or self-relation
+                await kanbanDb.updateFeatureStatus(plan.planId, 0, featurePlanId);
             }
         }
 
@@ -240,8 +240,8 @@ export class NotionBackupService {
                 ] } },
                 'ClickUp Task ID': { rich_text: {} },
                 'Linear Issue ID': { rich_text: {} },
-                // Epic structure — 'Is Feature' is created up-front; the 'Feature' self-relation
-                // is added post-creation via _ensureEpicProperties (Notion requires the DB
+                // Feature structure — 'Is Feature' is created up-front; the 'Feature' self-relation
+                // is added post-creation via _ensureFeatureProperties (Notion requires the DB
                 // to exist before a relation can reference it).
                 'Is Feature': { checkbox: {} }
             }
@@ -310,7 +310,7 @@ export class NotionBackupService {
         await this._ensureColumnSelectOptions(plansDatabaseId, allColumns);
         // Ensure feature schema properties (Is Feature checkbox + Feature self-relation) exist.
         // Idempotent — upgrades existing DBs in-place; no-op if already present.
-        await this._ensureEpicProperties(plansDatabaseId);
+        await this._ensureFeatureProperties(plansDatabaseId);
 
         // 3. Back up the participating plans and write page ids back.
         //    Two-pass: Pass 1 creates/updates all pages (with Is Feature but no Feature relation —
@@ -321,7 +321,7 @@ export class NotionBackupService {
         const planIdToPageId = new Map<string, string>(); // collected during Pass 1
         for (let i = 0; i < participating.length; i++) {
             const plan = participating[i];
-            // Pass 1: no epicIdToNotionPageId → Epic relation left empty (filled in Pass 2).
+            // Pass 1: no featureIdToNotionPageId → Feature relation left empty (filled in Pass 2).
             const result = await this._upsertPlanToNotion(plansDatabaseId, plan);
             if (result.success && result.pageId) {
                 await kanbanDb.updateNotionPageIdByPlanFile(plan.planFile, workspaceId, result.pageId);
@@ -334,20 +334,20 @@ export class NotionBackupService {
             if (participating.length > 1) { await this._delay(350); }
         }
 
-        // Pass 2: for each subtask with an epicId, PATCH its page to set the Epic relation.
-        // Only plans whose epic has a known page id (from Pass 1) get the relation.
+        // Pass 2: for each subtask with an featureId, PATCH its page to set the Feature relation.
+        // Only plans whose feature has a known page id (from Pass 1) get the relation.
         for (const plan of participating) {
-            if (!plan.epicId) { continue; }
-            const epicPageId = planIdToPageId.get(plan.epicId);
-            if (!epicPageId) { continue; } // epic not on this board or not backed up
+            if (!plan.featureId) { continue; }
+            const featurePageId = planIdToPageId.get(plan.featureId);
+            if (!featurePageId) { continue; } // feature not on this board or not backed up
             const subtaskPageId = planIdToPageId.get(plan.planId);
             if (!subtaskPageId) { continue; }
             try {
                 await this._notionFetchService.httpRequest('PATCH', `/pages/${subtaskPageId}`, {
-                    properties: { 'Feature': { relation: [{ id: epicPageId }] } }
+                    properties: { 'Feature': { relation: [{ id: featurePageId }] } }
                 }, 10000);
             } catch (e) {
-                console.warn(`[NotionBackupService] Pass 2: failed to set Epic relation for ${plan.planId}:`, e);
+                console.warn(`[NotionBackupService] Pass 2: failed to set Feature relation for ${plan.planId}:`, e);
             }
             await this._delay(350);
         }
@@ -432,7 +432,7 @@ export class NotionBackupService {
      * in after creation (same pattern as `_ensureColumnSelectOptions`). Safe to call on
      * every setup — only PATCHes properties that are missing.
      */
-    private async _ensureEpicProperties(databaseId: string): Promise<void> {
+    private async _ensureFeatureProperties(databaseId: string): Promise<void> {
         try {
             const dbResult = await this._notionFetchService.httpRequest('GET', `/databases/${databaseId}`, undefined, 10000);
             if (dbResult.status !== 200) { return; }
@@ -448,7 +448,7 @@ export class NotionBackupService {
                 await this._notionFetchService.httpRequest('PATCH', `/databases/${databaseId}`, { properties: patch }, 10000);
             }
         } catch (e) {
-            console.warn('[NotionBackupService] _ensureEpicProperties failed:', e);
+            console.warn('[NotionBackupService] _ensureFeatureProperties failed:', e);
         }
     }
 
@@ -493,7 +493,7 @@ export class NotionBackupService {
 
     // ── Private helpers ───────────────────────────────────────────
 
-    private async _upsertPlanToNotion(databaseId: string, plan: KanbanPlanRecord, epicIdToNotionPageId?: Map<string, string>): Promise<{ success: boolean; pageId?: string }> {
+    private async _upsertPlanToNotion(databaseId: string, plan: KanbanPlanRecord, featureIdToNotionPageId?: Map<string, string>): Promise<{ success: boolean; pageId?: string }> {
         try {
             // Query for existing page by Plan ID
             const queryResult = await this._notionFetchService.httpRequest('POST', `/databases/${databaseId}/query`, {
@@ -501,7 +501,7 @@ export class NotionBackupService {
             }, 15000);
             const existing = queryResult.data?.results?.[0];
 
-            const properties = this._planToNotionProperties(plan, epicIdToNotionPageId);
+            const properties = this._planToNotionProperties(plan, featureIdToNotionPageId);
             if (existing) {
                 await this._notionFetchService.httpRequest('PATCH', `/pages/${existing.id}`, { properties }, 10000);
                 return { success: true, pageId: String(existing.id || '') };
@@ -535,16 +535,16 @@ export class NotionBackupService {
         return pages;
     }
 
-    private _planToNotionProperties(plan: KanbanPlanRecord, epicIdToNotionPageId?: Map<string, string>): Record<string, any> {
-        // Epic relation — needs the epic's Notion page id (not the local planId).
-        // If the map is provided and the epic's page exists, set the relation; otherwise
+    private _planToNotionProperties(plan: KanbanPlanRecord, featureIdToNotionPageId?: Map<string, string>): Record<string, any> {
+        // Feature relation — needs the feature's Notion page id (not the local planId).
+        // If the map is provided and the feature's page exists, set the relation; otherwise
         // leave it empty (Pass 2 of setup sync fills it after all pages are created).
-        let epicRelation: { relation: any[] };
-        if (plan.epicId && epicIdToNotionPageId) {
-            const epicPageId = epicIdToNotionPageId.get(plan.epicId);
-            epicRelation = { relation: epicPageId ? [{ id: epicPageId }] : [] };
+        let featureRelation: { relation: any[] };
+        if (plan.featureId && featureIdToNotionPageId) {
+            const featurePageId = featureIdToNotionPageId.get(plan.featureId);
+            featureRelation = { relation: featurePageId ? [{ id: featurePageId }] : [] };
         } else {
-            epicRelation = { relation: [] };
+            featureRelation = { relation: [] };
         }
         return {
             'Topic': { title: [{ text: { content: plan.topic } }] },
@@ -562,17 +562,17 @@ export class NotionBackupService {
             'Source Type': { select: { name: plan.sourceType } },
             'ClickUp Task ID': { rich_text: [{ text: { content: plan.clickupTaskId || '' } }] },
             'Linear Issue ID': { rich_text: [{ text: { content: plan.linearIssueId || '' } }] },
-            'Is Feature': { checkbox: Boolean(plan.isEpic) },
-            'Feature': epicRelation
+            'Is Feature': { checkbox: Boolean(plan.isFeature) },
+            'Feature': featureRelation
         };
     }
 
     /**
-     * Map a Notion page → KanbanPlanRecord. Also returns the `Epic` relation's target
-     * page id (if any) as `epicNotionPageId` — a transient value NOT on KanbanPlanRecord.
+     * Map a Notion page → KanbanPlanRecord. Also returns the `Feature` relation's target
+     * page id (if any) as `featureNotionPageId` — a transient value NOT on KanbanPlanRecord.
      * The caller (`restoreFromNotion`) resolves it to a local `planId` in a second pass.
      */
-    private _notionPageToPlanRecord(page: any): { plan: KanbanPlanRecord; epicNotionPageId?: string } | null {
+    private _notionPageToPlanRecord(page: any): { plan: KanbanPlanRecord; featureNotionPageId?: string } | null {
         try {
             const p = page.properties;
             const getRichText = (prop: any): string => prop?.rich_text?.[0]?.plain_text || '';
@@ -583,11 +583,11 @@ export class NotionBackupService {
             const getMultiSelect = (prop: any): string => (prop?.multi_select || []).map((t: any) => t.name).join(',');
 
             // Feature structure — Is Feature checkbox + Feature relation (self-relation to plans DB).
-            // If the properties don't exist (pre-epic-schema setup), these read falsy — safe.
-            const isEpic = p['Is Feature']?.checkbox === true ? 1 : 0;
-            const epicRelation = p['Feature']?.relation;
-            const epicNotionPageId = Array.isArray(epicRelation) && epicRelation.length > 0
-                ? String(epicRelation[0]?.id || '') : '';
+            // If the properties don't exist (pre-feature-schema setup), these read falsy — safe.
+            const isFeature = p['Is Feature']?.checkbox === true ? 1 : 0;
+            const featureRelation = p['Feature']?.relation;
+            const featureNotionPageId = Array.isArray(featureRelation) && featureRelation.length > 0
+                ? String(featureRelation[0]?.id || '') : '';
 
             const plan: KanbanPlanRecord = {
                 planId: getRichText(p['Plan ID']),
@@ -613,10 +613,10 @@ export class NotionBackupService {
                 linearIssueId: getRichText(p['Linear Issue ID']),
                 // The row's own page id is the Notion Remote-Control linkage.
                 notionPageId: String(page.id || ''),
-                isEpic,
-                epicId: '' // resolved by the caller from epicNotionPageId
+                isFeature,
+                featureId: '' // resolved by the caller from featureNotionPageId
             };
-            return { plan, epicNotionPageId: epicNotionPageId || undefined };
+            return { plan, featureNotionPageId: featureNotionPageId || undefined };
         } catch {
             return null;
         }

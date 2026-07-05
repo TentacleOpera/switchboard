@@ -66,7 +66,7 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
 };
 
 /**
- * Remote-sync health snapshot (epic 7 — Remote-Sync Health & Error Surfacing).
+ * Remote-sync health snapshot (feature 7 — Remote-Sync Health & Error Surfacing).
  * Surfaced in the Remote tab so silent failures (bad token, revoked connection,
  * rate-limit storm) are visible instead of console-only.
  */
@@ -118,7 +118,7 @@ export class RemoteControlService {
     private _polling = false;
     private _active = false;
     private _gitProviders = new Map<GitProviderKind, GitStateProvider>();
-    // ── Health state (epic 7 — Remote-Sync Health & Error Surfacing) ──
+    // ── Health state (feature 7 — Remote-Sync Health & Error Surfacing) ──
     private _lastPollAt: string | null = null;
     private _lastPollOk = true;
     private _lastPollError: string | null = null;
@@ -136,7 +136,7 @@ export class RemoteControlService {
     public get isActive(): boolean { return this._active; }
 
     /**
-     * Health snapshot for the Remote tab UI (epic 7). Reads the in-memory
+     * Health snapshot for the Remote tab UI (feature 7). Reads the in-memory
      * last-status state recorded by the poll/push loops — no DB hit.
      */
     public async getHealth(): Promise<RemoteSyncHealth> {
@@ -464,10 +464,10 @@ export class RemoteControlService {
                 byRemoteId.set(d.remoteId, plan);
                 this._log(`Imported new ${provider.kind} plan ${d.remoteId} → ${plan.planFile}.`);
             }
-            // Mirror epic structure changes (parent/child links) BEFORE column dispatch so
-            // that a column cascade on an epic reaches its now-linked subtasks.
-            if (d.parentRemoteId !== undefined || d.isEpicCandidate !== undefined) {
-                await this._mirrorEpicStructure(db, plan, d, byRemoteId);
+            // Mirror feature structure changes (parent/child links) BEFORE column dispatch so
+            // that a column cascade on an feature reaches its now-linked subtasks.
+            if (d.parentRemoteId !== undefined || d.isFeatureCandidate !== undefined) {
+                await this._mirrorFeatureStructure(db, plan, d, byRemoteId);
             }
             const column = provider.stateKeyToColumn(d.stateKey);
             if (!column) { continue; }
@@ -513,45 +513,45 @@ export class RemoteControlService {
     }
 
     /**
-     * Mirror epic structure changes (parent/child links) detected by the provider's state
-     * delta query. Runs BEFORE `_applyStateMirror` so that a column cascade on an epic
+     * Mirror feature structure changes (parent/child links) detected by the provider's state
+     * delta query. Runs BEFORE `_applyStateMirror` so that a column cascade on an feature
      * reaches its now-linked subtasks in the same poll cycle.
      *
      * Idempotent: only writes if the local state differs from the delta. The echo guard
-     * for outbound sync (epic-sync-outbound) is the idempotency guard itself — if the
-     * local plan is already linked to the same epic, no write occurs.
+     * for outbound sync (feature-sync-outbound) is the idempotency guard itself — if the
+     * local plan is already linked to the same feature, no write occurs.
      */
-    private async _mirrorEpicStructure(
+    private async _mirrorFeatureStructure(
         db: KanbanDatabase,
         plan: KanbanPlanRecord,
         delta: RemoteStateDelta,
         byRemoteId: Map<string, KanbanPlanRecord>
     ): Promise<void> {
-        // 1. If this card is a parent (isEpicCandidate), ensure it's marked isEpic locally.
-        if (delta.isEpicCandidate === true && !plan.isEpic) {
-            await db.updateEpicStatus(plan.planId, 1, '');
-            this._log(`Epic mirror: ${plan.planId} marked as epic (remote says it has children).`);
+        // 1. If this card is a parent (isFeatureCandidate), ensure it's marked isFeature locally.
+        if (delta.isFeatureCandidate === true && !plan.isFeature) {
+            await db.updateFeatureStatus(plan.planId, 1, '');
+            this._log(`Feature mirror: ${plan.planId} marked as feature (remote says it has children).`);
         }
 
         // 2. If this card's parent changed, link/unlink locally.
         if (delta.parentRemoteId !== undefined) {
             if (delta.parentRemoteId === '') {
                 // Unparented remotely → unlink locally
-                if (plan.epicId) {
-                    await db.updateEpicStatus(plan.planId, 0, '');
-                    this._log(`Epic mirror: ${plan.planId} unlinked from epic ${plan.epicId}.`);
+                if (plan.featureId) {
+                    await db.updateFeatureStatus(plan.planId, 0, '');
+                    this._log(`Feature mirror: ${plan.planId} unlinked from feature ${plan.featureId}.`);
                 }
             } else {
                 // Parented remotely → find the parent's local plan by remote id
                 const parentPlan = byRemoteId.get(delta.parentRemoteId);
                 if (parentPlan && parentPlan.planId !== plan.planId) {
-                    if (plan.epicId !== parentPlan.planId) {
-                        await db.updateEpicStatus(plan.planId, 0, parentPlan.planId);
-                        this._log(`Epic mirror: ${plan.planId} linked to epic ${parentPlan.planId}.`);
+                    if (plan.featureId !== parentPlan.planId) {
+                        await db.updateFeatureStatus(plan.planId, 0, parentPlan.planId);
+                        this._log(`Feature mirror: ${plan.planId} linked to feature ${parentPlan.planId}.`);
                     }
                 } else if (!parentPlan) {
                     // Parent isn't tracked locally — can't link. Log (don't fail).
-                    this._log(`Epic mirror: parent ${delta.parentRemoteId} not tracked locally — cannot link ${plan.planId}.`);
+                    this._log(`Feature mirror: parent ${delta.parentRemoteId} not tracked locally — cannot link ${plan.planId}.`);
                 }
             }
         }

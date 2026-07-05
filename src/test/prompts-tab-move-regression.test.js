@@ -42,7 +42,7 @@ function run() {
         'validateWorkflowPath',
         'plannerAddonSwitchboardSafeguards',
         'plannerAddonDependencyCheck',
-        'plannerAddonPlanningEpic',
+        'plannerAddonPlanningFeature',
         'plannerAddonDesignSystemDoc',
         'plannerAddonAggressivePairProgramming',
         'plannerAddonGitProhibition',
