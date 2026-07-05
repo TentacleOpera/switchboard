@@ -79,8 +79,8 @@ frontmatter-facts` lands with the retirement (it's where the manifest's fields g
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
+- [ ] [Delete-feature (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **CREATED**
+- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **CREATED**
 - [ ] [Retire the file-based git control plane; hand board visibility to the read-only snapshot](../plans/retire-file-based-git-control-plane.md) — **CREATED**
 - [ ] [Board-state read snapshot (isolated ref, one-directional)](../plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md) — **CREATED**
-- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **CREATED**
-- [ ] [Delete-epic (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **CREATED**
 <!-- END SUBTASKS -->
