@@ -148,22 +148,22 @@ execution agent in the wrong direction.
 
 ## Features (grouping related work)
 
-An **feature** is a parent card that groups related subtask cards. Moving an feature's
+An **feature** is a parent card that groups related subtask cards. Moving a feature's
 `Kanban Column` cascades the move to all its subtasks on the local machine — so you
 can dispatch a whole group of work in one action.
 
-### To create an feature (Notion)
+### To create a feature (Notion)
 1. Create the feature's page in the plans DB (same as any card).
 2. Check the **Is Feature** checkbox property.
-3. The page is now an feature — it can have subtasks.
+3. The page is now a feature — it can have subtasks.
 
-### To create an feature (Linear)
+### To create a feature (Linear)
 1. Create the feature's issue in the mapped Linear project.
 2. Create subtask issues and set their **parent** to the feature issue.
 3. The local poll detects the parent/child relationship and mirrors it — the feature
    cascades subtask moves automatically.
 
-### To assign a subtask to an feature (Notion)
+### To assign a subtask to a feature (Notion)
 1. Create or find the subtask's page.
 2. Set its **Feature** relation property to point to the feature's page.
 3. The local poll mirrors the link — the subtask now moves when the feature moves.
@@ -177,7 +177,7 @@ can dispatch a whole group of work in one action.
 - A subtask can belong to only **one** feature (single-select relation / single parent).
 - Only create feature/subtask links between cards on the **same synced board** —
   the local poll can only mirror links between cards it tracks.
-- An feature with no subtasks is harmless (it just cascades to nothing).
+- A feature with no subtasks is harmless (it just cascades to nothing).
 
 ## Edge Cases
 

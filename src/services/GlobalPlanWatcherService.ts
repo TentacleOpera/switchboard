@@ -56,7 +56,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     /**
-     * Live re-deriver into the KanbanProvider for an feature's kanban_column. Called
+     * Live re-deriver into the KanbanProvider for a feature's kanban_column. Called
      * after the is_feature re-assert in _handlePlanFile to self-heal the
      * kanban_column clobber from insertFileDerivedPlan's hardcoded 'CREATED' on
      * fresh INSERT (re-import after the 3000ms registerPendingCreation window, or
@@ -454,7 +454,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
             // DIAGNOSTIC (is_feature clobber investigation): log which sql.js instance the watcher
-            // operates on when it handles an feature file. Compare against the provider=… /
+            // operates on when it handles a feature file. Compare against the provider=… /
             // watcher=… line from createFeatureFromPlanIds. Same instanceId ⇒ candidate ❷ is dead;
             // different ⇒ this handler may persist a stale snapshot over the feature's is_feature=1.
             // See docs/investigation-feature-is_feature-clobber.md. Remove once the clobber is fixed.
@@ -590,7 +590,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 // plans — features included. insertFileDerivedPlan hardcodes 'CREATED' on a
                 // fresh INSERT, so the atomic-write DELETE->re-INSERT race re-inserts the
                 // row at CREATED; the tombstone (captured for every plan in
-                // _handlePlanDelete) holds the column it actually had. An feature is a
+                // _handlePlanDelete) holds the column it actually had. A feature is a
                 // container whose column is authoritative — restoring its true (DB-owned)
                 // column is preferred over re-deriving it from subtasks, which only yields
                 // the least-progressed subtask and yanks an advanced feature backward.

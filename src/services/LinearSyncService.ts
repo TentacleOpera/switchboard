@@ -2604,7 +2604,7 @@ export class LinearSyncService {
       }
 
       // A top-level parent has children in the batch AND no in-batch parent.
-      // An intermediate parent has children AND an in-batch parent — it's a subtask, not an feature.
+      // An intermediate parent has children AND an in-batch parent — it's a subtask, not a feature.
       const isParent = (taskId: string) => childrenByParentId.has(taskId);
       const isChild = (task: any) => {
         const parentId = task.parent?.id;
@@ -2897,7 +2897,7 @@ export class LinearSyncService {
 
   /**
    * Unlink subtasks from their feature in Linear — set each subtask's parent to null.
-   * Used when a subtask is removed from an feature or reassigned.
+   * Used when a subtask is removed from a feature or reassigned.
    */
   public async unlinkSubtasksFromFeature(subtaskPlanFiles: string[]): Promise<{ unlinked: string[]; failed: string[] }> {
     const config = await this.loadConfig();

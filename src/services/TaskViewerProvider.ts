@@ -3036,7 +3036,7 @@ Each plan file must include:
 - Create ${issues.length} plan file(s) total — one per issue
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
 - Do NOT skip the investigation step — read the relevant code before writing each plan
-- If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create an feature grouping them: "These [N] plans cover related work — want me to create an feature to group them together?" Only create the feature if the user confirms. See ${workspaceRoot}/.switchboard/features/ for the format.`;
+- If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create a feature grouping them: "These [N] plans cover related work — want me to create a feature to group them together?" Only create the feature if the user confirms. See ${workspaceRoot}/.switchboard/features/ for the format.`;
 
         if (projectName) {
             prompt += '\n\n' + PROJECT_LINE_DIRECTIVE(projectName);

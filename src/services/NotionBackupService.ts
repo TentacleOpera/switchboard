@@ -68,7 +68,7 @@ export class NotionBackupService {
         const total = allPlans.length;
 
         // Build planId → notionPageId map for features so subtasks can set their Feature relation.
-        // Uses existing notionPageId values (set by a prior setup sync). If an feature has no
+        // Uses existing notionPageId values (set by a prior setup sync). If a feature has no
         // page id yet, its subtasks get an empty relation — filled on a later backup.
         const featureIdToNotionPageId = new Map<string, string>();
         for (const p of allPlans) {
@@ -172,7 +172,7 @@ export class NotionBackupService {
 
         // Post-restore: resolve Feature relations (Notion page id → local planId) and apply
         // feature structure. Build a notionPageId → planId map from the restored records
-        // (each has both). Then for each subtask with an Feature relation, set its featureId.
+        // (each has both). Then for each subtask with a Feature relation, set its featureId.
         if (featureLinks.length > 0) {
             const notionPageIdToPlanId = new Map<string, string>();
             for (const r of toRestore) {
@@ -334,7 +334,7 @@ export class NotionBackupService {
             if (participating.length > 1) { await this._delay(350); }
         }
 
-        // Pass 2: for each subtask with an featureId, PATCH its page to set the Feature relation.
+        // Pass 2: for each subtask with a featureId, PATCH its page to set the Feature relation.
         // Only plans whose feature has a known page id (from Pass 1) get the relation.
         for (const plan of participating) {
             if (!plan.featureId) { continue; }

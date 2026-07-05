@@ -106,7 +106,7 @@ async function runFunctionalChecks() {
             );
         `);
 
-        // Step 1: Insert an feature plan with explicit feature fields
+        // Step 1: Insert a feature plan with explicit feature fields
         upsertRecord(db, {
             planId: 'plan-feature-1',
             sessionId: 'sess-feature-1',

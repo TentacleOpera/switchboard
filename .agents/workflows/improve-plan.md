@@ -100,7 +100,7 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
 
 **When to emit:**
 - **Trigger A (remote only):** you have adversarially reviewed a plan → set `kanbanColumn: "PLAN REVIEWED"`.
-- **Trigger B (all agents):** if you restructured plans into an feature during review → include `isFeature`/`featureId` links for the feature + subtask set. Trigger B applies regardless of local/remote — feature relationships span multiple files and cannot be expressed via a single card move. **Local agents writing a Trigger B-only manifest:** set `kanbanColumn: "CREATED"` (or omit the field) so the ingestor does not auto-move the card — the user moves it manually.
+- **Trigger B (all agents):** if you restructured plans into a feature during review → include `isFeature`/`featureId` links for the feature + subtask set. Trigger B applies regardless of local/remote — feature relationships span multiple files and cannot be expressed via a single card move. **Local agents writing a Trigger B-only manifest:** set `kanbanColumn: "CREATED"` (or omit the field) so the ingestor does not auto-move the card — the user moves it manually.
 - Pure plan creation with no review and no grouping → no manifest.
 
 **Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced/reviewed). Write it **last**, after all `.md` files.

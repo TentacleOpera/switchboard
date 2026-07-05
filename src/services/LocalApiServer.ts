@@ -30,7 +30,7 @@ interface LocalApiServerOptions {
         planFile?: string
     ) => Promise<{ success: boolean; error?: string }>;
     /**
-     * Create an feature from a set of subtask plan IDs through the running extension so
+     * Create a feature from a set of subtask plan IDs through the running extension so
      * the create inherits the DB upsert, subtask linking, feature-file write, and board
      * refresh. Used by the kanban_operations create-feature.js script. Optional — absent
      * in headless/test harnesses. Note: feature creation does NOT sync to Linear/ClickUp.

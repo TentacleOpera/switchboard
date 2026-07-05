@@ -2,7 +2,7 @@
 
 // Regression: feature subtasks must NOT leak into column-batch operations.
 //
-// An feature's subtasks each carry their own `kanban_column`, independent of the
+// A feature's subtasks each carry their own `kanban_column`, independent of the
 // feature's column. The board (kanban.html) rolls subtasks up under their feature and
 // does NOT render them as loose column cards (`displayCards.filter(card => !card.featureId)`).
 // Column-batch handlers in KanbanProvider (Advance All / moveAll, promptAll,
@@ -80,7 +80,7 @@ function run() {
     assert.ok(!newBlock.includes('db.updateColumn(resolvedSessionId'), 'sendToNew must NOT call db.updateColumn directly');
 
     // 6. completeAll must cascade column updates for feature cards so subtasks follow
-    //    to COMPLETED (same rigid-unit model — an feature's subtasks share its column).
+    //    to COMPLETED (same rigid-unit model — a feature's subtasks share its column).
     const completeBlock = getCaseBlock(source, 'completeAll');
     assert.ok(
         completeBlock.includes('cascadeFeatureByPlanId('),

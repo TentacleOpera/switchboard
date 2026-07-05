@@ -232,7 +232,7 @@ export interface PromptBuilderOptions {
     workflowFilePath?: string;
     /** Resolved chat-plan write destination(s) for the chat role. One path per entry; the agent picks one. */
     chatPlanDestinations?: string[];
-    /** When true, the batch includes an feature and its subtasks. */
+    /** When true, the batch includes a feature and its subtasks. */
     featureMode?: boolean;
     /** The feature's topic/title for directive injection. */
     featureTopic?: string;
@@ -493,7 +493,7 @@ export const FEATURE_ORCHESTRATION_DIRECTIVE_HIGH_LOW = (featureTopic: string, t
  * imports new/changed `.switchboard/plans/*.md` files via `KanbanDatabase.insertFileDerivedPlan`
  * (src/services/KanbanDatabase.ts:1387). That INSERT statement does NOT reference `feature_id` at
  * all — there is no `**Feature ID:**`-style marker the watcher parses to link a file-derived plan to
- * an feature. `feature_id` is a DB-owned column, only ever set imperatively via
+ * a feature. `feature_id` is a DB-owned column, only ever set imperatively via
  * `KanbanDatabase.updateFeatureStatus(planId, isFeature, featureId)` — see `KanbanProvider.createFeatureFromPlanIds`'s
  * subtask-linking loop, and `PlanFileImporter.ts`'s explicit comment that file-derived imports
  * have "no business setting DB-owned columns (is_feature, feature_id, ...)". So the two new consolidated
@@ -658,7 +658,7 @@ Process:
 4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
 
 Feature Grouping:
-When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under an feature once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the feature if the user confirms. See existing files in \`.switchboard/features/\` for format.`;
+When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under a feature once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the feature if the user confirms. See existing files in \`.switchboard/features/\` for format.`;
 
 export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project regardless of what project is active when the file is imported. Omit the line only if no project name is given above.`;

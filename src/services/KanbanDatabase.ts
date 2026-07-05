@@ -1651,7 +1651,7 @@ export class KanbanDatabase {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false;
         // DIAGNOSTIC (is_feature clobber investigation): catch an explicit demotion of a live
-        // feature in the act. Fires only when this instance currently sees the plan as an feature
+        // feature in the act. Fires only when this instance currently sees the plan as a feature
         // (is_feature=1) and the incoming write would clear it (is_feature=0). The stack trace names
         // the exact caller (subtask-linking loop, PlanningPanel, remote sync, …). A HIT is a
         // smoking gun for the "explicit demotion" family (candidates ❶/❸/❺). SILENCE does not
@@ -1694,7 +1694,7 @@ export class KanbanDatabase {
     }
 
     /**
-     * Recompute an feature's stored complexity as the max score among its active subtasks.
+     * Recompute a feature's stored complexity as the max score among its active subtasks.
      * Writes the numeric string (e.g. '8'), or 'Unknown' when no subtask carries a
      * parseable score. Feature complexity is purely derived — this is the single source
      * of truth, invoked on membership change and whenever a subtask is rescored.
@@ -3271,7 +3271,7 @@ export class KanbanDatabase {
                     'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
                     ['completed', 'COMPLETED', now, normalized, workspaceId]
                 );
-                // Cascade: if this plan is an feature, complete its active subtasks too (Class 8).
+                // Cascade: if this plan is a feature, complete its active subtasks too (Class 8).
                 // WHERE feature_id = ? AND status = 'active' is atomic within this BEGIN/COMMIT and race-free.
                 const stmt = this._db.prepare(
                     'SELECT plan_id, is_feature FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1',
@@ -4205,7 +4205,7 @@ export class KanbanDatabase {
      * Subtask counts keyed by feature_id (== the feature's plan_id) for a whole workspace,
      * in ONE grouped query. Counts active + completed subtasks.
      *
-     * Deliberately UNFILTERED by project/repo scope: an feature's subtask count is an
+     * Deliberately UNFILTERED by project/repo scope: a feature's subtask count is an
      * intrinsic property of the feature, not of the current board view. The kanban board
      * derives its rows from getBoardFilteredByProject(), so counting subtasks from that
      * filtered set dropped every subtask living in a different project (or any assigned
@@ -4241,7 +4241,7 @@ export class KanbanDatabase {
      * (`KanbanProvider._backfillComplexityColumn`) to self-heal pre-fix installs
      * whose audit-only complexity was never written to the column. Features are
      * excluded because feature complexity is derived (recomputeFeatureComplexity), and
-     * parsing an feature file yields 'Unknown' — writing that back would clobber the
+     * parsing a feature file yields 'Unknown' — writing that back would clobber the
      * derived max. Completed/archived rows are excluded (display-only, bypass
      * file checks).
      */
@@ -4256,7 +4256,7 @@ export class KanbanDatabase {
 
 
     /**
-     * Move an feature and all its subtasks to a target column atomically, keyed by plan_id.
+     * Move a feature and all its subtasks to a target column atomically, keyed by plan_id.
      * File-based features/subtasks have session_id='' — the session_id-keyed updateColumnWithFeatureCascade
      * silently matches zero rows for them. This plan_id-keyed variant is the correct path (Class 2).
      */
@@ -4296,7 +4296,7 @@ export class KanbanDatabase {
     }
 
     /**
-     * Atomic, race-free feature cascade: move an feature and all its active subtasks
+     * Atomic, race-free feature cascade: move a feature and all its active subtasks
      * to a target column in one transaction. Optionally also update status.
      *
      * Unlike updateColumnWithFeatureCascadeByPlanId (which takes explicit subtaskPlanIds[]
@@ -5632,10 +5632,13 @@ export class KanbanDatabase {
         }
 
         // V46: Rename is_epic → is_feature, epic_id → feature_id (clean break).
-        // The feature concept is unreleased, so no user data exists. We use the
-        // SQLite table-rebuild pattern: rename old table, create new with correct
-        // schema, copy data with column mapping, drop old. Idempotent: if the new
-        // columns already exist (fresh DB), it's a no-op.
+        // The feature concept is unreleased. Use native ALTER TABLE RENAME COLUMN
+        // (SQLite ≥3.25.0; sql.js 1.14.1 bundles 3.49.1) so every OTHER column and all
+        // row data survive. A table rebuild from SCHEMA_TABLES_SQL is WRONG here:
+        // SCHEMA_TABLES_SQL omits columns added by later ALTER migrations
+        // (needs_path_fix, needs_relative_conversion, has_worktree), so INSERT … SELECT
+        // would throw "no column named needs_path_fix" and roll back on every startup.
+        // Idempotent: gated on the OLD columns still existing, so a fresh DB is a no-op.
         const v46 = await this.getMigrationVersion();
         if (v46 < 46) {
             try {
@@ -5653,42 +5656,21 @@ export class KanbanDatabase {
                 const hasOldWorktreeCol = wtColResult && wtColResult.c > 0;
 
                 if (hasOldPlansCol) {
-                    // Build column mapping: old column names → new column names
-                    const plansColsStmt = this._db.prepare(`SELECT name FROM pragma_table_info('plans') ORDER BY cid`);
-                    const plansCols: string[] = [];
-                    while (plansColsStmt.step()) {
-                        plansCols.push((plansColsStmt.getAsObject() as any).name);
-                    }
-                    plansColsStmt.free();
-                    // Map old names to new names for the SELECT (alias old → new)
-                    const selectCols = plansCols.map((c: string) => {
-                        if (c === 'is_epic') return 'is_epic AS is_feature';
-                        if (c === 'epic_id') return 'epic_id AS feature_id';
-                        return c;
-                    });
-                    const insertCols = plansCols.map((c: string) => {
-                        if (c === 'is_epic') return 'is_feature';
-                        if (c === 'epic_id') return 'feature_id';
-                        return c;
-                    });
-                    this._db.exec(`ALTER TABLE plans RENAME TO plans_old_v46`);
-                    this._db.exec(SCHEMA_TABLES_SQL);
-                    this._db.exec(`INSERT INTO plans (${insertCols.join(', ')}) SELECT ${selectCols.join(', ')} FROM plans_old_v46`);
-                    this._db.exec(`DROP TABLE plans_old_v46`);
+                    // RENAME COLUMN in place — preserves needs_path_fix,
+                    // needs_relative_conversion, has_worktree and every other
+                    // ALTER-added column that SCHEMA_TABLES_SQL does not declare.
+                    // RENAME COLUMN auto-repoints the old indexes to the new column
+                    // (keeping their old NAMES), so drop the stale names and recreate
+                    // them under the feature-* names the rest of the code expects.
+                    this._db.exec(`ALTER TABLE plans RENAME COLUMN is_epic TO is_feature`);
+                    this._db.exec(`ALTER TABLE plans RENAME COLUMN epic_id TO feature_id`);
+                    this._db.exec(`DROP INDEX IF EXISTS idx_plans_is_epic`);
+                    this._db.exec(`DROP INDEX IF EXISTS idx_plans_epic_id`);
+                    this._db.exec(`CREATE INDEX IF NOT EXISTS idx_plans_is_feature ON plans(is_feature)`);
+                    this._db.exec(`CREATE INDEX IF NOT EXISTS idx_plans_feature_id ON plans(feature_id)`);
                 }
                 if (hasOldWorktreeCol) {
-                    const wtColsStmt = this._db.prepare(`SELECT name FROM pragma_table_info('worktrees') ORDER BY cid`);
-                    const wtCols: string[] = [];
-                    while (wtColsStmt.step()) {
-                        wtCols.push((wtColsStmt.getAsObject() as any).name);
-                    }
-                    wtColsStmt.free();
-                    const wtSelectCols = wtCols.map((c: string) => c === 'epic_id' ? 'epic_id AS feature_id' : c);
-                    const wtInsertCols = wtCols.map((c: string) => c === 'epic_id' ? 'feature_id' : c);
-                    this._db.exec(`ALTER TABLE worktrees RENAME TO worktrees_old_v46`);
-                    this._db.exec(SCHEMA_TABLES_SQL);
-                    this._db.exec(`INSERT INTO worktrees (${wtInsertCols.join(', ')}) SELECT ${wtSelectCols.join(', ')} FROM worktrees_old_v46`);
-                    this._db.exec(`DROP TABLE worktrees_old_v46`);
+                    this._db.exec(`ALTER TABLE worktrees RENAME COLUMN epic_id TO feature_id`);
                 }
                 this._db.exec('COMMIT');
                 await this.setMigrationVersion(46);
@@ -5718,7 +5700,7 @@ export class KanbanDatabase {
         if (!this._db) return;
         const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
         try {
-            // Any file under .switchboard/features/ is an feature by the unified-architecture
+            // Any file under .switchboard/features/ is a feature by the unified-architecture
             // invariant (see GlobalPlanWatcherService) — match regardless of is_feature, since
             // the clobbering bug also resets that flag to 0/NULL.
             const stmt = this._db.prepare(
@@ -6308,7 +6290,7 @@ FROM plans
      * and a context label ("persist" = about to flush to disk, "reload" = just loaded from disk).
      *
      * This is the fallback that makes candidate ❷ visible without a second test run: if a stale
-     * instance flushes is_feature=0 for an feature the Provider just set to 1, the "persist" line names
+     * instance flushes is_feature=0 for a feature the Provider just set to 1, the "persist" line names
      * the offending instance and the exact moment. Logs nothing when the workspace has no feature
      * rows, to keep the file focused. Remove with the other probes.
      */

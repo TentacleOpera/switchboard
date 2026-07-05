@@ -465,7 +465,7 @@ export class RemoteControlService {
                 this._log(`Imported new ${provider.kind} plan ${d.remoteId} → ${plan.planFile}.`);
             }
             // Mirror feature structure changes (parent/child links) BEFORE column dispatch so
-            // that a column cascade on an feature reaches its now-linked subtasks.
+            // that a column cascade on a feature reaches its now-linked subtasks.
             if (d.parentRemoteId !== undefined || d.isFeatureCandidate !== undefined) {
                 await this._mirrorFeatureStructure(db, plan, d, byRemoteId);
             }
@@ -514,7 +514,7 @@ export class RemoteControlService {
 
     /**
      * Mirror feature structure changes (parent/child links) detected by the provider's state
-     * delta query. Runs BEFORE `_applyStateMirror` so that a column cascade on an feature
+     * delta query. Runs BEFORE `_applyStateMirror` so that a column cascade on a feature
      * reaches its now-linked subtasks in the same poll cycle.
      *
      * Idempotent: only writes if the local state differs from the delta. The echo guard

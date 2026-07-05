@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// Move a kanban card to a target column. Feature-aware: when the card is an feature,
+// Move a kanban card to a target column. Feature-aware: when the card is a feature,
 // all of its subtasks cascade to the same column.
 //
 // Two paths, tried in order:

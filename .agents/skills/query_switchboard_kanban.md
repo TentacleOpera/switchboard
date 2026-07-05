@@ -155,7 +155,7 @@ sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column F
 | linear_issue_id | TEXT | Linear issue ID |
 | worktree_id | INTEGER | Associated worktree ID |
 | worktree_status | TEXT | Worktree status ('none', 'active', 'merged', 'deleted') |
-| is_feature | INTEGER | 1 if this plan is an feature, 0 otherwise |
+| is_feature | INTEGER | 1 if this plan is a feature, 0 otherwise |
 | feature_id | TEXT | Parent feature plan_id if this is a subtask |
 | workspace_name | TEXT | Human-readable name of the workspace |
 | project_id | INTEGER | Foreign key matching projects.id |

@@ -53,11 +53,11 @@ import { importPlanFiles } from './PlanFileImporter';
 import { matchWorktreePath } from './worktreeResolver';
 
 /**
- * Feature workflow mode directives, prepended at position-zero of an feature prompt
+ * Feature workflow mode directives, prepended at position-zero of a feature prompt
  * when the corresponding sticky board toggle is active. Distinct from the
  * legacy ULTRACODE_DIRECTIVE (deleted with the orchestrator role).
  */
-const ULTRACODE_FEATURE_PREFIX = 'This is an feature with multiple subtasks. Activate your ultracode workflow.';
+const ULTRACODE_FEATURE_PREFIX = 'This is a feature with multiple subtasks. Activate your ultracode workflow.';
 const GOAL_FEATURE_PREFIX = '/goal';
 
 /**
@@ -411,12 +411,12 @@ export class KanbanProvider implements vscode.Disposable {
      * planner/coder prompts).
      *
      * This MUST mirror the webview's board-display contract (kanban.html: the
-     * main board renders `displayCards.filter(card => !card.featureId)`): an feature's
+     * main board renders `displayCards.filter(card => !card.featureId)`): a feature's
      * subtasks are rolled up under the feature card and are NOT shown as standalone
      * cards in their own `kanban_column`. A subtask carries its own column,
      * independent of its feature's column, so without this exclusion a subtask whose
      * column happens to match (e.g. CREATED) gets swept into the operation even
-     * though the user only sees it nested under an feature that may live in a
+     * though the user only sees it nested under a feature that may live in a
      * different column (e.g. BACKLOG). That divergence is exactly what made
      * "Advance All" on CREATED dispatch a BACKLOG feature's subtasks instead of the
      * loose plans the user could actually see in the column.
@@ -2900,7 +2900,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
                 const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
                     .filter(rec => rec.planFile);
-                // Workspace-wide (unfiltered) subtask counts — an feature's count is intrinsic
+                // Workspace-wide (unfiltered) subtask counts — a feature's count is intrinsic
                 // and must not shrink to 0 when its subtasks fall outside the board's
                 // project/repo filter. See getSubtaskCountsByFeature.
                 const subtaskCountMap2 = await db.getSubtaskCountsByFeature(workspaceId);
@@ -4162,7 +4162,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
         const built = buildKanbanBatchPrompt(role, plans, mergedOptions);
 
-        // Feature workflow mode prepend: when the primary plan is an feature and a
+        // Feature workflow mode prepend: when the primary plan is a feature and a
         // board-level workflow toggle (ultracode / goal) is active, prepend the
         // directive at position-zero of the prompt. Covers both copy and CLI
         // dispatch paths since both funnel through generateUnifiedPrompt.
@@ -5046,7 +5046,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // featureOnly columns are never a configured drag/integration dispatch target.
             // This null return only strips the spec-driven (custom-user) dispatch config;
             // it is defense-in-depth, not the gate (the webview handleDrop guard rejects
-            // every drop onto an featureOnly column, and auto-advance never enters one).
+            // every drop onto a featureOnly column, and auto-advance never enters one).
             return null;
         }
 
@@ -5565,7 +5565,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     /**
-     * Re-derive an feature's kanban_column from its subtasks (minimum ordinal /
+     * Re-derive a feature's kanban_column from its subtasks (minimum ordinal /
      * weakest-link: the feature is only as far along as its least-complete subtask)
      * and persist it. Mirrors createFeatureFromPlanIds' resolution exactly so the
      * two never disagree. No-op (returns without writing) when the feature has zero
@@ -5607,12 +5607,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
             )[0];
             if (resolved === 'BACKLOG') resolved = 'CREATED';
             const current = this._normalizeLegacyKanbanColumn(feature.kanbanColumn) || 'CREATED';
-            // An feature is a container: once it has a real column, that column is
+            // A feature is a container: once it has a real column, that column is
             // authoritative and must NOT be re-derived from its subtasks. This
             // function's ONLY job is to self-heal the 'CREATED' clobber that
             // insertFileDerivedPlan forces on a fresh INSERT (re-import after the
             // registerPendingCreation window, or the atomic-write DELETE->re-INSERT
-            // race). Re-deriving a non-'CREATED' column yanks an feature the user
+            // race). Re-deriving a non-'CREATED' column yanks a feature the user
             // advanced (e.g. to CODE REVIEWED) back down to its least-progressed
             // subtask on every feature-file re-import — the exact regression this guard
             // prevents. Subtask progress never drags the feature backward.
@@ -6934,7 +6934,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 
-                // Feature guard: check if any selected plan is an feature with subtasks
+                // Feature guard: check if any selected plan is a feature with subtasks
                 let archived = 0;
                 const featurePlans = plansToArchive.filter(p => p.isFeature);
                 if (featurePlans.length > 0) {
@@ -7677,7 +7677,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             // Persist via moveCardToColumn (DB-first, feature-cascade aware) — matches the
                             // pre-conversion kanbanForwardMove path which routed through moveCardToColumn.
                             // A direct db.updateColumn would skip the feature subtask cascade and orphan
-                            // subtasks in the source column when an feature parent is advanced.
+                            // subtasks in the source column when a feature parent is advanced.
                             const movedSids: string[] = [];
                             for (const sid of sids) {
                                 await this.moveCardToColumn(workspaceRoot, sid, targetCol);
@@ -7701,7 +7701,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 } else {
                     // Persist via moveCardToColumn (DB-first, feature-cascade aware) — matches the
                     // pre-conversion kanbanForwardMove path. A direct db.updateColumn would skip the
-                    // feature subtask cascade and orphan subtasks when an feature parent is advanced.
+                    // feature subtask cascade and orphan subtasks when a feature parent is advanced.
                     const allMovedIds: string[] = [];
                     for (const sid of sessionIds) {
                         await this.moveCardToColumn(workspaceRoot, sid, nextCol);
@@ -7815,7 +7815,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     for (const card of reviewedCards) {
                         const cardKey = this._cardId(card);
                         // Cascade column update for features so subtasks follow to COMPLETED
-                        // (same rigid-unit model as moveCardToColumn — an feature's subtasks
+                        // (same rigid-unit model as moveCardToColumn — a feature's subtasks
                         // always share its column on every move). A direct db.updateColumn
                         // would orphan subtasks in CODE REVIEWED when the feature completes.
                         if (card.isFeature) {
@@ -7851,7 +7851,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 for (const sessionId of msg.sessionIds) {
                     const db = this._getKanbanDb(workspaceRoot);
                     let planId: string | null = null;
-                    // Feature-aware recovery (Class 7): recovering an feature must pull its subtasks back too.
+                    // Feature-aware recovery (Class 7): recovering a feature must pull its subtasks back too.
                     let featurePlanId: string | null = null;
                     if (await db.ensureReady()) {
                         const record = await db.getPlanBySessionId(sessionId);
@@ -8117,7 +8117,7 @@ ${FOCUS_DIRECTIVE}`;
                     const db = this._getKanbanDb(workspaceRoot);
                     if (await db.ensureReady()) {
                         for (const sid of msg.sessionIds) {
-                            // Feature-aware (Class 7): an feature sent back for fixes must take its subtasks too.
+                            // Feature-aware (Class 7): a feature sent back for fixes must take its subtasks too.
                             const plan = await db.getPlanByPlanId(sid) ?? await db.getPlanBySessionId(sid);
                             if (plan && plan.isFeature) {
                                 await db.cascadeFeatureByPlanId(plan.planId, 'LEAD CODED');
@@ -8816,7 +8816,7 @@ ${FOCUS_DIRECTIVE}`;
                 // kinds: a subtask worktree merges into its feature's integration worktree
                 // (not main), and merging the integration worktree itself into main also
                 // requires cleaning up its now-converged subtask children. Plain/project
-                // worktrees (no subtask_plan_id, no feature_id, or an feature worktree from
+                // worktrees (no subtask_plan_id, no feature_id, or a feature worktree from
                 // `none` mode with no subtask children) keep the original main-merge path.
                 const allWorktrees = await db.getWorktrees();
                 const wtRow = allWorktrees.find(w => w.id === Number(worktreeId));
@@ -8984,7 +8984,7 @@ ${FOCUS_DIRECTIVE}`;
                 //    handler for the old path finds no matching record (already updated).
                 await db.updatePlanFileByPlanId(plan.planId, newRelPath);
 
-                // 2. Clear feature_id (plan is now an feature, not a subtask) and set is_feature=1
+                // 2. Clear feature_id (plan is now a feature, not a subtask) and set is_feature=1
                 await db.updateFeatureStatus(plan.planId, 1, '');
 
                 // 3. Register watcher suppression for both paths
@@ -9529,7 +9529,7 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Walk every child worktree of an feature (integration + all subtask worktrees) and
+     * Walk every child worktree of a feature (integration + all subtask worktrees) and
      * remove them. Used by both feature abandon (all children discarded) and feature merge
      * (children cleaned up after their branches have already been merged into the
      * integration branch, and the integration branch into main). Partial failures are
@@ -9986,7 +9986,7 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Delete an feature and optionally its subtasks. Shared entry point for BOTH the
+     * Delete a feature and optionally its subtasks. Shared entry point for BOTH the
      * webview `deleteFeature` message and the agent/API path (LocalApiServer
      * `/kanban/feature/delete` → TaskViewerProvider → here). Abandons all child
      * worktrees, either tombstones the subtasks or detaches them, tombstones the
@@ -10039,7 +10039,7 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Create an feature from a set of subtask plan IDs and link those subtasks to it.
+     * Create a feature from a set of subtask plan IDs and link those subtasks to it.
      * Shared entry point for BOTH the webview `createFeature` message and the agent/API
      * path (LocalApiServer `/kanban/feature` → TaskViewerProvider → here). Mirrors the
      * webview behaviour exactly: DB upsert + feature file write + subtask linking +
@@ -10087,7 +10087,7 @@ ${FOCUS_DIRECTIVE}`;
             if (plan) subtasks.push(plan);
         }
         // Zero subtasks is now valid — creates a blank feature. The "No valid subtasks"
-        // guard is removed; callers that pass invalid IDs simply get an feature with
+        // guard is removed; callers that pass invalid IDs simply get a feature with
         // fewer linked subtasks than requested.
         // WARNING: if the caller expected subtasks but none resolved (stale IDs),
         // emit a warning so the silent failure is visible.
@@ -10284,7 +10284,7 @@ ${FOCUS_DIRECTIVE}`;
         const lockColumnsRaw = await db.getConfig('feature_lock_columns');
         const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
         if (lockColumns.includes(feature.kanbanColumn)) {
-            return { success: false, assigned: [], skipped: [], error: 'Cannot modify subtasks of an feature in a locked column.' };
+            return { success: false, assigned: [], skipped: [], error: 'Cannot modify subtasks of a feature in a locked column.' };
         }
         // Snapshot the mode once for the whole batch — see _provisionSubtaskWorktreeIfNeeded's
         // modeSnapshot doc: a toggle mid-batch must not split one assignPlansToFeature call
@@ -10295,7 +10295,7 @@ ${FOCUS_DIRECTIVE}`;
         const assignedRecords: any[] = [];
         for (const pid of ids) {
             const subtask = await db.getPlanByPlanId(pid);
-            // Skip-and-report: missing, itself an feature, or already on a different feature.
+            // Skip-and-report: missing, itself a feature, or already on a different feature.
             if (!subtask || subtask.isFeature) { skipped.push(pid); continue; }
             if (subtask.featureId && subtask.featureId !== feature.planId) { skipped.push(pid); continue; }
             await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
@@ -10319,7 +10319,7 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Split an feature into two new features, partitioning its subtasks by a planId
+     * Split a feature into two new features, partitioning its subtasks by a planId
      * list. Shared entry point for the agent/API path (LocalApiServer
      * `/kanban/feature/split` → TaskViewerProvider → here). The original feature is
      * deleted (subtasks detached, not tombstoned); `keptPlanIds` go to the first
@@ -10342,7 +10342,7 @@ ${FOCUS_DIRECTIVE}`;
         }
         const allSubtasks = await db.getSubtasksByFeatureId(feature.planId);
         if (allSubtasks.length < 2) {
-            return { success: false, error: 'Cannot split an feature with fewer than 2 subtasks.' };
+            return { success: false, error: 'Cannot split a feature with fewer than 2 subtasks.' };
         }
         const keptSet = new Set(keptPlanIds);
         const firstIds = allSubtasks.filter(st => keptSet.has(st.planId)).map(st => st.planId);
@@ -10350,10 +10350,12 @@ ${FOCUS_DIRECTIVE}`;
         if (firstIds.length === 0 || secondIds.length === 0) {
             return { success: false, error: 'Split partition must be non-empty on both sides.' };
         }
-        // Detach all subtasks from the original feature (no tombstone), then delete
-        // the original feature. This mirrors _deleteFeature with deleteSubtasks=false.
-        await this._deleteFeature(workspaceRoot, feature.planId, false);
-        // Create the two new features with their respective subtask sets.
+        // Create the two new features FIRST. createFeatureFromPlanIds reassigns each
+        // subtask's feature_id unconditionally (see updateFeatureStatus at ~10223), so
+        // this re-parents the kept/rest sets away from the source atomically per
+        // subtask. Only once BOTH new features exist do we delete the now-empty source.
+        // Deleting the source first (the earlier approach) meant a failed second create
+        // left the source gone and every subtask orphaned with no rollback.
         const firstResult = await this.createFeatureFromPlanIds(workspaceRoot, firstFeatureName, firstIds);
         if (!firstResult.success) {
             return { success: false, error: `Failed to create first feature: ${firstResult.error}` };
@@ -10362,6 +10364,8 @@ ${FOCUS_DIRECTIVE}`;
         if (!secondResult.success) {
             return { success: false, error: `Failed to create second feature: ${secondResult.error}` };
         }
+        // Source feature now has zero subtasks (all re-parented). Delete the empty shell.
+        await this._deleteFeature(workspaceRoot, feature.planId, false);
         return {
             success: true,
             firstFeaturePlanId: firstResult.featurePlanId,
@@ -10370,7 +10374,7 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
-     * Best-effort outbound sync of an feature + its subtasks to Linear and ClickUp.
+     * Best-effort outbound sync of a feature + its subtasks to Linear and ClickUp.
      * Creates/updates the feature as a parent issue/task, then links subtasks as
      * children via the tracker's native parent/child fields. Does NOT block on
      * sync failure — the feature is already created locally; sync is diagnostic-only.

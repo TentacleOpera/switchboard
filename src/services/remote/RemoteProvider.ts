@@ -24,7 +24,7 @@ export interface RemoteStateDelta {
     /** If the remote card's parent changed, the new parent's remote id (or '' if unparented).
      *  Undefined = no parent change detected (provider didn't query it). */
     parentRemoteId?: string;
-    /** If the remote card is itself a parent (has children), mark it as an feature candidate.
+    /** If the remote card is itself a parent (has children), mark it as a feature candidate.
      *  Undefined = provider didn't query it. */
     isFeatureCandidate?: boolean;
     /** ISO timestamp of the remote item's last update. Linear: issue.updatedAt. Notion: page.last_edited_time. */

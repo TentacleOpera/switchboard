@@ -345,7 +345,7 @@ export class AgentSkillExporter {
         }
         if (addons.applyFeatureDirectives) {
             lines.push('### Feature Directives');
-            lines.push('- Apply feature-level directives when working on plans that belong to an feature.');
+            lines.push('- Apply feature-level directives when working on plans that belong to a feature.');
             lines.push('');
         }
         if (addons.defaultPromptOverride) {

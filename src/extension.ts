@@ -512,7 +512,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // constructor restore from workspaceState. No resolver wiring is needed — the DB is
     // the single source of truth, read back from the same DB the plan imports into.
 
-    // Let the watcher re-derive an feature's kanban_column from its subtasks after
+    // Let the watcher re-derive a feature's kanban_column from its subtasks after
     // every feature-file import, self-healing the clobber where insertFileDerivedPlan
     // hardcodes 'CREATED' on fresh INSERT (re-import after the 3000ms suppression
     // window, or the atomic-write DELETE->re-INSERT race). Mirrors the is_feature

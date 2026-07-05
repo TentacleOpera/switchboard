@@ -5242,7 +5242,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // context — and updates the bottom-bar indicator. Routing: selected feature worktree → active
         // project worktree → none. Does NOT use the prompt path's "sole active worktree" fallback,
         // because the indicator is a persistent status display and must stay project/feature-scoped
-        // (an feature's worktree must not show when that feature isn't selected).
+        // (a feature's worktree must not show when that feature isn't selected).
         function recomputeWorktreeIndicator() {
             const worktrees = (lastWorktreeConfig && lastWorktreeConfig.worktrees) || [];
 

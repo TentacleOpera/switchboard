@@ -24,12 +24,12 @@ A target plan file path (the plan to split). If none is given, ask which plan.
 
 5. **Do not lose anything.** Every implementation step, code block, and edge case in the source must land in exactly one of the two files (shared context in both). This is the split's core guarantee.
 
-6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should carry a specific column/project or be linked to an feature, add a `.switchboard/plans/manifest.json` entry for it (`planId`, `project`, `featureId`/`fromColumn` as needed). Commit both files.
+6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should carry a specific column/project or be linked to a feature, add a `.switchboard/plans/manifest.json` entry for it (`planId`, `project`, `featureId`/`fromColumn` as needed). Commit both files.
 
 ## Guardrails
 
 - Preserve information, not structure — nothing in the source may be dropped; git is the undo.
-- Never touch an feature's auto-generated `<!-- BEGIN/END SUBTASKS -->` block.
+- Never touch a feature's auto-generated `<!-- BEGIN/END SUBTASKS -->` block.
 - No `confirm()`-style gating anywhere (this is a planning-file operation, not UI).
 
 ## Report

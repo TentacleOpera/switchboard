@@ -14,7 +14,7 @@ When the user types a bare `/switchboard` (no request attached), reply with a **
 > - **Plan something** — talk it through and I'll write up a plan you can merge
 > - **Capture ideas fast** — dump thoughts now, sort them later
 > - **Sharpen an existing plan** — deepen or pressure-test one you've already got
-> - **Group related plans into an feature**
+> - **Group related plans into a feature**
 >
 > What are you working on?
 

@@ -28,7 +28,7 @@ When the user references plans, columns, or board state (e.g. "plans in the Crea
 
 ## Plan-Import Manifest (Trigger B — feature grouping)
 
-Emit a **plan-import manifest** ONLY when you group plans into an feature (or otherwise create an feature + subtask set). Pure consultation that writes loose plans with no grouping → **no manifest** (cards stay `CREATED`, the user moves them). Feature grouping → manifest with `isFeature`/`featureId`/`planId` and `kanbanColumn: "CREATED"` (no transition; the payload is the feature relationships, which span multiple `.md` files and cannot live in any single file's front-matter).
+Emit a **plan-import manifest** ONLY when you group plans into a feature (or otherwise create a feature + subtask set). Pure consultation that writes loose plans with no grouping → **no manifest** (cards stay `CREATED`, the user moves them). Feature grouping → manifest with `isFeature`/`featureId`/`planId` and `kanbanColumn: "CREATED"` (no transition; the payload is the feature relationships, which span multiple `.md` files and cannot live in any single file's front-matter).
 
 **Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced). Write it **last**, after all `.md` files — this is an atomicity requirement: all feature `.md` rows must exist before links resolve.
 
@@ -78,7 +78,7 @@ Emit a **plan-import manifest** ONLY when you group plans into an feature (or ot
 
 When the work described will span 3 or more plan files on a related topic (sharing a common feature area or root cause):
 
-- **Early (during Iterate):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under an feature?"* Do not create anything yet.
-- **Closing (at Gate):** When the user signals scoping is complete OR once 3+ related plans have been drafted, offer again: *"You now have [N] plans covering [topic] — want me to create an feature to group them?"*
+- **Early (during Iterate):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under a feature?"* Do not create anything yet.
+- **Closing (at Gate):** When the user signals scoping is complete OR once 3+ related plans have been drafted, offer again: *"You now have [N] plans covering [topic] — want me to create a feature to group them?"*
 
 Only create the feature if the user confirms. Refer to existing files in `.switchboard/features/` for the expected format.

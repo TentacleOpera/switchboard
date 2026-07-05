@@ -3850,7 +3850,7 @@ Start by checking which documents exist, then present the menu.`;
                     // project_id, embeds the full planId UUID in the filename, re-asserts
                     // is_feature=1 as the final DB write, and calls _refreshBoard() so the Kanban
                     // board panel actually updates. The previous duplicated body here omitted all
-                    // three, which is why an Features-tab feature never appeared on the board (and
+                    // three, which is why a Features-tab feature never appeared on the board (and
                     // showed up as a plain plan once a later refresh ran).
                     if (!this._kanbanProvider) {
                         this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Kanban provider not available.' });
