@@ -1157,51 +1157,6 @@ Your job is to help the user write and refine the following governance documents
 Start by checking which documents exist, then present the menu.`;
     }
 
-    private async gatherArchitectDocStatus(wsRoot: string): Promise<Array<{type: string, name: string, exists: boolean, path: string}>> {
-        const docs: Array<{type: string, name: string, exists: boolean, path: string}> = [];
-        const constitutionPath = path.join(wsRoot, 'CONSTITUTION.md');
-        const claudePath = path.join(wsRoot, 'CLAUDE.md');
-        const agentsPath = path.join(wsRoot, 'AGENTS.md');
-        const insightsDir = path.join(wsRoot, '.switchboard', 'insights');
-
-        // PRD — enumerate all project PRDs in .switchboard/projects/
-        const projectsDir = path.join(wsRoot, '.switchboard', 'projects');
-        let prdExists = false;
-        let prdPath = '';
-        try {
-            if (fs.existsSync(projectsDir)) {
-                const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
-                for (const entry of entries) {
-                    if (entry.isDirectory()) {
-                        const candidatePrd = path.join(projectsDir, entry.name, 'prd.md');
-                        if (fs.existsSync(candidatePrd)) {
-                            prdExists = true;
-                            prdPath = candidatePrd;
-                            break; // show first found; architect will enumerate all in-terminal
-                        }
-                    }
-                }
-            }
-        } catch { /* directory read failed — treat as no PRD */ }
-        docs.push({ type: 'prd', name: 'PRD', exists: prdExists, path: prdPath });
-
-        docs.push({ type: 'constitution', name: 'Constitution', exists: fs.existsSync(constitutionPath), path: constitutionPath });
-        docs.push({ type: 'system', name: 'System (CLAUDE.md)', exists: fs.existsSync(claudePath), path: claudePath });
-        docs.push({ type: 'agents', name: 'System (AGENTS.md)', exists: fs.existsSync(agentsPath), path: agentsPath });
-
-        // Tuning insights — check if directory exists and has any .md files
-        let insightsExist = false;
-        try {
-            if (fs.existsSync(insightsDir)) {
-                const insightFiles = fs.readdirSync(insightsDir);
-                insightsExist = insightFiles.some((f: string) => f.endsWith('.md'));
-            }
-        } catch { /* directory read failed */ }
-        docs.push({ type: 'tuning', name: 'Tuning Insights', exists: insightsExist, path: insightsDir });
-
-        return docs;
-    }
-
     /**
      * Post a message to BOTH the project panel and the planning panel webviews.
      * The Docs-tab "Save as PRD / Save as Constitution" actions run in the
@@ -2397,86 +2352,6 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 const nbPanel = isProject ? this._projectPanel : this._panel;
                 nbPanel?.webview.postMessage({ type: 'notebookDefaultRoot', root: defaultRoot || '' });
-                break;
-            }
-
-            // ── Remote Control (§10) — delegated to KanbanProvider ─────────
-            // The Remote tab renders here (project.html) but the per-workspace
-            // RemoteControlService instances live on KanbanProvider (their poll
-            // callbacks dispatch column agents). Delegation keeps ONE service
-            // instance per workspace regardless of which webview drives it.
-            case 'getRemoteConfig': {
-                const payload = await this._kanbanProvider?.remoteGetConfigPayload(msg.workspaceRoot);
-                const remotePanel = isProject ? this._projectPanel : this._panel;
-                if (payload) { remotePanel?.webview.postMessage(payload); }
-                break;
-            }
-            case 'setRemoteConfig': {
-                const payload = await this._kanbanProvider?.remoteSetConfig(msg.workspaceRoot, msg.config);
-                const remotePanel = isProject ? this._projectPanel : this._panel;
-                if (payload) { remotePanel?.webview.postMessage(payload); }
-                break;
-            }
-            case 'runNotionRemoteSetup': {
-                const remotePanel = isProject ? this._projectPanel : this._panel;
-                if (!this._kanbanProvider) {
-                    remotePanel?.webview.postMessage({ type: 'notionRemoteSetupResult', success: false, error: 'Kanban provider unavailable' });
-                    break;
-                }
-                const result = await this._kanbanProvider.remoteRunNotionSetup(msg.workspaceRoot);
-                remotePanel?.webview.postMessage({ type: 'notionRemoteSetupResult', ...result });
-                break;
-            }
-            case 'startRemoteControl': {
-                const active = (await this._kanbanProvider?.remoteStart(msg.workspaceRoot)) === true;
-                const remotePanel = isProject ? this._projectPanel : this._panel;
-                remotePanel?.webview.postMessage({ type: 'remoteControlState', active });
-                break;
-            }
-            case 'stopRemoteControl': {
-                const active = this._kanbanProvider?.remoteStop(msg.workspaceRoot) === true;
-                const remotePanel = isProject ? this._projectPanel : this._panel;
-                remotePanel?.webview.postMessage({ type: 'remoteControlState', active });
-                break;
-            }
-            case 'getRemoteHealth': {
-                const payload = await this._kanbanProvider?.remoteGetHealthPayload(msg.workspaceRoot);
-                const healthPanel = isProject ? this._projectPanel : this._panel;
-                if (payload) { healthPanel?.webview.postMessage(payload); }
-                break;
-            }
-            case 'copyLinearAgentSkill': {
-                const skillPanel = isProject ? this._projectPanel : this._panel;
-                if (!this._kanbanProvider) {
-                    skillPanel?.webview.postMessage({ type: 'linearAgentSkillText', text: null, error: 'Kanban provider unavailable' });
-                    break;
-                }
-                const result = await this._kanbanProvider.remoteBuildLinearAgentSkillText(msg.workspaceRoot);
-                skillPanel?.webview.postMessage({
-                    type: 'linearAgentSkillText',
-                    text: result.text || null,
-                    error: result.error,
-                });
-                break;
-            }
-            case 'getProjectContextSyncStatus': {
-                const payload = await this._kanbanProvider?.projectContextGetStatus(msg.workspaceRoot);
-                const ctxPanel = isProject ? this._projectPanel : this._panel;
-                if (payload) { ctxPanel?.webview.postMessage(payload); }
-                break;
-            }
-            case 'setProjectContextSyncEnabled': {
-                const payload = await this._kanbanProvider?.projectContextSetEnabled(msg.workspaceRoot, msg.enabled === true);
-                const ctxPanel = isProject ? this._projectPanel : this._panel;
-                if (payload) { ctxPanel?.webview.postMessage(payload); }
-                break;
-            }
-            case 'projectContextSyncNow': {
-                const ctxPanel = isProject ? this._projectPanel : this._panel;
-                ctxPanel?.webview.postMessage({ type: 'projectContextSyncRunning' });
-                const payload = await this._kanbanProvider?.projectContextSyncNow(msg.workspaceRoot, { auto: false });
-                if (payload) { ctxPanel?.webview.postMessage(payload); }
-                else { ctxPanel?.webview.postMessage({ type: 'projectContextSyncStatus', state: null, error: 'No workspace resolved' }); }
                 break;
             }
 
@@ -4390,33 +4265,6 @@ Please format the updated output document strictly as follows:
                 const promptText = this.buildArchitectPrompt(wsRoot);
                 await vscode.env.clipboard.writeText(promptText);
                 this._projectPanel?.webview.postMessage({ type: 'architectPromptCopied' });
-                break;
-            }
-
-            case 'loadArchitectDocStatus': {
-                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!wsRoot || !allRoots.includes(wsRoot)) {
-                    break;
-                }
-                const docs = await this.gatherArchitectDocStatus(wsRoot);
-                this._projectPanel?.webview.postMessage({ type: 'architectDocStatus', docs });
-                break;
-            }
-
-            case 'readArchitectDoc': {
-                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const docPath = msg.path;
-                const docType = msg.docType;
-                if (!wsRoot || !allRoots.includes(wsRoot)) {
-                    break;
-                }
-                try {
-                    const content = fs.readFileSync(docPath, 'utf8');
-                    const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
-                    this._projectPanel?.webview.postMessage({ type: 'architectDocContent', renderedHtml, docType });
-                } catch (e) {
-                    this._projectPanel?.webview.postMessage({ type: 'architectDocContent', renderedHtml: '<p>Unable to read file.</p>', docType });
-                }
                 break;
             }
 

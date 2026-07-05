@@ -6,13 +6,9 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data: file:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: http: about:srcdoc blob: data:;">
     <title>Switchboard Project</title>
     <style>
-        @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
+        @keyframes spin {from { transform: rotate(0deg); }to { transform: rotate(360deg); }
         }
-        @keyframes skeleton-shimmer {
-            0% { background-position: -200px 0; }
-            100% { background-position: calc(200px + 100%) 0; }
+        @keyframes skeleton-shimmer {0% { background-position: -200px 0; }100% { background-position: calc(200px + 100%) 0; }
         }
         @font-face {
             font-family: 'GeistPixel';
@@ -25,8 +21,7 @@
             src: url('{{HANKEN_FONT_URI}}') format('woff2');
             font-weight: 100 900;
             font-display: swap;
-        }
-        :root {
+        }:root {
             --kanban-bg: #000000;
             --panel-bg: #000000;
             --panel-bg2: #0a0a0a;
@@ -56,8 +51,7 @@
             --spacing-lg: calc(var(--spacing-unit) * 2);
             --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
             --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
-        }
-        body.theme-claudify {
+        }body.theme-claudify {
             /* The teal family derives from --accent-primary ON :root, so it resolves to cyan
                there and inherits cyan everywhere. Each must be redeclared here to go terracotta. */
             --accent-primary: #D97757;
@@ -71,77 +65,46 @@
             --border-bright: #444444;
             /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
             /* Display-font vars NOT overridden — keep base GeistPixel (pixel font). */
-        }
-
-        /* Claudify: remove neon glow from base (non-cyber) interactive states */
-        body.theme-claudify .kanban-plan-item.selected,
-        body.theme-claudify .feature-plan-item.selected,
-        body.theme-claudify .constitution-file-item.selected, body.theme-claudify .system-file-item.selected { box-shadow: none; }
-
-        /* Claudify: cards/sidebar items = an exact copy of implementation.html's .secondary-btn
-           (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
-           --text-secondary text. NO terracotta — the accent is not in these buttons. */
-        body.theme-claudify .kanban-plan-item,
-        body.theme-claudify .feature-plan-item,
-        body.theme-claudify .constitution-file-item,
-        body.theme-claudify .system-file-item,
-        body.theme-claudify .insight-item {
+        }/* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .kanban-plan-item.selected, body.theme-claudify .feature-plan-item.selected, body.theme-claudify .constitution-file-item.selected, body.theme-claudify .system-file-item.selected { box-shadow: none; }/* Claudify: cards/sidebar items = an exact copy of implementation.html's .secondary-btn
+           (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border, --text-secondary text. NO terracotta — the accent is not in these buttons. */
+        body.theme-claudify .kanban-plan-item, body.theme-claudify .feature-plan-item, body.theme-claudify .constitution-file-item, body.theme-claudify .system-file-item, body.theme-claudify .insight-item {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border: 1px solid #333333 !important;
             color: var(--text-secondary) !important;
             box-shadow: none !important;
-        }
-        body.theme-claudify .kanban-plan-item:hover,
-        body.theme-claudify .feature-plan-item:hover,
-        body.theme-claudify .constitution-file-item:hover,
-        body.theme-claudify .system-file-item:hover,
-        body.theme-claudify .insight-item:hover {
+        }body.theme-claudify .kanban-plan-item:hover, body.theme-claudify .feature-plan-item:hover, body.theme-claudify .constitution-file-item:hover, body.theme-claudify .system-file-item:hover, body.theme-claudify .insight-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: #555555 !important;
             color: var(--text-primary) !important;
             box-shadow: none !important;
-        }
-        /* Selected: clear terracotta highlight (border + left bar) so the selection is obvious.
+        }/* Selected: clear terracotta highlight (border + left bar) so the selection is obvious.
            The :hover variants keep the terracotta when a selected card is hovered. */
-        body.theme-claudify .kanban-plan-item.selected,
-        body.theme-claudify .kanban-plan-item.selected:hover,
-        body.theme-claudify .feature-plan-item.selected,
-        body.theme-claudify .feature-plan-item.selected:hover,
-        body.theme-claudify .constitution-file-item.selected,
-        body.theme-claudify .system-file-item.selected,
-        body.theme-claudify .constitution-file-item.selected:hover,
-        body.theme-claudify .system-file-item.selected:hover,
-        body.theme-claudify .insight-item.selected,
-        body.theme-claudify .insight-item.selected:hover {
+        body.theme-claudify .kanban-plan-item.selected, body.theme-claudify .kanban-plan-item.selected:hover, body.theme-claudify .feature-plan-item.selected, body.theme-claudify .feature-plan-item.selected:hover, body.theme-claudify .constitution-file-item.selected, body.theme-claudify .system-file-item.selected, body.theme-claudify .constitution-file-item.selected:hover, body.theme-claudify .system-file-item.selected:hover, body.theme-claudify .insight-item.selected, body.theme-claudify .insight-item.selected:hover {
             background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
             border-color: var(--accent-primary) !important;
             color: var(--text-primary) !important;
             box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
-        }
-        /* Card title: mid-tone so it's brighter than the subtitle (--text-secondary) without
+        }/* Card title: mid-tone so it's brighter than the subtitle (--text-secondary) without
            being the harsh cream (--text-primary) — consistent with the other panels. */
         body.theme-claudify .kanban-plan-topic {
             color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
-        }
-        * {
+        }* {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-        }
-        body {
+        }body {
             font-family: var(--font-family);
             font-size: 13px;
             color: var(--text-primary);
             background: var(--panel-bg);
             height: 100vh;
             overflow: hidden;
-        }
-        .container {
+        }.container {
             display: flex;
             flex-direction: column;
             height: calc(100vh - 40px);
-        }
-        .controls-strip, .kanban-controls-strip {
+        }.controls-strip, .kanban-controls-strip {
             display: flex;
             align-items: center;
             gap: 8px;
@@ -151,11 +114,9 @@
             flex-shrink: 0;
             overflow-x: auto;
             flex-wrap: nowrap;
-        }
-        .controls-strip > *, .kanban-controls-strip > * {
+        }.controls-strip > *, .kanban-controls-strip > * {
             flex-shrink: 0;
-        }
-        .kanban-controls-strip select, .controls-strip select, .controls-strip input {
+        }.kanban-controls-strip select, .controls-strip select, .controls-strip input {
             background: #111;
             border: 1px solid var(--border-color);
             color: var(--text-primary);
@@ -163,8 +124,7 @@
             border-radius: 4px;
             font-size: 11px;
             font-family: var(--font-mono);
-        }
-        .sidebar-search-input {
+        }.sidebar-search-input {
             margin-left: auto;
             width: 150px;
             background: #111;
@@ -173,8 +133,7 @@
             padding: 4px 8px;
             border-radius: 4px;
             font-size: 11px;
-        }
-        .strip-btn, .planning-button {
+        }.strip-btn, .planning-button {
             background: #111;
             border: 1px solid var(--border-color);
             color: var(--text-primary);
@@ -183,24 +142,20 @@
             font-size: 11px;
             cursor: pointer;
             transition: all 0.15s;
-        }
-        .strip-btn:hover:not(:disabled), .planning-button:hover:not(:disabled) {
+        }.strip-btn:hover:not(:disabled), .planning-button:hover:not(:disabled) {
             background: var(--card-bg-hover);
             border-color: var(--accent-teal);
-        }
-        .strip-btn:disabled, .planning-button:disabled {
+        }.strip-btn:disabled, .planning-button:disabled {
             opacity: 0.4;
             cursor: not-allowed;
-        }
-        .content-row {
+        }.content-row {
             display: flex;
             flex: 1;
             overflow-y: hidden;
             overflow-x: auto;
             height: 100%;
             min-height: 0;
-        }
-        #kanban-list-pane, #features-list-pane {
+        }#kanban-list-pane, #features-list-pane {
             width: 320px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -208,8 +163,7 @@
             flex-direction: column;
             overflow-y: auto;
             background: var(--panel-bg);
-        }
-        #constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane, #architect-list-pane, #devdocs-list-pane {
+        }#constitution-list-pane, #system-list-pane, #tuning-list-pane, #projects-list-pane {
             width: 240px;
             flex-shrink: 0;
             border-right: 1px solid var(--border-color);
@@ -217,8 +171,7 @@
             flex-direction: column;
             overflow-y: auto;
             background: var(--panel-bg);
-        }
-        .preview-panel-wrapper {
+        }.preview-panel-wrapper {
             flex: 1;
             flex-shrink: 0;
             min-width: 360px;
@@ -227,28 +180,24 @@
             overflow: hidden;
             position: relative;
             min-height: 0;
-        }
-        .kanban-preview-pane, .features-preview-pane {
+        }.kanban-preview-pane, .features-preview-pane {
             flex: 1;
             display: flex;
             flex-direction: column;
             background: var(--panel-bg);
             min-height: 0;
-        }
-        .constitution-preview-pane, .tuning-preview-pane {
+        }.constitution-preview-pane, .tuning-preview-pane {
             flex: 1;
             overflow-y: auto;
             padding: 16px;
             background: var(--panel-bg);
             min-height: 0;
-        }
-        #kanban-preview-content, #features-preview-content {
+        }#kanban-preview-content, #features-preview-content {
             padding: 16px;
             overflow-y: auto;
             flex: 1;
             min-height: 0;
-        }
-        .markdown-editor {
+        }.markdown-editor {
             width: 100%;
             height: 100%;
             background: #000;
@@ -260,19 +209,11 @@
             resize: none;
             outline: none;
             display: none;
-        }
-        .edit-mode .markdown-editor {
+        }.edit-mode .markdown-editor {
             display: block;
-        }
-        .edit-mode #kanban-preview-content, 
-        .edit-mode #features-preview-content, 
-        .edit-mode #constitution-preview-content,
-        .edit-mode #system-preview-content,
-        .edit-mode #tuning-preview-content,
-        .edit-mode #projects-preview-content, .edit-mode #devdocs-preview-content {
+        }.edit-mode #kanban-preview-content, .edit-mode #features-preview-content, .edit-mode #constitution-preview-content, .edit-mode #system-preview-content, .edit-mode #tuning-preview-content, .edit-mode #projects-preview-content {
             display: none;
-        }
-        /* Active Doc Banner */
+        }/* Active Doc Banner */
         .active-doc-banner {
             display: flex;
             align-items: center;
@@ -283,43 +224,35 @@
             color: #d18616;
             font-size: 11px;
             font-family: var(--font-mono);
-        }
-        .active-doc-banner.inactive {
+        }.active-doc-banner.inactive {
             display: none;
-        }
-        .btn-disable-doc {
+        }.btn-disable-doc {
             background: transparent;
             border: 1px solid #d18616;
             color: #d18616;
             padding: 2px 8px;
             border-radius: 3px;
             cursor: pointer;
-        }
-        .btn-disable-doc:hover {
+        }.btn-disable-doc:hover {
             background: rgba(209, 134, 22, 0.1);
-        }
-        /* Empty State */
+        }/* Empty State */
         .kanban-empty-state, .empty-state {
             padding: 32px;
             text-align: center;
             color: var(--text-secondary);
             font-style: italic;
-        }
-        /* Kanban specific plan items */
+        }/* Kanban specific plan items */
         .kanban-plan-item, .feature-plan-item, .constitution-file-item, .system-file-item, .insight-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
             transition: background 0.15s;
-        }
-        .kanban-plan-item:hover, .feature-plan-item:hover, .constitution-file-item:hover, .system-file-item:hover, .insight-item:hover {
+        }.kanban-plan-item:hover, .feature-plan-item:hover, .constitution-file-item:hover, .system-file-item:hover, .insight-item:hover {
             background: var(--card-bg-hover);
-        }
-        .kanban-plan-item.selected, .feature-plan-item.selected, .constitution-file-item.selected, .system-file-item.selected, .insight-item.selected {
+        }.kanban-plan-item.selected, .feature-plan-item.selected, .constitution-file-item.selected, .system-file-item.selected, .insight-item.selected {
             background: color-mix(in srgb, var(--accent-teal) 8%, #0f0f0f);
             border-left: 3px solid var(--accent-teal);
-        }
-        .kanban-plan-item {
+        }.kanban-plan-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
@@ -329,30 +262,24 @@
             margin: 3px 0;
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-left: 3px solid var(--accent-teal-dim);
-        }
-        .kanban-plan-item:hover {
+        }.kanban-plan-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
-        }
-        .kanban-plan-item.selected {
+        }.kanban-plan-item.selected {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
             color: var(--accent-teal);
-        }
-        .cyber-theme-enabled .kanban-plan-item.selected {
+        }.cyber-theme-enabled .kanban-plan-item.selected {
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
                         inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
-        }
-        .cyber-theme-enabled .kanban-plan-item:hover {
+        }.cyber-theme-enabled .kanban-plan-item:hover {
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
-
-        /* .feature-plan-item and .constitution-file-item mirror .kanban-plan-item styling */
+        }/* .feature-plan-item and .constitution-file-item mirror .kanban-plan-item styling */
         .feature-plan-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
@@ -363,30 +290,24 @@
             margin: 3px 0;
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-left: 3px solid var(--accent-teal-dim);
-        }
-        .feature-plan-item:hover {
+        }.feature-plan-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
-        }
-        .feature-plan-item.selected {
+        }.feature-plan-item.selected {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
             color: var(--accent-teal);
-        }
-        .cyber-theme-enabled .feature-plan-item:hover {
+        }.cyber-theme-enabled .feature-plan-item:hover {
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
-        .cyber-theme-enabled .feature-plan-item.selected {
+        }.cyber-theme-enabled .feature-plan-item.selected {
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
                         inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
-        }
-
-        .constitution-file-item, .system-file-item {
+        }.constitution-file-item, .system-file-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
@@ -396,34 +317,28 @@
             margin: 3px 0;
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-left: 3px solid var(--accent-teal-dim);
-        }
-        .constitution-file-item:hover, .system-file-item:hover {
+        }.constitution-file-item:hover, .system-file-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
-        }
-        .constitution-file-item.selected, .system-file-item.selected {
+        }.constitution-file-item.selected, .system-file-item.selected {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
             color: var(--accent-teal);
-        }
-        .cyber-theme-enabled .constitution-file-item:hover, .cyber-theme-enabled .system-file-item:hover {
+        }.cyber-theme-enabled .constitution-file-item:hover, .cyber-theme-enabled .system-file-item:hover {
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
-        .cyber-theme-enabled .constitution-file-item.selected, .cyber-theme-enabled .system-file-item.selected {
+        }.cyber-theme-enabled .constitution-file-item.selected, .cyber-theme-enabled .system-file-item.selected {
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
                         inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
-        }
-        .kanban-plan-meta {
+        }.kanban-plan-meta {
             font-size: 11px;
             color: var(--text-secondary);
             margin-top: 4px;
-        }
-        .doc-list-item {
+        }.doc-list-item {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
@@ -436,49 +351,39 @@
             display: flex;
             align-items: center;
             gap: 8px;
-        }
-        .doc-list-item:hover {
+        }.doc-list-item:hover {
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
-        }
-        .doc-list-item.missing {
+        }.doc-list-item.missing {
             opacity: 0.5;
             cursor: default;
-        }
-        .doc-list-item .doc-status {
+        }.doc-list-item .doc-status {
             font-size: 14px;
             flex-shrink: 0;
-        }
-        .doc-list-item .doc-name {
+        }.doc-list-item .doc-name {
             font-weight: 500;
             flex: 1;
-        }
-        .doc-list-item .doc-hint {
+        }.doc-list-item .doc-hint {
             font-size: 10px;
             color: var(--text-secondary);
-        }
-        .kanban-plan-actions {
+        }.kanban-plan-actions {
             display: flex;
             gap: 6px;
             margin-top: 8px;
-        }
-        .kanban-column-badge {
+        }.kanban-column-badge {
             font-size: 10px;
             background: #222;
             color: #aaa;
             padding: 2px 6px;
             border-radius: 3px;
-        }
-        .kanban-column-badge.clickable {
+        }.kanban-column-badge.clickable {
             cursor: pointer;
-        }
-        .kanban-column-badge.clickable:hover {
+        }.kanban-column-badge.clickable:hover {
             background: #333;
             color: #fff;
-        }
-        .kanban-plan-copy-link, .kanban-plan-copy-prompt, .feature-card-action {
+        }.kanban-plan-copy-link, .kanban-plan-copy-prompt, .feature-card-action {
             font-size: 10px;
             background: transparent;
             border: 1px solid var(--border-color);
@@ -486,24 +391,15 @@
             padding: 2px 6px;
             border-radius: 3px;
             cursor: pointer;
-        }
-        .kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .feature-card-action:hover {
+        }.kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .feature-card-action:hover {
             border-color: var(--accent-teal);
             color: var(--text-primary);
-        }
-        .complexity-dot {
+        }.complexity-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
             display: inline-block;
-        }
-        .complexity-dot.very-low { background: #4caf50; }
-        .complexity-dot.low { background: #8bc34a; }
-        .complexity-dot.medium { background: #ffeb3b; }
-        .complexity-dot.high { background: #ff9800; }
-        .complexity-dot.very-high { background: #f44336; }
-        .complexity-dot.unknown { background: #9e9e9e; }
-        /* Metadata preview bar */
+        }.complexity-dot.very-low { background: #4caf50; }.complexity-dot.low { background: #8bc34a; }.complexity-dot.medium { background: #ffeb3b; }.complexity-dot.high { background: #ff9800; }.complexity-dot.very-high { background: #f44336; }.complexity-dot.unknown { background: #9e9e9e; }/* Metadata preview bar */
         #kanban-preview-meta-bar, #feature-preview-meta-bar {
             display: flex;
             gap: 12px;
@@ -513,70 +409,45 @@
             font-size: 11px;
             flex-wrap: wrap;
             align-items: center;
-        }
-        .kanban-meta-group {
+        }.kanban-meta-group {
             display: flex;
             align-items: center;
             gap: 6px;
-        }
-        .kanban-meta-label {
+        }.kanban-meta-label {
             color: var(--text-secondary);
-        }
-        .kanban-meta-value {
+        }.kanban-meta-value {
             color: var(--text-primary);
             cursor: pointer;
-        }
-        .sidebar-toggle-row {
+        }.sidebar-toggle-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 6px 12px;
             background: var(--panel-bg2);
             border-bottom: 1px solid var(--border-color);
-        }
-        .sidebar-folders-btn, .sidebar-toggle-btn {
+        }.sidebar-folders-btn, .sidebar-toggle-btn {
             background: transparent;
             border: none;
             color: var(--text-secondary);
             font-size: 11px;
             cursor: pointer;
-        }
-        .sidebar-folders-btn:hover, .sidebar-toggle-btn:hover {
+        }.sidebar-folders-btn:hover, .sidebar-toggle-btn:hover {
             color: var(--text-primary);
-        }
-        .content-row.collapsed > :first-child {
+        }.content-row.collapsed > :first-child {
             flex: 0 0 40px !important;
-        }
-        .content-row.collapsed > :last-child {
+        }.content-row.collapsed > :last-child {
             flex: 1 !important;
-        }
-
-        .content-row.collapsed #kanban-list-pane,
-        .content-row.collapsed #features-list-pane,
-        .content-row.collapsed #constitution-list-pane,
-        .content-row.collapsed #system-list-pane,
-        .content-row.collapsed #tuning-list-pane,
-        .content-row.collapsed #projects-list-pane, .content-row.collapsed #devdocs-list-pane {
+        }.content-row.collapsed #kanban-list-pane, .content-row.collapsed #features-list-pane, .content-row.collapsed #constitution-list-pane, .content-row.collapsed #system-list-pane, .content-row.collapsed #tuning-list-pane, .content-row.collapsed #projects-list-pane {
             padding: 4px;
             overflow: hidden;
-        }
-
-        .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #features-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #system-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #projects-list-pane > *:not(.sidebar-toggle-row), .content-row.collapsed #devdocs-list-pane > *:not(.sidebar-toggle-row) {
+        }.content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row), .content-row.collapsed #features-list-pane > *:not(.sidebar-toggle-row), .content-row.collapsed #constitution-list-pane > *:not(.sidebar-toggle-row), .content-row.collapsed #system-list-pane > *:not(.sidebar-toggle-row), .content-row.collapsed #tuning-list-pane > *:not(.sidebar-toggle-row), .content-row.collapsed #projects-list-pane > *:not(.sidebar-toggle-row) {
             display: none !important;
-        }
-
-        .content-row.collapsed .sidebar-toggle-row {
+        }.content-row.collapsed .sidebar-toggle-row {
             position: static;
             display: flex;
             justify-content: center;
             margin-bottom: 8px;
-        }
-        /* Overlay and modals for logs */
+        }/* Overlay and modals for logs */
         .kanban-log-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -585,8 +456,7 @@
             align-items: center;
             justify-content: center;
             z-index: 1000;
-        }
-        .kanban-log-modal {
+        }.kanban-log-modal {
             background: #111;
             border: 1px solid var(--border-color);
             border-radius: 6px;
@@ -595,52 +465,41 @@
             max-height: 80vh;
             display: flex;
             flex-direction: column;
-        }
-        .kanban-log-entries {
+        }.kanban-log-entries {
             flex: 1;
             overflow-y: auto;
             padding: 16px;
-        }
-        .kanban-log-entry {
+        }.kanban-log-entry {
             margin-bottom: 12px;
             font-size: 11px;
             line-height: 1.4;
-        }
-        .kanban-log-timestamp { color: var(--text-secondary); }
-        .kanban-log-workflow { color: var(--accent-orange); font-weight: bold; }
-        .kanban-log-close {
+        }.kanban-log-timestamp { color: var(--text-secondary); }.kanban-log-workflow { color: var(--accent-orange); font-weight: bold; }.kanban-log-close {
             padding: 8px;
             text-align: right;
             border-top: 1px solid var(--border-color);
-        }
-        /* Accordion for Features */
+        }/* Accordion for Features */
         .feature-accordion {
             margin-top: 6px;
-        }
-        .feature-subtasks-list {
+        }.feature-subtasks-list {
             padding-left: 12px;
             margin-top: 4px;
-        }
-        .feature-subtask-item {
+        }.feature-subtask-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-size: 11px;
             color: var(--text-secondary);
             padding: 2px 0;
-        }
-        .feature-remove-subtask-btn {
+        }.feature-remove-subtask-btn {
             background: transparent;
             border: none;
             color: #ff6b6b;
             cursor: pointer;
             font-size: 11px;
-        }
-        .feature-subtask-link:hover {
+        }.feature-subtask-link:hover {
             color: var(--accent-teal);
             text-decoration: underline;
-        }
-        /* Shared tab bar + tab visibility (inlined to match planning.html/design.html;
+        }/* Shared tab bar + tab visibility (inlined to match planning.html/design.html;
            these are not shipped as a standalone stylesheet). */
         .shared-tab-bar {
             display: flex;
@@ -651,8 +510,7 @@
             border-bottom: 1px solid var(--border-color);
             overflow-x: auto;
             overflow-y: hidden;
-        }
-        .shared-tab-btn {
+        }.shared-tab-btn {
             flex-shrink: 0;
             white-space: nowrap;
             background: transparent;
@@ -669,51 +527,39 @@
             transition: all 0.08s;
             position: relative;
             top: 1px;
-        }
-        .shared-tab-btn:hover {
+        }.shared-tab-btn:hover {
             color: var(--text-primary);
             background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
-        }
-        .shared-tab-btn.active {
+        }.shared-tab-btn.active {
             color: var(--accent-teal);
             background: var(--panel-bg2);
             border-color: var(--border-color);
             border-bottom-color: var(--panel-bg2);
-        }
-        .shared-tab-content {
+        }.shared-tab-content {
             display: none;
             flex: 1;
             flex-direction: column;
             overflow: hidden;
-        }
-        .shared-tab-content.active {
+        }.shared-tab-content.active {
             display: flex;
             overflow: hidden;
-        }
-        .cyber-theme-enabled .shared-tab-btn.active {
+        }.cyber-theme-enabled .shared-tab-btn.active {
             box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
-        }
-        .cyber-theme-enabled .shared-tab-bar {
+        }.cyber-theme-enabled .shared-tab-bar {
             background: var(--panel-bg);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-        }
-
-        /* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
-        body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
-        /* Active tab = invisible rectangle: fill + bottom border match the bar so only the
+        }/* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
+        body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }/* Active tab = invisible rectangle: fill + bottom border match the bar so only the
            terracotta text reads (D14). */
         body.theme-claudify .shared-tab-btn.active {
             background: var(--panel-bg);
             border-color: transparent;
             border-bottom-color: transparent;
-        }
-        body.theme-claudify .shared-tab-btn:hover:not(.active) {
+        }body.theme-claudify .shared-tab-btn:hover:not(.active) {
             color: #c8c8c8;
             background: color-mix(in srgb, #ffffff 5%, transparent);
-        }
-
-        /* --- Cyber Theme Styles --- */
+        }/* --- Cyber Theme Styles --- */
         .cyber-scanlines {
             display: none;
             position: absolute;
@@ -727,10 +573,7 @@
                 rgba(0, 0, 0, 0.07) 4px
             );
             z-index: 5;
-        }
-        .cyber-theme-enabled .cyber-scanlines { display: block; }
-
-        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+        }.cyber-theme-enabled .cyber-scanlines { display: block; }.cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
             content: " ";
             display: block;
             position: absolute;
@@ -749,71 +592,44 @@
             animation: scanline-sweep 8s linear infinite;
         }
 
-        @keyframes scanline-sweep {
-            0% { transform: translateY(-80px); }
-            100% { transform: translateY(100vh); }
+        @keyframes scanline-sweep {0% { transform: translateY(-80px); }100% { transform: translateY(100vh); }
         }
 
-        @media (prefers-reduced-motion: reduce) {
-            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+        @media (prefers-reduced-motion: reduce) {.cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
                 animation: none;
                 display: none;
             }
-        }
-
-        .preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
+        }.preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
             display: none !important;
-        }
-
-        /* Global scanline suppression — toggled by the Setup panel checkbox */
+        }/* Global scanline suppression — toggled by the Setup panel checkbox */
         .cyber-theme-enabled.cyber-scanlines-disabled .cyber-scanlines {
             display: none !important;
-        }
-
-        body.cyber-theme-enabled {
+        }body.cyber-theme-enabled {
             background-color: #101414;
             background-image:
                 /* Subtle neutral grey grid lines (cyan pulled out of the background per D13) */
                 linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
                 linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
-        }
-
-        .cyber-theme-enabled .controls-strip,
-        .cyber-theme-enabled .kanban-controls-strip {
+        }.cyber-theme-enabled .controls-strip, .cyber-theme-enabled .kanban-controls-strip {
             background: rgba(10, 10, 10, 0.65);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
             border-bottom-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
-        }
-
-        .cyber-theme-enabled #kanban-list-pane,
-        .cyber-theme-enabled #features-list-pane {
+        }.cyber-theme-enabled #kanban-list-pane, .cyber-theme-enabled #features-list-pane {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
             border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
-        }
-        .cyber-theme-enabled #constitution-list-pane,
-        .cyber-theme-enabled #system-list-pane,
-        .cyber-theme-enabled #tuning-list-pane,
-        .cyber-theme-enabled #projects-list-pane, .cyber-theme-enabled #devdocs-list-pane {
+        }.cyber-theme-enabled #constitution-list-pane, .cyber-theme-enabled #system-list-pane, .cyber-theme-enabled #tuning-list-pane, .cyber-theme-enabled #projects-list-pane {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
             border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
-        }
-
-        .cyber-theme-enabled .preview-panel-wrapper {
+        }.cyber-theme-enabled .preview-panel-wrapper {
             background: transparent;
             box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
-        }
-
-        .cyber-theme-enabled #kanban-preview-pane,
-        .cyber-theme-enabled #features-preview-pane,
-        .cyber-theme-enabled #constitution-preview-pane,
-        .cyber-theme-enabled #tuning-preview-pane,
-        .cyber-theme-enabled #projects-preview-pane, .cyber-theme-enabled #devdocs-preview-pane {
+        }.cyber-theme-enabled #kanban-preview-pane, .cyber-theme-enabled #features-preview-pane, .cyber-theme-enabled #constitution-preview-pane, .cyber-theme-enabled #tuning-preview-pane, .cyber-theme-enabled #projects-preview-pane {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
                 linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
@@ -821,114 +637,50 @@
             background-size: 40px 40px, 40px 40px;
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
-        }
-
-        /* ── Cyber Panel Theme: Neon Glow Effects ── */
+        }/* ── Cyber Panel Theme: Neon Glow Effects ── */
         /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
 
         /* Inline code: neon glow */
-        .cyber-theme-enabled #kanban-preview-content code,
-        .cyber-theme-enabled #features-preview-content code,
-        .cyber-theme-enabled #constitution-preview-content code,
-        .cyber-theme-enabled #system-preview-content code,
-        .cyber-theme-enabled #tuning-preview-content code,
-        .cyber-theme-enabled #projects-preview-content code, .cyber-theme-enabled #devdocs-preview-content code {
+        .cyber-theme-enabled #kanban-preview-content code, .cyber-theme-enabled #features-preview-content code, .cyber-theme-enabled #constitution-preview-content code, .cyber-theme-enabled #system-preview-content code, .cyber-theme-enabled #tuning-preview-content code, .cyber-theme-enabled #projects-preview-content code {
             box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
-        }
-
-        /* Code blocks: subtle glow border */
-        .cyber-theme-enabled #kanban-preview-content pre,
-        .cyber-theme-enabled #features-preview-content pre,
-        .cyber-theme-enabled #constitution-preview-content pre,
-        .cyber-theme-enabled #system-preview-content pre,
-        .cyber-theme-enabled #tuning-preview-content pre,
-        .cyber-theme-enabled #projects-preview-content pre, .cyber-theme-enabled #devdocs-preview-content pre {
+        }/* Code blocks: subtle glow border */
+        .cyber-theme-enabled #kanban-preview-content pre, .cyber-theme-enabled #features-preview-content pre, .cyber-theme-enabled #constitution-preview-content pre, .cyber-theme-enabled #system-preview-content pre, .cyber-theme-enabled #tuning-preview-content pre, .cyber-theme-enabled #projects-preview-content pre {
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
                          inset 0 0 12px rgba(0, 0, 0, 0.3);
-        }
-
-        /* Blockquotes: glowing left border */
-        .cyber-theme-enabled #kanban-preview-content blockquote,
-        .cyber-theme-enabled #features-preview-content blockquote,
-        .cyber-theme-enabled #constitution-preview-content blockquote,
-        .cyber-theme-enabled #system-preview-content blockquote,
-        .cyber-theme-enabled #tuning-preview-content blockquote,
-        .cyber-theme-enabled #projects-preview-content blockquote, .cyber-theme-enabled #devdocs-preview-content blockquote {
+        }/* Blockquotes: glowing left border */
+        .cyber-theme-enabled #kanban-preview-content blockquote, .cyber-theme-enabled #features-preview-content blockquote, .cyber-theme-enabled #constitution-preview-content blockquote, .cyber-theme-enabled #system-preview-content blockquote, .cyber-theme-enabled #tuning-preview-content blockquote, .cyber-theme-enabled #projects-preview-content blockquote {
             border-left-color: var(--accent-teal);
             box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
-        }
-
-        /* Controls strip buttons: glow on hover */
+        }/* Controls strip buttons: glow on hover */
         .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
             box-shadow: var(--glow-teal);
-        }
-
-        /* ── Claudify Theme: Warm Obsidian Overrides ── */
+        }/* ── Claudify Theme: Warm Obsidian Overrides ── */
 
         /* Claudify: solid near-black surface + subtle warm grid (no translucency, no blur) */
-        body.theme-claudify #kanban-content,
-        body.theme-claudify #features-content,
-        body.theme-claudify #constitution-content,
-        body.theme-claudify #system-content,
-        body.theme-claudify #tuning-content,
-        body.theme-claudify #projects-content, body.theme-claudify #devdocs-content,
-        body.theme-claudify #kanban-preview-pane,
-        body.theme-claudify #features-preview-pane,
-        body.theme-claudify #constitution-preview-pane,
-        body.theme-claudify #system-preview-pane,
-        body.theme-claudify #tuning-preview-pane,
-        body.theme-claudify #projects-preview-pane, body.theme-claudify #devdocs-preview-pane {
+        body.theme-claudify #kanban-content, body.theme-claudify #features-content, body.theme-claudify #constitution-content, body.theme-claudify #system-content, body.theme-claudify #tuning-content, body.theme-claudify #projects-content, body.theme-claudify #kanban-preview-pane, body.theme-claudify #features-preview-pane, body.theme-claudify #constitution-preview-pane, body.theme-claudify #system-preview-pane, body.theme-claudify #tuning-preview-pane, body.theme-claudify #projects-preview-pane {
             background-color: #1C1C1C;   /* neutral flat surface (claudify has no glass overlay) */
             background-image:
                 linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
                 linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
-        }
-
-        /* Claudify: h1 — pixel font, terracotta */
-        body.theme-claudify #kanban-preview-content h1,
-        body.theme-claudify #features-preview-content h1,
-        body.theme-claudify #constitution-preview-content h1,
-        body.theme-claudify #system-preview-content h1,
-        body.theme-claudify #tuning-preview-content h1,
-        body.theme-claudify #projects-preview-content h1, body.theme-claudify #devdocs-preview-content h1 {
+        }/* Claudify: h1 — pixel font, terracotta */
+        body.theme-claudify #kanban-preview-content h1, body.theme-claudify #features-preview-content h1, body.theme-claudify #constitution-preview-content h1, body.theme-claudify #system-preview-content h1, body.theme-claudify #tuning-preview-content h1, body.theme-claudify #projects-preview-content h1 {
             font-family: 'GeistPixel', var(--font-family);
             letter-spacing: -0.05em;
             font-stretch: 90%;
             color: #D97757;
-        }
-
-        body.theme-claudify.claudify-pixel-font-disabled #kanban-preview-content h1,
-        body.theme-claudify.claudify-pixel-font-disabled #features-preview-content h1,
-        body.theme-claudify.claudify-pixel-font-disabled #constitution-preview-content h1,
-        body.theme-claudify.claudify-pixel-font-disabled #system-preview-content h1,
-        body.theme-claudify.claudify-pixel-font-disabled #tuning-preview-content h1,
-        body.theme-claudify.claudify-pixel-font-disabled #projects-preview-content h1 {
+        }body.theme-claudify.claudify-pixel-font-disabled #kanban-preview-content h1, body.theme-claudify.claudify-pixel-font-disabled #features-preview-content h1, body.theme-claudify.claudify-pixel-font-disabled #constitution-preview-content h1, body.theme-claudify.claudify-pixel-font-disabled #system-preview-content h1, body.theme-claudify.claudify-pixel-font-disabled #tuning-preview-content h1, body.theme-claudify.claudify-pixel-font-disabled #projects-preview-content h1 {
             font-family: var(--font-family);
             letter-spacing: normal;
             font-stretch: 100%;
-        }
-
-        /* Claudify: h2-h6 — Hanken, terracotta */
-        body.theme-claudify #kanban-preview-content h2, body.theme-claudify #kanban-preview-content h3, body.theme-claudify #kanban-preview-content h4, body.theme-claudify #kanban-preview-content h5, body.theme-claudify #kanban-preview-content h6,
-        body.theme-claudify #features-preview-content h2, body.theme-claudify #features-preview-content h3, body.theme-claudify #features-preview-content h4, body.theme-claudify #features-preview-content h5, body.theme-claudify #features-preview-content h6,
-        body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6,
-        body.theme-claudify #system-preview-content h2, body.theme-claudify #system-preview-content h3, body.theme-claudify #system-preview-content h4, body.theme-claudify #system-preview-content h5, body.theme-claudify #system-preview-content h6,
-        body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6,
-        body.theme-claudify #projects-preview-content h2, body.theme-claudify #devdocs-preview-content h2, body.theme-claudify #projects-preview-content h3, body.theme-claudify #devdocs-preview-content h3, body.theme-claudify #projects-preview-content h4, body.theme-claudify #devdocs-preview-content h4, body.theme-claudify #projects-preview-content h5, body.theme-claudify #devdocs-preview-content h5, body.theme-claudify #projects-preview-content h6, body.theme-claudify #devdocs-preview-content h6 {
+        }/* Claudify: h2-h6 — Hanken, terracotta */
+        body.theme-claudify #kanban-preview-content h2, body.theme-claudify #kanban-preview-content h3, body.theme-claudify #kanban-preview-content h4, body.theme-claudify #kanban-preview-content h5, body.theme-claudify #kanban-preview-content h6, body.theme-claudify #features-preview-content h2, body.theme-claudify #features-preview-content h3, body.theme-claudify #features-preview-content h4, body.theme-claudify #features-preview-content h5, body.theme-claudify #features-preview-content h6, body.theme-claudify #constitution-preview-content h2, body.theme-claudify #constitution-preview-content h3, body.theme-claudify #constitution-preview-content h4, body.theme-claudify #constitution-preview-content h5, body.theme-claudify #constitution-preview-content h6, body.theme-claudify #system-preview-content h2, body.theme-claudify #system-preview-content h3, body.theme-claudify #system-preview-content h4, body.theme-claudify #system-preview-content h5, body.theme-claudify #system-preview-content h6, body.theme-claudify #tuning-preview-content h2, body.theme-claudify #tuning-preview-content h3, body.theme-claudify #tuning-preview-content h4, body.theme-claudify #tuning-preview-content h5, body.theme-claudify #tuning-preview-content h6, body.theme-claudify #projects-preview-content h2, body.theme-claudify #projects-preview-content h3, body.theme-claudify #projects-preview-content h4, body.theme-claudify #projects-preview-content h5, body.theme-claudify #projects-preview-content h6 {
             font-family: var(--font-family);
             letter-spacing: normal;
             font-stretch: 100%;
             color: #D97757;
-        }
-
-        /* Unified Markdown Preview Styling (Kanban, Features & Constitution) */
-        #kanban-preview-content,
-        #features-preview-content,
-        #constitution-preview-content,
-        #system-preview-content,
-        #tuning-preview-content,
-        #projects-preview-content, #devdocs-preview-content {
+        }/* Unified Markdown Preview Styling (Kanban, Features & Constitution) */
+        #kanban-preview-content, #features-preview-content, #constitution-preview-content, #system-preview-content, #tuning-preview-content, #projects-preview-content {
             flex: 1;
             width: 100%;
             box-sizing: border-box;
@@ -938,56 +690,23 @@
             line-height: 1.5;
             word-wrap: break-word;
             color: var(--vscode-editor-foreground, #cccccc);
-        }
-
-        #kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6,
-        #features-preview-content h1, #features-preview-content h2, #features-preview-content h3, #features-preview-content h4, #features-preview-content h5, #features-preview-content h6,
-        #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6,
-        #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6,
-        #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6,
-        #projects-preview-content h1, #devdocs-preview-content h1, #projects-preview-content h2, #devdocs-preview-content h2, #projects-preview-content h3, #devdocs-preview-content h3, #projects-preview-content h4, #devdocs-preview-content h4, #projects-preview-content h5, #devdocs-preview-content h5, #projects-preview-content h6, #devdocs-preview-content h6 {
+        }#kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6, #features-preview-content h1, #features-preview-content h2, #features-preview-content h3, #features-preview-content h4, #features-preview-content h5, #features-preview-content h6, #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6, #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6, #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6, #projects-preview-content h1, #projects-preview-content h2, #projects-preview-content h3, #projects-preview-content h4, #projects-preview-content h5, #projects-preview-content h6 {
             margin-top: 24px;
             margin-bottom: 12px;
             font-weight: 600;
             line-height: 1.25;
             color: #ffffff;
-        }
-
-        /* Cyber theme — display heading typography */
-        body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
-        body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6,
-        body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
-        body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
-        body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
-        body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #devdocs-preview-content h1, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #devdocs-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #devdocs-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #devdocs-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #devdocs-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6, body.cyber-theme-enabled #devdocs-preview-content h6 {
+        }/* Cyber theme — display heading typography */
+        body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6, body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6, body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6, body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6, body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6, body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             font-family: var(--font-family);
             line-height: 1.1;
-        }
-        /* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
-        body.cyber-theme-enabled #kanban-preview-content h1,
-        body.cyber-theme-enabled #features-preview-content h1,
-        body.cyber-theme-enabled #constitution-preview-content h1,
-        body.cyber-theme-enabled #system-preview-content h1,
-        body.cyber-theme-enabled #tuning-preview-content h1,
-        body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #devdocs-preview-content h1 {
+        }/* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
+        body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #projects-preview-content h1 {
             color: #ffffff;
-        }
-        /* Cyber theme — doc preview h2-h6 use accent color */
-        body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6,
-        body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6,
-        body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6,
-        body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6,
-        body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6,
-        body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #devdocs-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #devdocs-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #devdocs-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #devdocs-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6, body.cyber-theme-enabled #devdocs-preview-content h6 {
+        }/* Cyber theme — doc preview h2-h6 use accent color */
+        body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             color: var(--accent-primary);
-        }
-
-        #kanban-preview-content h1,
-        #features-preview-content h1,
-        #constitution-preview-content h1,
-        #system-preview-content h1,
-        #tuning-preview-content h1,
-        #projects-preview-content h1, #devdocs-preview-content h1 {
+        }#kanban-preview-content h1, #features-preview-content h1, #constitution-preview-content h1, #system-preview-content h1, #tuning-preview-content h1, #projects-preview-content h1 {
             font-size: 2em; /* 2em relative to 14px base = 28px */
             margin-top: 0;
             padding-bottom: 0.3em;
@@ -995,14 +714,7 @@
             border-left: 3px solid var(--accent-teal-dim);
             padding-left: 8px;
             text-transform: uppercase;
-        }
-
-        #kanban-preview-content h2,
-        #features-preview-content h2,
-        #constitution-preview-content h2,
-        #system-preview-content h2,
-        #tuning-preview-content h2,
-        #projects-preview-content h2, #devdocs-preview-content h2 {
+        }#kanban-preview-content h2, #features-preview-content h2, #constitution-preview-content h2, #system-preview-content h2, #tuning-preview-content h2, #projects-preview-content h2 {
             font-size: 1.5em; /* 1.5em relative to 14px base = 21px */
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--accent-teal-dim);
@@ -1010,139 +722,44 @@
             padding-left: 6px;
             text-transform: uppercase;
             color: var(--accent-teal);
-        }
-
-        #kanban-preview-content h3,
-        #features-preview-content h3,
-        #constitution-preview-content h3,
-        #system-preview-content h3,
-        #tuning-preview-content h3,
-        #projects-preview-content h3, #devdocs-preview-content h3,
-        #kanban-preview-content h4,
-        #features-preview-content h4,
-        #constitution-preview-content h4,
-        #system-preview-content h4,
-        #tuning-preview-content h4,
-        #projects-preview-content h4, #devdocs-preview-content h4,
-        #kanban-preview-content h5,
-        #features-preview-content h5,
-        #constitution-preview-content h5,
-        #system-preview-content h5,
-        #tuning-preview-content h5,
-        #projects-preview-content h5, #devdocs-preview-content h5,
-        #kanban-preview-content h6,
-        #features-preview-content h6,
-        #constitution-preview-content h6,
-        #system-preview-content h6,
-        #tuning-preview-content h6,
-        #projects-preview-content h6, #devdocs-preview-content h6 {
+        }#kanban-preview-content h3, #features-preview-content h3, #constitution-preview-content h3, #system-preview-content h3, #tuning-preview-content h3, #projects-preview-content h3, #kanban-preview-content h4, #features-preview-content h4, #constitution-preview-content h4, #system-preview-content h4, #tuning-preview-content h4, #projects-preview-content h4, #kanban-preview-content h5, #features-preview-content h5, #constitution-preview-content h5, #system-preview-content h5, #tuning-preview-content h5, #projects-preview-content h5, #kanban-preview-content h6, #features-preview-content h6, #constitution-preview-content h6, #system-preview-content h6, #tuning-preview-content h6, #projects-preview-content h6 {
             text-transform: uppercase;
             color: var(--accent-teal);
-        }
-
-        #kanban-preview-content h3,
-        #features-preview-content h3,
-        #constitution-preview-content h3,
-        #system-preview-content h3,
-        #tuning-preview-content h3,
-        #projects-preview-content h3, #devdocs-preview-content h3 {
+        }#kanban-preview-content h3, #features-preview-content h3, #constitution-preview-content h3, #system-preview-content h3, #tuning-preview-content h3, #projects-preview-content h3 {
             font-size: 1.25em; /* 1.25em relative to 14px base = 17.5px */
-        }
-
-        #kanban-preview-content h4,
-        #features-preview-content h4,
-        #constitution-preview-content h4,
-        #system-preview-content h4,
-        #tuning-preview-content h4,
-        #projects-preview-content h4, #devdocs-preview-content h4 {
+        }#kanban-preview-content h4, #features-preview-content h4, #constitution-preview-content h4, #system-preview-content h4, #tuning-preview-content h4, #projects-preview-content h4 {
             font-size: 1em;
-        }
-
-        #kanban-preview-content h5,
-        #features-preview-content h5,
-        #constitution-preview-content h5,
-        #system-preview-content h5,
-        #tuning-preview-content h5,
-        #projects-preview-content h5, #devdocs-preview-content h5 {
+        }#kanban-preview-content h5, #features-preview-content h5, #constitution-preview-content h5, #system-preview-content h5, #tuning-preview-content h5, #projects-preview-content h5 {
             font-size: 0.875em;
-        }
-
-        #kanban-preview-content h6,
-        #features-preview-content h6,
-        #constitution-preview-content h6,
-        #system-preview-content h6,
-        #tuning-preview-content h6,
-        #projects-preview-content h6, #devdocs-preview-content h6 {
+        }#kanban-preview-content h6, #features-preview-content h6, #constitution-preview-content h6, #system-preview-content h6, #tuning-preview-content h6, #projects-preview-content h6 {
             font-size: 0.85em;
-        }
-
-        #kanban-preview-content p,
-        #features-preview-content p,
-        #constitution-preview-content p,
-        #system-preview-content p,
-        #tuning-preview-content p,
-        #projects-preview-content p, #devdocs-preview-content p {
+        }#kanban-preview-content p, #features-preview-content p, #constitution-preview-content p, #system-preview-content p, #tuning-preview-content p, #projects-preview-content p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
             color: var(--text-primary, #e0e0e0);
             font-size: inherit; /* Inherits from container's 14px */
-        }
-
-        #kanban-preview-content li,
-        #features-preview-content li,
-        #constitution-preview-content li,
-        #system-preview-content li,
-        #tuning-preview-content li,
-        #projects-preview-content li, #devdocs-preview-content li {
+        }#kanban-preview-content li, #features-preview-content li, #constitution-preview-content li, #system-preview-content li, #tuning-preview-content li, #projects-preview-content li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
             color: var(--vscode-editor-foreground, #cccccc);
             font-size: inherit;
-        }
-
-        #kanban-preview-content li p,
-        #features-preview-content li p,
-        #constitution-preview-content li p,
-        #system-preview-content li p,
-        #tuning-preview-content li p,
-        #projects-preview-content li p, #devdocs-preview-content li p {
+        }#kanban-preview-content li p, #features-preview-content li p, #constitution-preview-content li p, #system-preview-content li p, #tuning-preview-content li p, #projects-preview-content li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
-        }
-
-        #kanban-preview-content pre,
-        #features-preview-content pre,
-        #constitution-preview-content pre,
-        #system-preview-content pre,
-        #tuning-preview-content pre,
-        #projects-preview-content pre, #devdocs-preview-content pre {
+        }#kanban-preview-content pre, #features-preview-content pre, #constitution-preview-content pre, #system-preview-content pre, #tuning-preview-content pre, #projects-preview-content pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
             border-radius: 3px;
             overflow-x: auto;
             padding: 16px; /* VS Code default */
             margin: 16px 0;
-        }
-
-        #kanban-preview-content pre code,
-        #features-preview-content pre code,
-        #constitution-preview-content pre code,
-        #system-preview-content pre code,
-        #tuning-preview-content pre code,
-        #projects-preview-content pre code, #devdocs-preview-content pre code {
+        }#kanban-preview-content pre code, #features-preview-content pre code, #constitution-preview-content pre code, #system-preview-content pre code, #tuning-preview-content pre code, #projects-preview-content pre code {
             background: none;
             padding: 0;
             border: none;
             display: inline-block;
             color: var(--vscode-editor-foreground, #cccccc);
             tab-size: 4;
-        }
-
-        #kanban-preview-content code,
-        #features-preview-content code,
-        #constitution-preview-content code,
-        #system-preview-content code,
-        #tuning-preview-content code,
-        #projects-preview-content code, #devdocs-preview-content code {
+        }#kanban-preview-content code, #features-preview-content code, #constitution-preview-content code, #system-preview-content code, #tuning-preview-content code, #projects-preview-content code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
@@ -1151,138 +768,54 @@
             border: 1px solid var(--accent-teal-dim);
             padding: 2px 6px;
             border-radius: 3px;
-        }
-
-        #kanban-preview-content blockquote,
-        #features-preview-content blockquote,
-        #constitution-preview-content blockquote,
-        #system-preview-content blockquote,
-        #tuning-preview-content blockquote,
-        #projects-preview-content blockquote, #devdocs-preview-content blockquote {
+        }#kanban-preview-content blockquote, #features-preview-content blockquote, #constitution-preview-content blockquote, #system-preview-content blockquote, #tuning-preview-content blockquote, #projects-preview-content blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
             border-radius: 2px;
             color: var(--vscode-editor-foreground, var(--text-secondary));
             background: transparent;
-        }
-
-        #kanban-preview-content ul, #kanban-preview-content ol,
-        #features-preview-content ul, #features-preview-content ol,
-        #constitution-preview-content ul, #constitution-preview-content ol,
-        #system-preview-content ul, #system-preview-content ol,
-        #tuning-preview-content ul, #tuning-preview-content ol,
-        #projects-preview-content ul, #devdocs-preview-content ul, #projects-preview-content ol, #devdocs-preview-content ol {
+        }#kanban-preview-content ul, #kanban-preview-content ol, #features-preview-content ul, #features-preview-content ol, #constitution-preview-content ul, #constitution-preview-content ol, #system-preview-content ul, #system-preview-content ol, #tuning-preview-content ul, #tuning-preview-content ol, #projects-preview-content ul, #projects-preview-content ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
-        }
-
-        /* Table Styling */
-        #kanban-preview-content table,
-        #features-preview-content table,
-        #constitution-preview-content table,
-        #system-preview-content table,
-        #tuning-preview-content table,
-        #projects-preview-content table, #devdocs-preview-content table {
+        }/* Table Styling */
+        #kanban-preview-content table, #features-preview-content table, #constitution-preview-content table, #system-preview-content table, #tuning-preview-content table, #projects-preview-content table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
             font-size: inherit; /* Inherits from container */
-        }
-
-        #kanban-preview-content th,
-        #features-preview-content th,
-        #constitution-preview-content th,
-        #system-preview-content th,
-        #tuning-preview-content th,
-        #projects-preview-content th, #devdocs-preview-content th {
+        }#kanban-preview-content th, #features-preview-content th, #constitution-preview-content th, #system-preview-content th, #tuning-preview-content th, #projects-preview-content th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
             font-weight: 600;
             padding: 5px 10px;
-        }
-
-        #kanban-preview-content td,
-        #features-preview-content td,
-        #constitution-preview-content td,
-        #system-preview-content td,
-        #tuning-preview-content td,
-        #projects-preview-content td, #devdocs-preview-content td {
+        }#kanban-preview-content td, #features-preview-content td, #constitution-preview-content td, #system-preview-content td, #tuning-preview-content td, #projects-preview-content td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
             color: var(--vscode-editor-foreground, var(--text-primary));
-        }
-
-        #kanban-preview-content tr:hover td,
-        #features-preview-content tr:hover td,
-        #constitution-preview-content tr:hover td,
-        #system-preview-content tr:hover td,
-        #tuning-preview-content tr:hover td,
-        #projects-preview-content tr:hover td, #devdocs-preview-content tr:hover td {
+        }#kanban-preview-content tr:hover td, #features-preview-content tr:hover td, #constitution-preview-content tr:hover td, #system-preview-content tr:hover td, #tuning-preview-content tr:hover td, #projects-preview-content tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
-        }
-
-        #kanban-preview-content .table-wrapper,
-        #features-preview-content .table-wrapper,
-        #constitution-preview-content .table-wrapper,
-        #system-preview-content .table-wrapper,
-        #tuning-preview-content .table-wrapper,
-        #projects-preview-content .table-wrapper, #devdocs-preview-content .table-wrapper {
+        }#kanban-preview-content .table-wrapper, #features-preview-content .table-wrapper, #constitution-preview-content .table-wrapper, #system-preview-content .table-wrapper, #tuning-preview-content .table-wrapper, #projects-preview-content .table-wrapper {
             overflow-x: auto;
             max-width: 100%;
             margin-bottom: 16px;
-        }
-
-        /* Subtle, Interactive Links */
-        #kanban-preview-content a,
-        #features-preview-content a,
-        #constitution-preview-content a,
-        #system-preview-content a,
-        #tuning-preview-content a,
-        #projects-preview-content a, #devdocs-preview-content a {
+        }/* Subtle, Interactive Links */
+        #kanban-preview-content a, #features-preview-content a, #constitution-preview-content a, #system-preview-content a, #tuning-preview-content a, #projects-preview-content a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
-        }
-
-        #kanban-preview-content a:hover,
-        #features-preview-content a:hover,
-        #constitution-preview-content a:hover,
-        #system-preview-content a:hover,
-        #tuning-preview-content a:hover,
-        #projects-preview-content a:hover, #devdocs-preview-content a:hover {
+        }#kanban-preview-content a:hover, #features-preview-content a:hover, #constitution-preview-content a:hover, #system-preview-content a:hover, #tuning-preview-content a:hover, #projects-preview-content a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
-        }
-
-        #kanban-preview-content hr,
-        #features-preview-content hr,
-        #constitution-preview-content hr,
-        #system-preview-content hr,
-        #tuning-preview-content hr,
-        #projects-preview-content hr, #devdocs-preview-content hr {
+        }#kanban-preview-content hr, #features-preview-content hr, #constitution-preview-content hr, #system-preview-content hr, #tuning-preview-content hr, #projects-preview-content hr {
             border: 0;
             height: 1px;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
-        }
-
-        #kanban-preview-content img,
-        #features-preview-content img,
-        #constitution-preview-content img,
-        #system-preview-content img,
-        #tuning-preview-content img,
-        #projects-preview-content img, #devdocs-preview-content img {
+        }#kanban-preview-content img, #features-preview-content img, #constitution-preview-content img, #system-preview-content img, #tuning-preview-content img, #projects-preview-content img {
             max-width: 100%;
             max-height: 100%;
             position: relative;
             z-index: 7; /* Above .cyber-scanlines (z-index: 5) and sweep animation to prevent overlay distortion */
             box-shadow: 0 0 6px rgba(0, 0, 0, 0.4); /* Intentional elevation so the pop-out above scanlines looks designed */
-        }
-
-        #kanban-preview-content .empty-state,
-        #features-preview-content .empty-state,
-        #constitution-preview-content .empty-state,
-        #system-preview-content .empty-state,
-        #tuning-preview-content .empty-state,
-        #projects-preview-content .empty-state, #devdocs-preview-content .empty-state {
+        }#kanban-preview-content .empty-state, #features-preview-content .empty-state, #constitution-preview-content .empty-state, #system-preview-content .empty-state, #tuning-preview-content .empty-state, #projects-preview-content .empty-state {
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1290,36 +823,26 @@
             color: var(--vscode-editor-foreground, var(--text-secondary));
             font-size: inherit; /* Inherits from container's 14px */
             opacity: 0.5;
-        }
-
-        /* ── Cyber Theme: missing overrides from planning.html ── */
+        }/* ── Cyber Theme: missing overrides from planning.html ── */
         .cyber-theme-enabled .kanban-controls-strip {
             background: transparent;
-        }
-
-        .cyber-theme-enabled .markdown-editor {
+        }.cyber-theme-enabled .markdown-editor {
             background: transparent;
-        }
-
-        .constitution-onboarding {
+        }.constitution-onboarding {
             text-align: left;
             padding-top: 24px;
             max-width: 600px;
             opacity: 1;
             font-size: inherit;
-        }
-        .constitution-onboarding-title {
+        }.constitution-onboarding-title {
             font-weight: 600;
             font-size: 1.15em;
             margin-bottom: 12px;
             color: var(--accent-teal);
-        }
-        .constitution-onboarding p {
+        }.constitution-onboarding p {
             margin-bottom: 12px;
             line-height: 1.6;
-        }
-
-        /* Toast notification (replaces alert() which is a no-op in VS Code webviews) */
+        }/* Toast notification (replaces alert() which is a no-op in VS Code webviews) */
         .toast-notification {
             position: fixed;
             bottom: 24px;
@@ -1333,28 +856,21 @@
             line-height: 1.4;
             box-shadow: 0 4px 12px rgba(0,0,0,0.4);
             animation: toast-slide-in 0.2s ease-out;
-        }
-        .toast-notification.toast-error {
+        }.toast-notification.toast-error {
             background: #5d2424;
             color: #ffb0b0;
             border: 1px solid #8a3838;
-        }
-        .toast-notification.toast-success {
+        }.toast-notification.toast-success {
             background: #1e4030;
             color: #8fdab0;
             border: 1px solid #2e6a4a;
-        }
-        .toast-notification.toast-info {
+        }.toast-notification.toast-info {
             background: var(--panel-bg2);
             color: var(--text-primary);
             border: 1px solid var(--border-color);
         }
-        @keyframes toast-slide-in {
-            from { opacity: 0; transform: translateY(8px); }
-            to   { opacity: 1; transform: translateY(0); }
-        }
-
-        /* Folder Modal (Ported from planning.html) */
+        @keyframes toast-slide-in {from { opacity: 0; transform: translateY(8px); }to { opacity: 1; transform: translateY(0); }
+        }/* Folder Modal (Ported from planning.html) */
         .folder-modal {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -1363,8 +879,7 @@
             align-items: center;
             justify-content: center;
             z-index: 1000;
-        }
-        .folder-modal .modal-content {
+        }.folder-modal .modal-content {
             background: var(--panel-bg);
             border: 1px solid var(--border-color);
             border-radius: 8px;
@@ -1374,23 +889,20 @@
             display: flex;
             flex-direction: column;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-        }
-        .folder-modal .modal-header {
+        }.folder-modal .modal-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 16px 20px;
             border-bottom: 1px solid var(--border-color);
-        }
-        .folder-modal .modal-header h3 {
+        }.folder-modal .modal-header h3 {
             margin: 0;
             font-size: 14px;
             font-weight: 600;
             color: var(--text-primary);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-        }
-        .folder-modal .modal-close-btn {
+        }.folder-modal .modal-close-btn {
             background: transparent;
             border: none;
             color: var(--text-secondary);
@@ -1404,53 +916,41 @@
             justify-content: center;
             border-radius: 4px;
             transition: all 0.15s;
-        }
-        .folder-modal .modal-close-btn:hover {
+        }.folder-modal .modal-close-btn:hover {
             background: var(--card-bg-hover);
             color: var(--text-primary);
-        }
-        .folder-modal .modal-body {
+        }.folder-modal .modal-body {
             padding: 20px;
             overflow-y: auto;
             flex: 1;
-        }
-        .folder-modal .modal-section {
+        }.folder-modal .modal-section {
             margin-bottom: 20px;
-        }
-        .folder-modal .modal-section:last-child {
+        }.folder-modal .modal-section:last-child {
             margin-bottom: 0;
-        }
-        .folder-modal .section-header {
+        }.folder-modal .section-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
             margin-bottom: 12px;
-        }
-        .folder-modal .section-title {
+        }.folder-modal .section-title {
             font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             color: var(--text-secondary);
-        }
-        .folder-modal .section-actions {
+        }.folder-modal .section-actions {
             display: flex;
             gap: 8px;
-        }
-        .folder-modal .folder-list {
+        }.folder-modal .folder-list {
             max-height: none;
-        }
-
-        .folder-list {
+        }.folder-list {
             display: flex;
             flex-direction: column;
             gap: 4px;
             max-height: 250px;
             overflow-y: auto;
             margin-top: 4px;
-        }
-
-        .folder-list-item {
+        }.folder-list-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -1460,17 +960,13 @@
             border-radius: 3px;
             font-size: 11px;
             gap: 8px;
-        }
-
-        .folder-path {
+        }.folder-path {
             flex: 1;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
             color: var(--text-primary);
-        }
-
-        .folder-list-remove-btn {
+        }.folder-list-remove-btn {
             background: transparent;
             border: none;
             color: #ff5555;
@@ -1478,21 +974,15 @@
             font-size: 10px;
             padding: 2px 4px;
             border-radius: 2px;
-        }
-
-        .folder-list-remove-btn:hover {
+        }.folder-list-remove-btn:hover {
             background: rgba(255, 85, 85, 0.1);
-        }
-
-        .folder-list-empty {
+        }.folder-list-empty {
             font-size: 11px;
             color: var(--text-secondary);
             padding: 6px;
             text-align: center;
             font-style: italic;
-        }
-
-        .active-path-btn {
+        }.active-path-btn {
             display: block;
             width: calc(100% - 16px);
             text-align: left;
@@ -1506,10 +996,7 @@
             margin: 0 8px 6px 8px;
             cursor: pointer;
             box-sizing: border-box;
-        }
-        .active-path-btn:hover { border-color: var(--accent-teal, #00e5ff); }
-
-        /* ── Remote tab (§10, relocated from kanban.html) ── */
+        }.active-path-btn:hover { border-color: var(--accent-teal, #00e5ff); }/* ── Remote tab (§10, relocated from kanban.html) ── */
         .workspace-project-select {
             background: #0a0a0a;
             color: var(--text-primary);
@@ -1521,28 +1008,22 @@
             padding: 2px 8px;
             min-width: 280px;
             min-height: 24px;
-        }
-        .workspace-project-select:focus {
+        }.workspace-project-select:focus {
             outline: none;
             border-color: var(--accent-teal-dim);
-        }
-        .subsection-header {
+        }.subsection-header {
           display:flex; align-items:center; gap:8px;
           font-family:var(--font-mono); font-size:10px; font-weight:600;
           color:var(--accent-teal); text-transform:uppercase;
           letter-spacing:1px; margin-bottom:8px;
-        }
-        .db-subsection { border-top:1px solid var(--border-color); padding:10px 0; }
-        .startup-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; }
-        .remote-checkbox-list {
+        }.db-subsection { border-top:1px solid var(--border-color); padding:10px 0; }.startup-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; }.remote-checkbox-list {
             border: 1px solid var(--border-color);
             border-radius: 3px;
             background: var(--panel-bg2);
             padding: 6px 8px;
             max-height: 160px;
             overflow-y: auto;
-        }
-        .remote-checkbox-row {
+        }.remote-checkbox-row {
             display: flex;
             align-items: center;
             gap: 8px;
@@ -1550,9 +1031,7 @@
             color: var(--text-primary);
             font-family: var(--font-mono);
             padding: 3px 0;
-        }
-        .remote-checkbox-row input { accent-color: var(--accent-teal); }
-        .remote-number-input {
+        }.remote-checkbox-row input { accent-color: var(--accent-teal); }.remote-number-input {
             background: var(--panel-bg2);
             color: var(--text-primary);
             border: 1px solid var(--border-color);
@@ -1561,10 +1040,7 @@
             font-size: 11px;
             padding: 3px 6px;
             width: 120px;
-        }
-        .remote-number-input:focus { outline: none; border-color: var(--accent-teal-dim); }
-
-        /* ── NotebookLM tab (relocated from planning.html) ── */
+        }.remote-number-input:focus { outline: none; border-color: var(--accent-teal-dim); }/* ── NotebookLM tab (relocated from planning.html) ── */
         .planning-card {
             border: var(--card-border);
             border-radius: 6px;
@@ -1576,8 +1052,7 @@
             box-shadow: var(--shadow-md);
             margin-bottom: 16px;
             transition: all 0.15s;
-        }
-        .planning-card-header {
+        }.planning-card-header {
             font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
@@ -1586,55 +1061,46 @@
             margin-bottom: 8px;
             padding-bottom: 8px;
             border-bottom: 1px solid var(--accent-teal-dim);
-        }
-        .planning-card-description {
+        }.planning-card-description {
             font-size: 12px;
             line-height: 1.5;
             color: var(--text-primary);
-        }
-        .planning-card-section {
+        }.planning-card-section {
             display: flex;
             flex-direction: column;
             gap: 4px;
-        }
-        .planning-card-section + .planning-card-section {
+        }.planning-card-section + .planning-card-section {
             margin-top: 8px;
             border-top: 1px solid var(--accent-teal-dim);
             padding-top: 16px;
-        }
-        .planning-card-section-title {
+        }.planning-card-section-title {
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 1px;
             color: var(--accent-teal);
             margin-top: 12px;
             margin-bottom: 8px;
-        }
-        .planning-status {
+        }.planning-status {
             font-size: 10px;
             color: var(--text-secondary);
             font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             padding: 4px 0;
-        }
-        .planning-controls {
+        }.planning-controls {
             display: flex;
             flex-direction: row;
             gap: 8px;
             flex-wrap: wrap;
             margin-top: 12px;
             justify-content: flex-start;
-        }
-        .planning-button.secondary {
+        }.planning-button.secondary {
             border: 1px solid var(--border-color);
             background: var(--card-bg);
             color: var(--text-primary);
-        }
-        .planning-button.secondary:hover:not(:disabled) {
+        }.planning-button.secondary:hover:not(:disabled) {
             background: var(--card-bg-hover);
             color: var(--text-primary);
             box-shadow: none;
-        }
-        .planning-input {
+        }.planning-input {
             width: 100%;
             font-size: 12px;
             padding: 4px 8px;
@@ -1644,21 +1110,10 @@
             border-radius: 2px;
             font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             box-sizing: border-box;
-        }
-        /* Remote + NotebookLM tabs scroll as simple content columns
-           (block layout, not the flex column .shared-tab-content defaults to) */
-        #remote-content.active, #notebook-content.active {
+        }/* Remote + NotebookLM tabs scroll as simple content columns
+           (block layout {
             display: block;
             overflow-y: auto;
-        }
-        #notebook-content { padding: 16px; }
-        #notebook-content .planning-card { max-width: 720px; }
-        body.theme-claudify #remote-content, body.theme-claudify #notebook-content {
-            background-color: #1C1C1C;
-            background-image:
-                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
         }
     </style>
 </head>
@@ -1670,7 +1125,6 @@
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
         <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
-        <button class="shared-tab-btn" data-tab="architect">ARCHITECT</button>
     </div>
     <div class="container">
         <!-- Kanban tab -->
@@ -1729,6 +1183,7 @@
                 <button id="btn-cancel-projects" class="strip-btn" style="display:none;">Cancel</button>
                 <button class="strip-btn" id="btn-project-context" data-tooltip="When on, the selected project's PRD is injected into every dispatched prompt">PROJECT CONTEXT: OFF</button>
                 <button id="btn-architect-projects" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
+                <button id="btn-copy-architect-projects" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Copy Architect Prompt</button>
                 <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
             </div>
             <div class="content-row">
@@ -1811,6 +1266,7 @@
                 <button id="btn-delete-constitution" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
                 <button id="btn-manage-constitution-paths" class="strip-btn" title="Manage constitution file paths" disabled>Manage Paths</button>
                 <button id="btn-architect-constitution" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
+                <button id="btn-copy-architect-constitution" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Copy Architect Prompt</button>
             </div>
             <div class="content-row">
                 <div id="constitution-list-pane">
@@ -1845,6 +1301,7 @@
                 <button id="btn-cancel-system" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-delete-system" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
                 <button id="btn-architect-system" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
+                <button id="btn-copy-architect-system" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Copy Architect Prompt</button>
             </div>
             <div class="content-row">
                 <div id="system-list-pane">
@@ -1864,7 +1321,6 @@
                 </div>
             </div>
         </div>
-
 
 
         <!-- Tuning tab -->

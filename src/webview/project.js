@@ -30,9 +30,7 @@
                 applySidebarState('tuning', state.tuningListCollapsed);
             } else if (targetTab === 'projects') {
                 applySidebarState('projects', state.projectsListCollapsed);
-            } else if (targetTab === 'architect') {
-                applySidebarState('architect', state.architectListCollapsed);
-
+            }
 
             if (activeTab === 'kanban') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
@@ -49,8 +47,7 @@
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'tuning') {
                 vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
-            } else if (activeTab === 'architect') {
-                vscode.postMessage({ type: 'loadArchitectDocStatus', workspaceRoot: architectWorkspaceFilter ? architectWorkspaceFilter.value : '' });
+            }
 
         });
     });
@@ -68,7 +65,6 @@
         systemListCollapsed: false,
         tuningListCollapsed: false,
         projectsListCollapsed: false,
-        architectListCollapsed: false,
         switchboardTheme: 'afterburner'
     };
 
@@ -80,7 +76,6 @@
     state.systemListCollapsed = persistedState.systemListCollapsed || false;
     state.tuningListCollapsed = persistedState.tuningListCollapsed || false;
     state.projectsListCollapsed = persistedState.projectsListCollapsed || false;
-    state.architectListCollapsed = persistedState.architectListCollapsed || false;
 
     // Toast notification — replaces alert() which is a silent no-op in VS Code webviews.
     // type: 'error' | 'success' | 'info'
@@ -128,9 +123,6 @@
         } else if (activeTab === 'projects') {
             state.projectsListCollapsed = !state.projectsListCollapsed;
             applySidebarState('projects', state.projectsListCollapsed);
-        } else if (activeTab === 'architect') {
-            state.architectListCollapsed = !state.architectListCollapsed;
-            applySidebarState('architect', state.architectListCollapsed);
         }
 
         // Persist state
@@ -142,8 +134,7 @@
             constitutionListCollapsed: state.constitutionListCollapsed,
             systemListCollapsed: state.systemListCollapsed,
             tuningListCollapsed: state.tuningListCollapsed,
-            projectsListCollapsed: state.projectsListCollapsed,
-            architectListCollapsed: state.architectListCollapsed
+            projectsListCollapsed: state.projectsListCollapsed
         });
     }
 
@@ -371,6 +362,9 @@
     const btnArchitectProjects = document.getElementById('btn-architect-projects');
     const btnArchitectConstitution = document.getElementById('btn-architect-constitution');
     const btnArchitectSystem = document.getElementById('btn-architect-system');
+    const btnCopyArchitectProjects = document.getElementById('btn-copy-architect-projects');
+    const btnCopyArchitectConstitution = document.getElementById('btn-copy-architect-constitution');
+    const btnCopyArchitectSystem = document.getElementById('btn-copy-architect-system');
 
     // Projects tab elements (per-project PRDs)
     const projectsWorkspaceFilter = document.getElementById('projects-workspace-filter');
@@ -1135,16 +1129,6 @@
                 }
                 break;
             }
-            case 'architectDocStatus':
-                renderArchitectDocList(msg.docs);
-                break;
-
-            case 'architectDocContent':
-                if (architectPreviewContent) {
-                    architectPreviewContent.innerHTML = msg.renderedHtml || '';
-                }
-                break;
-
             case 'architectPromptCopied':
                 showToast('Architect prompt copied to clipboard', 'success');
                 break;
@@ -1169,7 +1153,6 @@
         kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         featuresWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         if (tuningWorkspaceFilter) tuningWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
-        if (architectWorkspaceFilter) architectWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
         if (projectsWorkspaceFilter) projectsWorkspaceFilter.innerHTML = '';
 
         _kanbanWorkspaceItems.forEach(ws => {
@@ -1179,7 +1162,6 @@
             kanbanWorkspaceFilter.appendChild(opt.cloneNode(true));
             featuresWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (tuningWorkspaceFilter) tuningWorkspaceFilter.appendChild(opt.cloneNode(true));
-            if (architectWorkspaceFilter) architectWorkspaceFilter.appendChild(opt.cloneNode(true));
             if (projectsWorkspaceFilter) projectsWorkspaceFilter.appendChild(opt.cloneNode(true));
         });
 
@@ -1187,9 +1169,6 @@
         featuresWorkspaceFilter.value = featuresFilters.workspaceRoot;
         if (tuningWorkspaceFilter && currentWS) {
             tuningWorkspaceFilter.value = currentWS;
-        }
-        if (architectWorkspaceFilter && currentWS) {
-            architectWorkspaceFilter.value = currentWS;
         }
         if (projectsWorkspaceFilter) {
             // Default the Projects tab to its prior selection, else the active kanban workspace,
@@ -2038,6 +2017,24 @@
         btnArchitectSystem.addEventListener('click', () => {
             const wsRoot = systemWorkspaceFilter ? systemWorkspaceFilter.value : '';
             vscode.postMessage({ type: 'openArchitectTerminal', workspaceRoot: wsRoot });
+        });
+    }
+    if (btnCopyArchitectProjects) {
+        btnCopyArchitectProjects.addEventListener('click', () => {
+            const wsRoot = projectsWorkspaceFilter ? projectsWorkspaceFilter.value : '';
+            vscode.postMessage({ type: 'copyArchitectPrompt', workspaceRoot: wsRoot });
+        });
+    }
+    if (btnCopyArchitectConstitution) {
+        btnCopyArchitectConstitution.addEventListener('click', () => {
+            const wsRoot = constitutionWorkspaceFilter ? constitutionWorkspaceFilter.value : '';
+            vscode.postMessage({ type: 'copyArchitectPrompt', workspaceRoot: wsRoot });
+        });
+    }
+    if (btnCopyArchitectSystem) {
+        btnCopyArchitectSystem.addEventListener('click', () => {
+            const wsRoot = systemWorkspaceFilter ? systemWorkspaceFilter.value : '';
+            vscode.postMessage({ type: 'copyArchitectPrompt', workspaceRoot: wsRoot });
         });
     }
 
@@ -3279,29 +3276,6 @@
 
     function selectInsight(filename, workspaceRoot) {
         vscode.postMessage({ type: 'readInsight', filename, workspaceRoot: workspaceRoot || '' });
-    }
-
-    function renderArchitectDocList(docs) {
-        // docs: [{ type: 'prd', name: 'PRD', exists: true, path: '...' }, ...]
-        if (!architectDocList) return;
-        architectDocList.innerHTML = '';
-        docs.forEach(doc => {
-            const item = document.createElement('div');
-            item.className = 'doc-list-item' + (doc.exists ? '' : ' missing');
-            item.dataset.docType = doc.type;
-            item.dataset.docPath = doc.path;
-            item.innerHTML = `
-                <span class="doc-status">${doc.exists ? '✓' : '○'}</span>
-                <span class="doc-name">${doc.name}</span>
-                <span class="doc-hint">${doc.exists ? 'Click to preview' : 'Not created'}</span>
-            `;
-            item.addEventListener('click', () => {
-                if (doc.exists) {
-                    vscode.postMessage({ type: 'readArchitectDoc', docType: doc.type, path: doc.path, workspaceRoot: architectWorkspaceFilter ? architectWorkspaceFilter.value : '' });
-                }
-            });
-            architectDocList.appendChild(item);
-        });
     }
 
     if (tuningWorkspaceFilter) {
