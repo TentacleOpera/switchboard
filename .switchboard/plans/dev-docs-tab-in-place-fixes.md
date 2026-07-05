@@ -39,7 +39,7 @@ Dev Docs was built as a minimal owned CRUD store and never inherited the afforda
 The tab's primary navigation becomes a **source-type dropdown** in the controls strip (`planning.html:3825`), modeled on the Docs tab's `docs-source-filter` (`planning.html:3561`). Selecting a type scopes the list pane to that source:
 - **Docs** — the configurable `docs/` folder from fix 2 (the default/authoring source; create + edit + import here).
 - **README** — the workspace root `README.md` (case-insensitive), surfaced as a first-class editable entry with its own badge in `renderDevDocsList` (`planning.js:10730`). `_resolveDevDocPath` gains a narrow allowance for exactly `<root>/README.md`.
-- **Wiki** — git wiki (see fix 5; deferred / read-only to start).
+- **Wiki** — git wiki (see fix 5; writable via its git clone, commit/push on save).
 - Extensible: the dropdown enum is the single place new source types (Pages, sibling repo) are added.
 - `projectContextSync.ts` includes README + the docs folder in the bundle, each labeled by type.
 
@@ -49,7 +49,8 @@ The tab's primary navigation becomes a **source-type dropdown** in the controls 
 ### 5. Git-backed sources (surfaced through the fix-3 dropdown)
 Each git source is a **type in the dropdown** (fix 3), not a separate UI:
 - **5a (local, cheap):** in-repo `docs/` (fix 2) and README (fix 3) already cover the common cases. Add sibling-repo/bench folders on disk as additional selectable sources.
-- **5b (remote, deferred):** **Wiki** and git Pages / other remote repo as read-only fetched snapshots, clearly marked read-only. Borrow the Docs tab's multi-source model rather than rebuilding it. Gate behind 5a landing.
+- **5b (remote, deferred):** **Wiki**, git Pages, and other remote repos — **all writable**. The source is a local clone; save = write file → commit → push. Deferred only for the clone/fetch + auth plumbing, not because they're read-only. Borrow the Docs tab's multi-source model rather than rebuilding it. Gate behind 5a landing.
+  - Write path per type: wiki → `<repo>.wiki.git` clone; Pages → the serving branch (`gh-pages`) or `/docs` folder; other repo → its own working clone.
 
 ### 6. Clipboard import
 - Add an "Import" button to the Dev Docs controls strip (`planning.html:3825`) → posts `importDevDocFromClipboard` → backend reuses `_handleImportResearchDoc` logic (`:8634`) targeting the resolved devdocs folder (H1-derived title, 200 KB cap already present).
@@ -57,7 +58,8 @@ Each git source is a **type in the dropdown** (fix 3), not a separate UI:
 ## Edge cases & migration
 
 - **No migration — clean break.** The Dev Docs feature is unreleased, so `.switchboard/devdocs/` is simply replaced by the configurable `docs/` default. No dual-read, no `*.migrated.bak`, no compat shim (per house rules, unreleased dev work takes clean breaks).
-- **README is a tracked repo file** — editing it writes real source. The path-guard allowance must be exactly `<root>/README.md`, nothing broader, to keep the traversal protection intact. Read-only remote sources (Wiki/Pages) must never be writable through the editor.
+- **README is a tracked repo file** — editing it writes real source. The path-guard allowance must be exactly `<root>/README.md`, nothing broader, to keep the traversal protection intact.
+- **Git-backed sources are writable, but saving involves commit + push** — network and auth can fail mid-save. Surface push failures clearly and don't lose the user's edit (the local clone keeps the committed change even if push fails; a retry re-pushes). No silent data loss.
 - **Empty `docs/`** — a fresh workspace may have no `docs/` folder; `_listDevDocs` handles a missing dir (already does via try/catch at `:8748`), and create (`:2537`) makes it with `mkdir -p`.
 - **No confirmation dialogs** (house rule); `window.confirm()` is a silent no-op in the webview. Delete stays immediate.
 - Verify external-change handling (`planning.js:3882`, `externalChangePending.devdocs`) still fires for README and the new default location.
