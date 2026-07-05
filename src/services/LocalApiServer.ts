@@ -52,6 +52,40 @@ interface LocalApiServerOptions {
         epicPlanId: string,
         planIds: string[]
     ) => Promise<{ success: boolean; assigned: string[]; skipped: string[]; error?: string }>;
+    /**
+     * Remove a single subtask from its parent feature through the running extension.
+     * Used by the kanban_operations remove-from-feature.js script. Detaches the
+     * subtask, abandons its worktree, regenerates the feature file, and unlinks
+     * from external trackers. Optional — absent in headless/test harnesses.
+     */
+    removeSubtaskFromEpic?: (
+        workspaceRoot: string,
+        subtaskPlanId: string
+    ) => Promise<{ success: boolean; error?: string }>;
+    /**
+     * Delete a feature and optionally its subtasks through the running extension.
+     * Used by the kanban_operations delete-feature.js script. Abandons all child
+     * worktrees, either tombstones or detaches subtasks, tombstones the feature,
+     * and unlinks from external trackers. Optional — absent in headless/test harnesses.
+     */
+    deleteEpic?: (
+        workspaceRoot: string,
+        epicPlanId: string,
+        deleteSubtasks: boolean
+    ) => Promise<{ success: boolean; error?: string }>;
+    /**
+     * Split a feature into two new features, partitioning its subtasks. Used by
+     * the kanban_operations split-feature.js script. The original feature is
+     * deleted (subtasks detached); `keptPlanIds` go to the first new feature, the
+     * rest go to the second. Optional — absent in headless/test harnesses.
+     */
+    splitEpic?: (
+        workspaceRoot: string,
+        epicPlanId: string,
+        keptPlanIds: string[],
+        firstEpicName: string,
+        secondEpicName: string
+    ) => Promise<{ success: boolean; firstEpicPlanId?: string; secondEpicPlanId?: string; error?: string }>;
 }
 
 export class LocalApiServer {
@@ -411,6 +445,146 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanAssignEpic error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanAssignEpic failed' }));
+        }
+    }
+
+    /**
+     * Handle POST /kanban/feature/remove — remove a single subtask from its parent
+     * feature through the running extension. Reached by the kanban_operations
+     * remove-from-feature.js script. Body: { subtaskPlanId: string, workspaceRoot?: string }.
+     */
+    private async _handleKanbanRemoveSubtaskFromEpic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const removeSubtaskFromEpic = this._options.removeSubtaskFromEpic;
+        if (!removeSubtaskFromEpic) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Subtask removal not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const subtaskPlanId = String(body?.subtaskPlanId || '').trim();
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!subtaskPlanId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: subtaskPlanId' }));
+                return;
+            }
+
+            const result = await removeSubtaskFromEpic(workspaceRoot, subtaskPlanId);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanRemoveSubtaskFromEpic error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanRemoveSubtaskFromEpic failed' }));
+        }
+    }
+
+    /**
+     * Handle POST /kanban/feature/delete — delete a feature and optionally its
+     * subtasks through the running extension. Reached by the kanban_operations
+     * delete-feature.js script. Body: { epicPlanId: string, deleteSubtasks?: boolean, workspaceRoot?: string }.
+     */
+    private async _handleKanbanDeleteEpic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const deleteEpic = this._options.deleteEpic;
+        if (!deleteEpic) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Feature deletion not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const epicPlanId = String(body?.epicPlanId || '').trim();
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const deleteSubtasks = !!body?.deleteSubtasks;
+            if (!epicPlanId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: epicPlanId' }));
+                return;
+            }
+
+            const result = await deleteEpic(workspaceRoot, epicPlanId, deleteSubtasks);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanDeleteEpic error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanDeleteEpic failed' }));
+        }
+    }
+
+    /**
+     * Handle POST /kanban/feature/split — split a feature into two new features,
+     * partitioning its subtasks. Reached by the kanban_operations split-feature.js
+     * script. Body: { epicPlanId: string, keptPlanIds: string[], firstEpicName: string, secondEpicName: string, workspaceRoot?: string }.
+     */
+    private async _handleKanbanSplitEpic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const splitEpic = this._options.splitEpic;
+        if (!splitEpic) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Feature split not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const epicPlanId = String(body?.epicPlanId || '').trim();
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const keptPlanIds = Array.isArray(body?.keptPlanIds) ? body.keptPlanIds.map((p: any) => String(p)) : null;
+            const firstEpicName = String(body?.firstEpicName || '').trim();
+            const secondEpicName = String(body?.secondEpicName || '').trim();
+            if (!epicPlanId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: epicPlanId' }));
+                return;
+            }
+            if (!keptPlanIds || keptPlanIds.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'keptPlanIds must be a non-empty array' }));
+                return;
+            }
+            if (!firstEpicName || !secondEpicName) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'firstEpicName and secondEpicName are required' }));
+                return;
+            }
+
+            const result = await splitEpic(workspaceRoot, epicPlanId, keptPlanIds, firstEpicName, secondEpicName);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanSplitEpic error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanSplitEpic failed' }));
         }
     }
 
@@ -1109,6 +1283,12 @@ export class LocalApiServer {
                 await this._handleKanbanCreateEpic(req, res);
             } else if (pathname === '/kanban/feature/assign' && req.method === 'POST') {
                 await this._handleKanbanAssignEpic(req, res);
+            } else if (pathname === '/kanban/feature/remove' && req.method === 'POST') {
+                await this._handleKanbanRemoveSubtaskFromEpic(req, res);
+            } else if (pathname === '/kanban/feature/delete' && req.method === 'POST') {
+                await this._handleKanbanDeleteEpic(req, res);
+            } else if (pathname === '/kanban/feature/split' && req.method === 'POST') {
+                await this._handleKanbanSplitEpic(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {

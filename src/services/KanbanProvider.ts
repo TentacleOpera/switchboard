@@ -9049,71 +9049,13 @@ ${FOCUS_DIRECTIVE}`;
             case 'removeSubtaskFromEpic': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.subtaskSessionId) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !(await db.ensureReady())) break;
-                const subtask = await db.getPlanByPlanId(msg.subtaskSessionId);
-                if (!subtask) break;
-                const epicId = subtask.epicId;
-                await db.updateEpicStatus(subtask.planId, 0, '');
-                // per-subtask mode: a subtask removed from its epic gets its worktree
-                // abandoned (discarded, not merged) — it's no longer part of the epic's
-                // convergence, so its branch shouldn't land in the integration branch.
-                const subtaskWorktrees = (await db.getWorktrees()).filter(w => w.subtask_plan_id === subtask.planId);
-                for (const wt of subtaskWorktrees) {
-                    await this._removeWorktreeRow(workspaceRoot, db, wt, 'abandoned');
-                }
-                if (subtaskWorktrees.length > 0) {
-                    await this._pruneWorktrees(workspaceRoot);
-                }
-                if (epicId) {
-                    await this._regenerateEpicFile(workspaceRoot, epicId, db);
-                }
-                await this._refreshBoard(workspaceRoot);
-                // Unlink the removed subtask from external trackers (best-effort).
-                const linearSvc = this._getLinearService(workspaceRoot);
-                const clickupSvc = this._getClickUpService(workspaceRoot);
-                await Promise.allSettled([
-                    linearSvc.unlinkSubtasksFromEpic([subtask.planFile]),
-                    clickupSvc.unlinkSubtasksFromEpic([subtask.planFile])
-                ]);
+                await this._removeSubtaskFromEpic(workspaceRoot, msg.subtaskSessionId);
                 break;
             }
             case 'deleteEpic': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.sessionId) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !(await db.ensureReady())) break;
-                const epic = await db.getPlanByPlanId(msg.sessionId);
-                if (!epic || !epic.isEpic) break;
-                // Capture the subtasks up front — after tombstone/clear we can no longer
-                // enumerate them, and we need their plan files to unlink them from the
-                // external trackers below.
-                const epicSubtasks = await db.getSubtasksByEpicId(epic.planId);
-                // Epic abandon: remove every child worktree (subtask + integration) —
-                // discarded, not merged. Runs regardless of deleteSubtasks: even when
-                // subtasks are kept on the board (unlinked from the epic), their
-                // per-subtask worktrees no longer have a convergence point to target.
-                await this._cleanupEpicWorktrees(workspaceRoot, db, epic.planId, 'abandoned');
-                if (msg.deleteSubtasks) {
-                    for (const st of epicSubtasks) {
-                        await db.tombstonePlan(st.planId);
-                    }
-                } else {
-                    await db.clearEpicIdForEpic(epic.planId);
-                }
-                await db.tombstonePlan(epic.planId);
-                await this._refreshBoard(workspaceRoot);
-                // Unlink the subtasks from external trackers (best-effort) so no Linear
-                // issue / ClickUp task is left parented to the now-deleted epic.
-                if (epicSubtasks.length > 0) {
-                    const linearSvc = this._getLinearService(workspaceRoot);
-                    const clickupSvc = this._getClickUpService(workspaceRoot);
-                    const subtaskFiles = epicSubtasks.map(st => st.planFile);
-                    await Promise.allSettled([
-                        linearSvc.unlinkSubtasksFromEpic(subtaskFiles),
-                        clickupSvc.unlinkSubtasksFromEpic(subtaskFiles)
-                    ]);
-                }
+                await this._deleteEpic(workspaceRoot, msg.sessionId, !!msg.deleteSubtasks);
                 break;
             }
             case 'getEpicDetails': {
@@ -9999,6 +9941,104 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
+     * Remove a single subtask from its parent epic. Shared entry point for BOTH the
+     * webview `removeSubtaskFromEpic` message and the agent/API path (LocalApiServer
+     * `/kanban/feature/remove` → TaskViewerProvider → here). Detaches the subtask,
+     * abandons its per-subtask worktree, regenerates the epic file, refreshes the
+     * board, and unlinks the subtask from external trackers (best-effort).
+     */
+    public async _removeSubtaskFromEpic(
+        workspaceRoot: string,
+        subtaskSessionId: string
+    ): Promise<{ success: boolean; error?: string }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban database not available.' };
+        }
+        const subtask = await db.getPlanByPlanId(subtaskSessionId);
+        if (!subtask) {
+            return { success: false, error: 'Subtask not found.' };
+        }
+        const epicId = subtask.epicId;
+        await db.updateEpicStatus(subtask.planId, 0, '');
+        // per-subtask mode: a subtask removed from its epic gets its worktree
+        // abandoned (discarded, not merged) — it's no longer part of the epic's
+        // convergence, so its branch shouldn't land in the integration branch.
+        const subtaskWorktrees = (await db.getWorktrees()).filter(w => w.subtask_plan_id === subtask.planId);
+        for (const wt of subtaskWorktrees) {
+            await this._removeWorktreeRow(workspaceRoot, db, wt, 'abandoned');
+        }
+        if (subtaskWorktrees.length > 0) {
+            await this._pruneWorktrees(workspaceRoot);
+        }
+        if (epicId) {
+            await this._regenerateEpicFile(workspaceRoot, epicId, db);
+        }
+        await this._refreshBoard(workspaceRoot);
+        // Unlink the removed subtask from external trackers (best-effort).
+        const linearSvc = this._getLinearService(workspaceRoot);
+        const clickupSvc = this._getClickUpService(workspaceRoot);
+        await Promise.allSettled([
+            linearSvc.unlinkSubtasksFromEpic([subtask.planFile]),
+            clickupSvc.unlinkSubtasksFromEpic([subtask.planFile])
+        ]);
+        return { success: true };
+    }
+
+    /**
+     * Delete an epic and optionally its subtasks. Shared entry point for BOTH the
+     * webview `deleteEpic` message and the agent/API path (LocalApiServer
+     * `/kanban/feature/delete` → TaskViewerProvider → here). Abandons all child
+     * worktrees, either tombstones the subtasks or detaches them, tombstones the
+     * epic, refreshes the board, and unlinks subtasks from external trackers
+     * (best-effort).
+     */
+    public async _deleteEpic(
+        workspaceRoot: string,
+        epicSessionId: string,
+        deleteSubtasks: boolean
+    ): Promise<{ success: boolean; error?: string }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban database not available.' };
+        }
+        const epic = await db.getPlanByPlanId(epicSessionId);
+        if (!epic || !epic.isEpic) {
+            return { success: false, error: 'Epic not found.' };
+        }
+        // Capture the subtasks up front — after tombstone/clear we can no longer
+        // enumerate them, and we need their plan files to unlink them from the
+        // external trackers below.
+        const epicSubtasks = await db.getSubtasksByEpicId(epic.planId);
+        // Epic abandon: remove every child worktree (subtask + integration) —
+        // discarded, not merged. Runs regardless of deleteSubtasks: even when
+        // subtasks are kept on the board (unlinked from the epic), their
+        // per-subtask worktrees no longer have a convergence point to target.
+        await this._cleanupEpicWorktrees(workspaceRoot, db, epic.planId, 'abandoned');
+        if (deleteSubtasks) {
+            for (const st of epicSubtasks) {
+                await db.tombstonePlan(st.planId);
+            }
+        } else {
+            await db.clearEpicIdForEpic(epic.planId);
+        }
+        await db.tombstonePlan(epic.planId);
+        await this._refreshBoard(workspaceRoot);
+        // Unlink the subtasks from external trackers (best-effort) so no Linear
+        // issue / ClickUp task is left parented to the now-deleted epic.
+        if (epicSubtasks.length > 0) {
+            const linearSvc = this._getLinearService(workspaceRoot);
+            const clickupSvc = this._getClickUpService(workspaceRoot);
+            const subtaskFiles = epicSubtasks.map(st => st.planFile);
+            await Promise.allSettled([
+                linearSvc.unlinkSubtasksFromEpic(subtaskFiles),
+                clickupSvc.unlinkSubtasksFromEpic(subtaskFiles)
+            ]);
+        }
+        return { success: true };
+    }
+
+    /**
      * Create an epic from a set of subtask plan IDs and link those subtasks to it.
      * Shared entry point for BOTH the webview `createEpic` message and the agent/API
      * path (LocalApiServer `/kanban/epic` → TaskViewerProvider → here). Mirrors the
@@ -10276,6 +10316,57 @@ ${FOCUS_DIRECTIVE}`;
             await this._syncEpicOutbound(workspaceRoot, epic.planFile, epic.planId, epic.topic, epic.kanbanColumn, subtaskSyncParams);
         }
         return { success: true, assigned, skipped };
+    }
+
+    /**
+     * Split an epic into two new epics, partitioning its subtasks by a planId
+     * list. Shared entry point for the agent/API path (LocalApiServer
+     * `/kanban/feature/split` → TaskViewerProvider → here). The original epic is
+     * deleted (subtasks detached, not tombstoned); `keptPlanIds` go to the first
+     * new epic, the rest go to the second. Returns the two new epic planIds.
+     */
+    public async splitEpic(
+        workspaceRoot: string,
+        epicPlanId: string,
+        keptPlanIds: string[],
+        firstEpicName: string,
+        secondEpicName: string
+    ): Promise<{ success: boolean; firstEpicPlanId?: string; secondEpicPlanId?: string; error?: string }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban database not available.' };
+        }
+        const epic = await db.getPlanByPlanId(epicPlanId);
+        if (!epic || !epic.isEpic) {
+            return { success: false, error: 'Epic not found.' };
+        }
+        const allSubtasks = await db.getSubtasksByEpicId(epic.planId);
+        if (allSubtasks.length < 2) {
+            return { success: false, error: 'Cannot split an epic with fewer than 2 subtasks.' };
+        }
+        const keptSet = new Set(keptPlanIds);
+        const firstIds = allSubtasks.filter(st => keptSet.has(st.planId)).map(st => st.planId);
+        const secondIds = allSubtasks.filter(st => !keptSet.has(st.planId)).map(st => st.planId);
+        if (firstIds.length === 0 || secondIds.length === 0) {
+            return { success: false, error: 'Split partition must be non-empty on both sides.' };
+        }
+        // Detach all subtasks from the original epic (no tombstone), then delete
+        // the original epic. This mirrors _deleteEpic with deleteSubtasks=false.
+        await this._deleteEpic(workspaceRoot, epic.planId, false);
+        // Create the two new epics with their respective subtask sets.
+        const firstResult = await this.createEpicFromPlanIds(workspaceRoot, firstEpicName, firstIds);
+        if (!firstResult.success) {
+            return { success: false, error: `Failed to create first epic: ${firstResult.error}` };
+        }
+        const secondResult = await this.createEpicFromPlanIds(workspaceRoot, secondEpicName, secondIds);
+        if (!secondResult.success) {
+            return { success: false, error: `Failed to create second epic: ${secondResult.error}` };
+        }
+        return {
+            success: true,
+            firstEpicPlanId: firstResult.epicPlanId,
+            secondEpicPlanId: secondResult.epicPlanId
+        };
     }
 
     /**

@@ -1010,7 +1010,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             },
             createEpic: async (wsRoot, name, planIds, description) => {
-                // Route the create-epic.js script through the provider so it inherits
+                // Route the create-feature.js script through the provider so it inherits
                 // the DB upsert, subtask linking, epic-file write, and board refresh.
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
@@ -1022,7 +1022,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             },
             assignToEpic: async (wsRoot, epicPlanId, planIds) => {
-                // Route the assign-to-epic.js script through the provider for batch
+                // Route the assign-to-feature.js script through the provider for batch
                 // subtask linking + a single board refresh.
                 if (!this._kanbanProvider) {
                     return { success: false, assigned: [], skipped: [], error: 'Kanban provider not available' };
@@ -1031,6 +1031,39 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return await this._kanbanProvider.assignPlansToEpic(wsRoot, epicPlanId, planIds);
                 } catch (err) {
                     return { success: false, assigned: [], skipped: [], error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            removeSubtaskFromEpic: async (wsRoot, subtaskPlanId) => {
+                // Route the remove-from-feature.js script through the provider.
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider._removeSubtaskFromEpic(wsRoot, subtaskPlanId);
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            deleteEpic: async (wsRoot, epicPlanId, deleteSubtasks) => {
+                // Route the delete-feature.js script through the provider.
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider._deleteEpic(wsRoot, epicPlanId, deleteSubtasks);
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            splitEpic: async (wsRoot, epicPlanId, keptPlanIds, firstEpicName, secondEpicName) => {
+                // Route the split-feature.js script through the provider.
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider.splitEpic(wsRoot, epicPlanId, keptPlanIds, firstEpicName, secondEpicName);
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             }
         });
