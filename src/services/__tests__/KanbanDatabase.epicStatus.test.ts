@@ -41,7 +41,14 @@ suite('KanbanDatabase - Feature Status Update', () => {
             createdAt: now,
             updatedAt: now,
             lastAction: 'created',
-            sourceType: 'local'
+            sourceType: 'local',
+            tags: '',
+            repoScope: '',
+            brainSourcePath: '',
+            mirrorPath: '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: ''
         }]);
         assert.strictEqual(upserted, true, 'plan upsert should succeed');
 

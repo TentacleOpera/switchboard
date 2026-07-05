@@ -20870,11 +20870,11 @@ What would you like to find?`;
             }
 
             // 4. All three present -> advanced tips
-            const prompt = `You are onboarding an experienced Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 5. Planning Tools & Workflows, ## 7. Multi-Repo Control Plane, ## 9. Design Panel (Google Stitch + Claude), ## 30. Remote Control (provider-agnostic), and the /improve-plan / features features), then walk me through advanced tips and features interactively — one step at a time, checking if I want to learn about each. Focus only on this; don't dump the whole manual.`;
+            const prompt = `You are onboarding an experienced Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 5. Planning Tools & Workflows, ## 7. Multi-Repo Control Plane, ## 9. Design Panel (Google Stitch + Claude), ## 30. Remote Control (provider-agnostic), and the /improve-plan and features tooling), then walk me through advanced tips and features interactively — one step at a time, checking if I want to learn about each. Focus only on this; don't dump the whole manual.`;
             await vscode.env.clipboard.writeText(prompt);
             vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through advanced features and tips.');
         } catch (err: any) {
-            vscode.window.showErrorMessage(`Couldn't copy to clipboard — see [error]: ${err?.message || err}`);
+            vscode.window.showErrorMessage(`Couldn't copy to clipboard: ${err?.message || err}`);
         }
     }
 
@@ -20900,7 +20900,7 @@ What would you like to find?`;
                 return false;
             }
             const files = await fs.promises.readdir(plansDir);
-            const planFiles = files.filter(f => f.endsWith('.md') && !f.startsWith('brain_'));
+            const planFiles = files.filter((f: string) => f.endsWith('.md') && !f.startsWith('brain_'));
             return planFiles.length > 0;
         } catch {
             return false;

@@ -43,7 +43,6 @@ describe('planMetadataUtils', () => {
             assert.strictEqual(metadata.kanbanColumn, 'INVESTIGATION');
             assert.strictEqual(metadata.complexity, '5');
             assert.strictEqual(metadata.tags, ',frontend,backend,');
-            assert.strictEqual(metadata.dependencies, 'Dep 1, Dep 2');
         });
 
         it('prefers Manual Complexity Override', async () => {

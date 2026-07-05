@@ -142,7 +142,6 @@ suite('NotionBackupService', () => {
             status: 'active',
             complexity: '3',
             tags: 'bug,backend',
-            dependencies: '',
             repoScope: 'switchboard',
             workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(),
@@ -193,7 +192,6 @@ suite('NotionBackupService', () => {
             status: 'active',
             complexity: '5',
             tags: 'feature',
-            dependencies: 'plan-001',
             repoScope: '',
             workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(),
@@ -233,7 +231,7 @@ suite('NotionBackupService', () => {
         const plan1: KanbanPlanRecord = {
             planId: 'plan-003', sessionId: 'sess-003', topic: 'P1', planFile: '',
             kanbanColumn: 'CREATED', status: 'active', complexity: '1', tags: '',
-            dependencies: '', repoScope: '', workspaceId: 'test-ws-id',
+            repoScope: '', workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
             routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
@@ -241,7 +239,7 @@ suite('NotionBackupService', () => {
         const plan2: KanbanPlanRecord = {
             planId: 'plan-004', sessionId: 'sess-004', topic: 'P2', planFile: '',
             kanbanColumn: 'CREATED', status: 'active', complexity: '1', tags: '',
-            dependencies: '', repoScope: '', workspaceId: 'test-ws-id',
+            repoScope: '', workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
             routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
@@ -278,7 +276,7 @@ suite('NotionBackupService', () => {
         const plan: KanbanPlanRecord = {
             planId: 'plan-005', sessionId: 'sess-005', topic: 'Progress Plan', planFile: '',
             kanbanColumn: 'CREATED', status: 'active', complexity: '1', tags: '',
-            dependencies: '', repoScope: '', workspaceId: 'test-ws-id',
+            repoScope: '', workspaceId: 'test-ws-id',
             createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
             routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
@@ -395,7 +393,7 @@ suite('NotionBackupService', () => {
         const localPlan: KanbanPlanRecord = {
             planId: 'plan-skip-001', sessionId: 'sess-skip-001', topic: 'Local Plan', planFile: '.switchboard/plans/local.md',
             kanbanColumn: 'CREATED', status: 'active', complexity: '5', tags: '',
-            dependencies: '', repoScope: '', workspaceId: 'test-ws-id',
+            repoScope: '', workspaceId: 'test-ws-id',
             createdAt: oldDate, updatedAt: newDate,
             lastAction: '', sourceType: 'local', brainSourcePath: '', mirrorPath: '',
             routedTo: '', dispatchedAgent: '', dispatchedIde: '', clickupTaskId: '', linearIssueId: ''
@@ -455,7 +453,7 @@ suite('NotionBackupService', () => {
             planId: 'plan-path-001', sessionId: 'sess-path-001', topic: 'Path Plan',
             planFile: '.switchboard/plans/path.md',
             kanbanColumn: 'CREATED', status: 'active', complexity: '5', tags: '',
-            dependencies: '', repoScope: '', workspaceId: 'test-ws-id',
+            repoScope: '', workspaceId: 'test-ws-id',
             createdAt: date, updatedAt: date,
             lastAction: '', sourceType: 'local',
             brainSourcePath: 'brain/plans/path.md',

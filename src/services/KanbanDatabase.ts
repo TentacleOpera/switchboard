@@ -6297,10 +6297,10 @@ FROM plans
     private _diagFeatureSnapshot(context: 'persist' | 'reload'): void {
         try {
             if (!this._db) return;
-            const res = this._db.exec("SELECT plan_file, is_feature, feature_id FROM plans WHERE plan_file LIKE '.switchboard/features/%'");
-            const rows = res[0]?.values ?? [];
+            const res = this._db.exec("SELECT plan_file, is_feature, feature_id FROM plans WHERE plan_file LIKE '.switchboard/features/%'") as unknown as Array<{ columns: string[]; values: unknown[][] }>;
+            const rows = res?.[0]?.values ?? [];
             if (rows.length === 0) return;
-            const summary = rows.map(r => `${r[0]}=is_feature:${r[1]},feature_id:${r[2] ?? ''}`).join(' | ');
+            const summary = rows.map((r: unknown[]) => `${r[0]}=is_feature:${r[1]},feature_id:${r[2] ?? ''}`).join(' | ');
             appendFeatureClobberDiag(this._workspaceRoot, `${context} instance=${this.instanceId} features=[ ${summary} ]`);
         } catch { /* diagnostic only */ }
     }

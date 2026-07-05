@@ -326,7 +326,7 @@ suite('GlobalPlanWatcherService', () => {
 
             const { parsePlanMetadata } = await import('../planMetadataUtils');
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             await (service as any)._handlePlanFile(mockUri, workspaceRoot);
 
@@ -345,7 +345,7 @@ suite('GlobalPlanWatcherService', () => {
             sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
 
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             await (service as any)._handlePlanFile(mockUri, workspaceRoot);
 
@@ -365,7 +365,7 @@ suite('GlobalPlanWatcherService', () => {
             sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
 
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             await (service as any)._handlePlanFile(mockUri, workspaceRoot);
 
@@ -388,7 +388,7 @@ suite('GlobalPlanWatcherService', () => {
             sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
 
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             const before = Date.now();
             await (service as any)._handlePlanFile(mockUri, workspaceRoot);
@@ -413,7 +413,7 @@ suite('GlobalPlanWatcherService', () => {
             sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
 
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             await (service as any)._handlePlanFile(mockUri, workspaceRoot);
 
@@ -448,7 +448,7 @@ suite('GlobalPlanWatcherService', () => {
             } as any);
             sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nExisting plan');
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: '', topic: 'Existing plan', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: '', topic: 'Existing plan', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             await (service as any)._handlePlanFile(mockUri, workspaceRoot);
 
@@ -482,33 +482,33 @@ suite('GlobalPlanWatcherService', () => {
 
         test('resolves child workspace root to parent before caching', () => {
             resolveStub.withArgs('/child/root').returns('/parent/root');
-            service.setCurrentProject('/child/root', 'PII Data');
+            (service as any).setCurrentProject('/child/root', 'PII Data');
             assert.strictEqual((service as any)._currentProjects.get('/parent/root'), 'PII Data');
             assert.strictEqual((service as any)._currentProjects.has('/child/root'), false);
         });
 
         test('uses workspaceRoot as-is when no mapping exists', () => {
             resolveStub.withArgs('/standalone/root').returns('/standalone/root');
-            service.setCurrentProject('/standalone/root', 'My Project');
+            (service as any).setCurrentProject('/standalone/root', 'My Project');
             assert.strictEqual((service as any)._currentProjects.get('/standalone/root'), 'My Project');
         });
 
         test('deletes project entry when filter is null', () => {
             resolveStub.withArgs('/child/root').returns('/parent/root');
-            service.setCurrentProject('/child/root', 'PII Data');
-            service.setCurrentProject('/child/root', null);
+            (service as any).setCurrentProject('/child/root', 'PII Data');
+            (service as any).setCurrentProject('/child/root', null);
             assert.strictEqual((service as any)._currentProjects.has('/parent/root'), false);
         });
 
         test('translates UNASSIGNED sentinel to delete', () => {
             resolveStub.withArgs('/child/root').returns('/parent/root');
-            service.setCurrentProject('/child/root', KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+            (service as any).setCurrentProject('/child/root', KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
             assert.strictEqual((service as any)._currentProjects.has('/parent/root'), false);
         });
 
         test('new plans detected by watcher inherit the project filter set via child workspace path', async () => {
             resolveStub.withArgs('/child/root').returns('/parent/root');
-            service.setCurrentProject('/child/root', 'PII Data');
+            (service as any).setCurrentProject('/child/root', 'PII Data');
 
             dbStub.getPlanByPlanFile = sandbox.stub().resolves(undefined);
             sandbox.stub(fs.promises, 'stat').resolves({
@@ -517,7 +517,7 @@ suite('GlobalPlanWatcherService', () => {
             } as any);
             sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             await (service as any)._handlePlanFile(parentMockUri, workspaceRoot);
 
@@ -527,7 +527,7 @@ suite('GlobalPlanWatcherService', () => {
 
         test('new plans detected by watcher resolve child workspace path during handle', async () => {
             resolveStub.withArgs('/child/root').returns('/parent/root');
-            service.setCurrentProject('/child/root', 'PII Data');
+            (service as any).setCurrentProject('/child/root', 'PII Data');
 
             dbStub.getPlanByPlanFile = sandbox.stub().resolves(undefined);
             sandbox.stub(fs.promises, 'stat').resolves({
@@ -536,7 +536,7 @@ suite('GlobalPlanWatcherService', () => {
             } as any);
             sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
             const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
-            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', kanbanColumn: 'CREATED' });
 
             await (service as any)._handlePlanFile(parentMockUri, '/child/root');
 

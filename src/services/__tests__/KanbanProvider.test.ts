@@ -577,7 +577,7 @@ Manual verification steps:
                 }
             };
 
-            const restoreProvider = new KanbanProvider(vscode.Uri.file('/test'), customContext);
+            const restoreProvider = new KanbanProvider(vscode.Uri.file('/test'), customContext as any);
             assert.strictEqual(restoreProvider.getProjectFilter(), 'MyProject');
             assert.strictEqual((restoreProvider as any)._projectFilterNeedsValidation, true);
         });
