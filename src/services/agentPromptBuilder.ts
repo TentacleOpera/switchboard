@@ -188,10 +188,6 @@ export interface PromptBuilderOptions {
     gitCommitStrategy?: 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
     /** Granular git policy — Push strategy. `'notSpecified'`/`undefined` = emit no push clause. */
     gitPushStrategy?: 'noPush' | 'pushWhenDone' | 'notSpecified';
-    /** When true, the coder/lead/intern prompt includes a Phone-a-Friend directive telling the agent to POST a notification to the LocalApiServer when the batch is done. */
-    phoneAFriendEnabled?: boolean;
-    /** The LocalApiServer port, interpolated into the Phone-a-Friend directive's curl URL. Plumbed at build time (Option A) so worktree CWDs don't need to read the port file. */
-    apiPort?: number;
     /** When true (default), include batchExecutionRules and FOCUS_DIRECTIVE. When false, omit them. */
     switchboardSafeguardsEnabled?: boolean;
     /**
@@ -470,19 +466,6 @@ export function buildGitPolicyBlock(opts: {
     if (clauses.length === 0) return '';
     return `GIT POLICY: ${clauses.join(' ')}`;
 }
-
-/**
- * Phone-a-Friend directive — appended to coder/lead/intern prompts when the
- * `phoneAFriend` addon is enabled. Tells the agent to POST a notification to the
- * LocalApiServer ONCE per batch (with the last completed plan file) when it has
- * finished coding. The port is interpolated at build time (Option A) so worktree
- * CWDs don't need to read the port file (which lives only in the main workspace
- * root's .switchboard/). Best-effort signal — a missing Phone-a-Friend terminal
- * is silently dropped by the host.
- */
-const PHONE_A_FRIEND_DIRECTIVE = (port: number) =>
-  `PHONE-A-FRIEND (OPTIONAL): When you have finished coding ALL plans in this batch, notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{"planFile":"<PLAN_FILE_PATH>","originRole":"coder"}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a best-effort signal — if the Phone-a-Friend agent is not running, the request will succeed silently. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
-
 export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
 
 // §11 — injected for ALL roles when the dispatched card's board is under remote control.
@@ -901,10 +884,6 @@ export function buildKanbanBatchPrompt(
     // clause globally (mixed-batch: non-worktree plans sharing a batch with worktree plans
     // is an accepted rarity).
     const worktreeActive = worktreePaths.length > 0;
-    // Phone-a-Friend directive — emitted only for coder/lead/intern branches below.
-    // The port is plumbed at build time (Option A) so worktree CWDs don't read the
-    // port file (which lives only in the main workspace root's .switchboard/).
-    const phoneAFriendBlock = (options?.phoneAFriendEnabled && options?.apiPort) ? PHONE_A_FRIEND_DIRECTIVE(options.apiPort) : '';
     // In feature mode, the per-subtask/high-low directive variants already list
     // worktree assignments — skip the generic worktree line to avoid duplication.
     const featureDirectiveListsWorktrees = options?.featureMode === true
@@ -1250,7 +1229,6 @@ For each plan:
             suffixBlock,
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            phoneAFriendBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1296,7 +1274,6 @@ For each plan:
                 baseInstructions,
                 suffixBlock,
                 featureFileBlock,
-                phoneAFriendBlock,
                 suppressWalkthroughBlock
             ].filter(Boolean).join('\n\n');
 
@@ -1338,7 +1315,6 @@ For each plan:
             suffixBlock,
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            phoneAFriendBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1376,7 +1352,6 @@ For each plan:
             suffixBlock,
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            phoneAFriendBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 

@@ -90,3 +90,7 @@ The only risk of a purely-additive read helper is that it is written wrong. Two 
 ## Recommendation
 
 **Routine — assign to any coder.** Complexity 1, purely additive.
+
+## Review Findings
+
+Implementation matches the plan exactly (commit `52ac2af`). **Files changed:** `src/services/KanbanDatabase.ts` (added `resolvePlanByAnyId` at :3212 with the `!id || !id.trim()` guard; redirected `getPlanBySessionId`'s existing `@deprecated` marker to the resolver, behavior unchanged) and new `src/test/kanban-resolve-plan-by-any-id.test.ts` (7 tests: modern plan_id, legacy session_id fallback, plan_id-wins-on-collision, empty, whitespace `' '`/`'\t'`/`'\n'`, unknown-id). **Validation:** compile/tests skipped per review prompt; static checks confirm zero callers (purely additive, no regression surface), all test-referenced DB methods exist, `upsertPlans` persists empty `planId`/`sessionId` verbatim so the legacy/watcher test rows are valid, and `getPlanBySessionId` was already deprecated so no new build warnings. **Remaining risks:** none material — one harmless NIT (the fallback arm re-queries `plan_id` a third time via `getPlanBySessionId`'s own internal fallback; dead query, plan-id-first precedence preserved) left unfixed because touching `getPlanBySessionId` is out of scope.
