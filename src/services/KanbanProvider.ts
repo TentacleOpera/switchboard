@@ -3994,6 +3994,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (mergedAddons.gitBranchStrategy === undefined) mergedAddons.gitBranchStrategy = 'current';
             if (mergedAddons.gitCommitStrategy === undefined) mergedAddons.gitCommitStrategy = 'whenDone';
             if (mergedAddons.gitPushStrategy === undefined) mergedAddons.gitPushStrategy = 'noPush';
+            // Guardrail (Safety clause) is part of the same work-on-main default (locked
+            // decision #2: `Guardrail: on`) and the custom-agent UI renders its checkbox
+            // checked by default. buildCustomAgentPrompt reads `gitProhibition` (UI key)
+            // falling back to `gitProhibitionEnabled` (definition key); default it on only
+            // when NEITHER is set, so an explicit off in either key is preserved. Without
+            // this a never-saved custom agent shows the guardrail checked but dispatches
+            // without it.
+            if (mergedAddons.gitProhibition === undefined && mergedAddons.gitProhibitionEnabled === undefined) mergedAddons.gitProhibition = true;
 
             if (mergedAddons.designSystemDoc) {
                 const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
