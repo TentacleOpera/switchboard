@@ -3660,18 +3660,25 @@ Start by checking which documents exist, then present the menu.`;
                 const deleteSubtasks = !!msg.deleteSubtasks;
                 if (!sessionId || !wsRoot) break;
                 try {
-                    const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const feature = await db.getPlanByPlanId(sessionId);
-                    if (!feature || !feature.isFeature) break;
-                    if (deleteSubtasks) {
-                        const subtasks = await db.getSubtasksByFeatureId(feature.planId);
-                        for (const st of subtasks) {
-                            await db.tombstonePlan(st.planId);
-                        }
+                    // Delegate to KanbanProvider._deleteFeature so the file-reap +
+                    // **Feature:** strip + plan_id tombstone guard logic is shared
+                    // (avoids the file-resurrect bug where the surviving .md re-imports).
+                    if (this._kanbanProvider) {
+                        await this._kanbanProvider._deleteFeature(wsRoot, sessionId, deleteSubtasks);
                     } else {
-                        await db.clearFeatureIdForFeature(feature.planId);
+                        const db = KanbanDatabase.forWorkspace(wsRoot);
+                        const feature = await db.getPlanByPlanId(sessionId);
+                        if (!feature || !feature.isFeature) break;
+                        if (deleteSubtasks) {
+                            const subtasks = await db.getSubtasksByFeatureId(feature.planId);
+                            for (const st of subtasks) {
+                                await db.tombstonePlan(st.planId);
+                            }
+                        } else {
+                            await db.clearFeatureIdForFeature(feature.planId);
+                        }
+                        await db.tombstonePlan(feature.planId);
                     }
-                    await db.tombstonePlan(feature.planId);
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
                     this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });

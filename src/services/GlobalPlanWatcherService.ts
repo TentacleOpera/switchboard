@@ -8,7 +8,6 @@ import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } 
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
-import { PlanManifestService } from './PlanManifestService';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
@@ -34,8 +33,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _recentlyDeletedColumns = new Map<string, { column: string; ts: number }>();
     private _scanSeenPaths = new Map<string, Set<string>>();
 
-    // Plan-Import DB Manifest ingest — dedicated check per periodic cycle.
-    private _manifestService = new PlanManifestService();
+    // Deferred **Feature:** links: subtask plan-id → unresolved feature plan-id.
+    // Retried when a feature file is imported or on the next watcher cycle.
+    // Bounded — entries are dropped after MAX_FEATURE_LINK_RETRIES with a warning.
+    private _pendingFeatureLinks = new Map<string, { featureId: string; retries: number }>();
+    private static readonly MAX_FEATURE_LINK_RETRIES = 5;
 
     // Paths currently being written by _createInitiatedPlan — skip watcher insert to avoid duplicates
     private static _pendingCreations = new Map<string, NodeJS.Timeout>();
@@ -122,11 +124,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 for (const folder of folders) {
                     await this._scanForNewFiles(folder);
                 }
-                // Manifest ingest on startup too — a manifest may have landed while
-                // the extension was unloaded; apply it once rows are seeded.
-                for (const folder of folders) {
-                    await this._processManifest(folder);
-                }
                 this._outputChannel?.appendLine('[GlobalPlanWatcher] Startup scan complete');
             } finally {
                 this._scanInProgress = false;
@@ -156,13 +153,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 const folders = await this._getAllMappedFolders();
                 for (const folder of folders) {
                     await this._scanForNewFiles(folder);
-                }
-                // Manifest ingest: explicit dedicated check AFTER the .md import pass,
-                // so plan rows exist before the manifest upgrades them. Runs every cycle
-                // regardless of whether new .md files appeared (the .md pass short-circuits
-                // when nothing is new, but a manifest can land alone).
-                for (const folder of folders) {
-                    await this._processManifest(folder);
                 }
             } finally {
                 this._scanInProgress = false;
@@ -442,6 +432,70 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._debounceTimers.set(key, timer);
     }
 
+    /**
+     * Apply a `**Feature:** <feature-plan-id>` durable fact on import.
+     * Apply-if-empty / positive-payload guard: ONLY links when the subtask's
+     * current feature_id is empty — an omitted key never clears a link, and
+     * the file does not overwrite a link the DB already has (so a human's UI
+     * regroup is not clobbered on re-import). If the feature row isn't imported
+     * yet, the link is deferred and retried when a feature file lands or on the
+     * next watcher cycle.
+     */
+    private async _applyFeatureLink(
+        db: KanbanDatabase,
+        subtaskPlanId: string,
+        featureId: string,
+        relativePath: string
+    ): Promise<void> {
+        if (!featureId || subtaskPlanId === featureId) return;
+        // Don't link a feature to itself.
+        if (relativePath.startsWith('.switchboard/features/')) return;
+
+        try {
+            const featureRow = await db.getPlanByPlanId(featureId);
+            if (!featureRow || !featureRow.isFeature) {
+                // Defer — feature not imported yet, or not a feature row.
+                const existing = this._pendingFeatureLinks.get(subtaskPlanId);
+                const retries = existing ? existing.retries + 1 : 0;
+                if (retries >= GlobalPlanWatcherService.MAX_FEATURE_LINK_RETRIES) {
+                    this._outputChannel?.appendLine(
+                        `[GlobalPlanWatcher] **Feature:** ${featureId} on ${relativePath} unresolved after ${retries} retries — dropping defer`
+                    );
+                    this._pendingFeatureLinks.delete(subtaskPlanId);
+                    return;
+                }
+                this._pendingFeatureLinks.set(subtaskPlanId, { featureId, retries });
+                return;
+            }
+            // Apply-if-empty: only link if the subtask's current feature_id is empty.
+            const subtaskRow = await db.getPlanByPlanId(subtaskPlanId);
+            if (!subtaskRow) return;
+            if (subtaskRow.featureId && subtaskRow.featureId !== '') {
+                // DB already has a link — file does not overwrite (apply-if-empty).
+                return;
+            }
+            await db.updateFeatureStatus(subtaskPlanId, 0, featureId);
+            this._pendingFeatureLinks.delete(subtaskPlanId);
+            this._outputChannel?.appendLine(
+                `[GlobalPlanWatcher] Linked subtask ${relativePath} to feature ${featureId} via **Feature:** frontmatter`
+            );
+        } catch (e) {
+            this._outputChannel?.appendLine(
+                `[GlobalPlanWatcher] _applyFeatureLink failed for ${relativePath}: ${e instanceof Error ? e.message : String(e)}`
+            );
+        }
+    }
+
+    /** Retry deferred feature links (called on feature-file import + periodic scan). */
+    private async _retryPendingFeatureLinks(db: KanbanDatabase, workspaceRoot: string): Promise<void> {
+        if (this._pendingFeatureLinks.size === 0) return;
+        const entries = [...this._pendingFeatureLinks.entries()];
+        for (const [subtaskPlanId, { featureId }] of entries) {
+            // Re-resolve via DB; the feature may have landed since the defer.
+            await this._applyFeatureLink(db, subtaskPlanId, featureId, '');
+        }
+    }
+
     private async _handlePlanFile(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
         try {
             if (GlobalPlanWatcherService._pendingCreations.has(path.resolve(uri.fsPath))) {
@@ -502,6 +556,28 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     if (plan.sourceType === 'local') {
                         await db.movePlanByPlanFile(absolutePath, workspaceId, plan.kanbanColumn, relativePath);
                         plan = await db.getPlanByPlanFile(relativePath, workspaceId);
+                    }
+                }
+            }
+
+            // plan_id tombstone guard (multi-branch resurrection fix): for feature
+            // files, the plan_id is derived from the filename UUID, so a file returning
+            // via merge/clone at the same path re-creates the SAME plan_id. If that id
+            // was previously deleted (status='deleted'), skip import — the user deleted
+            // this card and a returning file must not undo that. Non-feature plans get
+            // a fresh random plan_id on re-import, so the path-keyed delete already
+            // covers them; this guard is specifically for features.
+            if (!plan && relativePath.startsWith('.switchboard/features/')) {
+                const featureUuidMatch = path.basename(relativePath).match(
+                    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i
+                );
+                if (featureUuidMatch) {
+                    const tombstoned = await db.getPlanByPlanId(featureUuidMatch[1]);
+                    if (tombstoned && tombstoned.status === 'deleted') {
+                        this._outputChannel?.appendLine(
+                            `[GlobalPlanWatcher] Skipping import of deleted feature (plan_id tombstone guard): ${relativePath}`
+                        );
+                        return;
                     }
                 }
             }
@@ -585,6 +661,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 await db.insertFileDerivedPlan(newRecord);
                 if (relativePath.startsWith('.switchboard/features/')) {
                     await db.updateFeatureStatus(newRecord.planId, 1, '');
+                    // A feature file landed — retry deferred subtask links.
+                    await this._retryPendingFeatureLinks(db, workspaceRoot);
+                } else if (metadata.feature) {
+                    // Durable **Feature:** frontmatter fact — link subtask to feature
+                    // (apply-if-empty; defer if feature not imported yet).
+                    await this._applyFeatureLink(db, newRecord.planId, metadata.feature, relativePath);
                 }
                 // Restore the real pre-delete column from the delete-tombstone for ALL
                 // plans — features included. insertFileDerivedPlan hardcodes 'CREATED' on a
@@ -658,6 +740,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 // Unconditional update is idempotent and cheap.
                 if (relativePath.startsWith('.switchboard/features/')) {
                     await db.updateFeatureStatus(updatedRecord.planId, 1, '');
+                    // A feature file landed — retry deferred subtask links.
+                    await this._retryPendingFeatureLinks(db, workspaceRoot);
                     // Same clobber vector as above (the atomic-write DELETE->re-INSERT
                     // race hits this branch: _handlePlanDelete deletes the row, then
                     // this branch's insertFileDerivedPlan re-INSERTs with
@@ -700,6 +784,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                             `[GlobalPlanWatcher] recomputeFeatureComplexity failed for ${updatedRecord.featureId}: ${bubbleErr}`
                         );
                     }
+                }
+                // Durable **Feature:** frontmatter fact on re-save (apply-if-empty).
+                if (metadata.feature && !relativePath.startsWith('.switchboard/features/')) {
+                    await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath);
                 }
                 plan = updatedRecord;
 
@@ -820,49 +908,9 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 await scanDir(featuresDir);
             }
 
-            // Manifest ingest: apply AFTER the .md import pass so rows exist.
-            await this._processManifest(workspaceRoot);
-
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scanned ${processed} files in ${workspaceRoot}`);
         } catch (err) {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scan error in ${workspaceRoot}: ${err}`);
-        }
-    }
-
-    /**
-     * Dedicated manifest ingest for one workspace. Reads
-     * `.switchboard/plans/manifest.json`, validates + applies each entry via the
-     * targeted UPDATE methods on KanbanDatabase (NOT upsertPlans, which cannot
-     * override kanban_column on existing rows), then deletes the manifest once
-     * all entries are applied. Stale-manifest guard: only overrides the column
-     * when the row is still in the entry's `fromColumn` (default CREATED), so a
-     * manual board move between manifest-write and consume is never reverted.
-     * Staleness guard drops a
-     * manifest that can never resolve (referenced .md never appears) so the scan
-     * loop can't wedge. All validation failures are logged + skipped, never thrown.
-     */
-    private async _processManifest(workspaceRoot: string): Promise<void> {
-        try {
-            const db = KanbanDatabase.forWorkspace(workspaceRoot);
-            await db.ensureReady();
-            const workspaceId = await db.getWorkspaceId();
-            if (!workspaceId) { return; }
-            const result = await this._manifestService.applyManifest(
-                workspaceRoot,
-                workspaceId,
-                db,
-                (msg) => this._outputChannel?.appendLine(msg)
-            );
-            // Only toast when the manifest was consumed (deleted) — toasting while the
-            // manifest is retained (deferred entries pending) would re-toast every 10s
-            // scan cycle until the staleness guard drops it.
-            if (result.rejected > 0 && result.consumed) {
-                vscode.window.showWarningMessage(
-                    `Switchboard: ${result.rejected} manifest entr${result.rejected === 1 ? 'y' : 'ies'} rejected (invalid planFile path). Check the Output panel for details.`
-                );
-            }
-        } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manifest processing error in ${workspaceRoot}: ${err}`);
         }
     }
 

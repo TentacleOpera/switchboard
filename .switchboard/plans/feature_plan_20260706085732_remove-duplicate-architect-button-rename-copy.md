@@ -19,20 +19,49 @@ The root cause is likely that both buttons were added at different times for dif
 
 ## Metadata
 
-- **Tags:** ui-cleanup, project-html, architect, buttons
+- **Tags:** ui, ux
 - **Complexity:** 2
+
+## User Review Required
+
+No — this is a low-complexity UI-only change (button removal and label rename). The main gate before coding is confirming no remaining references to the removed `btn-architect-*` DOM ids or `btnArchitect*` JS variables beyond what this plan already identifies for removal. All such references have been verified from source (lines cited below). No user review needed beyond the plan approval itself.
 
 ## Complexity Audit
 
-**Routine.** Remove three HTML buttons, remove three JS event listeners and variable references, rename three button labels. No backend changes needed — the `openArchitectTerminal` message handler in the backend can remain (it's harmless if unused), but the `copyArchitectPrompt` handler must continue working.
+### Routine
+- Remove three HTML buttons (`btn-architect-projects`, `btn-architect-constitution`, `btn-architect-system`) from project.html.
+- Remove three JS variable declarations (`btnArchitectProjects`, `btnArchitectConstitution`, `btnArchitectSystem`) at project.js lines 362–364.
+- Remove three JS event listener blocks (`btnArchitect*` click handlers sending `openArchitectTerminal`) at project.js lines 2004–2021.
+- Rename three button labels from "Copy Architect Prompt" to "Architect Prompt" in project.html.
+- No backend changes needed — the `openArchitectTerminal` handler in PlanningPanelProvider.ts becomes dead code but is harmless; the `copyArchitectPrompt` handler must continue working.
+
+### Complex / Risky
+- None
 
 ## Edge-Case & Dependency Audit
 
-- **`openArchitectTerminal` backend handler:** After removing the buttons, no webview message will send `openArchitectTerminal`. The backend handler in `PlanningPanelProvider.ts` can remain as dead code (harmless) or be cleaned up separately. This plan only removes the UI.
-- **`architectPromptCopied` message handler (project.js line 1132):** This is the response to `copyArchitectPrompt` — it shows a toast. Must be preserved.
-- **`architect-shortcut-btn` CSS class:** Both buttons share this class. After removing the "Architect" button, the class is still used by the "Copy Architect Prompt" (now "Architect Prompt") button. No CSS changes needed.
-- **Button variable references in project.js:** Lines 362-367 declare 6 variables for the 6 buttons. The 3 `btnArchitect*` variables (lines 362-364) and their event listeners (lines 2004-2021) must be removed. The 3 `btnCopyArchitect*` variables (lines 365-367) and their event listeners (lines 2022-2039) must be preserved.
+**Race Conditions**
+- None — button removal and rename are synchronous DOM edits with no async side effects.
+
+**Security**
+- None — no auth, permissions, or data-access changes.
+
+**Side Effects**
+- **`openArchitectTerminal` backend handler becomes dead code:** After removing the three webview senders (the `btnArchitect*` click listeners at project.js:2004–2021), NOTHING else posts `openArchitectTerminal`. The backend handler at `PlanningPanelProvider.ts:4221` is unreachable. Leaving it is harmless and out of scope for this UI-only plan; optional separate cleanup in a follow-up.
+- **`architectPromptCopied` toast handler (project.js:1132–1134) MUST be preserved:** This is the inbound response to `copyArchitectPrompt` — it shows `showToast('Architect prompt copied to clipboard', 'success')`. This is the retained functionality's toast and must not be touched.
+- **`architect-shortcut-btn` CSS class remains in use:** Both the removed "Architect" button and the retained "Copy Architect Prompt" button share this class. After removal, the class is still used by the renamed "Architect Prompt" button. No CSS changes needed.
 - **Tab layout:** Removing one button from each tab's controls strip will make the strip slightly shorter. No layout issues expected — the strip uses flex with wrapping.
+
+**Dependencies & Conflicts**
+- **Button variable references in project.js:** Lines 362–367 declare 6 variables for the 6 buttons. The 3 `btnArchitect*` variables (lines 362–364) and their event listeners (lines 2004–2021) must be removed. The 3 `btnCopyArchitect*` variables (lines 365–367) and their event listeners (lines 2022–2039) must be preserved.
+
+## Dependencies
+
+None — single-file UI change (project.html + project.js), no cross-plan dependencies. Backend dead-code cleanup of `openArchitectTerminal` handler is an optional follow-up, out of scope.
+
+## Adversarial Synthesis
+
+Removing three buttons and renaming three labels is mechanically straightforward, but the dead `openArchitectTerminal` handler at PlanningPanelProvider.ts:4221 and the shared `architect-shortcut-btn` CSS class both warrant explicit documentation to prevent later confusion. The `title` attribute on retained buttons still says "Copy the Architect prompt" — consider whether it should be updated to match the new "Architect Prompt" label for consistency, though this is cosmetic and low-risk.
 
 ## Proposed Changes
 
@@ -77,6 +106,8 @@ After:
 <button id="btn-copy-architect-system" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Architect Prompt</button>
 ```
 
+> **Note:** The `architect-shortcut-btn` CSS class remains in use by the retained (renamed) buttons — no CSS change needed.
+
 ### 2. `src/webview/project.js` — Remove `btnArchitect*` variable declarations (lines 362-364)
 
 Remove:
@@ -117,6 +148,12 @@ if (btnArchitectSystem) {
 Keep the `btnCopyArchitect*` event listeners (lines 2022-2039) — these send `copyArchitectPrompt` which is the retained functionality.
 
 ## Verification Plan
+
+### Automated Tests
+
+Automated tests SKIPPED per session directive; verification is manual UI inspection only (no compile, no test runner).
+
+### Manual Steps
 
 1. Open the project panel.
 2. Switch to the Projects tab — verify there is only one architect button labeled "Architect Prompt" (no "Architect" button).

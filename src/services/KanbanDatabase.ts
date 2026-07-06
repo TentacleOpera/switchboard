@@ -7,6 +7,7 @@ import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard'
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
+import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE } from './BoardSnapshotPublisher';
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -882,6 +883,15 @@ export class KanbanDatabase {
         const created = new KanbanDatabase(stable, resolvedDbPath);
         KanbanDatabase._instances.set(stable, created);
         KanbanDatabase._instancesByDbPath.set(resolvedDbPath, created);
+        // Wire the one-directional board-snapshot publisher. No-op until the user
+        // opts in via `switchboard.boardStateExport === 'read-only-snapshot'`.
+        try {
+            created.setBoardSnapshotPublisher(new BoardSnapshotPublisher({
+                db: created,
+                getWorkspaceRoot: () => stable,
+                getWorkspaceId: () => created.getWorkspaceId(),
+            }));
+        } catch { /* outside extension host — publisher is optional */ }
         return created;
     }
 
@@ -1388,18 +1398,22 @@ export class KanbanDatabase {
      */
     private async _resolveOrCreateProjectId(workspaceId: string, projectName: string): Promise<number | null> {
         if (!this._db || !projectName) return null;
-        const existing = await this.getProjectIdByName(workspaceId, projectName);
+        // Normalize: trim so " Switchboard " and "Switchboard" don't create duplicate rows.
+        const trimmedName = projectName.trim();
+        if (!trimmedName) return null;
+        const existing = await this.getProjectIdByName(workspaceId, trimmedName);
         if (existing !== null) return existing;
         try {
             this._db.run(
                 'INSERT OR IGNORE INTO projects (name, workspace_id) VALUES (?, ?)',
-                [projectName, workspaceId]
+                [trimmedName, workspaceId]
             );
+            console.debug(`[KanbanDatabase] _resolveOrCreateProjectId: created projects row "${trimmedName}" (workspace=${workspaceId})`);
         } catch (e) {
             console.error('[KanbanDatabase] _resolveOrCreateProjectId: INSERT OR IGNORE failed:', e);
             return null;
         }
-        return await this.getProjectIdByName(workspaceId, projectName);
+        return await this.getProjectIdByName(workspaceId, trimmedName);
     }
 
     /**
@@ -6471,151 +6485,36 @@ FROM plans
 
     private _exportStateInFlight = false;
     private _exportStatePending = false;
-    private async exportStateToFile(): Promise<void> {
-        if (!this._workspaceRoot || !this._db) return;
-        // Single-flight: while one export runs, collapse all further requests into a
-        // single trailing run. Prevents the refresh-driven export churn and the
-        // shared-".tmp" rename race that produced "ENOENT ... rename kanban-state-*.md.tmp".
-        if (this._exportStateInFlight) { this._exportStatePending = true; return; }
-        this._exportStateInFlight = true;
-        try {
-            const workspaceId = await this.getWorkspaceId();
-            if (!workspaceId) return;
-
-            // Resolve the export target root. When boardStateExport is 'control-plane',
-            // write to the control-plane root instead of the workspace root so the
-            // mirror lands in the control-plane's git repo for push.
-            const exportRoot = this._resolveExportRoot();
-
-            const allPlans = await this.getBoard(workspaceId);
-            // Build feature-id -> topic lookup so subtask lines can name their parent feature.
-            const featureTopicById = new Map<string, string>();
-            for (const plan of allPlans) {
-                if (plan.isFeature) {
-                    featureTopicById.set(plan.planId, plan.topic);
-                }
-            }
-            const orderedColumns = [...DEFAULT_KANBAN_COLUMNS].sort((a, b) => a.order - b.order);
-            const columns = new Map<string, KanbanPlanRecord[]>();
-            for (const col of orderedColumns) {
-                columns.set(col.id, []);
-            }
-            columns.set('BACKLOG', []);
-            columns.set('CODED', []);
-            for (const plan of allPlans) {
-                const list = columns.get(plan.kanbanColumn);
-                if (list) list.push(plan);
-            }
-
-            const customColumns = new Map<string, KanbanPlanRecord[]>();
-            for (const plan of allPlans) {
-                if (!columns.has(plan.kanbanColumn)) {
-                    if (!customColumns.has(plan.kanbanColumn)) {
-                        customColumns.set(plan.kanbanColumn, []);
-                    }
-                    customColumns.get(plan.kanbanColumn)!.push(plan);
-                }
-            }
-
-            const allColumns = [
-                ...columns.entries(),
-                ...customColumns.entries(),
-            ];
-
-            for (const [col, plans] of allColumns) {
-                const perColPath = path.join(exportRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
-                let colMd = `## ${col}\n\n`;
-                if (plans.length === 0) {
-                    colMd += `_No plans_\n\n`;
-                } else {
-                    for (const plan of plans) {
-                        const filePath = path.isAbsolute(plan.planFile)
-                            ? plan.planFile
-                            : path.join(exportRoot, plan.planFile);
-                        // Append planId + feature assignment in an HTML comment so the visible
-                        // board is unchanged but the "Suggest Features" agent can parse them
-                        // without falling back to the 1.3 MB get-state.js JSON blob.
-                        const parts = [`planId:${plan.planId}`];
-                        if (plan.isFeature) { parts.push('feature'); }
-                        if (plan.featureId) {
-                            const featureTopic = featureTopicById.get(plan.featureId);
-                            parts.push(featureTopic ? `subtask-of:"${featureTopic}"` : `subtask-of:${plan.featureId}`);
-                        }
-                        // NEW: emit project tag so the Suggest Features skill can filter by project.
-                        // Empty/missing project → no tag (unassigned by definition).
-                        if (plan.project) {
-                            const safeProject = plan.project.replace(/"/g, '');
-                            parts.push(`project:"${safeProject}"`);
-                        }
-                        // Net-new: emit **Column:** line per plan so the inbound git signal
-                        // (GitStateProvider) has something to diff against. This is the
-                        // state signal channel for control-plane/wiki providers.
-                        colMd += `**Column:** ${plan.kanbanColumn}\n`;
-                        colMd += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
-                    }
-                    colMd += `\n`;
-                }
-                const tmpPath = `${perColPath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-                await fs.promises.mkdir(path.dirname(perColPath), { recursive: true });
-                await fs.promises.writeFile(tmpPath, colMd, 'utf8');
-                await fs.promises.rename(tmpPath, perColPath);
-            }
-
-            let md = `# Kanban Board\n\n`;
-            md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
-            md += `| Column | File |\n|---|---|\n`;
-            for (const [col, plans] of allColumns) {
-                const slug = _columnSlug(col);
-                md += `| ${col} | [kanban-state-${slug}.md](./kanban-state-${slug}.md) |\n`;
-            }
-
-            // One-time cleanup of old JSON file
-            const oldJsonPath = path.join(exportRoot, '.switchboard', 'kanban-state.json');
-            if (fs.existsSync(oldJsonPath)) {
-                await fs.promises.unlink(oldJsonPath);
-            }
-
-            const stateFilePath = path.join(exportRoot, '.switchboard', 'kanban-board.md');
-            const tmpPath = `${stateFilePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-            await fs.promises.writeFile(tmpPath, md, 'utf8');
-            await fs.promises.rename(tmpPath, stateFilePath);
-        } catch (error) {
-            console.error('[KanbanDatabase] Failed to export state to file:', error);
-        } finally {
-            this._exportStateInFlight = false;
-            if (this._exportStatePending) {
-                this._exportStatePending = false;
-                void this.exportStateToFile();
-            }
-        }
-    }
+    private _boardSnapshotPublisher: BoardSnapshotPublisher | null = null;
 
     /**
-     * Resolve the export target root directory. When boardStateExport is 'control-plane',
-     * the control-plane root is used instead of the workspace root, so the mirror files
-     * land in the control-plane's git repo for push. For 'none' or 'wiki', the workspace
-     * root is used (wiki pushes from the project repo's working tree).
+     * Install (or replace) the board-snapshot publisher. When set, every
+     * successful `_persist` schedules a debounced, content-stable publish to
+     * the orphan branch `switchboard/board` — but only when the user has opted
+     * in via `switchboard.boardStateExport === 'read-only-snapshot'`.
      */
-    private _resolveExportRoot(): string {
+    public setBoardSnapshotPublisher(publisher: BoardSnapshotPublisher | null): void {
+        this._boardSnapshotPublisher = publisher;
+    }
+
+    private _isBoardSnapshotEnabled(): boolean {
         try {
             const vscode = require('vscode');
             const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-            const exportTarget: string = config.get('boardStateExport', 'none');
-
-            if (exportTarget === 'control-plane') {
-                // Resolve the control-plane root the same way PlanAutoFetchService does:
-                // via getControlPlaneSelectionStatus (KanbanProvider) or
-                // resolveEffectiveWorkspaceRootFromMappings (WorkspaceIdentityService).
-                const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
-                const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(this._workspaceRoot);
-                if (effectiveRoot && effectiveRoot !== this._workspaceRoot) {
-                    return effectiveRoot;
-                }
-            }
-        } catch { /* outside extension host or config unavailable */ }
-        return this._workspaceRoot;
+            return String(config.get('boardStateExport', 'none')) === BOARD_SNAPSHOT_MODE;
+        } catch { /* outside extension host */ }
+        return false;
     }
-
+    /**
+     * Retired: the bidirectional board-state mirror (kanban-board.md /
+     * kanban-state-*.md) was the file-based git control plane, which is gone.
+     * Board read-visibility is now the one-directional snapshot publisher
+     * (`BoardSnapshotPublisher`, orphan branch `switchboard/board`). This is
+     * kept as a no-op so `_persist`'s fire-and-forget call site stays stable.
+     */
+    private async exportStateToFile(): Promise<void> {
+        return;
+    }
     /**
      * DIAGNOSTIC (is_feature clobber investigation) — TEMPORARY. Snapshot the is_feature state of
      * every .switchboard/features/ row THIS instance currently holds, tagged with the instance id
@@ -6678,6 +6577,11 @@ FROM plans
         if (result) {
             void this.exportStateToFile(); // fire-and-forget, no debounce
             void this._writeKanbanStateBackup(); // fire-and-forget backup JSON
+            // One-directional read-only board snapshot (orphan branch). Debounce +
+            // content-hash live inside the publisher; fire-and-forget here.
+            if (this._boardSnapshotPublisher && this._isBoardSnapshotEnabled()) {
+                this._boardSnapshotPublisher.schedulePublish();
+            }
         }
 
         return result;

@@ -125,20 +125,6 @@ export class PlanAutoFetchService implements vscode.Disposable {
     private async _runCycleForRoot(root: string, config: vscode.WorkspaceConfiguration): Promise<void> {
         const resolvedRoot = path.resolve(root);
 
-        // Determine if this root is a control-plane target (§5), which needs the
-        // discard-before-merge step below. (Cadence is now 60s by default for all
-        // auto-fetch targets, so the control-plane channel converges within ~1 min.)
-        let isControlPlaneTarget = false;
-        try {
-            const exportConfig = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(resolvedRoot));
-            const exportTarget = exportConfig.get<string>('boardStateExport', 'none');
-            if (exportTarget === 'control-plane') {
-                const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
-                const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
-                isControlPlaneTarget = effectiveRoot !== resolvedRoot;
-            }
-        } catch { /* fall through */ }
-
         // Resolve git root
         let effectiveGitRoot = resolvedRoot;
         try {
@@ -219,12 +205,10 @@ export class PlanAutoFetchService implements vscode.Disposable {
                 return;
             }
 
-            // 2. Working tree is clean (ignoring the generated kanban mirror files —
-            // kanban-board.md and kanban-state-*.md are rewritten with a fresh timestamp
-            // on every DB persist, so treating them as "dirty" would block nearly every
-            // cycle in an actively-used workspace)
+            // 2. Working tree is clean (the bidirectional mirror is retired; no
+            // generated board-state files live in the code tree anymore).
             const { stdout: statusRaw } = await execFileAsync('git', ['status', '--porcelain'], { cwd: effectiveGitRoot, timeout: 5000 });
-            const dirtyLines = statusRaw.split('\n').filter(line => line.trim() !== '' && !this._isIgnorableMirrorFileLine(line));
+            const dirtyLines = statusRaw.split('\n').filter(line => line.trim() !== '');
             if (dirtyLines.length > 0) {
                 this._updateStatus(resolvedRoot, 'skipped', 'Working tree is dirty', defaultBranch);
                 return;
@@ -268,36 +252,6 @@ export class PlanAutoFetchService implements vscode.Disposable {
                 return;
             }
 
-            // All guards passed -> discard mirror files then merge --ff-only
-            // §5: For control-plane targets, discard uncommitted changes matching
-            // MIRROR_FILE_RE immediately before merge. Safe by construction: mirror
-            // files are always fully re-derived from the DB and never hand-authored,
-            // so nothing is lost. Without this, a concurrent regeneration leaves dirty
-            // mirror files that cause git's fast-forward checkout to refuse with
-            // "local changes would be overwritten by merge."
-            if (isControlPlaneTarget) {
-                try {
-                    const { stdout: dirtyFiles } = await execFileAsync('git', ['status', '--porcelain'], { cwd: effectiveGitRoot, timeout: 5000 });
-                    const mirrorDirtyPaths = dirtyFiles.split('\n')
-                        .filter(line => line.trim() !== '' && this._isIgnorableMirrorFileLine(line))
-                        .map(line => {
-                            const rawPath = line.slice(3);
-                            const filePath = rawPath.includes(' -> ') ? rawPath.split(' -> ')[1] : rawPath;
-                            return filePath.trim().replace(/^"|"$/g, '');
-                        });
-                    for (const dirtyPath of mirrorDirtyPaths) {
-                        try {
-                            await execFileAsync('git', ['checkout', '--', dirtyPath], { cwd: effectiveGitRoot, timeout: 5000 });
-                            this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Discarded dirty mirror file: ${dirtyPath}`);
-                        } catch (discardErr) {
-                            this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Warning: failed to discard ${dirtyPath}: ${discardErr}`);
-                        }
-                    }
-                } catch (discardCheckErr) {
-                    this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Warning: discard-before-merge check failed: ${discardCheckErr}`);
-                }
-            }
-
             this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Merging ${remoteRef} fast-forward...`);
             await execFileAsync('git', ['merge', '--ff-only', remoteRef], { cwd: effectiveGitRoot, timeout: 15000 });
 
@@ -319,18 +273,6 @@ export class PlanAutoFetchService implements vscode.Disposable {
             this._outputChannel.appendLine(`[PlanAutoFetch] [${path.basename(resolvedRoot)}] Error running auto-fetch: ${errMsg}`);
             this._updateStatus(resolvedRoot, 'failed', `Fetch/git error: ${errMsg}`);
         }
-    }
-
-    // Matches `.switchboard/kanban-board.md` and `.switchboard/kanban-state-<slug>.md`,
-    // regardless of any path prefix (repo-scoped control-plane roots put `.switchboard`
-    // below effectiveGitRoot, so porcelain paths aren't always repo-root-relative).
-    public static readonly MIRROR_FILE_RE = /(^|\/)\.switchboard\/kanban-(board|state-[^/]+)\.md$/;
-
-    private _isIgnorableMirrorFileLine(porcelainLine: string): boolean {
-        const rawPath = porcelainLine.slice(3);
-        const filePath = rawPath.includes(' -> ') ? rawPath.split(' -> ')[1] : rawPath;
-        const normalized = filePath.trim().replace(/^"|"$/g, '').replace(/\\/g, '/');
-        return PlanAutoFetchService.MIRROR_FILE_RE.test(normalized);
     }
 
     private _updateStatus(workspaceRoot: string, outcome: 'success' | 'skipped' | 'failed' | 'idle', reason: string, defaultBranch?: string): void {
@@ -366,24 +308,6 @@ export class PlanAutoFetchService implements vscode.Disposable {
                             ? path.join(require('os').homedir(), wf.slice(1))
                             : wf;
                         allowedRoots.add(path.resolve(expanded));
-                    }
-                }
-            }
-        } catch { /* fall through */ }
-
-        // §5: also target the control-plane root when boardStateExport is 'control-plane'.
-        // The control-plane root is the parent workspace that holds the shared .switchboard/
-        // and is the git repo that the mirror gets pushed to. This enables pulling externally
-        // merged content (new plans from PRs) into the local checkout.
-        try {
-            for (const root of Array.from(allowedRoots)) {
-                const exportConfig = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(root));
-                const exportTarget = exportConfig.get<string>('boardStateExport', 'none');
-                if (exportTarget === 'control-plane') {
-                    const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
-                    const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(root);
-                    if (effectiveRoot && effectiveRoot !== root) {
-                        allowedRoots.add(effectiveRoot);
                     }
                 }
             }

@@ -105,7 +105,7 @@ export interface ArchiveResult {
 }
 
 export interface RemoteProvider {
-    readonly kind: 'linear' | 'notion' | 'clickup' | 'control-plane' | 'wiki';
+    readonly kind: 'linear' | 'notion' | 'clickup';
 
     /** Declared capabilities — gate callers on these, never on `kind`. */
     readonly capabilities: RemoteProviderCapabilities;

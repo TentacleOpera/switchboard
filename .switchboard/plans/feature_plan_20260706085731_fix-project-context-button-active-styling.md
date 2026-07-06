@@ -37,31 +37,63 @@ The root cause is that `project.html` doesn't define the `.strip-btn.is-active` 
 
 ## Metadata
 
-- **Tags:** ui-cleanup, project-html, button-styling, css
+- **Tags:** ui, ux
 - **Complexity:** 2
+
+## User Review Required
+
+**Yes — visual confirmation recommended before merge.** This is a low-complexity visual change with no logic impact, but the active-state appearance (teal outline + subtle tint vs. the current solid teal fill) is a subjective visual design choice. The coder should verify the new `.is-active` style looks correct in both the default and cyber themes before marking the plan done. No architectural or behavioral review is needed — the gate is purely "does it look right?"
 
 ## Complexity Audit
 
-**Routine.** Add a CSS class to `project.html` and replace inline styles with class toggling in `project.js`. No backend changes, no logic changes.
+### Routine
+- Add a single CSS class (`.strip-btn.is-active`) to `project.html`, matching the canonical definition from `kanban.html`.
+- Add an optional hover variant (`.strip-btn.is-active:hover:not(:disabled)`) for interactive parity.
+- Replace three inline style assignments in `project.js` with one `classList.toggle` call.
+- No backend changes, no logic changes, no new dependencies.
+
+### Complex / Risky
+- None
 
 ## Edge-Case & Dependency Audit
 
-- **`project.html` `.strip-btn` base style (line 136):** Already defines `background: #111; border: 1px solid var(--border-color); color: var(--text-primary);`. The `.is-active` class will override these properties.
-- **Cyber theme:** `project.html` has a cyber-theme override at line 655: `.cyber-theme-enabled .strip-btn:hover:not(:disabled)`. The `.is-active` class should also have a cyber-theme variant for the glow effect, matching `kanban.html`'s pattern.
-- **Other buttons in project.html:** The `.strip-btn.is-active` class is generic — it could affect other buttons if they also get `is-active` toggled. Currently, no other button in `project.html` uses `is-active`, so this is safe. If future buttons need it, they'll benefit from the same style.
-- **Tooltip change:** The tooltip text change in `updateProjectContextButton` (lines 1309-1311) should be preserved — it's useful UX.
-- **`--glow-teal` variable:** Verify this variable is defined in `project.html` or its shared CSS. If not, the `box-shadow` can be omitted or a fallback used.
+**Race Conditions**
+- None — `updateProjectContextButton()` is called from the `projectContextEnabled` message handler (line 553-556) and on initialization; the class toggle is synchronous and idempotent.
+
+**Security**
+- None — CSS class toggle on a local DOM element; no user input is processed.
+
+**Side Effects**
+- **Other buttons in `project.html`:** The `.strip-btn.is-active` class is generic — it could affect other buttons if they also get `is-active` toggled. Currently, no other button in `project.html` uses `is-active`, so this is safe. If future buttons need it, they'll benefit from the same style.
+- **Tooltip change:** The tooltip text change in `updateProjectContextButton` (lines 1309-1311) is preserved unchanged — it's useful UX and unrelated to the styling fix.
+
+**Dependencies & Conflicts**
+- **`project.html` `.strip-btn` base style (line 136):** Already defines `background: #111; border: 1px solid var(--border-color); color: var(--text-primary);`. The `.is-active` class will cleanly override these properties via CSS specificity.
+- **`--glow-teal` variable:** IS defined in `project.html` at line 36 (`0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent)`). The cyber theme overrides it to `none` at line 62, which means `box-shadow: var(--glow-teal)` naturally resolves to `none` in cyber — no separate cyber-theme `.is-active` override is needed. The teal text, teal border, and subtle tint still render correctly in cyber.
+- **`--accent-teal-dim` variable:** IS defined in `project.html` at line 32 (`color-mix(in srgb, var(--accent-teal) 40%, transparent)`). Available for the `border-color` property.
+- **Cyber theme hover:** `project.html` line 655-656 defines `.cyber-theme-enabled .strip-btn:hover:not(:disabled) { box-shadow: var(--glow-teal); }`, which resolves to `none` in cyber. The `.is-active` hover variant does not need a separate cyber override for the same reason.
+
+No external research is needed — all facts were verified from source by the orchestrator.
+
+## Dependencies
+
+None — single-file UI change, no cross-plan dependencies.
+
+## Adversarial Synthesis
+
+Key risks: the generic `.strip-btn.is-active` class could unintentionally style future buttons that receive `is-active` toggling, and the `classList.toggle` approach silently removes inline styles that may have been set by other code paths. Mitigations: currently no other `project.html` button uses `is-active`; the `classList.toggle` with its boolean argument is deterministic and replaces only the class, not other inline styles that might exist.
 
 ## Proposed Changes
 
 ### 1. `src/webview/project.html` — Add `.strip-btn.is-active` CSS class (after line 148)
 
-Add the active button style, matching `kanban.html`'s definition:
+Add the active button style, using the EXACT canonical definition from `kanban.html` (lines 455-460), including `box-shadow: var(--glow-teal)`. This variable IS defined in `project.html` at line 36. In the cyber theme, `--glow-teal` is overridden to `none` at line 62, so the glow naturally disappears without needing a separate cyber-theme `.is-active` override — the teal text, border, and subtle tint still render.
 
 ```css
 .strip-btn.is-active {
     color: var(--accent-teal);
     border-color: var(--accent-teal-dim);
+    box-shadow: var(--glow-teal);
     background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
 }
 .strip-btn.is-active:hover:not(:disabled) {
@@ -70,7 +102,7 @@ Add the active button style, matching `kanban.html`'s definition:
 }
 ```
 
-Note: `box-shadow: var(--glow-teal)` is omitted because `project.html` may not define `--glow-teal`. If it does (check shared CSS variables), it can be added. The core visual — teal text + teal border + subtle tint — is what matters.
+The hover variant provides a slightly stronger tint (14% vs 10%) and a solid teal border on hover, matching the interactive feel of `kanban.html`'s buttons. The `box-shadow: var(--glow-teal)` is included in the base `.is-active` rule only (not re-declared on hover) — the existing `.strip-btn:hover:not(:disabled)` rule at line 145-147 and the cyber-theme hover at line 655-656 already handle hover glow.
 
 ### 2. `src/webview/project.js` — Replace inline styles with class toggle (~lines 1302-1312)
 
@@ -102,16 +134,22 @@ function updateProjectContextButton() {
 ```
 
 Key changes:
-- Removed all `style.background/color/borderColor` inline assignments.
+- Removed all `style.background/color/borderColor` inline assignments and the stale comment about missing classes.
 - Replaced with `classList.toggle('is-active', projectContextEnabled)` — adds the class when active, removes when inactive.
 - Tooltip logic preserved unchanged.
 
 ## Verification Plan
 
+### Automated Tests
+
+Automated tests are SKIPPED per session directive. Verification is manual UI inspection only — no compile step, no test runner.
+
+### Manual UI Steps
+
 1. Open the project panel and switch to the Projects tab.
 2. Verify the "PROJECT CONTEXT: OFF" button has the default strip-btn appearance (dark background, standard border).
-3. Click the button to enable it — verify it now shows "PROJECT CONTEXT: ON" with a teal outline, teal text, and subtle teal-tinted background (matching the active button style used in the Kanban board).
+3. Click the button to enable it — verify it now shows "PROJECT CONTEXT: ON" with a teal outline, teal text, subtle teal-tinted background, and a soft teal glow (matching the active button style used in the Kanban board).
 4. Click again to disable — verify it returns to the default appearance.
-5. Test in cyber theme — verify the active state looks correct with the theme's styling.
+5. Test in cyber theme — verify the active state renders correctly (glow resolves to `none`; teal text, border, and tint still visible).
 6. Verify the tooltip updates correctly on toggle.
 7. Verify the backend still receives `setProjectContextEnabled` messages correctly.

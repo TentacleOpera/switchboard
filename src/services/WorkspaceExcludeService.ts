@@ -16,8 +16,6 @@ export class WorkspaceExcludeService {
         '!.switchboard/CLIENT_CONFIG.md',
         '!.switchboard/README.md',
         '!.switchboard/SWITCHBOARD_PROTOCOL.md',
-        '!.switchboard/kanban-board.md',
-        '!.switchboard/kanban-state-*.md',
         '',
         '# Notion page content cache',
         '.switchboard/notion-cache.md',
@@ -122,7 +120,7 @@ export class WorkspaceExcludeService {
         }
 
         if (strategy === 'targetedGitignore') {
-            await this._upsertManagedBlock(gitignoreFile, this._effectiveTargetedRules());
+            await this._upsertManagedBlock(gitignoreFile, WorkspaceExcludeService.getTargetedRules());
             if (excludeFile) {
                 await this._removeManagedBlock(excludeFile);
             }
@@ -158,37 +156,15 @@ export class WorkspaceExcludeService {
         console.warn('[WorkspaceExcludeService] Unknown strategy "' + String(strategy) + '" — skipping.');
     }
 
-    // The board-state mirror files are only un-ignored (shared via git) when the
-    // boardStateExport feature is on. Rows are dropped from the managed block when
-    // export is 'none' (the default) so an unconfigured workspace keeps a zero git
-    // footprint — the files stay ignored and can't be committed or conflict.
-    private static readonly MIRROR_EXPORT_RULES: string[] = [
-        '!.switchboard/kanban-board.md',
-        '!.switchboard/kanban-state-*.md',
-    ];
-
-    private _boardStateExportEnabled(): boolean {
-        const target = vscode.workspace
-            .getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot))
-            .get<string>('boardStateExport', 'none');
-        return !!target && target !== 'none';
-    }
-
-    private _effectiveTargetedRules(): string[] {
-        return WorkspaceExcludeService.getTargetedRules(this._boardStateExportEnabled());
-    }
-
     /**
-     * The managed targeted-gitignore rules. When `includeMirrorExport` is false
-     * (boardStateExport === 'none', the default), the board-state mirror files
-     * (kanban-board.md / kanban-state-*.md) stay ignored — so the setup-UI preview
-     * matches what apply() actually writes. Pass the workspace's boardStateExport
-     * state; defaults to true for backward compatibility.
+     * The managed targeted-gitignore rules. The board-state mirror files
+     * (kanban-board.md / kanban-state-*.md) are no longer un-ignored — the
+     * bidirectional mirror is retired and the read-only snapshot writes to
+     * its own orphan ref, not the code tree. Mirror files stay ignored under
+     * `.switchboard/*`. The `includeMirrorExport` parameter is retained for
+     * backward compatibility but no longer adds mirror carve-outs.
      */
-    static getTargetedRules(includeMirrorExport: boolean = true): string[] {
-        const rules = [...WorkspaceExcludeService.TARGETED_RULES];
-        if (includeMirrorExport) { return rules; }
-        const mirror = new Set(WorkspaceExcludeService.MIRROR_EXPORT_RULES);
-        return rules.filter(r => !mirror.has(r));
+    static getTargetedRules(_includeMirrorExport: boolean = false): string[] {
+        return [...WorkspaceExcludeService.TARGETED_RULES];
     }
 }

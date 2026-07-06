@@ -4,7 +4,40 @@
 
 ## Goal
 
-Fixes 6 bugs and UX issues found during testing of the Comms Monitor feature: start polling delay, Slack prompt error, stuck stop button, stop-polling-kills-terminal confusion, missing output capture, and excessive paste-to-enter delay.
+Fixes 6 bugs and UX issues found during testing of the Comms Monitor feature: start polling delay, Slack prompt error, stuck stop button, stop-polling-kills-terminal confusion, missing output capture, and excessive paste-to-enter delay. These plans are grouped because they were all surfaced during a single testing pass of the Comms Monitor and share the same files (`src/services/TaskViewerProvider.ts`, `src/webview/kanban.html`, `src/services/terminalUtils.ts`); shipping them together brings the monitor from "launched but rough" to a coherent, reliably-operable state.
+
+## How the Subtasks Achieve This
+
+- **Start Polling Immediate First Tick**: cuts the 30s first-prompt `setTimeout` in `startMcpMonitorPolling()` to ~2s so the user sees the first channel check within seconds of clicking Start Polling — eliminates the perceived "nothing happened" gap.
+- **Slack Prompt Claude Error**: rewrites `_buildSlackPromptLine()` to explicitly invoke Slack MCP tools, prefix channel names with `#`, and guard the both-filters-checked edge case, so Claude queries Slack instead of erroring on ambiguous/bare channel references.
+- **Stop Polling Button Stuck**: adds a deferred re-render flag (`commsPanelRenderPending`) plus immediate button feedback so the COMMS panel DOM reflects the stopped-polling state instead of staying stale behind the 500ms interaction guard.
+- **Capture Output to UI**: adds file-based output capture — the prompt instructs Claude to write findings to `.switchboard/comms-monitor-latest.md`, and a "Latest Results" section in the COMMS tab displays them — so users see monitor findings without switching to the terminal.
+- **Stop Polling Kills Terminal**: separates "Stop Polling" from "Kill Terminal" into different rows, relabels the destructive button, and adds tooltips so users stop accidentally killing the terminal when they only meant to pause polling.
+- **Reduce Paste-to-Enter Delay**: cuts `POST_PASTE_SETTLE_MS` / `NEWLINE_DELAY` / `CLI_CONFIRM_ENTER_DELAY` so the paste→Enter window shrinks from ~1800ms to ~400ms, reducing user-typing interference with pasted prompts.
+
+## Dependencies & sequencing
+
+- **Cross-feature dependencies:** None external — all six are internal to the Comms Monitor feature and require no work from other features to land.
+- **Shipping order within this feature:**
+  - **Plan 6 (reduce delays) → first.** Independent (lives in `terminalUtils.ts`); landing it early makes every other plan's manual verification faster and more reliable.
+  - **Plan 3 (stuck button) before Plan 5 (kill-terminal confusion).** Plan 5 explicitly states the stuck-button fix is a prerequisite — until users can see that "Stop Polling" worked, they fall back to the prominent red "Stop Monitor" button and kill the terminal anyway.
+  - **Plan 1 (immediate first tick) before Plan 4 (capture output).** Plan 4's verification waits for "the first tick" and references the 2s delay; settle the first-tick timing before adding output capture on top.
+  - **Plan 2 (slack prompt) before Plan 4 (capture output).** Both edit `_buildMcpMonitorPrompt` / the preamble — ship the smaller prompt-clarity fix first, then Plan 4 appends the file-write postscript, avoiding a preamble merge conflict.
+  - **Plan 5** can land any time after Plan 3 (pure `kanban.html` UI, no backend coupling).
+  - **Suggested merge order: 6 → 3 → 5 → 1 → 2 → 4.**
+- **Prerequisites / guards:** the three-step launch flow (Start Terminal → Check Auth → Start Polling) is already implemented and separates auth from polling. For Plan 2 to have any effect, the Slack MCP server must be configured and authenticated in the user's Claude environment — this is environmental, not a code dependency. For Plan 4, the `.switchboard/` directory must exist (it does in any Switchboard-managed workspace).
+
+## Uncertain Assumptions
+
+Web research was run and findings integrated into the plans. Of the 4 original uncertainties, 2 are now resolved by research and 2 remain:
+
+**Resolved by research:**
+- ~~**Plan 4 — VS Code terminal output-capture API status.**~~ **RESOLVED:** `vscode.window.onDidWriteTerminalData` remains proposed-only (VS Code team confirmed no plans to stabilize — cross-process performance barrier). Shell Integration API (`TerminalShellExecution.read()`) is stable (v1.93+) but blind to REPL sub-turns — it treats the entire Claude CLI session as one undemarcated stream. File-based capture is confirmed as the only viable path for a published extension. Plan 4 upgraded: 60s polling timer replaced with `vscode.workspace.createFileSystemWatcher` (fires the moment Claude writes) + 90s fallback timeout.
+- ~~**Plan 6 — xterm.js paste latency on all terminals.**~~ **RESOLVED:** Research confirmed 100ms `POST_PASTE_SETTLE_MS` is safe for local terminals but **unsafe for Remote-SSH** (50-200ms RTT) — Enter can arrive before the clipboard buffer transfers, corrupting bracketed paste. Plan 6 upgraded: connection-aware delays via `vscode.env.remoteName` (local: 100/300ms, remote: 300/600ms). The `fast` option is now secondary.
+
+**Still uncertain (implementation-time verification):**
+- **Plan 2 — root cause is speculative.** The actual Claude error response was never captured (user report truncated). The prompt rewrite (explicit MCP-tool invocation, `#` prefixes, both-filters guard) is a best-effort fix; the real cause could instead be a custom startup command overriding the `mcp__*` fallback, or a missing/unauthenticated Slack MCP server. Research confirmed `mcp__slack__*` is the canonical tool pattern and the `mcp__*` fallback covers Slack, but this doesn't tell us what the actual error IS. The plan's diagnostic step (capture the full error first) remains essential and non-negotiable.
+- **Plan 4 — Claude file-write reliability.** Research found typical multi-source MCP response latency is 15-45s (within the 90s fallback) and identified known failure modes: Claude may output "All clear" inline without calling its file-write tool, or halt on permission prompts if not spawned with `--dangerously-skip-permissions`. Plan 4 now uses stricter prompt wording ("you MUST call your filesystem write tool... Do not output your final analysis solely in natural language") and flags the skip-permissions requirement. Reliability should be verified during manual testing — if Claude frequently doesn't write the file, the "No output captured" fallback will show frequently and the UX will need iteration.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks

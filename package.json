@@ -538,17 +538,16 @@
           "type": "string",
           "enum": [
             "none",
-            "control-plane",
-            "wiki"
+            "read-only-snapshot"
           ],
           "default": "none",
-          "description": "Where (if anywhere) the kanban board state gets mirrored for remote/web-agent visibility. 'none' = no git footprint; 'control-plane' = push to the control-plane repo; 'wiki' = push to <remote>.wiki.git. notion/linear are governed by their existing provider config, not this setting.",
+          "description": "Where (if anywhere) the kanban board state gets mirrored for remote/web-agent visibility. 'none' = no git footprint; 'read-only-snapshot' = publish a one-directional, read-only snapshot (board.json + board.md) to the orphan branch 'switchboard/board'. Notion/Linear are governed by their existing provider config, not this setting.",
           "scope": "resource"
         },
         "switchboard.boardStateExport.remoteUrl": {
           "type": "string",
           "default": "",
-          "description": "Git remote URL for the board-state export destination (used when boardStateExport is 'control-plane' or 'wiki'). If empty for 'control-plane', uses the control-plane's configured remote; for 'wiki', derives from the project repo's origin.",
+          "description": "Reserved. Git remote URL for the board-state export destination (currently unused — the read-only snapshot publishes to the repo's own orphan branch 'switchboard/board').",
           "scope": "resource"
         },
         "switchboard.planScanner.enabled": {

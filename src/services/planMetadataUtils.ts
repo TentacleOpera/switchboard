@@ -51,6 +51,8 @@ export interface PlanMetadata {
     complexity: string;
     tags: string;
     project?: string;
+    /** Durable fact: the feature plan-id (filename UUID) this subtask belongs to. */
+    feature?: string;
 }
 
 /**
@@ -101,12 +103,24 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         project = projectMatch[1].trim() || undefined;
     }
 
+    // Durable fact: **Feature:** <feature-plan-id> (the feature's filename UUID).
+    // Apply-if-empty semantics on import — absence never clears a DB link.
+    let feature: string | undefined;
+    const featureMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Feature(?:\*\*:\s*|:\*\*)\s*(.+)$/im);
+    if (featureMatch) {
+        const raw = featureMatch[1].trim();
+        if (raw) {
+            feature = raw;
+        }
+    }
+
     return {
         topic,
         kanbanColumn: columnMatch?.[1],
         complexity,
         tags,
-        project
+        project,
+        feature
     };
 }
 

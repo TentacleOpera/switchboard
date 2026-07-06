@@ -1684,28 +1684,6 @@ export class KanbanProvider implements vscode.Disposable {
             log: (m) => this._outputChannel?.appendLine(m)
         });
 
-        // Register git providers for outbound push
-        try {
-            const { GitStateProvider } = require('./remote/GitStateProvider');
-            const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
-            if (cpRoot !== resolved) {
-                service.registerGitProvider(new GitStateProvider('control-plane', {
-                    db: this._getKanbanDb(resolved),
-                    getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
-                    getPlansDir: () => this._getIntegrationImportDir(resolved),
-                    log: (m: string) => this._outputChannel?.appendLine(m),
-                    getExportRoot: () => cpRoot,
-                }));
-            }
-            service.registerGitProvider(new GitStateProvider('wiki', {
-                db: this._getKanbanDb(resolved),
-                getWorkspaceId: async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '',
-                getPlansDir: () => this._getIntegrationImportDir(resolved),
-                log: (m: string) => this._outputChannel?.appendLine(m),
-                getExportRoot: () => resolved,
-            }));
-        } catch { /* GitStateProvider unavailable */ }
-
         this._remoteControls.set(resolved, service);
         return service;
     }
@@ -1724,23 +1702,6 @@ export class KanbanProvider implements vscode.Disposable {
                 notion: this._getNotionService(resolved),
                 db: this._getKanbanDb(resolved),
                 getWorkspaceId, getPlansDir, log,
-            });
-        }
-        if (kind === 'control-plane') {
-            const { GitStateProvider } = require('./remote/GitStateProvider');
-            const cpRoot = this.resolveEffectiveWorkspaceRoot(resolved);
-            return new GitStateProvider('control-plane', {
-                db: this._getKanbanDb(resolved),
-                getWorkspaceId, getPlansDir, log,
-                getExportRoot: () => cpRoot !== resolved ? cpRoot : null,
-            });
-        }
-        if (kind === 'wiki') {
-            const { GitStateProvider } = require('./remote/GitStateProvider');
-            return new GitStateProvider('wiki', {
-                db: this._getKanbanDb(resolved),
-                getWorkspaceId, getPlansDir, log,
-                getExportRoot: () => resolved,
             });
         }
         if (kind === 'clickup') {
@@ -10041,11 +10002,26 @@ ${FOCUS_DIRECTIVE}`;
         if (deleteSubtasks) {
             for (const st of featureSubtasks) {
                 await db.tombstonePlan(st.planId);
+                // Reap the subtask file so the watcher's delete handler hard-deletes the
+                // row and the file can't resurrect on the next scan/clone. Best-effort:
+                // a locked file (editor open) warns but does not block the DB tombstone;
+                // the pending-delete registration means the watcher cleans it up once the
+                // editor releases it.
+                await this._reapPlanFile(workspaceRoot, st.planFile);
             }
         } else {
             await db.clearFeatureIdForFeature(feature.planId);
+            // Keep-subtasks: strip the **Feature:** <deletedId> carrier line from each
+            // kept subtask so it doesn't re-link to the dead feature on re-import. The
+            // carrier is apply-if-empty, so an absent line leaves the subtask standalone.
+            for (const st of featureSubtasks) {
+                await this._stripFeatureLineFromPlanFile(workspaceRoot, st.planFile, feature.planId);
+            }
         }
         await db.tombstonePlan(feature.planId);
+        // Reap the feature file so the watcher's delete handler hard-deletes the row
+        // (not just tombstone) and the file can't resurrect on the next scan/clone.
+        await this._reapPlanFile(workspaceRoot, feature.planFile);
         await this._refreshBoard(workspaceRoot);
         // Unlink the subtasks from external trackers (best-effort) so no Linear
         // issue / ClickUp task is left parented to the now-deleted feature.
@@ -10059,6 +10035,75 @@ ${FOCUS_DIRECTIVE}`;
             ]);
         }
         return { success: true };
+    }
+
+    /**
+     * Reap (unlink) a plan file on delete so the watcher's delete handler fires and
+     * hard-deletes the DB row, and the file can't resurrect on the next scan/clone.
+     * Best-effort: a locked file (editor open) warns but does not block the DB
+     * tombstone. ENOENT (already gone) is treated as success.
+     */
+    private async _reapPlanFile(workspaceRoot: string, relativePlanFile: string): Promise<void> {
+        if (!relativePlanFile) return;
+        const absPath = path.isAbsolute(relativePlanFile)
+            ? relativePlanFile
+            : path.join(workspaceRoot, relativePlanFile);
+        try {
+            await fs.promises.unlink(absPath);
+            this._outputChannel?.appendLine(`[KanbanProvider] Reaped plan file on delete: ${relativePlanFile}`);
+        } catch (e: any) {
+            if (e && e.code === 'ENOENT') {
+                // Already gone — treat as success.
+                return;
+            }
+            // Locked / permission failure — warn, rely on pending-delete + next watcher cycle.
+            this._outputChannel?.appendLine(
+                `[KanbanProvider] Warning: could not reap plan file ${relativePlanFile} (${e?.message || e}). DB tombstone still lands; watcher will clean up when the editor releases it.`
+            );
+        }
+    }
+
+    /**
+     * Strip the `**Feature:** <featureId>` carrier line from a kept subtask's file so
+     * it doesn't re-link to a deleted feature on re-import. The carrier is
+     * apply-if-empty, so an absent line leaves the subtask standalone. Best-effort:
+     * read/write failure warns but does not block the delete.
+     */
+    private async _stripFeatureLineFromPlanFile(
+        workspaceRoot: string,
+        relativePlanFile: string,
+        featureId: string
+    ): Promise<void> {
+        if (!relativePlanFile || !featureId) return;
+        const absPath = path.isAbsolute(relativePlanFile)
+            ? relativePlanFile
+            : path.join(workspaceRoot, relativePlanFile);
+        try {
+            if (!fs.existsSync(absPath)) return;
+            const content = await fs.promises.readFile(absPath, 'utf8');
+            // Match the same list-item-tolerant form as parsePlanMetadata's **Feature:**
+            // regex, but only strip lines whose value matches the deleted feature id.
+            const stripped = content.replace(
+                /^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Feature(?:\*\*:\s*|:\*\*)\s*.*$/gim,
+                (line: string) => {
+                    // Only strip if the line references the deleted feature id.
+                    if (line.includes(featureId)) {
+                        return '';
+                    }
+                    return line;
+                }
+            );
+            if (stripped !== content) {
+                await fs.promises.writeFile(absPath, stripped, 'utf8');
+                this._outputChannel?.appendLine(
+                    `[KanbanProvider] Stripped **Feature:** ${featureId} from kept subtask: ${relativePlanFile}`
+                );
+            }
+        } catch (e: any) {
+            this._outputChannel?.appendLine(
+                `[KanbanProvider] Warning: could not strip **Feature:** line from ${relativePlanFile} (${e?.message || e}). Subtask may re-link on re-import.`
+            );
+        }
     }
 
     /**

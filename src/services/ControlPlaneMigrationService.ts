@@ -575,17 +575,7 @@ export class ControlPlaneMigrationService {
             warnings.push('The detected parent folder does not contain at least two immediate child git repositories yet.');
         }
         if (parentIsGitRepo) {
-            // Suppress the "parent folder is a git repo" warning when boardStateExport
-            // is 'control-plane' — the opposite guidance applies (the control-plane
-            // SHOULD be a git repo when opted in for mirror push).
-            let isExportOptedIn = false;
-            try {
-                const exportConfig = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(normalizedParent));
-                isExportOptedIn = exportConfig.get<string>('boardStateExport', 'none') === 'control-plane';
-            } catch { /* outside extension host */ }
-            if (!isExportOptedIn) {
-                warnings.push('Your parent folder is a git repository. You may still need .gitignore entries for .switchboard/ here.');
-            }
+            warnings.push('Your parent folder is a git repository. You may still need .gitignore entries for .switchboard/ here.');
         }
         if (alreadyControlPlane) {
             warnings.push('This parent folder already has a control-plane kanban database.');

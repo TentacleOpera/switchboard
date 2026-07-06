@@ -290,9 +290,7 @@ export class AutoArchiveService {
     private _remoteIdOf(kind: RemoteProviderKind, plan: KanbanPlanRecord): string {
         if (kind === 'linear') { return plan.linearIssueId || ''; }
         if (kind === 'notion') { return plan.notionPageId || ''; }
-        if (kind === 'control-plane' || kind === 'wiki') {
-            return plan.planFile ? path.basename(plan.planFile, '.md') : '';
-        }
+        if (kind === 'clickup') { return plan.clickupTaskId || ''; }
         return '';
     }
 

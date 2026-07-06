@@ -726,20 +726,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         BOARD STATE EXPORT
                     </div>
                     <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
-                        Choose where the kanban board state (<code>kanban-board.md</code>, <code>kanban-state-*.md</code>) gets mirrored for remote/web-agent visibility. <strong>Default: none</strong> — no git footprint. Notion/Linear are governed by their existing provider config.
+                        Choose where the kanban board state gets mirrored for remote/web-agent visibility. <strong>Default: none</strong> — no git footprint. <code>read-only-snapshot</code> publishes a one-directional, read-only snapshot (<code>board.json</code> + <code>board.md</code>) to the orphan branch <code>switchboard/board</code> — read-only, not a control channel. Notion/Linear are governed by their existing provider config.
                     </div>
                     <label class="startup-row" style="display:block; margin-top:8px;">
                         <span style="display:block; margin-bottom:4px;">Export destination</span>
                         <select id="board-state-export-select" style="width:100%; padding:4px 8px; background:var(--panel-bg); color:var(--text-primary); border:1px solid var(--border-color); border-radius:3px;">
                             <option value="none">none — no git footprint</option>
-                            <option value="control-plane">control-plane — push to the control-plane repo</option>
-                            <option value="wiki">wiki — push to &lt;remote&gt;.wiki.git</option>
+                            <option value="read-only-snapshot">read-only-snapshot — publish to orphan branch switchboard/board (read-only)</option>
                         </select>
                     </label>
                     <div id="board-state-export-remote-url-row" class="hidden" style="margin-top:8px;">
                         <label class="startup-row" style="display:block;">
-                            <span style="display:block; margin-bottom:4px;">Git remote URL (optional — auto-detected if empty)</span>
-                            <input id="board-state-export-remote-url" type="text" placeholder="https://github.com/org/control-plane.git" style="width:100%;">
+                            <span style="display:block; margin-bottom:4px;">Git remote URL (reserved — currently unused)</span>
+                            <input id="board-state-export-remote-url" type="text" placeholder="reserved" style="width:100%;">
                         </label>
                     </div>
                     <div id="board-state-export-init-git-row" class="hidden" style="margin-top:8px;">
