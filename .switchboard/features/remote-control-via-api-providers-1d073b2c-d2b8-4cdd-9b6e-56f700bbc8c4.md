@@ -77,10 +77,22 @@ frontmatter-facts` lands with the retirement (it's where the manifest's fields g
 > Notion/Linear providers, a one-directional read-only board snapshot for visibility, the
 > durable-fact carriers (`**Feature:**`/`**Project:**`), and the delete-resurrect fix.
 
+## Dependencies & sequencing
+
+- **Cross-feature dependencies:** none. The scope note above isolates this feature from "Agent activity light" — no shared code, dependency, or ordering. Control providers (Notion, Linear) already exist and are untouched by this feature.
+- **Shipping order within this feature:**
+  - `board-state-read-snapshot` lands **with/before** `retire-file-based-git-control-plane`'s mirror removal, so remote read-visibility is never lost. There is **no control gap** — Notion/Linear already serve control, so the mirror's *control* role can be deleted without a replacement.
+  - `plan-authoring-frontmatter-facts` lands **with** the retirement — it is where the retired manifest's feature/project fields go (`**Feature:**` + `**Project:**` per-plan frontmatter on import).
+  - `delete-epic-file-resurrect-fix` is **independent** and can land in any order, but it pairs with `plan-authoring-frontmatter-facts`: the `**Feature:**` carrier that plan introduces is the line this plan must strip from kept subtasks on delete. If they ship together, the strip logic is exercised immediately; if delete-epic lands first, the strip step is a no-op until the carrier exists.
+- **Prerequisites / guards:**
+  - The file-based control plane, `manifest.json`, and `GitStateProvider` are **unreleased/experimental** → clean break, no migration, no `*.migrated.bak`, no compat shims (per CLAUDE.md).
+  - `board-state-read-snapshot` defaults **opt-in (off)** → no behavior change until a user enables it, so it can land before the mirror removal without risk.
+  - `delete-epic` must key delete handling on `plan_id` (not file path alone) so a file returning on another branch via merge/clone cannot re-create a card the user deleted.
+
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delete-feature (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **CREATED**
-- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **CREATED**
-- [ ] [Retire the file-based git control plane; hand board visibility to the read-only snapshot](../plans/retire-file-based-git-control-plane.md) — **CREATED**
-- [ ] [Board-state read snapshot (isolated ref, one-directional)](../plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md) — **CREATED**
+- [ ] [Delete-feature (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **PLAN REVIEWED**
+- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **PLAN REVIEWED**
+- [ ] [Retire the file-based git control plane; hand board visibility to the read-only snapshot](../plans/retire-file-based-git-control-plane.md) — **PLAN REVIEWED**
+- [ ] [Board-state read snapshot (isolated ref, one-directional)](../plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

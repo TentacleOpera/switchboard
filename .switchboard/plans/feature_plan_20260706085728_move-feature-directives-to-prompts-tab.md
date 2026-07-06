@@ -163,3 +163,7 @@ Skipped per session directive — this is a UI relocation with no new logic path
 ---
 
 **Recommendation:** Complexity 4 → Send to Coder.
+
+## Review Findings
+
+Reviewed against commit `29b3060`. Checkbox removal from form, addon array addition, save-path removals, and legacy-agent seed all match the plan. **CRITICAL fix applied:** the seed condition `isChecked === addon.default` could not distinguish "roleConfig key absent" from "user explicitly set false" — a user who unchecked the checkbox would see it re-check on re-render (UI/dispatch mismatch on a dispatch-critical flag). Changed to guard on key existence (`=== undefined`) at `kanban.html:3487`. Also fixed a double-blank-line NIT at `kanban.html:3551`. File changed: `src/webview/kanban.html`. No orphaned references to the removed element ID. Dispatch merge path (`KanbanProvider.ts:3988-3991`) unchanged and correct. Verification (compile/tests) skipped per session directive. Remaining risk: narrow race where `lastCustomAgents` is empty if user selects a custom agent before the `getCustomAgents` async response arrives — seed falls back to default (false), self-corrects on next render.

@@ -3480,8 +3480,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 } else {
                     // Existing checkbox rendering
                     let isChecked = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
-                    // Seed checkbox initial state from the agent object for legacy agents
-                    if (role.startsWith('custom_agent_') && isChecked === addon.default) {
+                    // Seed checkbox initial state from the agent object for legacy agents.
+                    // Guard on key EXISTENCE (undefined), not value-equality with default —
+                    // otherwise an explicit `false` written by the user is indistinguishable
+                    // from "key absent" and the seed would re-check the checkbox on re-render.
+                    if (role.startsWith('custom_agent_') && roleConfigs[role]?.addons?.[addon.id] === undefined) {
                         const agentObj = (typeof lastCustomAgents !== 'undefined' ? lastCustomAgents : [])
                             .find(a => (a.role || ('custom_agent_' + a.id)) === role);
                         if (agentObj?.addons?.[addon.id] === true) isChecked = true;
@@ -3546,7 +3549,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           document.getElementById('agents-tab-inline-form-title').textContent = agent ? `Edit: ${agent.name}` : 'New Custom Agent';
           document.getElementById('agents-tab-custom-agent-name').value = agent?.name || '';
           document.getElementById('agents-tab-custom-agent-command').value = agent?.startupCommand || '';
-
 
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
           document.getElementById('agents-tab-custom-agent-form').classList.remove('hidden');
@@ -8929,45 +8931,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             `;
             container.appendChild(depNotice);
 
-            // ─── Model Indicator (Haiku cost highlight) ───
-            const detectModel = (cmd) => {
-                if (!cmd || !cmd.trim()) return { name: 'Unknown', isHaiku: false, isCustom: false };
-                const lower = cmd.toLowerCase();
-                if (!lower.includes('claude')) return { name: 'Custom command', isHaiku: false, isCustom: true };
-                if (lower.includes('haiku')) return { name: 'Haiku', isHaiku: true, isCustom: false };
-                if (lower.includes('sonnet')) return { name: 'Sonnet', isHaiku: false, isCustom: false };
-                if (lower.includes('opus')) return { name: 'Opus', isHaiku: false, isCustom: false };
-                return { name: 'Default (not Haiku)', isHaiku: false, isCustom: false };
-            };
-            const modelInfo = detectModel(mcpMonitorResolvedCmd);
-            const modelIcon = modelInfo.isHaiku ? '💰' : '⚠️';
-            const modelColor = modelInfo.isHaiku ? 'var(--accent-teal)' : 'var(--text-secondary)';
-            const modelNote = modelInfo.isHaiku
-                ? 'Using Haiku to minimize token costs. Each check is a short read-only query — Haiku is ideal.'
-                : modelInfo.isCustom
-                    ? 'Custom command detected. Model unknown — verify it uses Haiku for cost efficiency.'
-                    : 'Not using Haiku. This monitor runs frequently — consider --model claude-haiku-4-5 to reduce costs.';
-            const modelRow = document.createElement('div');
-            modelRow.style.cssText = 'padding:6px 8px; margin:0 8px 8px 8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); font-size:9px; line-height:1.4;';
-            modelRow.innerHTML = `
-                <span style="color:${modelColor};">${modelIcon}</span>
-                <strong style="color:var(--text-primary);">Model: ${modelInfo.name}</strong><br>
-                <span style="color:var(--text-secondary);">${modelNote}</span>
-            `;
-            container.appendChild(modelRow);
-
-            // Resolved startup command (collapsible)
-            const cmdDetails = document.createElement('details');
-            cmdDetails.style.cssText = 'margin:0 8px 8px 8px; font-size:9px; color:var(--text-secondary);';
-            const cmdSummary = document.createElement('summary');
-            cmdSummary.textContent = 'Startup command (resolved)';
-            cmdSummary.style.cssText = 'cursor:pointer; color:var(--text-secondary);';
+            // Startup command (always visible)
+            const cmdLabel = document.createElement('div');
+            cmdLabel.style.cssText = 'margin:0 8px 2px 8px; font-size:9px; color:var(--text-secondary);';
+            cmdLabel.textContent = 'Startup command';
             const cmdPre = document.createElement('pre');
-            cmdPre.style.cssText = 'margin-top:4px; padding:4px; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:3px; font-size:9px; color:var(--text-primary); white-space:pre-wrap; word-break:break-all;';
+            cmdPre.style.cssText = 'margin:0 8px 8px 8px; padding:4px; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:3px; font-size:9px; color:var(--text-primary); white-space:pre-wrap; word-break:break-all;';
             cmdPre.textContent = mcpMonitorResolvedCmd || '(not resolved)';
-            cmdDetails.appendChild(cmdSummary);
-            cmdDetails.appendChild(cmdPre);
-            container.appendChild(cmdDetails);
+            container.appendChild(cmdLabel);
+            container.appendChild(cmdPre);
 
             // ─── On/Off dropdown (config-panel visibility) ───
             const mcpRow = document.createElement('div');
@@ -9214,7 +9186,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const startTermBtn = document.createElement('button');
             startTermBtn.textContent = 'Start Terminal';
-            startTermBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
+            startTermBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);';
             guardCommsInteraction(startTermBtn);
             startTermBtn.addEventListener('click', () => {
                 startTermBtn.disabled = true;
@@ -9235,7 +9207,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const startPollBtn = document.createElement('button');
             startPollBtn.textContent = 'Start Polling';
-            startPollBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
+            startPollBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);';
             guardCommsInteraction(startPollBtn);
             startPollBtn.addEventListener('click', () => {
                 postKanbanMessage({ type: 'startMcpMonitorPolling' });

@@ -13,8 +13,8 @@ Clean up the project.html controls strip across all three tabs (Projects, Consti
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove Duplicate Architect Button and Rename "Copy Architect Prompt" in project.html](../plans/feature_plan_20260706085732_remove-duplicate-architect-button-rename-copy.md) — **CREATED**
-- [ ] [Fix Project Context Button Active Styling in project.html](../plans/feature_plan_20260706085731_fix-project-context-button-active-styling.md) — **CREATED**
+- [ ] [Remove Duplicate Architect Button and Rename "Copy Architect Prompt" in project.html](../plans/feature_plan_20260706085732_remove-duplicate-architect-button-rename-copy.md) — **PLAN REVIEWED**
+- [ ] [Fix Project Context Button Active Styling in project.html](../plans/feature_plan_20260706085731_fix-project-context-button-active-styling.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

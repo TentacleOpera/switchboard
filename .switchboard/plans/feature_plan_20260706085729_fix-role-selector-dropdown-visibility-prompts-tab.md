@@ -145,3 +145,7 @@ Skipped per session directive — this is a CSS/visual-UX change with no logic p
 ---
 
 **Recommendation:** Complexity 3 → Send to Intern.
+
+## Review Findings
+
+Reviewed against commit `29b3060`. CSS changes (border `var(--accent-teal)`, theme-aware `var(--panel-bg2)` background, `:focus` box-shadow) and the scroll-to-top on tab activation match the plan exactly. Two NITs found (redundant focus `border-color` identical to base; `--panel-bg2` resolves to same `#0a0a0a` as before — border change is the real fix) — both cosmetic, deferred. No code changes applied. No orphaned references, no race conditions, no double-trigger. Verification (compile/tests) skipped per session directive. Remaining risk: manual theme-by-theme visual confirmation still needed per the plan's User Review.
