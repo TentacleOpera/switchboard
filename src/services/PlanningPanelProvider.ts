@@ -91,6 +91,13 @@ export class PlanningPanelProvider {
     private _antigravityWatchers: vscode.FileSystemWatcher[] = [];
     private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
+    // Dedicated watcher for the currently-selected Dev Doc / root README so
+    // external edits (git pull, another window, an agent writing the file back)
+    // re-emit `devDocContent` instead of leaving the tab on a stale buffer.
+    private _activeDevDocWatcher: vscode.FileSystemWatcher | undefined;
+    private _activeDevDocWatchDebounce: NodeJS.Timeout | undefined;
+    private _activeDevDocPath: string | undefined;      // resolved on-disk path being watched (staleness guard)
+    private _devDocWatcherGeneration: number = 0;
     private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
     private _featureDocsWatchers: vscode.FileSystemWatcher[] = [];
@@ -1411,6 +1418,82 @@ Start by checking which documents exist, then present the menu.`;
         }
     }
 
+    /**
+     * Watch the currently-selected Dev Doc (or root README) for EXTERNAL changes.
+     * The Dev Docs tab reads content only on explicit selection (`readDevDoc`), so
+     * without this a `git pull`, another window, or an agent writing the file back
+     * (the Draft/Improve hand-off) leaves the tab on a stale buffer — and a Save
+     * would then clobber the newer on-disk version. On an external edit we re-read
+     * and re-post `devDocContent`: in view mode the preview live-refreshes; in edit
+     * mode it arms `externalChangePending.devdocs` so a later exit reloads instead
+     * of silently stomping. Panel-initiated writes are suppressed via
+     * `_lastPanelWriteTimestamp` (mirrors `_setupActiveDocWatcher`).
+     */
+    private _setupActiveDevDocWatcher(diskPath: string | null, emitPath: string, isProject: boolean): void {
+        if (this._activeDevDocWatchDebounce) {
+            clearTimeout(this._activeDevDocWatchDebounce);
+            this._activeDevDocWatchDebounce = undefined;
+        }
+        if (this._activeDevDocWatcher) {
+            try { this._activeDevDocWatcher.dispose(); } catch (err) { console.warn('[PlanningPanel] Error disposing dev-doc watcher:', err); }
+            const idx = this._disposables.indexOf(this._activeDevDocWatcher);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+            this._activeDevDocWatcher = undefined;
+        }
+
+        this._devDocWatcherGeneration++;
+        const gen = this._devDocWatcherGeneration;
+        this._activeDevDocPath = diskPath || undefined;
+
+        if (!diskPath || !fs.existsSync(diskPath)) { return; }
+
+        try {
+            this._activeDevDocWatcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(path.dirname(diskPath), path.basename(diskPath)),
+                true,  // ignore create
+                false, // watch change
+                false  // watch delete — surface external deletes so the tab doesn't stay stale
+            );
+
+            this._activeDevDocWatcher.onDidChange(() => {
+                if (gen !== this._devDocWatcherGeneration) { return; }               // stale watcher
+                if (diskPath !== this._activeDevDocPath) { return; }                 // selection moved on
+                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }   // our own write
+                if (this._activeDevDocWatchDebounce) { clearTimeout(this._activeDevDocWatchDebounce); }
+                this._activeDevDocWatchDebounce = setTimeout(async () => {
+                    if (gen !== this._devDocWatcherGeneration || diskPath !== this._activeDevDocPath) { return; }
+                    if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }
+                    await this._reemitDevDocContent(diskPath, emitPath, isProject);
+                }, 300);
+            });
+
+            this._activeDevDocWatcher.onDidDelete(() => {
+                if (gen !== this._devDocWatcherGeneration) { return; }               // stale watcher
+                if (diskPath !== this._activeDevDocPath) { return; }                 // selection moved on
+                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }   // our own delete (via the tab)
+                if (this._activeDevDocWatchDebounce) { clearTimeout(this._activeDevDocWatchDebounce); }
+                this._activeDevDocPath = undefined; // stop reacting to the now-gone file
+                const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                devDocsPanel?.webview.postMessage({ type: 'devDocDeletedExternally', path: emitPath });
+            });
+
+            this._disposables.push(this._activeDevDocWatcher);
+        } catch (err) {
+            console.error('[PlanningPanel] Failed to create dev-doc watcher:', err);
+        }
+    }
+
+    /** Re-read a Dev Doc changed on disk and re-post its content to the tab. */
+    private async _reemitDevDocContent(diskPath: string, emitPath: string, isProject: boolean): Promise<void> {
+        const devDocsPanel = isProject ? this._projectPanel : this._panel;
+        if (!devDocsPanel) { return; }
+        let content = '';
+        try { content = await fs.promises.readFile(diskPath, 'utf8'); } catch { return; } // gone — leave the last view
+        let renderedHtml = '';
+        try { renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content); } catch { renderedHtml = ''; }
+        devDocsPanel.webview.postMessage({ type: 'devDocContent', path: emitPath, content, renderedHtml });
+    }
+
     private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<void> {
         const allRoots = Array.from(this._getAllowedRoots());
         // Resolve relative paths against workspace roots, not just CWD
@@ -2362,6 +2445,8 @@ Start by checking which documents exist, then present the menu.`;
                     renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
                 } catch { renderedHtml = ''; }
                 devDocsPanel?.webview.postMessage({ type: 'devDocContent', path: msg.path, content, renderedHtml });
+                // Watch this file for external edits so the tab never holds a stale buffer.
+                this._setupActiveDevDocWatcher(safePath, typeof msg.path === 'string' ? msg.path : safePath, isProject);
                 break;
             }
             case 'saveDevDoc': {
@@ -2376,6 +2461,7 @@ Start by checking which documents exist, then present the menu.`;
                 try {
                     await fs.promises.mkdir(path.dirname(safePath), { recursive: true });
                     await fs.promises.writeFile(safePath, msg.content, 'utf8');
+                    this._lastPanelWriteTimestamp = Date.now(); // suppress our own dev-doc watcher fire
                     ok = true;
                 } catch (err) {
                     error = err instanceof Error ? err.message : String(err);
@@ -2469,6 +2555,7 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 try {
                     await fs.promises.unlink(safePath);
+                    this._lastPanelWriteTimestamp = Date.now(); // suppress our own dev-doc delete-watcher fire
                     devDocsPanel?.webview.postMessage({ type: 'devDocDeleted', path: msg.path, ok: true });
                     this._onProjectContextContentChanged(msg.workspaceRoot);
                 } catch (err) {
@@ -8608,7 +8695,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
     private _devDocsFolder(root: string): string {
         const cfg = vscode.workspace.getConfiguration('switchboard').get<string>('devDocsFolder', 'docs') || 'docs';
         const p = path.resolve(root, cfg);
-        return p.startsWith(path.resolve(root)) ? p : path.resolve(root, 'docs');
+        // Must be strictly INSIDE root. Bare startsWith(root) lets a sibling
+        // like `<root>-evil` (via `../<root>-evil`) pass — and this dir feeds
+        // the webview-trust boundary in _resolveDevDocPath. Require the separator.
+        const rootResolved = path.resolve(root);
+        return p.startsWith(rootResolved + path.sep) ? p : path.resolve(root, 'docs');
     }
 
     /** Relative form (for path.join with a slug). */
@@ -9068,6 +9159,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
         if (this._activeDocWatcher) {
             try { this._activeDocWatcher.dispose(); } catch (e) {}
             this._activeDocWatcher = undefined;
+        }
+        if (this._activeDevDocWatchDebounce) {
+            clearTimeout(this._activeDevDocWatchDebounce);
+            this._activeDevDocWatchDebounce = undefined;
+        }
+        if (this._activeDevDocWatcher) {
+            try { this._activeDevDocWatcher.dispose(); } catch (e) {}
+            this._activeDevDocWatcher = undefined;
         }
         for (const watcher of this._antigravityWatchers) {
             try { watcher.dispose(); } catch (e) {}

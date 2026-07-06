@@ -1,12 +1,8 @@
 # Global Override 02: Scope-Aware Settings Read/Write Layer
 
-## Metadata
-
-**Complexity:** 7
-**Tags:** backend, refactor, feature
-**Project:** switchboard
-
 ## Goal
+
+Introduce `_getScopedSetting` / `_updateScopedSetting` on `KanbanProvider` that resolve reads and writes through the project → workspace → global tier order, driven by the two override switches, and route every in-scope settings call site through them. This is the backbone that makes tab settings scope-aware.
 
 ### Problem
 
@@ -14,7 +10,14 @@ All settings reads and writes in `KanbanProvider` go through flat methods (`_get
 
 ### Background
 
-`KanbanProvider._getSetting<T>(key, defaultValue)` (line 471) checks `globalState` → workspace `config` table → default. `_updateSetting<T>(key, value)` (line 500) writes to `globalState` + mirrors to workspace `config` table. ~15 direct message handlers (`toggleCliTriggers`, `updateRoutingConfig`, `saveKanbanColumn`, etc.) call these methods. `_reloadSettingsFromStore()` (line 516) also uses `_getSetting`.
+`KanbanProvider._getSetting<T>(key, defaultValue)` (verified at line 471) checks `globalState` → workspace kanban.db `config` table → default. `_updateSetting<T>(key, value)` (line 500) writes to `globalState` + mirrors to the kanban.db `config` table. `_reloadSettingsFromStore()` (line 516) also uses `_getSetting`.
+
+**Verified against code (2026-07-07) — corrections to the original draft:**
+- "Workspace config" is the **kanban.db `config` table**, reached via `KanbanDatabase.forWorkspace(root)` where `root = this._taskViewerProvider._resolveWorkspaceRoot()` — NOT VS Code workspace configuration. The DB fallback in `_getSetting` is gated on `this._taskViewerProvider` being set (`:474`).
+- The original handler table overstated what flows through `_getSetting`/`_updateSetting`. The complete, verified call-site inventory is in Proposed Changes §4 — only **6 `kanban.*` keys + the generic `switchboard.prompts.*` path** go through the flat methods. Several handlers named in the original draft delegate to entirely different storage (VS Code configuration, `workspaceState`, TaskViewerProvider state.json mirror, AutoArchiveService) and are classified explicitly below.
+- `_configEpoch` exists (`:194`) but is only ever incremented via `_markConfigDirty()` (`:5653`) — use that, never a manual bump. It feeds `_buildPushKey` (`:5625`) so config-only changes aren't dropped by the refresh no-op early-out.
+- `setProjectFilter` **method** is at `:5739` (persists `kanban.activeProjectFilter` to db config at `:5753-5754`, debounced `workspaceState` write at `:5762-5764`); the **message handler** `case 'setProjectFilter'` is at `:6440` and calls `_refreshBoard` after. Neither currently reloads settings — this plan adds that.
+- Constructor calls `_reloadSettingsFromStore()` at `:219`, **before** `setTaskViewerProvider` (`:217-218` setter, wired in `extension.ts:790-792`) — so during construction the DB tiers are unreachable and reads degrade to globalState-only. Scoped tiers only become available after wiring; see §6.
 
 ### Root Cause
 
@@ -22,108 +25,182 @@ The read/write methods are scope-unaware. They need to be replaced with scope-aw
 
 ### Desired Outcome
 
-New `_getScopedSetting` / `_updateScopedSetting` methods that resolve reads and writes based on the override tier. All existing handlers routed through them. This is the backbone that makes every tab setting scope-aware.
+New `_getScopedSetting` / `_updateScopedSetting` methods that resolve reads and writes based on the override tier. All in-scope handlers routed through them. Settings whose storage is already per-workspace by construction (workspaceState, db config, VS Code workspace settings) are classified and documented rather than force-fitted.
 
 **Depends on:** Plan 01 (project_config storage layer must exist).
 
-## Implementation
+## Metadata
 
-### 1. Override state fields — `KanbanProvider.ts`
+**Complexity:** 7
+**Tags:** backend, refactor, feature
+**Project:** switchboard
+
+## User Review Required
+
+None. Scope classification (§4) is decided in this plan: the scoped layer covers settings flowing through `_getSetting`/`_updateSetting`; subsystems with natively per-workspace storage keep their storage and are documented as such; the globalState-by-design column-structure system (`switchboard.kanban.customColumns`, `switchboard.agents.visibleAgents`) is a follow-up feature, not this one.
+
+## Complexity Audit
+
+### Routine
+- The two new methods are small and their fallback branch is a verbatim copy of today's behavior — both-OFF mode must be bit-identical to current resolution.
+- Call-site swaps for the 6 `kanban.*` keys and the generic prompts path are mechanical (verified inventory below).
+- Epoch invalidation reuses the existing `_markConfigDirty()`.
+
+### Complex / Risky
+- Resolution-order correctness: workspace-ON inverts today's globalState-first order for the workspace tier. A mistake here silently changes every user's effective settings.
+- The db `config` table carries **two meanings** in one namespace: "mirror of globalState" (both-OFF mode writes it) and "workspace-scoped values" (workspace-ON mode writes it). While OFF, continued edits clobber previously scoped workspace values via the mirror. This is accepted design (the workspace tier IS the config table), but tests and docs must state it.
+- Constructor-time reads happen before `_taskViewerProvider` is wired — override flags and scoped values are unreadable until after wiring. Requires the §6 reload hook or the board opens with global values for one refresh cycle.
+- Project filter switches mid-session must swap the effective settings atomically with the board refresh, or the board renders with stale settings.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** `_updateScopedSetting` is async (db write + persist); rapid toggle sequences in the webview can interleave. Same exposure as today's `_updateSetting` mirror — last write wins, acceptable. Project-filter change during an in-flight scoped write targets the OLD project (the write captured `_projectFilter` at call time) — correct behavior, no fix needed.
+- **Security:** No new input surfaces; project names already flow into db queries via plan 01's parameter binding.
+- **Side Effects:** Workspace-ON writes stop updating globalState — other workspaces keep their own view (that is the point). Toggling OFF reverts effective values to globalState instantly (feature semantics: both OFF = today's behavior). Snapshot-on-toggle (plan 04) covers the ON-transition continuity.
+- **Dependencies & Conflicts:** Depends on plan 01 methods. Plan 03 consumes the override fields + handlers. Plan 05 mirrors this pattern for role configs. No conflict with the tickets tab or other providers — this layer is KanbanProvider-internal.
+
+## Dependencies
+
+- Plan 01 (`project_config` CRUD) must land first. No cross-feature dependencies.
+
+## Adversarial Synthesis
+
+Key risks: regression in both-OFF mode (mitigated: fallback branch is a verbatim copy of current `_getSetting`/`_updateSetting` bodies); mixed mirror/scoped meaning of the config table (accepted design, documented + tested); constructor-order gap where flags load before the DB tier is reachable (mitigated: reload hook in `setTaskViewerProvider`). Mitigations: verified call-site inventory (no missed swaps), `_markConfigDirty()` on every scope-state change, settings reload wired into `setProjectFilter`.
+
+## Proposed Changes
+
+### src/services/KanbanProvider.ts
+
+**Context:** `_getSetting` `:471`, `_updateSetting` `:500`, `_reloadSettingsFromStore` `:516`, constructor loads `:377-393`, `setTaskViewerProvider` `:217-218`, `_markConfigDirty` `:5653`, `setProjectFilter` method `:5739` / handler case `:6440`, generic `saveSetting`/`getSetting` handlers `:8355`/`:8373`.
+
+#### 1. Override state fields
 
 Add fields:
 - `_workspaceOverrideEnabled: boolean` (default `false`)
 - `_projectOverrideEnabled: boolean` (default `false`)
 
-Load these in the constructor and `_reloadSettingsFromStore` from the workspace `config` table:
+These two keys live **only** in the kanban.db `config` table (they are the control, not the data — never scope-resolved, never in globalState):
+
 ```typescript
-this._workspaceOverrideEnabled = this._getSetting<boolean>('kanban.workspaceOverrideEnabled', false);
-this._projectOverrideEnabled = this._getSetting<boolean>('kanban.projectOverrideEnabled', false);
+private _loadOverrideFlags(): void {
+    const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+    if (!root) { return; } // pre-wiring: keep defaults (false)
+    try {
+        const db = KanbanDatabase.forWorkspace(root);
+        if (db.isOpen()) {
+            this._workspaceOverrideEnabled = db.getConfigJsonSync<boolean>('kanban.workspaceOverrideEnabled', false);
+            this._projectOverrideEnabled = db.getConfigJsonSync<boolean>('kanban.projectOverrideEnabled', false);
+        }
+    } catch { /* keep defaults */ }
+}
 ```
-(These two keys use the existing flat `_getSetting` since they are the control, not the data.)
 
-### 2. Scope-aware read — `_getScopedSetting<T>(key, defaultValue)`
+Call from `_reloadSettingsFromStore` (start of method) so flags refresh with every settings reload.
 
-Resolution order:
+#### 2. Scope-aware read — `_getScopedSetting<T>(key, defaultValue)`
+
+Resolution order (original design, terminology corrected — "workspace config" = kanban.db `config` table):
 
 ```
-1. If _projectOverrideEnabled AND _projectFilter is a specific project (not null, not __unassigned__):
-     → check project_config(project, key) via db.getProjectConfigJsonSync
-     → if found, return it
+1. If _projectOverrideEnabled AND _projectFilter is a specific project (truthy, not __unassigned__):
+     → db.getProjectConfigJsonSync(project, key) — if found, return it
 2. If _workspaceOverrideEnabled:
-     → check workspace config table via db.getConfigJsonSync
-     → if found, return it
+     → db.getConfigJsonSync(key) — if found, return it
 3. Check globalState (existing _getSetting globalState check)
 4. If neither override is ON:
-     → check workspace config table (legacy fallback, current behavior)
+     → db.getConfigJsonSync(key) (legacy fallback, current behavior)
 5. Return defaultValue
 ```
 
-Key insight: when both overrides are OFF, the order is `globalState → workspace config` (today's behavior). When workspace override is ON, workspace config takes precedence over globalState. When project override is ON, project_config takes precedence over everything.
+Key insight: when both overrides are OFF, the order is `globalState → db config` (today's behavior, bit-identical). When workspace override is ON, db config takes precedence over globalState. When project override is ON with a specific project selected, project_config takes precedence over everything. Project override ON but filter on all/unassigned → project tier is skipped (dormant), resolution continues at step 2.
 
-### 3. Scope-aware write — `_updateScopedSetting<T>(key, value)`
+"Found" for the db tiers means: use a sentinel-default probe (e.g. call with `undefined` default and check `!== undefined`), matching how `_getSetting` distinguishes presence at `:480`. All db access wrapped in the same `isOpen()` / try-catch guards as `_getSetting` `:474-482`.
 
-Write target:
+#### 3. Scope-aware write — `_updateScopedSetting<T>(key, value)`
 
 ```
 - If _projectOverrideEnabled AND _projectFilter is a specific project:
-    → write to project_config(project, key) ONLY via db.setProjectConfigJson
-    → do NOT write to globalState or workspace config
+    → db.setProjectConfigJson(project, key, value) ONLY
+    → do NOT write globalState or db config
 - Else if _workspaceOverrideEnabled:
-    → write to workspace config table ONLY via db.setConfigJson
-    → do NOT write to globalState
+    → db.setConfigJson(key, value) ONLY
+    → do NOT write globalState
 - Else (both OFF):
-    → write to globalState + mirror to workspace config (current _updateSetting behavior)
+    → globalState.update + mirror to db config (verbatim current _updateSetting body)
 ```
 
-### 4. Route all existing handlers through scoped methods
+#### 4. Call-site inventory & routing (verified 2026-07-07)
 
-Replace every `_getSetting` / `_updateSetting` call with `_getScopedSetting` / `_updateScopedSetting` for scope-aware keys. Affected locations:
+**Category A — flows through `_getSetting`/`_updateSetting` today → swap to scoped methods.** Complete inventory (every call site, from a full grep):
 
-| Location | Setting Key(s) | Current Method |
-|---------|---------------|---------------|
-| Constructor / `_reloadSettingsFromStore` (lines 377-392, 517-527) | `kanban.cliTriggersEnabled`, `kanban.dynamicComplexityRoutingEnabled`, `kanban.columnDragDropModes`, `kanban.routingMapConfig`, `kanban.allowUnknownComplexityAutoMove`, `kanban.orderOverrides` | `_getSetting` → `_getScopedSetting` |
-| `toggleCliTriggers` (line 6882) | `kanban.cliTriggersEnabled` | `_updateSetting` → `_updateScopedSetting` |
-| `toggleDynamicComplexityRouting` (line 6909) | `kanban.dynamicComplexityRoutingEnabled` | same |
-| `toggleAllowUnknownComplexityAutoMove` (line 6921) | `kanban.allowUnknownComplexityAutoMove` | same |
-| `toggleClearTerminalBeforePrompt` (line 6933) | `kanban.clearTerminalBeforePrompt` | same |
-| `updateClearTerminalBeforePromptDelay` | `kanban.clearTerminalBeforePromptDelay` | same |
-| `updateRoutingConfig` (line 6970) | `kanban.routingMapConfig` | same |
-| `setColumnDragDropMode` (line 6975) | `kanban.columnDragDropModes` | same |
-| `setPairProgrammingMode` (line 6528) | `kanban.pairProgrammingMode` | same |
-| `setFeatureWorkflowMode` (line 6887) | `kanban.featureWorkflowMode` | same |
-| `saveKanbanColumn` / `updateKanbanStructure` / `toggleKanbanColumnVisibility` (lines 8527-8566) | kanban column structure keys | same |
-| `saveAutoArchiveConfig` (line 8522) | `autoArchive.*` keys | same |
-| `setAutomationMode` / `updateAutobanConfig` / `toggleAutoban` / `toggleAutobanPause` (lines 6458-6528) | automation keys | same |
-| Order override saves (lines 622, 5207-5208, 5239-5240) | `kanban.orderOverrides`, `kanban.columnDragDropModes` | same |
+| Call site | Verified line(s) | Key(s) |
+|---|---|---|
+| Constructor loads | 377-384, 391-393 | `kanban.cliTriggersEnabled`, `kanban.dynamicComplexityRoutingEnabled`, `kanban.columnDragDropModes`, `kanban.routingMapConfig`, `kanban.allowUnknownComplexityAutoMove`, `kanban.orderOverrides` |
+| `_reloadSettingsFromStore` | 516-527 | same 6 keys |
+| `toggleCliTriggers` | 6890 (write 6893) | `kanban.cliTriggersEnabled` |
+| `toggleDynamicComplexityRouting` | 6917 (write 6921) | `kanban.dynamicComplexityRoutingEnabled` |
+| `toggleAllowUnknownComplexityAutoMove` | 6929 (write 6933) | `kanban.allowUnknownComplexityAutoMove` |
+| `updateRoutingConfig` → `_updateRoutingConfig` | 6978 → 6015 | `kanban.routingMapConfig` |
+| `setColumnDragDropMode` | 6983 (write 6988) | `kanban.columnDragDropModes` |
+| `setKanbanOrderOverrides` | 622 | `kanban.orderOverrides` (also reached from TaskViewerProvider `handleUpdateKanbanStructure` for built-in column order) |
+| `cleanupKanbanColumnState` | 5215-5216, 5247-5248 | `kanban.orderOverrides`, `kanban.columnDragDropModes` |
+| Generic `saveSetting` handler | 8369 | `switchboard.prompts.<key>` (non-roleConfig) |
+| Generic `getSetting` handler | 8385 | `switchboard.prompts.<key>` (non-roleConfig) |
+| `_getRoleConfig` fallback | 497 | `switchboard.prompts.roleConfig_<role>` — **owned by plan 05**, do not touch here |
 
-**Exception:** `selectedRole` stays workspace-scoped (ephemeral UI state, already handled specially in the `saveSetting` handler).
+**Category B — does NOT flow through the settings layer; storage verified, classified out of the scoped layer:**
 
-### 5. Generic `saveSetting` / `getSetting` handler updates (lines 8347-8381)
+| Handler | Verified line | Actual storage | Decision |
+|---|---|---|---|
+| `toggleClearTerminalBeforePrompt` / `updateClearTerminalBeforePromptDelay` | 6941 / 6960 | VS Code configuration `switchboard.terminal.clearBeforePrompt(Delay)` | Excluded — VS Code settings already have native user/workspace scoping; double-scoping them would create two competing systems |
+| `setFeatureWorkflowMode` | 6895 (writes 6911-6912) | db config `feature_ultracode_enabled` / `feature_goal_enabled` | Already per-workspace by construction; project tier deferred |
+| `setPairProgrammingMode` | 6536 | `workspaceState` `autoban.state` (`pairProgrammingMode` field; force-reset to `off` on load at TaskViewerProvider `:472-473`) | Already per-workspace ephemeral runtime state; excluded |
+| `setAutomationMode` / `updateAutobanConfig` / `toggleAutoban` / `toggleAutobanPause` | 6466 / 6505 / 6511 / 6532 | `workspaceState` `autoban.state`, `singleColumn.autoban.state` via TaskViewerProvider `_persistAutobanState` (`:6543`) | Already per-workspace; automation state, not a "setting"; excluded |
+| `saveAutoArchiveConfig` | 8530 | db config `kanban.autoArchive` via `AutoArchiveService.setConfig` (`AutoArchiveService.ts:102`) | Already per-workspace; project tier deferred (auto-archive is a board-wide service) |
+| `saveKanbanColumn` / `updateKanbanStructure` / `toggleKanbanColumnVisibility` | 8544 / 8535 / 8574 | globalState `switchboard.kanban.customColumns` / `switchboard.agents.visibleAgents` via TaskViewerProvider `updateState` state.json mirror (+ `~/.switchboard` shadow read in `getVisibleAgents`) | Global-by-design storage riding a different mirror system; scoping it is a separate follow-up feature. Exception: built-in column ORDER flows into `kanban.orderOverrides` via `setKanbanOrderOverrides` → Category A, scoped. |
+| `selectedRole` (generic handler special case) | 8361-8364 | `workspaceState` `switchboard.prompts.selectedRole` | Already per-workspace ephemeral UI state; stays as-is (original plan agrees) |
 
-The generic handler currently routes to `_updateSetting` / `_getSetting`. Update it:
-- `saveSetting`: use `_updateScopedSetting` for non-roleConfig keys. For `roleConfig_*` keys, route through the scope-aware role config path (plan 05 handles this in detail; for now, role configs continue through TaskViewerProvider but the underlying `updateSetting` call in TaskViewerProvider should be updated in plan 05).
-- `getSetting`: use `_getScopedSetting` for non-roleConfig keys.
-- `selectedRole` stays as-is (workspaceState).
+Net effect of the workspace override for Category B rows: those settings are ALREADY per-workspace (workspaceState / db config / VS Code workspace settings), so workspace-override semantics hold natively. Only the project tier is deferred for them.
 
-### 6. Config epoch invalidation
+#### 5. Generic `saveSetting` / `getSetting` handler updates (verified `:8355` / `:8373`)
 
-When override state changes or project filter changes, the `_configEpoch` (used in snapshot keys for board refresh) must be incremented so the board re-reads settings. Add a bump in the `setWorkspaceOverride` / `setProjectOverride` handlers (plan 03) and in `setProjectFilter`.
+- `saveSetting`: use `_updateScopedSetting(fullKey, value)` for non-roleConfig keys (`:8369`). `roleConfig_*` keys continue routing to `TaskViewerProvider.saveRoleConfig` until plan 05 replaces that route with the scoped role-config path.
+- `getSetting`: use `_getScopedSetting(fullKey, undefined)` for non-roleConfig keys (`:8385`).
+- `selectedRole` stays as-is (`workspaceState`, `:8361-8364` / `:8379-8381`).
+
+#### 6. Reload & invalidation wiring
+
+- **After provider wiring:** at the end of `setTaskViewerProvider` (`:217-218`), call `this._loadOverrideFlags()` then `this._reloadSettingsFromStore()` — the constructor's `:219` reload ran before the DB tier was reachable, so this second pass is what actually applies scoped values on startup.
+- **On override toggle** (plan 03's handlers): `_loadOverrideFlags()` → `_reloadSettingsFromStore()` → `_markConfigDirty()` (`:5653`) → board refresh. Never bump `_configEpoch` manually.
+- **On project filter change:** in the `setProjectFilter` method (`:5739`), after `_projectFilter` updates and when `_projectOverrideEnabled` is true, call `_reloadSettingsFromStore()` + `_markConfigDirty()` before the handler's `_refreshBoard` (`:6440`) runs, so the board renders with the new project's settings, plus push `overrideState` (plan 03 §5).
+
+**Edge Cases:** DB not open / provider not wired → scoped tiers silently skipped, globalState-only resolution (same degradation as today's `_getSetting`); project override ON with no specific project → project tier dormant; values written while workspace-ON then override toggled OFF → effective values revert to globalState by design, db rows remain until next mirror write clobbers them.
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/services/KanbanProvider.ts` | New `_workspaceOverrideEnabled`/`_projectOverrideEnabled` fields, `_getScopedSetting`/`_updateScopedSetting` methods, replace all `_getSetting`/`_updateSetting` calls for scope-aware keys, update generic `saveSetting`/`getSetting` handler |
+| `src/services/KanbanProvider.ts` | New `_workspaceOverrideEnabled`/`_projectOverrideEnabled` fields + `_loadOverrideFlags`, `_getScopedSetting`/`_updateScopedSetting` methods, Category-A call-site swaps, generic `saveSetting`/`getSetting` handler update, reload hooks in `setTaskViewerProvider` and `setProjectFilter` |
 
-## Test Plan
+## Verification Plan
 
-- [ ] Both overrides OFF: `_getScopedSetting` returns same values as old `_getSetting` (no regression)
-- [ ] Both overrides OFF: `_updateScopedSetting` writes to globalState + workspace config (same as old `_updateSetting`)
-- [ ] Workspace ON: read checks workspace config before globalState
-- [ ] Workspace ON: write goes to workspace config only, globalState untouched
+### Automated Tests
+
+Session directive: no compilation or automated test runs in this pass. Acceptance checklist for manual/UAT verification after coding:
+
+- [ ] Both overrides OFF: `_getScopedSetting` returns same values as old `_getSetting` (no regression — bit-identical resolution)
+- [ ] Both overrides OFF: `_updateScopedSetting` writes to globalState + db config mirror (same as old `_updateSetting`)
+- [ ] Workspace ON: read checks db config before globalState
+- [ ] Workspace ON: write goes to db config only, globalState untouched (verify another workspace's board is unaffected)
 - [ ] Project ON (specific project): read checks project_config first
 - [ ] Project ON: write goes to project_config only
 - [ ] Project ON + Workspace ON: project_config takes precedence on read
-- [ ] Switching project filter: subsequent scoped reads use the new project's project_config
-- [ ] All existing toggle/update handlers work correctly in all three scope states
-- [ ] `_reloadSettingsFromStore` loads from the correct scope
+- [ ] Project ON with filter on All/Unassigned: project tier dormant, workspace/global resolution applies
+- [ ] Switching project filter: board refresh renders with the new project's settings (no stale-settings frame)
+- [ ] All Category-A toggle/update handlers work correctly in all three scope states
+- [ ] Startup: after extension activation, board reflects scoped values (the `setTaskViewerProvider` reload hook fires)
+- [ ] Category-B settings (autoban, auto-archive, clear-terminal, column structure, selectedRole) behave exactly as before
+
+---
+
+**Recommendation: Send to Lead Coder**

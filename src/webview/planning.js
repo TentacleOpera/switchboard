@@ -3957,6 +3957,23 @@
                     showToast('Import failed: ' + (msg.error || 'unknown error'), 'error');
                 }
                 break;
+            case 'devDocDeletedExternally':
+                if (_devDocSelected && _devDocSelected.path === msg.path) {
+                    if (state.editMode.devdocs) {
+                        // Keep the in-progress edit buffer — Save recreates the file, so no work is lost.
+                        showToast('This dev doc was deleted on disk. Saving will recreate it.', 'error');
+                    } else {
+                        _devDocSelected = null;
+                        if (devdocsPreviewContent) devdocsPreviewContent.innerHTML = '<div class="empty-state">This dev doc was deleted on disk.</div>';
+                        if (btnEditDevdocs) btnEditDevdocs.disabled = true;
+                        if (btnDeleteDevdocs) btnDeleteDevdocs.style.display = 'none';
+                        if (btnImportDevdoc) btnImportDevdoc.disabled = true;
+                        if (btnAgentDevdoc) { btnAgentDevdoc.disabled = true; btnAgentDevdoc.textContent = 'Draft with agent'; }
+                        showToast('This dev doc was deleted on disk.', 'error');
+                    }
+                }
+                vscode.postMessage({ type: 'loadDevDocs' });
+                break;
             case 'notebookDefaultRoot':
                 if (msg.root) {
                     _notebookWorkspaceRoot = msg.root;
@@ -6945,6 +6962,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
                         slugPrefix: resolveActiveOnlineSlugPrefix(),
                         requestId: ++state.previewRequestId
                     });
+                }
+            } else if (tab === 'devdocs') {
+                // Reload the selected dev doc / README after an external change
+                // that arrived while editing (the watcher armed the flag). editMode
+                // is already false here, so devDocContent refreshes the preview.
+                if (_devDocSelected && _devDocSelected.path) {
+                    vscode.postMessage({ type: 'readDevDoc', path: _devDocSelected.path });
                 }
             }
         }

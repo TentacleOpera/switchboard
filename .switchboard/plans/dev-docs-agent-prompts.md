@@ -155,6 +155,10 @@ Key risks: (1) trusting a raw webview path in the write-back instruction instead
 7. **Half-loaded state:** Click immediately after selecting (before `devDocContent` replies) → `hasContent=false` → Draft (no empty Improve prompt).
 8. **Frontmatter preserved:** The Improve template text includes the "preserving any YAML frontmatter" directive verbatim.
 
+## Review Findings
+
+Reviewed the `draftImproveDevDoc` case (`PlanningPanelProvider.ts`) and the `btn-agent-devdoc` wiring (`planning.html`/`planning.js`) in commit `8a14023` against this plan — fully compliant, no fixes required. Confirmed: server-side path re-validation via `_resolveDevDocPath` (untrusted paths rejected with a toast, no prompt built), server-side content re-read with Draft-on-empty/half-load default, the 200 KB truncated-Improve variant that points the agent at the file instead of inlining, the verbatim "preserve YAML frontmatter" directive, the `<Type>` token mapped from the source dropdown, and the label toggle Draft/Improve. No code changed in this subtask. Validated by static trace (compile/tests skipped per session directives); no remaining risks specific to this subtask.
+
 ## Uncertain Assumptions
 
 None. This plan reuses only verified internal patterns (the refine copy-prompt idiom at `PlanningPanelProvider.ts:6034-6035`, the 200 KB threshold at `:8385`) and standard VS Code clipboard/notification APIs. The prompt templates are product copy, not factual or library claims. No web research is needed for this subtask.
