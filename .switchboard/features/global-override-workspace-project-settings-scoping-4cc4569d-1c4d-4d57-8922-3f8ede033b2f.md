@@ -20,19 +20,6 @@ Add a GLOBAL OVERRIDE section to the Setup tab with two independent switches (Wo
 - **Shipping order within the feature:** 01 → 02 → 03 → 04, strictly — 02 calls 01's CRUD, 03 flips 02's flags, 04 inserts into 03's handlers at marked insertion points. 05 depends only on 01 + 02 and can be coded in parallel with 03/04, but all five must ship together: the feature is one delivery unit (a released 03 without 04 would show the "settings appear to reset" behavior 04 exists to prevent, and without 05 the Prompts tab would show scoped values that dispatched prompts ignore).
 - **Prerequisites / guards:** none beyond the internal ordering. The feature has never shipped, so no migrations or compat shims are owed to the install base beyond V52 itself; both-switches-OFF must remain bit-identical to current behavior, which every subtask's verification checklist enforces.
 
-## Subtasks
-- [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **PLAN REVIEWED**
-- [ ] [Global Override 02: Scope-Aware Settings Read/Write Layer](../plans/global-override-02-scope-aware-settings-layer.md) — **PLAN REVIEWED**
-- [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **PLAN REVIEWED**
-- [ ] [Global Override 04: Snapshot-on-Toggle Mechanism](../plans/global-override-04-snapshot-on-toggle.md) — **PLAN REVIEWED**
-- [ ] [Global Override 05: Role Config Scope Awareness](../plans/global-override-05-role-config-scope-awareness.md) — **PLAN REVIEWED**
-<!-- END SUBTASKS -->
-
-<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
-## Subtasks
-- [ ] (no subtasks)
-<!-- END SUBTASKS -->
-
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **CODE REVIEWED**
@@ -40,15 +27,6 @@ Add a GLOBAL OVERRIDE section to the Setup tab with two independent switches (Wo
 - [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **CODE REVIEWED**
 - [ ] [Global Override 04: Snapshot-on-Toggle Mechanism](../plans/global-override-04-snapshot-on-toggle.md) — **CODE REVIEWED**
 - [ ] [Global Override 05: Role Config Scope Awareness](../plans/global-override-05-role-config-scope-awareness.md) — **CODE REVIEWED**
-<!-- END SUBTASKS -->
-
-<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
-## Subtasks
-- [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **LEAD CODED**
-- [ ] [Global Override 02: Scope-Aware Settings Read/Write Layer](../plans/global-override-02-scope-aware-settings-layer.md) — **LEAD CODED**
-- [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **LEAD CODED**
-- [ ] [Global Override 04: Snapshot-on-Toggle Mechanism](../plans/global-override-04-snapshot-on-toggle.md) — **LEAD CODED**
-- [ ] [Global Override 05: Role Config Scope Awareness](../plans/global-override-05-role-config-scope-awareness.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
 
 ## Review Findings
