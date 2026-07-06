@@ -30,6 +30,11 @@ Add a GLOBAL OVERRIDE section to the Setup tab with two independent switches (Wo
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
+- [ ] (no subtasks)
+<!-- END SUBTASKS -->
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
 - [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **CODE REVIEWED**
 - [ ] [Global Override 02: Scope-Aware Settings Read/Write Layer](../plans/global-override-02-scope-aware-settings-layer.md) — **CODE REVIEWED**
 - [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **CODE REVIEWED**
