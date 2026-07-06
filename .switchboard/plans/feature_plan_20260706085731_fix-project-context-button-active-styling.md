@@ -153,3 +153,7 @@ Automated tests are SKIPPED per session directive. Verification is manual UI ins
 5. Test in cyber theme — verify the active state renders correctly (glow resolves to `none`; teal text, border, and tint still visible).
 6. Verify the tooltip updates correctly on toggle.
 7. Verify the backend still receives `setProjectContextEnabled` messages correctly.
+
+## Review Findings
+
+Reviewed `src/webview/project.html` and `src/webview/project.js`. The `.strip-btn.is-active` and `.is-active:hover:not(:disabled)` rules were added (project.html:151-158) matching the canonical kanban definition; `updateProjectContextButton` (project.js:1299-1305) now uses `classList.toggle('is-active', projectContextEnabled)` with zero residual `btnProjectContext.style.*` assignments; all three CSS custom properties (`--accent-teal`, `--accent-teal-dim`, `--glow-teal`) are defined including the cyber `--glow-teal: none` override (project.html:62), so both default and cyber themes render correctly. No other `project.html` element uses `is-active` (no collision) and the call sites (project.js:553/1435/1455) are unchanged, so no double-refresh was introduced. Verification was static (grep + CSS-variable inspection); compile and tests skipped per session directive. No CRITICAL/MAJOR findings — no code changes applied; no material remaining risks.

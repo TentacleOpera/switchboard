@@ -162,3 +162,7 @@ Automated tests SKIPPED per session directive; verification is manual UI inspect
 5. Click "Architect Prompt" in each tab — verify the architect prompt is copied to clipboard and a success toast appears.
 6. Verify no console errors about missing DOM elements (the removed `btnArchitect*` variables should not be referenced anywhere).
 7. Verify the controls strip layout looks clean with one fewer button per tab.
+
+## Review Findings
+
+Reviewed `src/webview/project.html` (all three tabs) and `src/webview/project.js`. All three `btn-architect-*` buttons plus their `btnArchitect*` declarations (formerly project.js:362-364) and `openArchitectTerminal` senders are removed; the three retained buttons are renamed to "Architect Prompt"; the `copyArchitectPrompt` listeners (project.js:1998-2015) and the `architectPromptCopied` toast (project.js:1130) are intact; no orphaned `btnArchitect`/`btn-architect`/`openArchitectTerminal` references remain in the webview and the three strips are well-formed. Verification was static (grep + markup inspection); compile and tests skipped per session directive. No CRITICAL/MAJOR findings — no code changes applied. Remaining risks: the backend `openArchitectTerminal` handler (`PlanningPanelProvider.ts:4383`) is now dead code (harmless, explicitly out of scope) and the retained buttons' `title="Copy the Architect prompt"` still reads slightly redundant against the shortened label (accurate, cosmetic NIT — deferred).
