@@ -148,6 +148,14 @@
         }.strip-btn:disabled, .planning-button:disabled {
             opacity: 0.4;
             cursor: not-allowed;
+        }.strip-btn.is-active {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }.strip-btn.is-active:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 14%, transparent);
+            border-color: var(--accent-teal);
         }.content-row {
             display: flex;
             flex: 1;
@@ -1176,8 +1184,7 @@
                 <button id="btn-save-projects" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-projects" class="strip-btn" style="display:none;">Cancel</button>
                 <button class="strip-btn" id="btn-project-context" data-tooltip="When on, the selected project's PRD is injected into every dispatched prompt">PROJECT CONTEXT: OFF</button>
-                <button id="btn-architect-projects" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
-                <button id="btn-copy-architect-projects" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Copy Architect Prompt</button>
+                <button id="btn-copy-architect-projects" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Architect Prompt</button>
                 <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
             </div>
             <div class="content-row">
@@ -1259,8 +1266,7 @@
                 <button id="btn-cancel-constitution" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-delete-constitution" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
                 <button id="btn-manage-constitution-paths" class="strip-btn" title="Manage constitution file paths" disabled>Manage Paths</button>
-                <button id="btn-architect-constitution" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
-                <button id="btn-copy-architect-constitution" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Copy Architect Prompt</button>
+                <button id="btn-copy-architect-constitution" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Architect Prompt</button>
             </div>
             <div class="content-row">
                 <div id="constitution-list-pane">
@@ -1294,8 +1300,7 @@
                 <button id="btn-save-system" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-system" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-delete-system" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
-                <button id="btn-architect-system" class="strip-btn architect-shortcut-btn" title="Open guided architect session">Architect</button>
-                <button id="btn-copy-architect-system" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Copy Architect Prompt</button>
+                <button id="btn-copy-architect-system" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Architect Prompt</button>
             </div>
             <div class="content-row">
                 <div id="system-list-pane">

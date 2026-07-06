@@ -359,9 +359,6 @@
     const tuningEditor = document.getElementById('tuning-editor');
 
     // Architect shortcut buttons
-    const btnArchitectProjects = document.getElementById('btn-architect-projects');
-    const btnArchitectConstitution = document.getElementById('btn-architect-constitution');
-    const btnArchitectSystem = document.getElementById('btn-architect-system');
     const btnCopyArchitectProjects = document.getElementById('btn-copy-architect-projects');
     const btnCopyArchitectConstitution = document.getElementById('btn-copy-architect-constitution');
     const btnCopyArchitectSystem = document.getElementById('btn-copy-architect-system');
@@ -1302,10 +1299,7 @@
     function updateProjectContextButton() {
         if (!btnProjectContext) return;
         btnProjectContext.textContent = projectContextEnabled ? 'PROJECT CONTEXT: ON' : 'PROJECT CONTEXT: OFF';
-        // project.html has no is-teal/is-off classes — toggle the "on" look inline.
-        btnProjectContext.style.background = projectContextEnabled ? 'var(--accent-teal)' : '';
-        btnProjectContext.style.color = projectContextEnabled ? '#001014' : '';
-        btnProjectContext.style.borderColor = projectContextEnabled ? 'var(--accent-teal)' : '';
+        btnProjectContext.classList.toggle('is-active', projectContextEnabled);
         btnProjectContext.setAttribute('data-tooltip', projectContextEnabled
             ? "Project Context ON — the selected project's PRD is injected into every dispatched prompt. Click to disable."
             : "Project Context OFF — click to inject the selected project's PRD into every dispatched prompt.");
@@ -2001,24 +1995,6 @@
     }
 
     // Architect shortcut buttons
-    if (btnArchitectProjects) {
-        btnArchitectProjects.addEventListener('click', () => {
-            const wsRoot = projectsWorkspaceFilter ? projectsWorkspaceFilter.value : '';
-            vscode.postMessage({ type: 'openArchitectTerminal', workspaceRoot: wsRoot });
-        });
-    }
-    if (btnArchitectConstitution) {
-        btnArchitectConstitution.addEventListener('click', () => {
-            const wsRoot = constitutionWorkspaceFilter ? constitutionWorkspaceFilter.value : '';
-            vscode.postMessage({ type: 'openArchitectTerminal', workspaceRoot: wsRoot });
-        });
-    }
-    if (btnArchitectSystem) {
-        btnArchitectSystem.addEventListener('click', () => {
-            const wsRoot = systemWorkspaceFilter ? systemWorkspaceFilter.value : '';
-            vscode.postMessage({ type: 'openArchitectTerminal', workspaceRoot: wsRoot });
-        });
-    }
     if (btnCopyArchitectProjects) {
         btnCopyArchitectProjects.addEventListener('click', () => {
             const wsRoot = projectsWorkspaceFilter ? projectsWorkspaceFilter.value : '';
