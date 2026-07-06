@@ -2078,6 +2078,22 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * enabled flag and the coarse content-hash gate; a manual Sync Now pushes
      * unconditionally.
      */
+    /** Resolve the configured dev docs folder (absolute) for the sync bundle. */
+    private _resolveDevDocsDirForSync(root: string): string {
+        const cfg = vscode.workspace.getConfiguration('switchboard').get<string>('devDocsFolder', 'docs') || 'docs';
+        const p = path.resolve(root, cfg);
+        return p.startsWith(path.resolve(root)) ? p : path.resolve(root, 'docs');
+    }
+
+    /** Resolve the root README.md path (case-insensitive lookup) for the sync bundle, or undefined. */
+    private _resolveReadmePathForSync(root: string): string | undefined {
+        try {
+            const entries = fs.readdirSync(root);
+            const found = entries.find(e => e.toLowerCase() === 'readme.md');
+            return found ? path.join(root, found) : undefined;
+        } catch { return undefined; }
+    }
+
     public async projectContextSyncNow(
         workspaceRoot: string | undefined,
         opts: { auto?: boolean } = {}
@@ -2087,7 +2103,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const effective = this.resolveEffectiveWorkspaceRoot(resolved);
         const db = this._getKanbanDb(effective);
         if (!(await db.ensureReady())) { return null; }
-
         // In-flight guard: an auto (debounced) sync must not run concurrently
         // with a manual "Sync Now" or a prior auto run still pushing — the
         // Notion append path would duplicate content and both would race on the
@@ -2124,6 +2139,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             boards: remoteConfig.boards,
             constitutionPath: getConstitutionPath(this._context, effective),
             projectNames,
+            devDocsDir: this._resolveDevDocsDirForSync(effective),
+            readmePath: this._resolveReadmePathForSync(effective),
         });
 
         if (!assembled) {

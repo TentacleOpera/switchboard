@@ -3819,7 +3819,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <select id="devdocs-workspace-filter">
                     <option value="">All Workspaces</option>
                 </select>
+                <select id="devdocs-source-filter" class="workspace-filter-select" style="margin-right: 12px;">
+                    <option value="docs">Docs</option>
+                    <option value="readme">README</option>
+                </select>
                 <button id="btn-create-devdoc" class="strip-btn" title="Create a new developer doc">+ New Doc</button>
+                <button id="btn-import-devdoc" class="strip-btn" disabled title="Import markdown from clipboard">Import</button>
+                <button id="btn-agent-devdoc" class="strip-btn" disabled title="Copy a Draft/Improve prompt to clipboard">Draft with agent</button>
                 <button id="btn-edit-devdocs" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save-devdocs" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-devdocs" class="strip-btn" style="display:none;">Cancel</button>
@@ -4165,29 +4171,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
     </div>
-    <!-- New Dev Doc Modal -->
-    <div id="new-devdoc-modal" class="kanban-log-overlay" style="display: none;">
-        <div class="kanban-log-modal" style="width: 400px;">
-            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color);">
-                Create New Dev Doc
-            </div>
-            <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="new-devdoc-name" style="font-size: 11px; color: var(--text-secondary);">Doc Name *</label>
-                    <input type="text" id="new-devdoc-name" placeholder="e.g. Architecture Overview" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;" required />
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="new-devdoc-workspace" style="font-size: 11px; color: var(--text-secondary);">Workspace</label>
-                    <select id="new-devdoc-workspace" style="background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 4px; font-size: 12px;"></select>
-                </div>
-            </div>
-            <div class="kanban-log-close" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;">
-                <button id="btn-new-devdoc-cancel" class="strip-btn">Cancel</button>
-                <button id="btn-new-devdoc-submit" class="strip-btn" style="border-color: var(--accent-teal);">Create</button>
-            </div>
-        </div>
-    </div>
-
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{MARKDOWN_EDITOR_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{PLANNING_JS_URI}}"></script>

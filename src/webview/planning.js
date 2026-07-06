@@ -3907,6 +3907,12 @@
                         state.editOriginalContent.devdocs = msg.content || '';
                         if (btnEditDevdocs) btnEditDevdocs.disabled = false;
                         if (btnDeleteDevdocs) btnDeleteDevdocs.style.display = '';
+                        if (btnImportDevdoc) btnImportDevdoc.disabled = false;
+                        if (btnAgentDevdoc) {
+                            btnAgentDevdoc.disabled = false;
+                            const hasContent = !!(msg.content && msg.content.trim());
+                            btnAgentDevdoc.textContent = hasContent ? 'Improve with agent' : 'Draft with agent';
+                        }
                     }
                 }
                 break;
@@ -3933,10 +3939,22 @@
                         if (devdocsPreviewContent) devdocsPreviewContent.innerHTML = '<div class="empty-state">Select a dev doc to view it</div>';
                         if (btnEditDevdocs) btnEditDevdocs.disabled = true;
                         if (btnDeleteDevdocs) btnDeleteDevdocs.style.display = 'none';
+                        if (btnImportDevdoc) btnImportDevdoc.disabled = true;
+                        if (btnAgentDevdoc) { btnAgentDevdoc.disabled = true; btnAgentDevdoc.textContent = 'Draft with agent'; }
                     }
                     vscode.postMessage({ type: 'loadDevDocs' });
                 } else {
                     showToast('Delete failed: ' + (msg.error || 'unknown error'), 'error');
+                }
+                break;
+            case 'importDevDocResult':
+                if (msg.success) {
+                    if (devdocsStatus) devdocsStatus.textContent = 'Imported ✓';
+                    vscode.postMessage({ type: 'loadDevDocs' });
+                    setTimeout(() => { if (devdocsStatus && devdocsStatus.textContent === 'Imported ✓') devdocsStatus.textContent = ''; }, 2000);
+                } else {
+                    if (devdocsStatus) devdocsStatus.textContent = 'Import failed' + (msg.error ? ': ' + msg.error : '');
+                    showToast('Import failed: ' + (msg.error || 'unknown error'), 'error');
                 }
                 break;
             case 'notebookDefaultRoot':
@@ -10683,10 +10701,13 @@ Instructions:
     }
 
     const devdocsWorkspaceFilter = document.getElementById('devdocs-workspace-filter');
+    const devdocsSourceFilter = document.getElementById('devdocs-source-filter');
     const devdocsListPane = document.getElementById('devdocs-list-pane');
     const devdocsPreviewContent = document.getElementById('devdocs-preview-content');
     const devdocsEditor = document.getElementById('devdocs-editor');
     const btnCreateDevdoc = document.getElementById('btn-create-devdoc');
+    const btnImportDevdoc = document.getElementById('btn-import-devdoc');
+    const btnAgentDevdoc = document.getElementById('btn-agent-devdoc');
     const btnEditDevdocs = document.getElementById('btn-edit-devdocs');
     const btnSaveDevdocs = document.getElementById('btn-save-devdocs');
     const btnCancelDevdocs = document.getElementById('btn-cancel-devdocs');
@@ -10695,6 +10716,7 @@ Instructions:
     let _devDocs = [];
     let _devDocSelected = null;
     let _devDocsWsFilter = '';
+    let _devDocsSourceFilter = 'docs';
     let _pendingDevDocSelection = null;
     let _notebookWorkspaceRoot = '';
     let _notebookHydrated = false;
@@ -10704,14 +10726,23 @@ Instructions:
         devdocsListPane.innerHTML = '';
         devdocsListPane.appendChild(buildSidebarToggleRow(state.devdocsListCollapsed));
 
-        const docs = _devDocsWsFilter
+        let docs = _devDocsWsFilter
             ? _devDocs.filter(d => d.workspaceRoot === _devDocsWsFilter)
-            : _devDocs;
+            : _devDocs.slice();
+
+        // Scope by source-type filter (docs / readme). README entries are sourceType 'readme'.
+        if (_devDocsSourceFilter === 'readme') {
+            docs = docs.filter(d => d.sourceType === 'readme');
+        } else {
+            docs = docs.filter(d => d.sourceType !== 'readme');
+        }
 
         if (docs.length === 0) {
             const emptyState = document.createElement('div');
             emptyState.className = 'empty-state';
-            emptyState.textContent = 'No dev docs yet. Use "+ New Doc" to create one.';
+            emptyState.textContent = _devDocsSourceFilter === 'readme'
+                ? 'No README found in this workspace.'
+                : 'No dev docs yet. Use "+ New Doc" to create one.';
             devdocsListPane.appendChild(emptyState);
             return;
         }
@@ -10724,7 +10755,10 @@ Instructions:
             const wsLabel = !_devDocsWsFilter && doc.workspaceLabel
                 ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">${escapeHtml(doc.workspaceLabel)}</div>`
                 : '';
-            row.innerHTML = `<div style="font-weight:500;">${escapeHtml(doc.title || doc.fileName)}</div>${wsLabel}`;
+            const readmeBadge = doc.sourceType === 'readme'
+                ? ` <span style="font-size:9px; background:var(--accent-teal); color:#000; padding:1px 5px; border-radius:3px; margin-left:6px; vertical-align:middle;">README</span>`
+                : '';
+            row.innerHTML = `<div style="font-weight:500;">${escapeHtml(doc.title || doc.fileName)}${readmeBadge}</div>${wsLabel}`;
             row.addEventListener('click', () => {
                 if (state.dirtyFlags.devdocs) exitEditMode('devdocs');
                 devdocsListPane.querySelectorAll('.system-file-item').forEach(el => el.classList.remove('selected'));
@@ -10780,35 +10814,48 @@ Instructions:
         });
     }
 
-    const newDevdocModal = document.getElementById('new-devdoc-modal');
-    if (btnCreateDevdoc && newDevdocModal) {
+    // Create: native input box on the backend (no modal). Single-root skips the picker.
+    if (btnCreateDevdoc) {
         btnCreateDevdoc.addEventListener('click', () => {
-            const nameInput = document.getElementById('new-devdoc-name');
-            if (nameInput) nameInput.value = '';
-            const wsSelect = document.getElementById('new-devdoc-workspace');
-            if (wsSelect) {
-                const desired = _devDocsWsFilter
-                    || (devdocsWorkspaceFilter && devdocsWorkspaceFilter.value)
-                    || (_kanbanWorkspaceItems[0] && _kanbanWorkspaceItems[0].workspaceRoot) || '';
-                if (desired) wsSelect.value = desired;
-            }
-            newDevdocModal.style.display = 'flex';
-            if (nameInput) nameInput.focus();
+            vscode.postMessage({ type: 'createDevDoc' });
         });
     }
-    document.getElementById('btn-new-devdoc-cancel')?.addEventListener('click', () => {
-        if (newDevdocModal) newDevdocModal.style.display = 'none';
-    });
-    document.getElementById('btn-new-devdoc-submit')?.addEventListener('click', () => {
-        const nameInput = document.getElementById('new-devdoc-name');
-        const wsSelect = document.getElementById('new-devdoc-workspace');
-        const name = nameInput ? nameInput.value.trim() : '';
-        const wsRoot = wsSelect ? wsSelect.value : '';
-        if (!name) { showToast('Doc name is required.', 'error'); return; }
-        if (!wsRoot) { showToast('Select a workspace.', 'error'); return; }
-        vscode.postMessage({ type: 'createDevDoc', name, workspaceRoot: wsRoot });
-        if (newDevdocModal) newDevdocModal.style.display = 'none';
-    });
+
+    // Source-type dropdown — scope the list pane.
+    if (devdocsSourceFilter) {
+        devdocsSourceFilter.addEventListener('change', () => {
+            if (state.dirtyFlags.devdocs) exitEditMode('devdocs');
+            _devDocsSourceFilter = devdocsSourceFilter.value || 'docs';
+            renderDevDocsList();
+        });
+    }
+
+    // Import from clipboard — backend writes to the configured dev docs folder.
+    if (btnImportDevdoc) {
+        btnImportDevdoc.addEventListener('click', () => {
+            const wsRoot = _devDocsWsFilter
+                || (devdocsWorkspaceFilter && devdocsWorkspaceFilter.value)
+                || (_devDocSelected && _devDocSelected.workspaceRoot)
+                || '';
+            vscode.postMessage({ type: 'importDevDocFromClipboard', workspaceRoot: wsRoot });
+        });
+    }
+
+    // Draft/Improve with agent — copies a prompt to clipboard (backend builds it).
+    if (btnAgentDevdoc) {
+        btnAgentDevdoc.addEventListener('click', () => {
+            if (!_devDocSelected) return;
+            const hasContent = !!(state.editOriginalContent.devdocs && state.editOriginalContent.devdocs.trim());
+            vscode.postMessage({
+                type: 'draftImproveDevDoc',
+                path: _devDocSelected.path,
+                workspaceRoot: _devDocSelected.workspaceRoot,
+                title: _devDocSelected.title || _devDocSelected.fileName,
+                sourceType: _devDocSelected.sourceType || _devDocsSourceFilter || 'docs',
+                hasContent
+            });
+        });
+    }
 
     function getNotebookWorkspaceRoot() {
         const sel = document.getElementById('notebook-workspace-filter');
@@ -10883,7 +10930,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function populateDevDocsAndNotebookFilters() {
         const devdocsWorkspaceFilter = document.getElementById('devdocs-workspace-filter');
         const notebookWorkspaceFilter = document.getElementById('notebook-workspace-filter');
-        const newDevdocWorkspace = document.getElementById('new-devdoc-workspace');
 
         if (devdocsWorkspaceFilter) {
             devdocsWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
@@ -10907,16 +10953,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const desired = _notebookWorkspaceRoot || (_kanbanWorkspaceItems[0] && _kanbanWorkspaceItems[0].workspaceRoot) || '';
             notebookWorkspaceFilter.value = desired;
             if (notebookWorkspaceFilter.value) _notebookWorkspaceRoot = notebookWorkspaceFilter.value;
-        }
-
-        if (newDevdocWorkspace) {
-            newDevdocWorkspace.innerHTML = '';
-            _kanbanWorkspaceItems.forEach(ws => {
-                const opt = document.createElement('option');
-                opt.value = ws.workspaceRoot;
-                opt.textContent = ws.label;
-                newDevdocWorkspace.appendChild(opt);
-            });
         }
     }
 

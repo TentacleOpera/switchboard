@@ -201,6 +201,12 @@
           "description": "Default folder path for downloaded Stitch assets (PNG/HTML). Relative to workspace root.",
           "scope": "resource"
         },
+        "switchboard.devDocsFolder": {
+          "type": "string",
+          "default": "docs",
+          "description": "Root-relative folder where developer docs are stored and authored in the Dev Docs tab. Visible by default (not a dot-folder).",
+          "scope": "resource"
+        },
         "switchboard.stitch.defaultModelId": {
           "type": "string",
           "enum": ["GEMINI_3_FLASH", "GEMINI_3_1_PRO"],

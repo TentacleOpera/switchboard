@@ -65,9 +65,9 @@ export interface RemoteProviderCapabilities {
     archive: boolean;
 }
 
-/** One project-context document (a dev doc, a project PRD, or the constitution). */
+/** One project-context document (a dev doc, a project PRD, the constitution, or the root README). */
 export interface ProjectContextDocument {
-    kind: 'devdoc' | 'prd' | 'constitution';
+    kind: 'devdoc' | 'prd' | 'constitution' | 'readme';
     /** Display title — dev-doc H1, project name for PRDs, 'Workspace Constitution'. */
     title: string;
     /** Raw markdown body. */

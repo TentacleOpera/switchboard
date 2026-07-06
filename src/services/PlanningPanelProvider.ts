@@ -2386,14 +2386,32 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'createDevDoc': {
                 const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                const root = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const name = typeof msg.name === 'string' ? msg.name.trim() : '';
-                if (!root || !name) {
-                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: false, error: 'Workspace and doc name are required' });
+                // Native input box (no modal). Multi-root: pick a workspace first.
+                let root = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!root && allRoots.length > 1) {
+                    const items = buildWorkspaceItems(allRoots).map(it => ({ label: it.label, root: it.workspaceRoot }));
+                    const picked = await vscode.window.showQuickPick(items.map(i => ({ label: i.label, description: i.root })), { placeHolder: 'Select a workspace for the new dev doc' });
+                    if (!picked) { break; } // user cancelled
+                    root = items.find(i => i.label === picked.label)?.root || null;
+                }
+                if (!root && allRoots.length === 1) { root = allRoots[0]; }
+                if (!root) {
+                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: false, error: 'No workspace selected' });
                     break;
                 }
+                const name = await vscode.window.showInputBox({
+                    prompt: 'New dev doc name',
+                    placeHolder: 'e.g. Architecture Overview',
+                    validateInput: (value) => {
+                        if (!value || !value.trim()) { return 'Name is required'; }
+                        const sanitized = value.trim().replace(/[\\/:]/g, '').replace(/\.\./g, '');
+                        if (!sanitized) { return 'Invalid name'; }
+                        return undefined;
+                    }
+                });
+                if (!name) { break; } // user cancelled
                 const slug = sanitizeProjectSlug(name);
-                const docPath = path.join(root, '.switchboard', 'devdocs', `${slug}.md`);
+                const docPath = path.join(root, this._devDocsFolderRelative(root), `${slug}.md`);
                 try {
                     await fs.promises.mkdir(path.dirname(docPath), { recursive: true });
                     if (!fs.existsSync(docPath)) {
@@ -2403,6 +2421,43 @@ Start by checking which documents exist, then present the menu.`;
                 } catch (err) {
                     devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: false, error: err instanceof Error ? err.message : String(err) });
                 }
+                break;
+            }
+            case 'importDevDocFromClipboard': {
+                const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                const targetRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || (allRoots.length === 1 ? allRoots[0] : '');
+                if (!targetRoot) {
+                    devDocsPanel?.webview.postMessage({ type: 'importDevDocResult', error: 'No workspace selected' });
+                    break;
+                }
+                await this._importDevDocFromClipboard(targetRoot, this._devDocsFolder(targetRoot));
+                break;
+            }
+            case 'draftImproveDevDoc': {
+                const safePath = this._resolveDevDocPath(allRoots, msg.path);
+                if (!safePath) {
+                    showTemporaryNotification('Dev doc: invalid path — prompt not copied');
+                    break;
+                }
+                const title = typeof msg.title === 'string' ? msg.title : path.basename(safePath, '.md');
+                const sourceType = typeof msg.sourceType === 'string' && msg.sourceType === 'readme' ? 'README' : 'Docs';
+                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot)
+                    || allRoots.find(r => safePath === path.resolve(r, path.basename(safePath)) || safePath.startsWith(path.resolve(r) + path.sep))
+                    || path.dirname(safePath);
+                let currentContent = '';
+                try { currentContent = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty → Draft */ }
+                const hasContent = !!(msg.hasContent === true) && !!(currentContent && currentContent.trim());
+                let prompt: string;
+                if (hasContent && currentContent.length > 200_000) {
+                    // Truncated Improve — don't inline a huge payload; point the agent at the file.
+                    prompt = `You are improving an existing developer document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **Type:** ${sourceType}\n- **File path (read the current doc here, and write the improved doc back here):** ${safePath}\n\nThe current content is large (>200 KB) and is not inlined here. Read the file at the path above, then fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
+                } else if (hasContent) {
+                    prompt = `You are improving an existing developer document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **Type:** ${sourceType}\n- **File path (write the improved doc back here):** ${safePath}\n\n## Current content\n${currentContent}\n\nRead the current content above and the relevant parts of the codebase. Fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
+                } else {
+                    prompt = `You are writing a developer document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **Type:** ${sourceType}\n- **File path (write the finished doc here):** ${safePath}\n\nThe file is currently empty (or contains only a title heading). Research the codebase as needed to write an accurate, useful developer doc for this topic. Write the finished markdown directly to the file path above. Report back with a short summary of what you covered.`;
+                }
+                await vscode.env.clipboard.writeText(prompt);
+                showTemporaryNotification('Dev doc prompt copied to clipboard');
                 break;
             }
             case 'deleteDevDoc': {
@@ -8491,21 +8546,88 @@ Read the current content above. Determine what's missing. Produce a complete fea
         }
     }
 
-    // ── Dev Docs (project-context authoring surface) ────────────────────
-    // Developer docs live per-workspace at .switchboard/devdocs/*.md, beside
-    // the PRD (.switchboard/projects/<slug>/prd.md) and constitution storage.
-    // Together those three form the project context synced to Notion/Linear.
+    /**
+     * Clipboard import for Dev Docs — shared logic extracted from `_handleImportResearchDoc`
+     * but writing directly to the configured dev docs folder (not the local-folder service).
+     * Reads clipboard → 200 KB cap → H1-derived title → write `<dir>/<slug>.md`.
+     */
+    private async _importDevDocFromClipboard(workspaceRoot: string, targetDir: string): Promise<void> {
+        const panel = this._projectPanel ?? this._panel;
+        if (this._importInProgress) {
+            panel?.webview.postMessage({ type: 'importDevDocResult', error: 'Import already in progress' });
+            return;
+        }
+        this._importInProgress = true;
+        try {
+            const content = await vscode.env.clipboard.readText();
+            if (!content || !content.trim()) {
+                panel?.webview.postMessage({ type: 'importDevDocResult', error: 'Clipboard is empty. Copy markdown first.' });
+                return;
+            }
+            if (content.length > 200_000) {
+                panel?.webview.postMessage({ type: 'importDevDocResult', error: 'Clipboard content is too large (>200 KB). Aborting import.' });
+                return;
+            }
+            let title = '';
+            const h1Match = content.match(/^#\s+(.+)$/m);
+            if (h1Match) {
+                title = h1Match[1].trim();
+            } else {
+                const timestamp = new Date().toISOString().split('.')[0].replace(/:/g, '-');
+                title = `Imported Doc ${timestamp}`;
+            }
+            let contentToWrite = content;
+            const bodyWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+            if (!/^#\s+/m.test(bodyWithoutFrontMatter.slice(0, 1000))) {
+                contentToWrite = `# ${title}\n\n${bodyWithoutFrontMatter}`;
+            }
+            const slug = sanitizeProjectSlug(title) || `imported-${Date.now()}`;
+            await fs.promises.mkdir(targetDir, { recursive: true });
+            const docPath = path.join(targetDir, `${slug}.md`);
+            await fs.promises.writeFile(docPath, contentToWrite, 'utf8');
+            this._lastPanelWriteTimestamp = Date.now();
+            panel?.webview.postMessage({ type: 'importDevDocResult', success: true, docTitle: title, savedPath: docPath });
+            this._onProjectContextContentChanged(workspaceRoot);
+        } catch (err) {
+            panel?.webview.postMessage({ type: 'importDevDocResult', error: String(err) });
+        } finally {
+            this._importInProgress = false;
+        }
+    }
 
-    /** Enumerate every workspace's dev docs. Title = first `# ` heading, else filename. */
+    // ── Dev Docs (project-context authoring surface) ────────────────────
+    // Developer docs live per-workspace in the configured `switchboard.devDocsFolder`
+    // (default root `docs/`), beside the PRD and constitution. The root `README.md`
+    // is also surfaced as a first-class editable entry. Together those form the
+    // project context synced to Notion/Linear.
+
+    /**
+     * Resolve the configured dev docs folder for a workspace root, absolute.
+     * Guards against absolute/escape configs — falls back to root `docs/`.
+     */
+    private _devDocsFolder(root: string): string {
+        const cfg = vscode.workspace.getConfiguration('switchboard').get<string>('devDocsFolder', 'docs') || 'docs';
+        const p = path.resolve(root, cfg);
+        return p.startsWith(path.resolve(root)) ? p : path.resolve(root, 'docs');
+    }
+
+    /** Relative form (for path.join with a slug). */
+    private _devDocsFolderRelative(root: string): string {
+        const abs = this._devDocsFolder(root);
+        const rel = path.relative(path.resolve(root), abs);
+        return rel || 'docs';
+    }
+
+    /** Enumerate every workspace's dev docs + root README. Title = first `# ` heading, else filename. */
     private async _listDevDocs(allRoots: string[]): Promise<Array<{
-        path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string;
+        path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string; sourceType: string;
     }>> {
-        const docs: Array<{ path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string }> = [];
+        const docs: Array<{ path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string; sourceType: string }> = [];
         const items = buildWorkspaceItems(allRoots);
         for (const item of items) {
-            const dir = path.join(item.workspaceRoot, '.switchboard', 'devdocs');
+            const dir = this._devDocsFolder(item.workspaceRoot);
             let entries: string[] = [];
-            try { entries = await fs.promises.readdir(dir); } catch { continue; }
+            try { entries = await fs.promises.readdir(dir); } catch { /* dir missing — skip */ }
             for (const entry of entries.sort()) {
                 if (!entry.endsWith('.md')) { continue; }
                 const filePath = path.join(dir, entry);
@@ -8521,22 +8643,50 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     title,
                     workspaceRoot: item.workspaceRoot,
                     workspaceLabel: item.label,
+                    sourceType: 'docs',
                 });
             }
+            // Surface root README.md (case-insensitive) as a first-class editable entry.
+            try {
+                const rootEntries = await fs.promises.readdir(item.workspaceRoot);
+                const readmeName = rootEntries.find(e => e.toLowerCase() === 'readme.md');
+                if (readmeName) {
+                    const readmePath = path.join(item.workspaceRoot, readmeName);
+                    let title = 'README';
+                    try {
+                        const head = (await fs.promises.readFile(readmePath, 'utf8')).slice(0, 2000);
+                        const match = head.match(/^#\s+(.+)$/m);
+                        if (match) { title = match[1].trim(); }
+                    } catch { /* keep default title */ }
+                    docs.push({
+                        path: readmePath,
+                        fileName: readmeName,
+                        title,
+                        workspaceRoot: item.workspaceRoot,
+                        workspaceLabel: item.label,
+                        sourceType: 'readme',
+                    });
+                }
+            } catch { /* root unreadable — skip */ }
         }
         return docs;
     }
 
     /**
      * Accept a webview-supplied dev-doc path only when it resolves inside some
-     * workspace's .switchboard/devdocs/ directory — the webview is untrusted input.
+     * workspace's configured dev docs folder OR is exactly that workspace's root
+     * README.md (any case variant, direct child of root). The webview is untrusted input.
      */
     private _resolveDevDocPath(allRoots: string[], candidate: unknown): string | null {
         if (typeof candidate !== 'string' || !candidate.endsWith('.md')) { return null; }
         const resolved = path.resolve(candidate);
         for (const root of allRoots) {
-            const devDocsDir = path.resolve(root, '.switchboard', 'devdocs');
-            if (resolved.startsWith(devDocsDir + path.sep)) { return resolved; }
+            const devDocsDir = path.resolve(root, this._devDocsFolderRelative(root));
+            if (resolved === devDocsDir || resolved.startsWith(devDocsDir + path.sep)) { return resolved; }
+            // Root README allowance: direct child of root, basename lowercased 'readme.md'.
+            const parent = path.dirname(resolved);
+            const base = path.basename(resolved);
+            if (parent === path.resolve(root) && base.toLowerCase() === 'readme.md') { return resolved; }
         }
         return null;
     }

@@ -82,6 +82,10 @@ export interface AssembleContextOptions {
     constitutionPath: string;
     /** Project names from the kanban DB — PRD paths derive from these. */
     projectNames: string[];
+    /** Caller-resolved absolute dev docs folder (defaults to <root>/.switchboard/devdocs for legacy callers). */
+    devDocsDir?: string;
+    /** Caller-resolved absolute README path (root README.md, if present). */
+    readmePath?: string;
 }
 
 /**
@@ -114,7 +118,7 @@ export async function assembleProjectContextBundle(
         }
     }
 
-    const devDocsDir = path.join(opts.workspaceRoot, '.switchboard', 'devdocs');
+    const devDocsDir = opts.devDocsDir ?? path.join(opts.workspaceRoot, '.switchboard', 'devdocs');
     let devDocFiles: string[] = [];
     try { devDocFiles = (await fs.promises.readdir(devDocsDir)).filter(f => f.endsWith('.md')).sort(); } catch { /* none */ }
     for (const file of devDocFiles) {
@@ -122,6 +126,14 @@ export async function assembleProjectContextBundle(
         if (!markdown) { continue; }
         const heading = markdown.match(/^#\s+(.+)$/m);
         documents.push({ kind: 'devdoc', title: heading ? heading[1].trim() : file.replace(/\.md$/, ''), markdown });
+    }
+
+    if (opts.readmePath) {
+        const readme = await readIfExists(opts.readmePath);
+        if (readme) {
+            const heading = readme.match(/^#\s+(.+)$/m);
+            documents.push({ kind: 'readme', title: heading ? heading[1].trim() : 'README', markdown: readme });
+        }
     }
 
     if (documents.length === 0) { return null; }
@@ -135,6 +147,7 @@ export async function assembleProjectContextBundle(
     const sectionFor = (d: ProjectContextDocument): string => {
         const label = d.kind === 'constitution' ? d.title
             : d.kind === 'prd' ? `PRD — ${d.title}`
+            : d.kind === 'readme' ? `README — ${d.title}`
             : `Dev Doc — ${d.title}`;
         return `## ${label}\n\n${d.markdown.trim()}\n`;
     };
