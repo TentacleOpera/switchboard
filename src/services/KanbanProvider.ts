@@ -601,6 +601,61 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
+    // ── Global Override: snapshot-on-toggle (plan 04) ──────────────────────
+    // Any new scope-aware key must be added here OR match the switchboard.prompts. prefix.
+    private static readonly SCOPE_AWARE_KEYS: string[] = [
+        'kanban.cliTriggersEnabled',
+        'kanban.dynamicComplexityRoutingEnabled',
+        'kanban.allowUnknownComplexityAutoMove',
+        'kanban.columnDragDropModes',
+        'kanban.routingMapConfig',
+        'kanban.orderOverrides',
+    ];
+
+    /** Discover dynamic switchboard.prompts.* keys from both mementos (mirrors
+     *  exportPromptSettings idiom). selectedRole excluded — ephemeral UI state. */
+    private _discoverPromptKeys(): string[] {
+        const promptKeys = new Set<string>();
+        try {
+            for (const k of this._context.globalState.keys()) {
+                if (k.startsWith('switchboard.prompts.')) { promptKeys.add(k); }
+            }
+        } catch { /* globalState.keys() unavailable */ }
+        try {
+            for (const k of this._context.workspaceState.keys()) {
+                if (k.startsWith('switchboard.prompts.') && k !== 'switchboard.prompts.selectedRole') {
+                    promptKeys.add(k);
+                }
+            }
+        } catch { /* workspaceState.keys() unavailable */ }
+        return [...promptKeys];
+    }
+
+    /** Copy current effective values (flat pre-toggle resolution) into the scoped store.
+     *  MUST run before the override flag flips and uses _getSetting explicitly — belt and braces.
+     *  Skips keys with no value anywhere. Project target uses batched persist (plan 01). */
+    private async _snapshotSettingsToScope(target: 'workspace' | 'project', project?: string): Promise<void> {
+        const keys = [...KanbanProvider.SCOPE_AWARE_KEYS, ...this._discoverPromptKeys()];
+        const entries: Record<string, unknown> = {};
+        for (const key of keys) {
+            const currentValue = this._getSetting<any>(key, undefined);
+            if (currentValue === undefined) continue;
+            entries[key] = currentValue;
+        }
+        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+        if (!root) return;
+        const db = KanbanDatabase.forWorkspace(root);
+        if (!(await db.ensureReady())) return;
+        if (target === 'workspace') {
+            // config-table writes have no batch variant; row count is small.
+            for (const [key, value] of Object.entries(entries)) {
+                await db.setConfigJson(key, value);
+            }
+        } else if (target === 'project' && project) {
+            await db.setProjectConfigJsonMany(project, entries); // single persist
+        }
+    }
+
     private _reloadSettingsFromStore(): void {
         this._loadOverrideFlags();
         this._cliTriggersEnabled = this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
@@ -7016,9 +7071,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
             case 'setWorkspaceOverride': {
                 const enabled = !!msg.enabled;
-                // [Plan 04 insertion point: snapshot-before-activate when enabling]
-                this._workspaceOverrideEnabled = enabled;
                 const wsRoot1 = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                // Snapshot before activating: copy current effective values into the workspace
+                // store for any missing keys (mirror behavior means most are already present).
+                if (enabled && !this._workspaceOverrideEnabled) {
+                    await this._snapshotSettingsToScope('workspace');
+                }
+                this._workspaceOverrideEnabled = enabled;
                 const db1 = wsRoot1 ? this._getKanbanDb(wsRoot1) : undefined;
                 if (db1 && await db1.ensureReady()) {
                     await db1.setConfigJson('kanban.workspaceOverrideEnabled', enabled);
@@ -7040,9 +7099,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     this._postOverrideState();
                     break;
                 }
-                // [Plan 04 insertion point: snapshot-before-activate when enabling]
-                this._projectOverrideEnabled = enabled;
                 const wsRoot2 = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                // Snapshot before activating: if project_config is empty for this project,
+                // copy current effective values in one batched persist.
+                if (enabled && !this._projectOverrideEnabled) {
+                    const dbSnap = wsRoot2 ? this._getKanbanDb(wsRoot2) : undefined;
+                    if (dbSnap && await dbSnap.ensureReady()) {
+                        const existing = await dbSnap.getAllProjectConfigJson(this._projectFilter!);
+                        if (Object.keys(existing).length === 0) {
+                            await this._snapshotSettingsToScope('project', this._projectFilter!);
+                        }
+                    }
+                }
+                this._projectOverrideEnabled = enabled;
                 const db2 = wsRoot2 ? this._getKanbanDb(wsRoot2) : undefined;
                 if (db2 && await db2.ensureReady()) {
                     await db2.setConfigJson('kanban.projectOverrideEnabled', enabled);
