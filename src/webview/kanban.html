@@ -2232,12 +2232,18 @@
 
         .role-selector-section select {
             padding: 6px 12px;
-            border: 1px solid var(--accent-teal-dim);
+            border: 1px solid var(--accent-teal);
             border-radius: 4px;
             font-size: 13px;
             min-width: 200px;
-            background: #0a0a0a;
+            background: var(--panel-bg2, #0a0a0a);
             color: var(--text-primary);
+        }
+
+        .role-selector-section select:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 0 1px var(--accent-teal-dim);
         }
 
         .role-config {
@@ -2782,11 +2788,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <input id="agents-tab-custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
             <label class="modal-label" for="agents-tab-custom-agent-command">Startup command</label>
             <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
-            <label class="checkbox-item" title="When dispatched on a feature, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern)." style="margin-top:8px;">
-              <input type="checkbox" id="agents-tab-custom-agent-apply-feature-directives">
-              <span>Apply feature ultracode/goal directives</span>
-              <span class="tooltip">When dispatched on a feature, prepend the board's ultracode//goal directives (as for Lead/Coder/Intern).</span>
-            </label>
+
             <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
               Configure prompt add-ons and custom instructions in the <strong>PROMPTS</strong> tab after saving this agent.
             </p>
@@ -3337,7 +3339,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (addons.length === 0 && role.startsWith('custom_agent_')) {
                 addons = [
                     { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-                    { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Instruct the agent to use its native subagent/orchestration capabilities to process each plan in an isolated git worktree', default: false }
+                    { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Instruct the agent to use its native subagent/orchestration capabilities to process each plan in an isolated git worktree', default: false },
+                    { id: 'applyFeatureDirectives', label: 'Apply Feature Ultracode/Goal Directives', tooltip: 'When dispatched on a feature, prepend the board\'s ultracode//goal directives (as for Lead/Coder/Intern)', default: false }
                 ];
             }
 
@@ -3476,7 +3479,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     group.appendChild(wrapper);
                 } else {
                     // Existing checkbox rendering
-                    const isChecked = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
+                    let isChecked = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
+                    // Seed checkbox initial state from the agent object for legacy agents
+                    if (role.startsWith('custom_agent_') && isChecked === addon.default) {
+                        const agentObj = (typeof lastCustomAgents !== 'undefined' ? lastCustomAgents : [])
+                            .find(a => (a.role || ('custom_agent_' + a.id)) === role);
+                        if (agentObj?.addons?.[addon.id] === true) isChecked = true;
+                    }
                     const label = document.createElement('label');
                     label.className = 'checkbox-item';
                     label.title = addon.tooltip;
@@ -3537,7 +3546,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           document.getElementById('agents-tab-inline-form-title').textContent = agent ? `Edit: ${agent.name}` : 'New Custom Agent';
           document.getElementById('agents-tab-custom-agent-name').value = agent?.name || '';
           document.getElementById('agents-tab-custom-agent-command').value = agent?.startupCommand || '';
-          document.getElementById('agents-tab-custom-agent-apply-feature-directives').checked = !!agent?.addons?.applyFeatureDirectives;
 
 
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
@@ -3578,9 +3586,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               if (existing.addons) nextAgent.addons = existing.addons;
             }
           }
-
-          const applyFeatureDirectives = document.getElementById('agents-tab-custom-agent-apply-feature-directives').checked;
-          nextAgent.addons = { ...(nextAgent.addons || {}), applyFeatureDirectives };
 
           const duplicate = agentsTabCustomAgents.find(agent =>
             (agentsTabEditingAgentId ? agent.id !== agentsTabEditingAgentId : true) &&
@@ -3943,6 +3948,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   postKanbanMessage({ type: 'getCustomAgents' });
                   loadRoleConfigs();
                   updateRoleDescription();
+                  const promptsTab = document.querySelector('.prompts-tab');
+                  if (promptsTab) promptsTab.scrollTop = 0;
                 }
 
                 // Hydrate WORKTREES tab when activated

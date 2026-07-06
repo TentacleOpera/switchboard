@@ -2876,13 +2876,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const repoScope = this._repoScopeFilter;
 
                 // Sync the in-memory project filter to the DB config on every refresh so
-                // the plan watcher (GlobalPlanWatcherService._handlePlanFile) reads the
-                // currently-displayed project when stamping newly-imported plans. Without
-                // this, the DB config can diverge from workspaceState after a reload
-                // (the constructor restores _projectFilter from workspaceState but does
-                // NOT write it back to the DB config), leaving the config stale/empty
-                // while the board shows a project selected — every new plan then lands
-                // with project='' and project_id=NULL.
+                // the DB layer (_resolveProjectForInsert, used by both insertFileDerivedPlan
+                // and upsertPlans) reads the currently-displayed project when stamping
+                // newly-created plans. Without this, the DB config can diverge from
+                // workspaceState after a reload (the constructor restores _projectFilter
+                // from workspaceState but does NOT write it back to the DB config), leaving
+                // the config stale/empty while the board shows a project selected — every
+                // new plan then lands with project='' and project_id=NULL.
                 const activeProjectName = (projectFilter && projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
                     ? projectFilter
                     : '';
@@ -5656,11 +5656,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
             // Write the active project to the DB the moment the filter changes (this method
             // is called on every project-dropdown switch, via the setProjectFilter /
-            // selectWorkspace message handlers). The plan watcher reads this key when it
-            // imports a new plan and stamps it — exactly like the manual Assign button.
-            // _refreshBoardImpl also writes this key on every board refresh, and the
-            // constructor writes it on restore from workspaceState, so the watcher always
-            // sees the current value even after a reload.
+            // selectWorkspace message handlers). The DB layer's _resolveProjectForInsert
+            // reads this key on fresh INSERT to stamp newly-created plans — exactly like
+            // the manual Assign button. _refreshBoardImpl also writes this key on every
+            // board refresh, and the constructor writes it on restore from workspaceState,
+            // so the DB layer always sees the current value even after a reload.
             const activeProjectName = (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? filter : '';
             try {
                 await this._getKanbanDb(this._currentWorkspaceRoot)

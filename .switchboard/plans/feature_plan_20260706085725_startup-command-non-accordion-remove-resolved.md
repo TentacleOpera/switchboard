@@ -8,18 +8,27 @@ In the Comms Monitor tab of `kanban.html`, the resolved startup command is displ
 
 ### Problem Analysis & Root Cause
 
-The startup command display is implemented at lines 8952-8963 of `src/webview/kanban.html` using a `<details>` element with a `<summary>` child. The `<details>` element is collapsed by default (no `open` attribute), so the user must click to expand it. The summary text includes "(resolved)" which is unnecessary jargon.
+The startup command display is implemented at lines 8960-8971 of `src/webview/kanban.html` using a `<details>` element with a `<summary>` child. The `<details>` element is collapsed by default (no `open` attribute), so the user must click to expand it. The summary text includes "(resolved)" which is unnecessary jargon.
 
 The root cause is simply a design choice that prioritized compactness over visibility. The command is short and important enough to always show.
 
 ## Metadata
 
-- **Tags:** ui-cleanup, comms-tab, kanban-html
+- **Tags:** ui
 - **Complexity:** 1
+
+## User Review Required
+
+No — this is a pure visual cleanup with no behavioral or data changes. Safe to proceed.
 
 ## Complexity Audit
 
-**Routine.** Replace a `<details>`/`<summary>` accordion with a plain div + label. No logic changes, no backend changes.
+### Routine
+- Replace a `<details>`/`<summary>` accordion with a plain div + label.
+- No logic changes, no backend changes, no state changes.
+
+### Complex / Risky
+- None
 
 ## Edge-Case & Dependency Audit
 
@@ -29,7 +38,7 @@ The root cause is simply a design choice that prioritized compactness over visib
 
 ## Proposed Changes
 
-### `src/webview/kanban.html` — Replace accordion with always-visible box (~lines 8952-8963)
+### `src/webview/kanban.html` — Replace accordion with always-visible box (~lines 8960-8971)
 
 **Before:**
 ```javascript
@@ -66,9 +75,19 @@ Key changes:
 - The `<pre>` is always visible (no toggle).
 - Margin adjusted so the label sits directly above the pre block.
 
+## Dependencies
+
+- None — this subtask edits a self-contained block (lines 8960-8971) independent of the other two subtasks.
+- Coordinate only if landing in the same commit: the Haiku-callout removal (subtask 3) deletes the block immediately above this one (lines 8933-8958); both touch `renderCommsMonitorSection` but non-overlapping ranges.
+
+## Adversarial Synthesis
+
+Key risks: none material — pure DOM-structure swap with no event listeners or state bindings on the removed `<details>`/`<summary>`. Mitigation: preserve the `cmdPre` element and `mcpMonitorResolvedCmd` variable exactly as-is; only the wrapping accordion changes.
+
 ## Verification Plan
 
 1. Open the Kanban board and switch to the Comms tab.
 2. Verify the startup command box is immediately visible without clicking.
 3. Verify the label reads "Startup command" (no "(resolved)" text).
 4. Verify the command text displays correctly inside the bordered box.
+5. Skip compilation and automated tests per session directives — visual verification only.

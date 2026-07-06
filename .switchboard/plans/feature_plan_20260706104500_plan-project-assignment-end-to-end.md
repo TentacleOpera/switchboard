@@ -185,3 +185,7 @@ Mirror the same text into `CLAUDE.md`, `.agents/workflows/switchboard-chat.md`, 
 ## Recommendation
 
 Complexity 6 → **Send to Coder**.
+
+## Review Findings
+
+Reviewed commit `ec51170` against all five phases. No CRITICAL or MAJOR findings — the implementation is functionally correct: Phase 1 regex mirrors the Tags regex exactly; Phase 2 `_resolveProjectForInsert` is a clean single choke point with the pre-pass correctly placed outside the BEGIN/COMMIT transaction (no async yields inside the batch transaction); Phase 3 `INSERT OR IGNORE` + re-select is idempotent and the V50 migration follows the V48/V49 pattern verbatim; Phase 4 validation auto-creates instead of wiping, the empty-`getProjects` guard retries next refresh, and `deleteProject` clears the config key; Phase 5 updates all four doc mirrors. Two NIT-level stale comments in `KanbanProvider.ts` (lines 5659 and 2878) still named the plan watcher as the config consumer — fixed to reference `_resolveProjectForInsert`. Lint passes clean; `tsc --noEmit` shows only pre-existing TS2835 errors in untouched files. Remaining risk: the V50 backfill resurrects deliberately-deleted project names (documented in the migration log line and the plan's Edge Cases — one-time cost, user can re-delete).

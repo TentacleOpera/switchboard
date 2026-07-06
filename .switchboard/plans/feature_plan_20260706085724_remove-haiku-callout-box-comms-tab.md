@@ -6,7 +6,7 @@ The Comms Monitor tab in `kanban.html` displays a "Model Indicator" callout box 
 
 ### Problem Analysis & Root Cause
 
-The callout box is rendered in the `renderCommsMonitorSection` function (around line 8925-8950 of `src/webview/kanban.html`). It consists of:
+The callout box is rendered in the `renderCommsMonitorSection` function (around lines 8933-8958 of `src/webview/kanban.html`). It consists of:
 1. A `detectModel()` helper function that parses the resolved command string for model keywords.
 2. A `modelRow` div with inline styles that displays the detected model name, an icon (💰 for Haiku, ⚠️ otherwise), and a cost note.
 
@@ -14,12 +14,21 @@ This was likely added as a helpful hint to encourage Haiku usage for cost effici
 
 ## Metadata
 
-- **Tags:** ui-cleanup, comms-tab, kanban-html
+- **Tags:** ui
 - **Complexity:** 2
+
+## User Review Required
+
+No — pure deletion of a self-contained cosmetic UI block. No logic, state, or backend changes.
 
 ## Complexity Audit
 
-**Routine.** This is a pure deletion of a self-contained UI element. No backend changes, no state changes, no dependencies. The `detectModel` helper and `modelRow` div are only used for this callout — removing them has no side effects.
+### Routine
+- Pure deletion of a self-contained UI element (the `detectModel` helper + `modelRow` div).
+- No backend changes, no state changes, no dependencies. The `detectModel` helper and `modelRow` div are only used for this callout — removing them has no side effects.
+
+### Complex / Risky
+- None
 
 ## Edge-Case & Dependency Audit
 
@@ -29,7 +38,7 @@ This was likely added as a helpful hint to encourage Haiku usage for cost effici
 
 ## Proposed Changes
 
-### `src/webview/kanban.html` — Remove model indicator block (~lines 8925-8950)
+### `src/webview/kanban.html` — Remove model indicator block (~lines 8933-8958)
 
 Delete the entire "Model Indicator (Haiku cost highlight)" section:
 
@@ -65,9 +74,19 @@ container.appendChild(modelRow);
 
 The block between the "Dependency Notice" (`depNotice`) and the "Resolved startup command" (`cmdDetails`) should be removed cleanly, leaving the dependency notice flowing directly into the startup command display.
 
+## Dependencies
+
+- None — this subtask deletes a self-contained block (lines 8933-8958) independent of the other two subtasks.
+- The block sits between the Dependency Notice (`depNotice`, ends line 8931) and the startup command accordion (`cmdDetails`, starts line 8960). Removing it leaves `depNotice` flowing directly into `cmdDetails` — no reconnect logic needed.
+
+## Adversarial Synthesis
+
+Key risks: none material — the `detectModel` helper and `modelInfo`/`modelIcon`/`modelColor`/`modelNote`/`modelRow` variables are all local to the render function and unreferenced elsewhere. Mitigation: confirm `mcpMonitorResolvedCmd` (read by `detectModel`) is NOT removed — it is still consumed by the startup command display (subtask 1).
+
 ## Verification Plan
 
 1. Open the Kanban board and switch to the Comms tab.
 2. Verify the Haiku/model callout box is no longer present.
 3. Verify the Prerequisites notice and startup command display still render correctly.
 4. Verify the On/Off dropdown and config panel still function normally.
+5. Skip compilation and automated tests per session directives — visual verification only.

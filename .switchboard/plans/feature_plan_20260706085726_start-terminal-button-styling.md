@@ -6,12 +6,12 @@ In the Comms Monitor tab of `kanban.html`, the "Start Terminal" button uses a co
 
 ### Problem Analysis & Root Cause
 
-The Comms Monitor lifecycle buttons are created dynamically in JavaScript (lines 9203-9266 of `src/webview/kanban.html`) with inline styles via `btnBaseStyle`. The "Start Terminal" and "Start Polling" buttons both use:
+The Comms Monitor lifecycle buttons are created dynamically in JavaScript (lines 9211-9261 of `src/webview/kanban.html`) with inline styles via `btnBaseStyle`. The "Start Terminal" and "Start Polling" buttons both use:
 ```javascript
 startTermBtn.style.cssText = btnBaseStyle + ' background:var(--accent-teal); color:var(--bg-primary);';
 ```
 
-This produces a solid-filled button that clashes with the extension's design language. The extension's standard active/primary button style (defined in CSS at line 455) is:
+This produces a solid-filled button that clashes with the extension's design language. The extension's standard active/primary button style (defined in CSS at lines 455-460) is:
 ```css
 .strip-btn.is-active {
     color: var(--accent-teal);
@@ -27,12 +27,21 @@ The root cause is that these buttons are created with raw inline styles in JS ra
 
 ## Metadata
 
-- **Tags:** ui-cleanup, comms-tab, button-styling, kanban-html
+- **Tags:** ui
 - **Complexity:** 2
+
+## User Review Required
+
+No — pure CSS inline-style change on two buttons. No logic, state, or backend changes.
 
 ## Complexity Audit
 
-**Routine.** Change inline styles on dynamically-created buttons. No logic changes, no backend changes. The "Start Polling" button has the same issue and should be fixed for consistency.
+### Routine
+- Change inline `cssText` styles on two dynamically-created buttons (Start Terminal, Start Polling).
+- No logic changes, no backend changes. The "Start Polling" button has the same issue and should be fixed for consistency.
+
+### Complex / Risky
+- None
 
 ## Edge-Case & Dependency Audit
 
@@ -43,9 +52,9 @@ The root cause is that these buttons are created with raw inline styles in JS ra
 
 ## Proposed Changes
 
-### `src/webview/kanban.html` — Restyle Start Terminal and Start Polling buttons (~lines 9208-9210, 9229-9231)
+### `src/webview/kanban.html` — Restyle Start Terminal and Start Polling buttons (~lines 9218, 9239)
 
-**Start Terminal button (line 9210):**
+**Start Terminal button (line 9218):**
 
 Before:
 ```javascript
@@ -57,7 +66,7 @@ After:
 startTermBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);';
 ```
 
-**Start Polling button (line 9231):**
+**Start Polling button (line 9239):**
 
 Before:
 ```javascript
@@ -71,6 +80,15 @@ startPollBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(
 
 Note: The `btnBaseStyle` already includes `border:none;` — the inline `border:1px solid var(--accent-teal-dim)` will override it since it appears later in the cssText string.
 
+## Dependencies
+
+- None — this subtask edits two `cssText` assignments (lines 9218, 9239) in the lifecycle-controls block, independent of the other two subtasks.
+- All three subtasks touch `renderCommsMonitorSection` but non-overlapping ranges; safe to land in parallel or any order.
+
+## Adversarial Synthesis
+
+Key risks: the `btnBaseStyle` string already contains `border:none;` — the appended `border:1px solid var(--accent-teal-dim)` must override it (later in cssText wins), which it does. Secondary risk: `color-mix` browser support in VS Code webviews — already used by `.strip-btn.is-active` at line 459, so the runtime supports it. Mitigation: match the exact `color-mix` expression from the existing CSS class to guarantee parity.
+
 ## Verification Plan
 
 1. Open the Kanban board and switch to the Comms tab.
@@ -80,3 +98,4 @@ Note: The `btnBaseStyle` already includes `border:none;` — the inline `border:
 5. Verify the "Check Auth" and "Stop Polling" buttons retain their existing secondary style.
 6. Verify the "Stop Monitor" button retains its red destructive style.
 7. Verify all buttons still function correctly (clicking triggers the right backend messages).
+8. Skip compilation and automated tests per session directives — visual verification only.

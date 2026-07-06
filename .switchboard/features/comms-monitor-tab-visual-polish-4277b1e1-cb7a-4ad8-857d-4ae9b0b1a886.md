@@ -14,9 +14,9 @@ De-clutter and standardize the Comms Monitor tab visual presentation in kanban.h
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix Startup Command Entry in Comms Tab — Remove "(resolved)" Text and Accordion](../plans/feature_plan_20260706085725_startup-command-non-accordion-remove-resolved.md) — **CREATED**
-- [ ] [Fix Start Terminal Button Styling in Comms Tab](../plans/feature_plan_20260706085726_start-terminal-button-styling.md) — **CREATED**
-- [ ] [Remove Haiku Model Callout Box in Comms Tab](../plans/feature_plan_20260706085724_remove-haiku-callout-box-comms-tab.md) — **CREATED**
+- [ ] [Fix Startup Command Entry in Comms Tab — Remove "(resolved)" Text and Accordion](../plans/feature_plan_20260706085725_startup-command-non-accordion-remove-resolved.md) — **PLAN REVIEWED**
+- [ ] [Fix Start Terminal Button Styling in Comms Tab](../plans/feature_plan_20260706085726_start-terminal-button-styling.md) — **PLAN REVIEWED**
+- [ ] [Remove Haiku Model Callout Box in Comms Tab](../plans/feature_plan_20260706085724_remove-haiku-callout-box-comms-tab.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
