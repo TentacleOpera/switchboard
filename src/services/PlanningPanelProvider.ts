@@ -627,7 +627,7 @@ export class PlanningPanelProvider {
         );
 
         // Watch the docs directory for changes and refresh imported docs list
-        this._setupDocsFolderWatcher(workspaceRoot);
+        this._setupDocsFolderWatcher(this._getWorkspaceRoot() || this._getWorkspaceRoots()[0]);
         this._setupLocalFolderWatchers();
         this._setupPlanningHtmlFolderWatchers();
 
@@ -2478,7 +2478,7 @@ Start by checking which documents exist, then present the menu.`;
                     const items = buildWorkspaceItems(allRoots).map(it => ({ label: it.label, root: it.workspaceRoot }));
                     const picked = await vscode.window.showQuickPick(items.map(i => ({ label: i.label, description: i.root })), { placeHolder: 'Select a workspace for the new dev doc' });
                     if (!picked) { break; } // user cancelled
-                    root = items.find(i => i.label === picked.label)?.root || null;
+                    root = items.find(i => i.label === picked.label)?.root || undefined;
                 }
                 if (!root && allRoots.length === 1) { root = allRoots[0]; }
                 if (!root) {
@@ -8740,7 +8740,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             // Surface root README.md (case-insensitive) as a first-class editable entry.
             try {
                 const rootEntries = await fs.promises.readdir(item.workspaceRoot);
-                const readmeName = rootEntries.find(e => e.toLowerCase() === 'readme.md');
+                const readmeName = rootEntries.find((e: string) => e.toLowerCase() === 'readme.md');
                 if (readmeName) {
                     const readmePath = path.join(item.workspaceRoot, readmeName);
                     let title = 'README';

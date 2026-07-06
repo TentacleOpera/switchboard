@@ -2290,7 +2290,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     private _resolveReadmePathForSync(root: string): string | undefined {
         try {
             const entries = fs.readdirSync(root);
-            const found = entries.find(e => e.toLowerCase() === 'readme.md');
+            const found = entries.find((e: string) => e.toLowerCase() === 'readme.md');
             return found ? path.join(root, found) : undefined;
         } catch { return undefined; }
     }
