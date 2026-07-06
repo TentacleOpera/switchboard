@@ -99,3 +99,7 @@ Key risks: the `btnBaseStyle` string already contains `border:none;` — the app
 6. Verify the "Stop Monitor" button retains its red destructive style.
 7. Verify all buttons still function correctly (clicking triggers the right backend messages).
 8. Skip compilation and automated tests per session directives — visual verification only.
+
+## Review Findings
+
+Implemented and committed in `cbb3771` (`src/webview/kanban.html`). Both `startTermBtn` (9313) and `startPollBtn` (9334) now use `background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);`, matching the plan exactly; the inline `border` correctly overrides `btnBaseStyle`'s `border:none` (later shorthand wins) and `--accent-teal-dim` is a defined token (both themes). Secondary buttons (Check Auth, Stop Polling) and the red destructive Stop Monitor button were left untouched as intended, and all click handlers still post live backend message types verified against `extension.ts`. Only deviation from the referenced `.strip-btn.is-active` is the omitted `box-shadow: var(--glow-teal)` — but the plan's own "After" snippet omitted it too, so this is plan-compliant and deferred, not a defect. No CRITICAL/MAJOR findings; no code changes required; compile/tests skipped per session directives.

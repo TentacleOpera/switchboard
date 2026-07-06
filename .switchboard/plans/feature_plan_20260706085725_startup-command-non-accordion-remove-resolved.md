@@ -91,3 +91,7 @@ Key risks: none material — pure DOM-structure swap with no event listeners or 
 3. Verify the label reads "Startup command" (no "(resolved)" text).
 4. Verify the command text displays correctly inside the bordered box.
 5. Skip compilation and automated tests per session directives — visual verification only.
+
+## Review Findings
+
+Implemented and committed in `cbb3771` (`src/webview/kanban.html`, ~9058-9066). The `<details>`/`<summary>` accordion is replaced by an always-visible `cmdLabel` div + `cmdPre` box; the label reads exactly "Startup command" (no "(resolved)") and `cmdPre` retains `white-space:pre-wrap; word-break:break-all` so long commands wrap. Grep confirms zero remaining `cmdDetails`/`cmdSummary`/"(resolved)" references and the old accordion had no event listeners, so nothing was orphaned; `mcpMonitorResolvedCmd` is still consumed at 9064. No CRITICAL/MAJOR findings; no code changes required; compile/tests skipped per session directives.

@@ -90,3 +90,7 @@ Key risks: none material — the `detectModel` helper and `modelInfo`/`modelIcon
 3. Verify the Prerequisites notice and startup command display still render correctly.
 4. Verify the On/Off dropdown and config panel still function normally.
 5. Skip compilation and automated tests per session directives — visual verification only.
+
+## Review Findings
+
+Implemented and committed in `cbb3771` (`src/webview/kanban.html`). The `detectModel` helper and `modelRow`/`modelInfo`/`modelIcon`/`modelColor`/`modelNote` block are fully removed — grep returns zero remaining references anywhere in the file — and `depNotice` (~9056) now flows directly into the startup command block (~9058) with no dangling separator. Shared `mcpMonitorResolvedCmd` was correctly spared (still read at 9064). Regression sweep confirmed no positional child indexing on the comms container (the `container.children[i]` at 7116 is unrelated autoban-badge code). No CRITICAL/MAJOR findings; no code changes required; compile/tests skipped per session directives.
