@@ -3,6 +3,12 @@ export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'teste
 export interface CustomAgentAddons {
     // Core
     gitProhibitionEnabled?: boolean;
+    // Granular git policy (Branch / Commit / Push). The guardrail (gitProhibitionEnabled)
+    // is independent; these three compile into the composed `GIT POLICY:` block by
+    // buildGitPolicyBlock. `'notSpecified'` and `undefined` both mean "emit no clause".
+    gitBranchStrategy?: 'current' | 'newBranch' | 'notSpecified';
+    gitCommitStrategy?: 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
+    gitPushStrategy?: 'noPush' | 'pushWhenDone' | 'notSpecified';
     workspaceTypeDetection?: boolean;
     switchboardSafeguards?: boolean;
 
@@ -23,6 +29,11 @@ export interface CustomAgentAddons {
     subagentPolicy?: 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
     customSubagentName?: string;
     useWorktreesPerPlan?: boolean;
+
+    // Phone-a-Friend — when true, the coder/lead/intern prompt includes a directive
+    // to POST a notification to the LocalApiServer when the batch is done, which
+    // triggers a second-pass dispatch to the Phone-a-Friend terminal.
+    phoneAFriend?: boolean;
 
     // Design doc (planning feature)
 
@@ -199,6 +210,19 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
         if (sanitized) a.customSubagentName = sanitized;
     }
     if (s.useWorktreesPerPlan === true) a.useWorktreesPerPlan = true;
+    if (s.phoneAFriend === true) a.phoneAFriend = true;
+
+    // Granular git policy — allowlist the enum values so custom-agent definitions
+    // persist the user's selection across reloads (mirrors subagentPolicy above).
+    if (s.gitBranchStrategy && ['current', 'newBranch', 'notSpecified'].includes(s.gitBranchStrategy as string)) {
+        a.gitBranchStrategy = s.gitBranchStrategy as 'current' | 'newBranch' | 'notSpecified';
+    }
+    if (s.gitCommitStrategy && ['whenDone', 'incremental', 'dontCommit', 'notSpecified'].includes(s.gitCommitStrategy as string)) {
+        a.gitCommitStrategy = s.gitCommitStrategy as 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
+    }
+    if (s.gitPushStrategy && ['noPush', 'pushWhenDone', 'notSpecified'].includes(s.gitPushStrategy as string)) {
+        a.gitPushStrategy = s.gitPushStrategy as 'noPush' | 'pushWhenDone' | 'notSpecified';
+    }
 
     if (s.designSystemDoc === true) a.designSystemDoc = true;
     if (s.designSystemDocLink) a.designSystemDocLink = String(s.designSystemDocLink).trim();

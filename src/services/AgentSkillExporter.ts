@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { CustomAgentConfig, CustomAgentAddons, BuiltInAgentRole } from './agentConfig';
 import {
-    GIT_PROHIBITION_DIRECTIVE,
+    buildGitPolicyBlock,
     FOCUS_DIRECTIVE,
     NO_SUBAGENTS_DIRECTIVE,
     WORKTREES_PER_PLAN_DIRECTIVE,
@@ -96,6 +96,13 @@ export class AgentSkillExporter {
         if (builtinAddons.aggressivePairProgramming !== undefined) out.aggressivePairProgramming = !!builtinAddons.aggressivePairProgramming;
         if (builtinAddons.adviseResearch !== undefined) out.researchEnabled = !!builtinAddons.adviseResearch;
         if (builtinAddons.gitProhibition !== undefined) out.gitProhibitionEnabled = !!builtinAddons.gitProhibition;
+        // §Git — granular git-policy strategies (same-name pass-through, mirroring
+        // the subagentPolicy pass-through below). Without this, built-in role exports
+        // call buildGitPolicyBlock with undefined strategies and emit a guardrail-only
+        // skill, silently reverting the feature for every exported skill.
+        if (builtinAddons.gitBranchStrategy !== undefined) out.gitBranchStrategy = builtinAddons.gitBranchStrategy;
+        if (builtinAddons.gitCommitStrategy !== undefined) out.gitCommitStrategy = builtinAddons.gitCommitStrategy;
+        if (builtinAddons.gitPushStrategy !== undefined) out.gitPushStrategy = builtinAddons.gitPushStrategy;
         // Fields with SAME name in both schemas — pass through directly
         if (builtinAddons.switchboardSafeguards !== undefined) out.switchboardSafeguards = !!builtinAddons.switchboardSafeguards;
         if (builtinAddons.cavemanOutput !== undefined) out.cavemanOutput = !!builtinAddons.cavemanOutput;
@@ -177,10 +184,21 @@ export class AgentSkillExporter {
     }
 
     private static appendAddonSection(lines: string[], addons: CustomAgentAddons): void {
-        if (addons.gitProhibitionEnabled) {
+        // §Git — composed GIT POLICY block (Branch → Commit → Push → Safety). Replaces
+        // the legacy single GIT_PROHIBITION_DIRECTIVE emit so exported skills carry the
+        // same composed policy as dispatched prompts. Exported skills have no plan batch,
+        // so worktreeActive is false (the Branch clause emits per the user's selection).
+        const gitPolicyBlock = buildGitPolicyBlock({
+            branch: addons.gitBranchStrategy,
+            commit: addons.gitCommitStrategy,
+            push: addons.gitPushStrategy,
+            guardrail: addons.gitProhibitionEnabled,
+            worktreeActive: false
+        });
+        if (gitPolicyBlock) {
             lines.push('### Git Safety Guardrail');
             lines.push('```');
-            lines.push(GIT_PROHIBITION_DIRECTIVE);
+            lines.push(gitPolicyBlock);
             lines.push('```');
             lines.push('');
         }

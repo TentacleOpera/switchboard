@@ -396,6 +396,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private _localApiServer: LocalApiServer | null = null;
+    // Phone-a-Friend dispatch serialization guard — a single in-flight promise that
+    // prevents interleaved /clear + prompt sequences when multiple POSTs arrive
+    // near-simultaneously at batch end. Keyed on the one phone-a-friend terminal.
+    private _phoneAFriendInFlight: Promise<void> | null = null;
     private _isMigratingSettings: boolean = false;
 
     // Last-accessed tracking for background prefetch
@@ -1065,6 +1069,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
+            },
+            onPhoneAFriend: async (planFile: string, originRole?: string) => {
+                // Route the coder's batch-end POST to the Phone-a-Friend terminal dispatch.
+                // The callback handles the silent drop internally and MUST NOT throw on
+                // "no terminal" (a throw becomes a 500 and breaks the best-effort signal).
+                await this._dispatchPhoneAFriend(planFile, originRole || 'coder');
             }
         });
 
@@ -1164,6 +1174,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._localApiServer.stop();
             this._localApiServer = null;
         }
+    }
+
+    /**
+     * Public accessor for the LocalApiServer port. Used by KanbanProvider to plumb the
+     * port into the Phone-a-Friend directive's curl URL at prompt-build time (Option A —
+     * avoids the worktree port-file pitfall where worktree CWDs can't read the port file
+     * that lives only in the main workspace root's .switchboard/). Returns 0 when the
+     * server isn't running (the directive is omitted when apiPort is falsy).
+     */
+    public getLocalApiServerPort(): number {
+        return this._localApiServer?.getPort() ?? 0;
     }
 
     private _getWorkspaceRoots(): string[] {
@@ -2907,6 +2928,89 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await withTerminalSendLock(sendLockKey, async () => {
             await sendRobustText(terminal!, text, true);
         });
+    }
+
+    /**
+     * Phone-a-Friend dispatch — invoked by the LocalApiServer's onPhoneAFriend callback
+     * when a coding agent POSTs `/phone-a-friend` at batch end. Resolves the Phone-a-Friend
+     * terminal, sends `/clear` (respecting terminal.clearBeforePrompt), then a second-pass
+     * coder prompt that tells the agent to read the plan, check the implementation, and fix
+     * any bugs. The prompt does NOT append a Stage Complete marker (it is a continuation,
+     * not a stage transition — a second marker risks a double stage-advance).
+     *
+     * Serialization: all dispatches are chained behind a single in-flight promise
+     * (`_phoneAFriendInFlight`) so rapid batch-end POSTs cannot interleave /clear + prompt
+     * sequences in the one terminal. Silent drop (with diagnostics log) when no terminal is
+     * running — MUST NOT throw (a throw becomes a 500 and breaks the best-effort signal).
+     */
+    private async _dispatchPhoneAFriend(planFile: string, originRole: string): Promise<void> {
+        // Serialize: chain behind any in-flight dispatch, then become the in-flight one.
+        const prev = this._phoneAFriendInFlight;
+        const run = (async () => {
+            if (prev) { try { await prev; } catch { /* prior dispatch failure is isolated */ } }
+            const resolvedWorkspaceRoot = this._resolveWorkspaceRoot('');
+            if (!resolvedWorkspaceRoot) {
+                this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] POST received for ${planFile}, no workspace root, dropped.`);
+                return;
+            }
+
+            // Resolve the Phone-a-Friend terminal name via state.json role mapping.
+            const agentName = await this._getAgentNameForRole('phone_a_friend', resolvedWorkspaceRoot) || 'Phone-a-Friend';
+            const suffixedKey = this._suffixedName(agentName);
+
+            let terminal: vscode.Terminal | undefined;
+            if (this._registeredTerminals) {
+                terminal = this._registeredTerminals.get(agentName) || this._registeredTerminals.get(suffixedKey);
+            }
+            if (!terminal) {
+                // Fallback: scan open terminals by normalized name (same pattern as _isTerminalLive).
+                const openTerminals = vscode.window.terminals || [];
+                const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(agentName));
+                terminal = openTerminals.find(t => this._normalizeAgentKey(t.name) === strippedTarget);
+            }
+
+            if (!terminal || terminal.exitStatus !== undefined) {
+                // Silent drop — log so a misconfigured workspace (addon on, no terminal) is diagnosable.
+                this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] POST received for ${planFile}, no terminal running, dropped.`);
+                return;
+            }
+
+            terminal.show();
+
+            // /clear before prompt — respect the same config gate as card dispatch.
+            const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+            const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
+            const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
+            if (clearBeforePrompt) {
+                try {
+                    await pasteTextViaClipboard(terminal, '/clear', { acquireFocus: true });
+                    await new Promise(r => setTimeout(r, 1000));
+                    terminal.sendText('', true);
+                    await new Promise(r => setTimeout(r, clearDelay));
+                } catch (e) {
+                    console.error(`[Phone-a-Friend] /clear paste failed: ${e}`);
+                }
+            }
+
+            // Build the second-pass coder prompt. No Stage Complete marker (continuation,
+            // not a stage transition). The originRole is informational — the phone-a-friend
+            // agent receives prompts from the host, not the prompts tab, so it does not
+            // inherit the coder's addons here (it has its own DEFAULT_ROLE_CONFIG entry).
+            const prompt = `Read ${planFile} — this plan was just coded by another agent (origin role: ${originRole}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. When done, summarize the bugs you found and the fixes you applied.`;
+
+            const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || agentName)) || agentName;
+            await withTerminalSendLock(sendLockKey, async () => {
+                await sendRobustText(terminal!, normalizeNewlines(prompt), true);
+            });
+        })();
+        this._phoneAFriendInFlight = run;
+        try {
+            await run;
+        } finally {
+            if (this._phoneAFriendInFlight === run) {
+                this._phoneAFriendInFlight = null;
+            }
+        }
     }
 
     /** Called by the Kanban board to trigger an agent action on a plan session. */

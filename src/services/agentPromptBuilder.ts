@@ -182,6 +182,16 @@ export interface PromptBuilderOptions {
     workspaceRoot?: string;
     /** When true, the git safety guardrail directive is included (permits worktrees/commits, forbids destructive undo). Default: true. */
     gitProhibitionEnabled?: boolean;
+    /** Granular git policy — Branch strategy. `'notSpecified'`/`undefined` = emit no branch clause. */
+    gitBranchStrategy?: 'current' | 'newBranch' | 'notSpecified';
+    /** Granular git policy — Commit strategy. `'notSpecified'`/`undefined` = emit no commit clause. */
+    gitCommitStrategy?: 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
+    /** Granular git policy — Push strategy. `'notSpecified'`/`undefined` = emit no push clause. */
+    gitPushStrategy?: 'noPush' | 'pushWhenDone' | 'notSpecified';
+    /** When true, the coder/lead/intern prompt includes a Phone-a-Friend directive telling the agent to POST a notification to the LocalApiServer when the batch is done. */
+    phoneAFriendEnabled?: boolean;
+    /** The LocalApiServer port, interpolated into the Phone-a-Friend directive's curl URL. Plumbed at build time (Option A) so worktree CWDs don't need to read the port file. */
+    apiPort?: number;
     /** When true (default), include batchExecutionRules and FOCUS_DIRECTIVE. When false, omit them. */
     switchboardSafeguardsEnabled?: boolean;
     /**
@@ -375,7 +385,104 @@ ${perPlanDirectories}`
     };
 }
 
-export const GIT_PROHIBITION_DIRECTIVE = `GIT POLICY: You may create worktrees and branches, stage, and commit your own work. You MUST NOT run work-discarding commands: git reset, git checkout <path> / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. Never fix a mistake by discarding — commit first, then correct forward. Do not push or merge to shared branches.`;
+/**
+ * §Git — Granular git policy.
+ *
+ * The old single `GIT_PROHIBITION_DIRECTIVE` string conflated a safety guardrail
+ * (forbid destructive ops) with permission to branch/commit and a shared-branch
+ * push ban. That binary string caused two symptoms: agents refused legitimate
+ * commits to `main` (a "shared branch") AND created defensive branches to have
+ * somewhere "allowed" to commit. It is replaced by a composed `GIT POLICY:` block
+ * assembled from four independent, prescriptive clauses (Branch → Commit → Push →
+ * Safety) by `buildGitPolicyBlock`. The Safety guardrail below is the salvaged
+ * half of the original string and remains byte-for-byte as strong — do not soften.
+ */
+export const GIT_SAFETY_DIRECTIVE = `Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout \`<path>\` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward.`;
+
+/** Branch clause vocabulary. */
+const GIT_BRANCH_CLAUSES: Record<string, string> = {
+    current: 'Do all work on the current branch. Do NOT create new branches or worktrees.',
+    newBranch: 'Before making any changes, create ONE new git branch named descriptively for this task, and do all work on that single branch. Do not create additional branches.'
+};
+
+/** Commit clause vocabulary. */
+const GIT_COMMIT_CLAUSES: Record<string, string> = {
+    whenDone: 'When you have finished the task, stage all your changes and create a single descriptive commit.',
+    incremental: 'Commit at each logical checkpoint with a clear message so progress is captured incrementally.',
+    dontCommit: 'Do NOT commit. Leave all changes in the working tree for the user to review.'
+};
+
+/** Push clause vocabulary. */
+const GIT_PUSH_CLAUSES: Record<string, string> = {
+    noPush: 'Do NOT push to any remote.',
+    pushWhenDone: 'After committing, push the working branch to its remote. Do not force-push.'
+};
+
+/**
+ * Compose the `GIT POLICY:` block from the four independent clauses.
+ *
+ * Pure: `undefined` and `'notSpecified'` both mean "emit no clause for that
+ * dimension". `guardrail` emits only when truthy. Returns `''` when nothing is
+ * enabled. The `GIT POLICY:` literal marker is kept as the block prefix so any
+ * existing substring-based tests/assertions remain valid.
+ *
+ * Feature-worktree interaction (read-only — never creates anything): when
+ * `worktreeActive` is true a feature orchestration directive already owns the
+ * branch/worktree language for the assigned worktree, so the Branch clause is
+ * suppressed to avoid contradicting it. The Commit clause is anchored to the
+ * assigned worktree. Push/Safety still emit normally. Mixed-batch edge case:
+ * if any plan in the batch carries a worktree, the Branch clause is suppressed
+ * globally (the feature directive owns worktree/branch language for those plans;
+ * non-worktree plans sharing a batch with worktree plans is an accepted rarity).
+ */
+export function buildGitPolicyBlock(opts: {
+    branch?: string;
+    commit?: string;
+    push?: string;
+    guardrail?: boolean;
+    worktreeActive?: boolean;
+}): string {
+    const { branch, commit, push, guardrail, worktreeActive } = opts;
+    const clauses: string[] = [];
+
+    // Branch clause — suppressed when a feature worktree is already assigned
+    // (the feature orchestration directive owns branch/worktree language).
+    if (!worktreeActive && branch && branch !== 'notSpecified' && GIT_BRANCH_CLAUSES[branch]) {
+        clauses.push(GIT_BRANCH_CLAUSES[branch]);
+    }
+
+    // Commit clause — anchor to the assigned worktree when one is active.
+    if (commit && commit !== 'notSpecified' && GIT_COMMIT_CLAUSES[commit]) {
+        const commitText = GIT_COMMIT_CLAUSES[commit];
+        clauses.push(worktreeActive ? `${commitText} Commit inside your assigned worktree.` : commitText);
+    }
+
+    // Push clause.
+    if (push && push !== 'notSpecified' && GIT_PUSH_CLAUSES[push]) {
+        clauses.push(GIT_PUSH_CLAUSES[push]);
+    }
+
+    // Safety guardrail — independent checkbox; emits only when truthy.
+    if (guardrail) {
+        clauses.push(GIT_SAFETY_DIRECTIVE);
+    }
+
+    if (clauses.length === 0) return '';
+    return `GIT POLICY: ${clauses.join(' ')}`;
+}
+
+/**
+ * Phone-a-Friend directive — appended to coder/lead/intern prompts when the
+ * `phoneAFriend` addon is enabled. Tells the agent to POST a notification to the
+ * LocalApiServer ONCE per batch (with the last completed plan file) when it has
+ * finished coding. The port is interpolated at build time (Option A) so worktree
+ * CWDs don't need to read the port file (which lives only in the main workspace
+ * root's .switchboard/). Best-effort signal — a missing Phone-a-Friend terminal
+ * is silently dropped by the host.
+ */
+const PHONE_A_FRIEND_DIRECTIVE = (port: number) =>
+  `PHONE-A-FRIEND (OPTIONAL): When you have finished coding ALL plans in this batch, notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{"planFile":"<PLAN_FILE_PATH>","originRole":"coder"}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a best-effort signal — if the Phone-a-Friend agent is not running, the request will succeed silently. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
+
 export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
 
 // §11 — injected for ALL roles when the dispatched card's board is under remote control.
@@ -732,6 +839,14 @@ export function buildKanbanBatchPrompt(
     const reviewerConciseModeEnabled = options?.reviewerConciseModeEnabled ?? false;
     const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
+    // Granular git policy strategies. The config layer (KanbanProvider._getPromptsConfig)
+    // owns the work-on-main defaults for built-in code roles; `undefined` here means
+    // "emit no clause for this dimension" — buildGitPolicyBlock treats `undefined` and
+    // `'notSpecified'` identically. Non-code roles receive `'notSpecified'` from the
+    // config maps, so only the guardrail clause fires for them.
+    const gitBranchStrategy = options?.gitBranchStrategy;
+    const gitCommitStrategy = options?.gitCommitStrategy;
+    const gitPushStrategy = options?.gitPushStrategy;
     const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
     const clearAntigravityContext = options?.clearAntigravityContext ?? false;
     const skipCompilation = options?.skipCompilation ?? false;
@@ -779,6 +894,17 @@ export function buildKanbanBatchPrompt(
     // Replaces the four per-branch safetySessionBlock loops with one shared
     // line emitted via dispatchPrefixCore so every role gets it identically.
     const worktreePaths = [...new Set(plans.map(p => p.worktreePath).filter((p): p is string => !!p))];
+    // §Git — worktree-active signal for buildGitPolicyBlock. Derived from the per-plan
+    // aggregation above (NOT options.worktreePath, which KanbanProvider.resolvedOptions
+    // never sets). When any plan in the batch carries a worktree, the feature orchestration
+    // directive owns branch/worktree language — buildGitPolicyBlock suppresses the Branch
+    // clause globally (mixed-batch: non-worktree plans sharing a batch with worktree plans
+    // is an accepted rarity).
+    const worktreeActive = worktreePaths.length > 0;
+    // Phone-a-Friend directive — emitted only for coder/lead/intern branches below.
+    // The port is plumbed at build time (Option A) so worktree CWDs don't read the
+    // port file (which lives only in the main workspace root's .switchboard/).
+    const phoneAFriendBlock = (options?.phoneAFriendEnabled && options?.apiPort) ? PHONE_A_FRIEND_DIRECTIVE(options.apiPort) : '';
     // In feature mode, the per-subtask/high-low directive variants already list
     // worktree assignments — skip the generic worktree line to avoid duplication.
     const featureDirectiveListsWorktrees = options?.featureMode === true
@@ -843,6 +969,12 @@ export function buildKanbanBatchPrompt(
     if (role === 'planner') {
         const workflowPath = options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW;
         const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? false;
+        // §Git — planner is non-code-touching; strategies resolve to `undefined`/`notSpecified`
+        // so only the guardrail clause can fire. Resolved here for symmetry with the outer
+        // scope (the planner branch re-declares gitProhibitionEnabled with its own default).
+        const gitBranchStrategy = options?.gitBranchStrategy;
+        const gitCommitStrategy = options?.gitCommitStrategy;
+        const gitPushStrategy = options?.gitPushStrategy;
 
         let workspaceTypeBlock = '';
         if (options?.workspaceRoot) {
@@ -898,7 +1030,7 @@ export function buildKanbanBatchPrompt(
 
         // Add dispatch context and plan list
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         const suffixBlock = assembleSuffix('planner', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -995,7 +1127,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         const suffixBlock = assembleSuffix('reviewer', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1047,7 +1179,7 @@ For each plan:
             : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct product acceptance / intent review against the product requirements document in-place for each plan.`;
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         const suffixBlock = assembleSuffix('tester', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1104,7 +1236,7 @@ For each plan:
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         const suffixBlock = assembleSuffix('lead', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1118,6 +1250,7 @@ For each plan:
             suffixBlock,
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
+            phoneAFriendBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1151,7 +1284,7 @@ For each plan:
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
             // no subagent block, no feature directive (replaced by featureExecutionBlock).
             // gitBlock still included via assembleSuffix.
-            const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+            const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
             const suffixBlock = assembleSuffix('coder', {
                 dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
             });
@@ -1163,6 +1296,7 @@ For each plan:
                 baseInstructions,
                 suffixBlock,
                 featureFileBlock,
+                phoneAFriendBlock,
                 suppressWalkthroughBlock
             ].filter(Boolean).join('\n\n');
 
@@ -1190,7 +1324,7 @@ For each plan:
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         const suffixBlock = assembleSuffix('coder', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1204,6 +1338,7 @@ For each plan:
             suffixBlock,
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
+            phoneAFriendBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1228,7 +1363,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         const suffixBlock = assembleSuffix('intern', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1241,6 +1376,7 @@ For each plan:
             suffixBlock,
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
+            phoneAFriendBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1258,7 +1394,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         // §6 — analyst is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('analyst', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1320,7 +1456,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         // §6 — ticket_updater is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('ticket_updater', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1371,7 +1507,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
         // §6 — researcher is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('researcher', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1459,6 +1595,11 @@ export function buildCustomAgentPrompt(
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
 
+    // §Git — worktree-active signal for the custom-agent path's buildGitPolicyBlock.
+    // Same derivation as buildKanbanBatchPrompt: from the per-plan aggregation, not
+    // options.worktreePath. Mixed-batch suppresses the Branch clause globally.
+    const customWorktreeActive = [...new Set(plans.map(p => p.worktreePath).filter((p): p is string => !!p))].length > 0;
+
     // Custom workflow: prepend read-workflow instruction.
     // NOTE: Built-in roles handle workflow prepend in resolveBaseInstructions.
     // If you change the workflow instruction format here, update resolveBaseInstructions too.
@@ -1504,7 +1645,21 @@ export function buildCustomAgentPrompt(
     prompt += '\n\n' + buildStageCompleteDirective(addons?.destinationColumn);
 
     // Apply directives in defined order
-    if (addons?.gitProhibitionEnabled) prompt += '\n\n' + GIT_PROHIBITION_DIRECTIVE;
+    // §Git — composed GIT POLICY block. Reads the UI keys (gitProhibition — the
+    // role-config toggle persisted by the Prompts tab) plus the three granular
+    // strategy fields. This also fixes the pre-existing gitProhibitionEnabled-vs-
+    // gitProhibition key mismatch: the role-config toggle now actually flows into
+    // the custom-agent prompt. `mergedAddons` (KanbanProvider.generateUnifiedPrompt)
+    // carries these from roleConfigAddons; the agent-definition key
+    // (gitProhibitionEnabled) is superseded by the UI key when both are present.
+    const customGitBlock = buildGitPolicyBlock({
+        branch: (addons as any)?.gitBranchStrategy,
+        commit: (addons as any)?.gitCommitStrategy,
+        push: (addons as any)?.gitPushStrategy,
+        guardrail: (addons as any)?.gitProhibition ?? addons?.gitProhibitionEnabled,
+        worktreeActive: customWorktreeActive
+    });
+    if (customGitBlock) prompt += '\n\n' + customGitBlock;
     if (addons?.workspaceTypeDetection && workspaceRoot) {
         const { isMultiRepo, subRepoNames } = detectWorkspaceType(workspaceRoot);
         prompt += isMultiRepo

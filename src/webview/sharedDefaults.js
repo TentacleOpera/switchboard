@@ -11,7 +11,8 @@ const DEFAULT_VISIBLE_AGENTS = {
     ticket_updater: false,
     researcher: false,
     mcp_monitor: false,
-    claude_designer: false
+    claude_designer: false,
+    phone_a_friend: false
 };
 
 // CRITICAL: DO NOT CHANGE DEFAULTS UNLESS SPECIFICALLY ASKED
@@ -20,15 +21,16 @@ const DEFAULT_ROLE_CONFIG = {
         workflowFilePath: '.agents/workflows/improve-plan.md',
         addons: { switchboardSafeguards: true, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, adviseResearch: true, writeFeatureDescriptionIfEmpty: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true }
     },
-    lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
-    coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
+    lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'current', gitCommitStrategy: 'whenDone', gitPushStrategy: 'noPush', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
+    coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'current', gitCommitStrategy: 'whenDone', gitPushStrategy: 'noPush', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
     reviewer: { prompt: '', addons: { switchboardSafeguards: true, advancedRegression: false, reviewerConciseMode: false, reviewerCompactPlanUpdate: false, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
     tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    intern: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
+    intern: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'current', gitCommitStrategy: 'whenDone', gitPushStrategy: 'noPush', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
     analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
     ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateMode: 'disabled', clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
     researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, researchEnabled: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    claude_designer: { prompt: 'Import a design from claude.ai/design into the target folder, writing the implementation into the designated workspace folder, built with the repo\'s existing components and styles.', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } }
+    claude_designer: { prompt: 'Import a design from claude.ai/design into the target folder, writing the implementation into the designated workspace folder, built with the repo\'s existing components and styles.', addons: { switchboardSafeguards: true, gitProhibition: true, gitBranchStrategy: 'current', gitCommitStrategy: 'whenDone', gitPushStrategy: 'noPush', clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
+    phone_a_friend: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } }
 };
 
 // Role key/label pairs for UI rendering
@@ -44,7 +46,8 @@ const BUILT_IN_AGENT_LABELS = [
     { key: 'researcher', label: 'Researcher' },
     { key: 'claude_designer', label: 'Claude Designer' },
     { key: 'jules', label: 'Jules' },
-    { key: 'mcp_monitor', label: 'Comms Monitor' }
+    { key: 'mcp_monitor', label: 'Comms Monitor' },
+    { key: 'phone_a_friend', label: 'Phone-a-Friend' }
 ];
 
 // Derivable helper
@@ -53,6 +56,33 @@ const ROLE_KEYS = Object.keys(DEFAULT_ROLE_CONFIG);
 // Specialized roles that operate via skills/addons, not prompt overrides.
 // Used by setup.html to filter the prompt customization UI.
 const PROMPT_OVERRIDE_EXCLUDED_KEYS = new Set(['ticket_updater']);
+
+// Shared git-policy radio groups (Branch / Commit / Push). Attached to the
+// four code-writing roles inside ROLE_ADDONS; the guardrail checkbox stays
+// independent. No worktree option — feature-worktree isolation stays at
+// feature granularity (see plan: expand-git-policy-granular-...).
+const GIT_BRANCH_STRATEGY_RADIO = {
+    id: 'gitBranchStrategy', label: 'Git Branch Strategy', tooltip: 'Prescriptive branch directive emitted in the GIT POLICY block', type: 'radio', default: 'current', options: [
+        { value: 'current', label: 'Current Branch', tooltip: 'Do all work on the current branch; do NOT create new branches or worktrees' },
+        { value: 'newBranch', label: 'New Branch', tooltip: 'Create ONE descriptively-named branch for this task and do all work on it' },
+        { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no branch clause' }
+    ]
+};
+const GIT_COMMIT_STRATEGY_RADIO = {
+    id: 'gitCommitStrategy', label: 'Git Commit Strategy', tooltip: 'Prescriptive commit directive emitted in the GIT POLICY block', type: 'radio', default: 'whenDone', options: [
+        { value: 'whenDone', label: 'Commit When Done', tooltip: 'Stage all changes and create a single descriptive commit when the task is finished' },
+        { value: 'incremental', label: 'Incremental Commits', tooltip: 'Commit at each logical checkpoint with a clear message' },
+        { value: 'dontCommit', label: 'Do Not Commit', tooltip: 'Leave all changes in the working tree for the user to review' },
+        { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no commit clause' }
+    ]
+};
+const GIT_PUSH_STRATEGY_RADIO = {
+    id: 'gitPushStrategy', label: 'Git Push Strategy', tooltip: 'Prescriptive push directive emitted in the GIT POLICY block', type: 'radio', default: 'noPush', options: [
+        { value: 'noPush', label: 'Do Not Push', tooltip: 'Do NOT push to any remote' },
+        { value: 'pushWhenDone', label: 'Push When Done', tooltip: 'After committing, push the working branch to its remote. Do not force-push.' },
+        { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no push clause' }
+    ]
+};
 
 // Role addon UI metadata (moved from kanban.html)
 const ROLE_ADDONS = {
@@ -79,6 +109,10 @@ const ROLE_ADDONS = {
         { id: 'leadChallenge', label: 'Inline Challenge Step', tooltip: 'Internal review before code generation', default: false },
         { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false },
         { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
+        GIT_BRANCH_STRATEGY_RADIO,
+        GIT_COMMIT_STRATEGY_RADIO,
+        GIT_PUSH_STRATEGY_RADIO,
+        { id: 'phoneAFriend', label: 'Phone-a-Friend', tooltip: 'When done coding the batch, notify the Phone-a-Friend terminal to do a second pass (requires Phone-a-Friend agent configured)', default: false },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'suppressWalkthrough', label: 'Suppress Walkthrough Artifact', tooltip: 'Do not generate walkthrough.md at task completion', default: false },
@@ -98,6 +132,10 @@ const ROLE_ADDONS = {
         { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Only do Routine (Band A) work', default: false },
         { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false },
         { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
+        GIT_BRANCH_STRATEGY_RADIO,
+        GIT_COMMIT_STRATEGY_RADIO,
+        GIT_PUSH_STRATEGY_RADIO,
+        { id: 'phoneAFriend', label: 'Phone-a-Friend', tooltip: 'When done coding the batch, notify the Phone-a-Friend terminal to do a second pass (requires Phone-a-Friend agent configured)', default: false },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'suppressWalkthrough', label: 'Suppress Walkthrough Artifact', tooltip: 'Do not generate walkthrough.md at task completion', default: false },
@@ -148,6 +186,10 @@ const ROLE_ADDONS = {
         { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Only do Routine (Band A) work', default: false },
         { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false },
         { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
+        GIT_BRANCH_STRATEGY_RADIO,
+        GIT_COMMIT_STRATEGY_RADIO,
+        GIT_PUSH_STRATEGY_RADIO,
+        { id: 'phoneAFriend', label: 'Phone-a-Friend', tooltip: 'When done coding the batch, notify the Phone-a-Friend terminal to do a second pass (requires Phone-a-Friend agent configured)', default: false },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'suppressWalkthrough', label: 'Suppress Walkthrough Artifact', tooltip: 'Do not generate walkthrough.md at task completion', default: false },
@@ -204,6 +246,9 @@ const ROLE_ADDONS = {
     claude_designer: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
         { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
+        GIT_BRANCH_STRATEGY_RADIO,
+        GIT_COMMIT_STRATEGY_RADIO,
+        GIT_PUSH_STRATEGY_RADIO,
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },

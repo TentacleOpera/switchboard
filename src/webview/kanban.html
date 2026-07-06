@@ -2793,6 +2793,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Offloads tasks to Google Jules cloud-coding service for quota-free background execution.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="claude_artifacts" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Claude Artifacts</label><input type="text" data-role="claude_artifacts" id="agents-tab-cmd-claude-artifacts" placeholder="e.g. claude" style="flex:1;"></div>
           <div class="agent-description">Terminal-only helper to download and upload claude.ai document artifacts.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="phone_a_friend" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Phone-a-Friend</label><input type="text" data-role="phone_a_friend" id="agents-tab-cmd-phone-a-friend" placeholder="e.g. agy --model flash" style="flex:1;"></div>
+          <div class="agent-description">Automatic second-pass coder — receives a dispatch when a coder finishes a plan batch (requires the Phone-a-Friend addon enabled on the coding role).</div>
           <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
             <input id="agents-tab-jules-auto-sync" type="checkbox" style="width:auto;margin:0;">
             <span>Auto-sync repo before sending to Jules</span>
@@ -3361,9 +3363,30 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             let addons = ROLE_ADDONS[role] || [];
             if (addons.length === 0 && role.startsWith('custom_agent_')) {
+                // Custom agents receive the guardrail + the three granular git-policy
+                // radios (Branch/Commit/Push) with work-on-main defaults, plus the
+                // custom-agent-specific add-ons. Parity with built-in code roles.
                 addons = [
+                    { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
+                    { id: 'gitBranchStrategy', label: 'Git Branch Strategy', tooltip: 'Prescriptive branch directive emitted in the GIT POLICY block', type: 'radio', default: 'current', options: [
+                        { value: 'current', label: 'Current Branch', tooltip: 'Do all work on the current branch; do NOT create new branches or worktrees' },
+                        { value: 'newBranch', label: 'New Branch', tooltip: 'Create ONE descriptively-named branch for this task and do all work on it' },
+                        { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no branch clause' }
+                    ] },
+                    { id: 'gitCommitStrategy', label: 'Git Commit Strategy', tooltip: 'Prescriptive commit directive emitted in the GIT POLICY block', type: 'radio', default: 'whenDone', options: [
+                        { value: 'whenDone', label: 'Commit When Done', tooltip: 'Stage all changes and create a single descriptive commit when the task is finished' },
+                        { value: 'incremental', label: 'Incremental Commits', tooltip: 'Commit at each logical checkpoint with a clear message' },
+                        { value: 'dontCommit', label: 'Do Not Commit', tooltip: 'Leave all changes in the working tree for the user to review' },
+                        { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no commit clause' }
+                    ] },
+                    { id: 'gitPushStrategy', label: 'Git Push Strategy', tooltip: 'Prescriptive push directive emitted in the GIT POLICY block', type: 'radio', default: 'noPush', options: [
+                        { value: 'noPush', label: 'Do Not Push', tooltip: 'Do NOT push to any remote' },
+                        { value: 'pushWhenDone', label: 'Push When Done', tooltip: 'After committing, push the working branch to its remote. Do not force-push.' },
+                        { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no push clause' }
+                    ] },
                     { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
                     { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Instruct the agent to use its native subagent/orchestration capabilities to process each plan in an isolated git worktree', default: false },
+                    { id: 'phoneAFriend', label: 'Phone-a-Friend', tooltip: 'When done coding the batch, notify the Phone-a-Friend terminal to do a second pass (requires Phone-a-Friend agent configured)', default: false },
                     { id: 'applyFeatureDirectives', label: 'Apply Feature Ultracode/Goal Directives', tooltip: 'When dispatched on a feature, prepend the board\'s ultracode//goal directives (as for Lead/Coder/Intern)', default: false }
                 ];
             }

@@ -86,6 +86,17 @@ interface LocalApiServerOptions {
         firstFeatureName: string,
         secondFeatureName: string
     ) => Promise<{ success: boolean; firstFeaturePlanId?: string; secondFeaturePlanId?: string; error?: string }>;
+    /**
+     * Phone-a-Friend dispatch — reached by a coding agent's `curl` when it finishes a
+     * plan batch. The host resolves the Phone-a-Friend terminal, sends `/clear` + a
+     * second-pass coder prompt, and silently drops the dispatch if no terminal is
+     * running (the callback MUST NOT throw on "no terminal" — a throw becomes a 500
+     * and breaks the coder's best-effort signal). `planFile` is an opaque relative
+     * path forwarded into the prompt text; the server does NOT resolve/traverse it.
+     * `originRole` lets the host resolve the originating coder's saved addons.
+     * Optional — absent in headless/test harnesses.
+     */
+    onPhoneAFriend?: (planFile: string, originRole?: string) => Promise<void>;
 }
 
 export class LocalApiServer {
@@ -585,6 +596,59 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanSplitFeature error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanSplitFeature failed' }));
+        }
+    }
+
+    /**
+     * POST /phone-a-friend — notify the Phone-a-Friend terminal to do a second pass on
+     * a just-coded plan batch. Reached by a coding agent's `curl` when it finishes.
+     * Body: { planFile: string, originRole?: string }. The host handles the silent drop
+     * when no terminal is running (the callback MUST NOT throw on "no terminal"). Returns
+     * 200 on ack, 400 on bad body, 503 when no callback is wired (headless/test harness).
+     */
+    private async _handlePhoneAFriend(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const onPhoneAFriend = this._options.onPhoneAFriend;
+        if (!onPhoneAFriend) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Phone-a-Friend dispatch not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const planFile = String(body?.planFile || '').trim();
+            const originRole = body?.originRole ? String(body.originRole).trim() : undefined;
+            // Validate planFile: non-empty, relative, no traversal (the host only forwards
+            // it into prompt text — never resolves it server-side).
+            if (!planFile) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: planFile' }));
+                return;
+            }
+            if (path.isAbsolute(planFile) || planFile.includes('..')) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'planFile must be a relative path without .. traversal' }));
+                return;
+            }
+
+            // The callback handles the silent drop internally and MUST NOT throw on
+            // "no terminal" — a throw here becomes a 500 and breaks the best-effort signal.
+            await onPhoneAFriend(planFile, originRole);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+            console.error('[LocalApiServer] phoneAFriend error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'phoneAFriend failed' }));
         }
     }
 
@@ -1291,6 +1355,8 @@ export class LocalApiServer {
                 await this._handleKanbanSplitFeature(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);
+            } else if (pathname === '/phone-a-friend' && req.method === 'POST') {
+                await this._handlePhoneAFriend(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {
                 await this._handleClickUpApiProxy(req, res);
             } else if (pathname === '/api/linear' && req.method === 'POST') {
