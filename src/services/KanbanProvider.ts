@@ -21,7 +21,7 @@ import {
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
@@ -4025,12 +4025,21 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // This branch returns early, before the built-in feature-directive block
             // below — so custom agents must have their own opt-in prepend here or
             // they'd never receive the directive regardless of the toggle.
+            // Phone-a-Friend — the custom-agent fallback addon list (kanban.html
+            // renderRoleAddons) exposes this checkbox for custom coding agents, but the
+            // custom branch returns before the built-in coder/lead/intern wiring below.
+            // Append the directive here (Option A port, same as generateUnifiedPrompt's
+            // built-in path) or the checkbox is a dead control.
+            const customApiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
+            const customPhoneSuffix = (mergedAddons.phoneAFriend && customApiPort)
+                ? `\n\n${PHONE_A_FRIEND_DIRECTIVE(customApiPort)}`
+                : '';
             const primaryPlan = plans[0];
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
                 const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot);
-                return `${prefix}${customBuilt}`;
+                return `${prefix}${customBuilt}${customPhoneSuffix}`;
             }
-            return customBuilt;
+            return `${customBuilt}${customPhoneSuffix}`;
         }
 
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);

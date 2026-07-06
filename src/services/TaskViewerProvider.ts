@@ -2996,7 +2996,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // not a stage transition). The originRole is informational — the phone-a-friend
             // agent receives prompts from the host, not the prompts tab, so it does not
             // inherit the coder's addons here (it has its own DEFAULT_ROLE_CONFIG entry).
-            const prompt = `Read ${planFile} — this plan was just coded by another agent (origin role: ${originRole}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. When done, summarize the bugs you found and the fixes you applied.`;
+            const prompt = `Read ${planFile} — this plan was just coded by another agent (origin role: ${originRole}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`;
 
             const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || agentName)) || agentName;
             await withTerminalSendLock(sendLockKey, async () => {

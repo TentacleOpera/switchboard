@@ -480,7 +480,7 @@ export function buildGitPolicyBlock(opts: {
  * root's .switchboard/). Best-effort signal — a missing Phone-a-Friend terminal
  * is silently dropped by the host.
  */
-const PHONE_A_FRIEND_DIRECTIVE = (port: number) =>
+export const PHONE_A_FRIEND_DIRECTIVE = (port: number) =>
   `PHONE-A-FRIEND (OPTIONAL): When you have finished coding ALL plans in this batch, notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{"planFile":"<PLAN_FILE_PATH>","originRole":"coder"}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a best-effort signal — if the Phone-a-Friend agent is not running, the request will succeed silently. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
 
 export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
