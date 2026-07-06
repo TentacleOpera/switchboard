@@ -35,7 +35,6 @@ So the coupling is **localized**, not pervasive: it lives in `extension.ts` (176
 
 ## User Review Required
 
-- **Panel scope for MVP.** Proposed MVP ships **kanban + planning + terminal fleet** and defers **design/Stitch** and **project** panels. Confirm that subset, or name a different one. This roughly halves the transport-migration surface for v1.
 - **UI reuse vs. rebuild.** Plan assumes the existing webview HTML/JS is **reused** (only its transport changes). Confirm you don't want a UI rewrite bundled into this effort.
 - **Terminal semantics.** Confirm the standalone fleet's terminals being *Switchboard-owned browser terminals* (not the editor's `` Ctrl+` `` terminals) is acceptable — this is the deliberate product change, not an accident.
 
@@ -51,7 +50,6 @@ So the coupling is **localized**, not pervasive: it lives in `extension.ts` (176
 - `npx` distribution: `bin`, a launcher that boots the service and opens the browser, and a **`node-pty` prebuilt-binary pipeline** (macOS/Linux/Windows × x64/arm64).
 
 ### ⚙️ OUT OF SCOPE (this plan)
-- **Design/Stitch panel** and **project panel** transport migration (defer to a follow-up; MVP subset above).
 - **Electron desktop packaging** — explicitly not doing it; `npx` is the distribution. Electron remains a *possible later* upgrade, decided with real usage data.
 - **Extension-as-launcher** (having the VS Code extension boot the standalone browser board) — attractive to preserve marketplace discovery, but a separate follow-up.
 - **Open VSX publish** (Cursor/Windsurf reach) — unrelated near-zero-cost follow-up.
@@ -83,17 +81,18 @@ Enumerate the full message contract so later phases are mechanical, not archaeol
 - Lifecycle: exit status, close events (replacing `onDidCloseTerminal`), resize, focus semantics.
 - `node-pty` prebuilt binaries across macOS/Linux/Windows × x64/arm64 (`prebuildify`/`node-gyp` or a prebuilt-multiarch package).
 
-**Phase 3 — Handler extraction + transport migration, MVP subset (~4–8 wks).**
-- For the MVP panels (kanban + planning), lift each `case` arm's body out of the Provider into a shared service method (Phase 1 target), leaving the Provider as a thin `postMessage`→service adapter (this is the extension-preserving move).
-- Add the corresponding HTTP endpoint / WS push for each verb from the Phase 0 catalog.
+**Phase 3 — Handler extraction + transport migration, all panels (~10–18 wks).**
+Full parity — every panel migrates: kanban, planning, **design/Stitch, project**, and setup. For **each** of the ~680 handler arms across all five Providers:
+- Lift the `case` arm's body out of the Provider into a shared service method (Phase 1 target), leaving the Provider as a thin `postMessage`→service adapter (this is the extension-preserving move).
+- Add the corresponding HTTP endpoint / WS push for the verb from the Phase 0 catalog.
+- Wire the browser UI's transport shim (below) to it.
+Sequence the work provider-by-provider (kanban → planning → project → design/Stitch → setup) so parity lands incrementally and the Phase 0 catalog is burned down to zero, but **all five ship before this effort is "done"** — there is no deferred panel.
 - Add a UI transport shim so `src/webview` calls resolve to postMessage (in-extension) or fetch/WS (in-browser).
 - Auth + CORS for the browser origin.
 
 **Phase 4 — `npx` distribution (~1–2 wks, overlaps Phase 2 prebuilds).**
 - `bin` + launcher (boot service, open browser to the served board), health-gated on the existing `/health` endpoint + `api-server-port.txt`.
-- Package, smoke-test `npx switchboard` clean-machine (Node-present) install on all three OSes.
-
-**Phase 5 (post-MVP) — remaining panels.** Repeat Phase 3 for design/Stitch + project panels.
+- Package, smoke-test `npx switchboard` clean-machine (Node-present) install on all three OSes with the full board (all panels) rendering.
 
 ## Complexity Audit
 
@@ -103,7 +102,7 @@ Enumerate the full message contract so later phases are mechanical, not archaeol
 - Serving static UI assets from `LocalApiServer` (it's already an HTTP server).
 
 ### Complex / Risky
-- **Phase 3 transport migration** is the long pole: ~400-verb contract, and each verb needs handler extraction + endpoint + UI-shim + test. The risk is the extraction silently changing extension behavior.
+- **Phase 3 transport migration** is the long pole and the bulk of the effort: the full ~400-verb / ~680-handler contract across all five panels, each verb needing handler extraction + endpoint + UI-shim + test. The risk is the extraction silently changing extension behavior. Full parity means none of this surface is deferrable.
 - **`node-pty` native-module distribution** — the tail that turns "works on my machine" into "shippable"; the prebuild matrix is where release readiness slips.
 - **Secret/config/state substitution** touching the shipped extension's shared code without regressing it.
 - **WebSocket push fidelity** — 985 broadcast sites; missing or mis-ordered pushes manifest as a subtly stale board.
@@ -126,7 +125,7 @@ Enumerate the full message contract so later phases are mechanical, not archaeol
 - `.agents/skills/kanban_operations/move-card.js` works against the standalone service's `/health` + `/kanban/move` unchanged.
 
 ## Effort Estimate (one experienced engineer familiar with the codebase)
-- **Thin MVP** (kanban + planning + fleet, `npx`): **~2–3 months**.
-- **Feature parity** (all panels): **~4–7 months**, transport migration ≈ half of it.
-- **Compression lever:** the ~400-verb migration is highly repetitive/patterned — disciplined AI-agent-driven porting (ironically, Switchboard's own job) can roughly halve Phase 3.
+- **Full parity — the required target** (all five panels, fleet, `npx`): **~4–7 months**, with the Phase 3 transport migration ≈ half of it. There is no partial-ship milestone; the deliverable is a browser board at feature parity with the extension.
+- **Incremental internal milestones** (not shippable scope reductions, just burn-down order): first panel migrated ≈ end of month 2–3; all panels + distribution ≈ month 4–7.
+- **Compression lever:** the ~400-verb / ~680-handler migration is highly repetitive/patterned — disciplined AI-agent-driven porting (ironically, Switchboard's own job) can roughly halve Phase 3 and is the main way to pull the parity date in.
 - **Slip risk:** the `node-pty` prebuild matrix; budget it explicitly rather than as an afterthought.
