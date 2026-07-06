@@ -202,4 +202,6 @@ None. Per session directive, automated tests and compilation (`npm run compile`)
 
 ---
 
-**Recommendation:** Complexity 4 (Low — routine single-file change reusing an existing pattern). **Send to Coder.**
+## Review Findings
+
+Implementation is a faithful, complete execution of the plan in `src/webview/kanban.html`: the hoisted `CODED_IDS` + `resolveDomColumn()` helper (3859-3867), `moveCardsOptimistically` target/source/count DOM resolution (4478/4501/4529) with `card.column` kept logical (4508), and all five highlight sites resolved via `resolveDomColumn(nextCol)` (per-card 5575; headers 4952/4969/4991/5008). Regression trace confirmed: all 5 `moveCardsOptimistically` callers pass logical columns, the render guard now arms correctly (4550) because the collapsed early-return is bypassed, and the guard consumer (6511-6527) preserves the optimistic move — no double-trigger, no new race. No CRITICAL/MAJOR issues found. Fix applied: consolidated the residual duplicate `CODED_COLUMN_IDS` (formerly 5412) into the hoisted `CODED_IDS`, fully realizing the plan's anti-drift goal (verified: zero remaining references, one declaration, 12 uses). Validation: compilation and automated tests skipped per session directive; correctness verified by static call-graph trace — remaining (out-of-scope, pre-existing) risk is the drag path at 6019 mapping to `CODED_AUTO` without a `collapseCodersEnabled` gate, which the plan explicitly deemed correct.

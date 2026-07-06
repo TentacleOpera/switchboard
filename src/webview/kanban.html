@@ -5409,12 +5409,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 buckets[col].push(card);
             });
 
-            const CODED_COLUMN_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-
             if (collapseCodersEnabled) {
                 // Render all coder-column cards into the synthetic CODED_AUTO container
                 const coderItems = [];
-                CODED_COLUMN_IDS.forEach(colId => {
+                CODED_IDS.forEach(colId => {
                     coderItems.push(...(buckets[colId] || []));
                 });
                 // Sort combined coder items by timestamp (newest first)
@@ -5432,7 +5430,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             columns.forEach(col => {
                 // In collapsed mode, skip the individual coder columns (rendered above as CODED_AUTO)
-                if (collapseCodersEnabled && CODED_COLUMN_IDS.includes(col)) return;
+                if (collapseCodersEnabled && CODED_IDS.includes(col)) return;
                 const container = document.getElementById('col-' + col);
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
