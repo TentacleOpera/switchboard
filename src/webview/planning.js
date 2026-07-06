@@ -13,6 +13,7 @@
         activeDocContent: null,
         activeDocFilePath: null,
         activeFileType: null,  // 'json' | 'yaml' | 'markdown' | 'css' | 'xml' | 'text' | 'image' | null
+        editPending: false, // set when Edit clicked on an unimported online doc; importFullDocResult enters edit mode
         activeContainers: new Map(),
         importedDocs: new Map(), // slugPrefix -> { sourceId, docId, docName }
         _lastImportedDocs: null, // raw docs array from last importedDocsReady message
@@ -1369,21 +1370,6 @@
         updatePrdButtonState();
     });
 
-    document.getElementById('docs-cache-mode')?.addEventListener('change', (e) => {
-        const mode = e.target.value;
-        vscode.postMessage({
-            type: 'setPlanningPanelSyncMode',
-            mode
-        });
-        const picker = document.getElementById('docs-sync-container-picker');
-        if (picker) {
-            picker.style.display = mode === 'sync-selected' ? 'flex' : 'none';
-        }
-        if (mode === 'sync-selected') {
-            vscode.postMessage({ type: 'fetchAvailableSyncContainers' });
-        }
-    });
-
     const allSources = ['local', 'clickup', 'linear', 'notion', 'antigravity'];
     const sourceFilterSelect = document.getElementById('docs-source-filter');
     if (sourceFilterSelect) {
@@ -1552,7 +1538,6 @@
             hydrateNotebookTab();
         }
         if (tabName === 'docs') {
-            vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
             vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
         }
         if (tabName === 'html') {
@@ -3164,22 +3149,36 @@
             state.activeDocFilePath = filePath || null;
             const isImported = state.importedDocs.has(state.activeDocId);
             if (btnEdit) {
-                btnEdit.disabled = !isImported;
-                if (!isImported) {
-                    btnEdit.title = 'Import this document first to edit';
-                } else {
-                    btnEdit.title = 'Edit document content';
-                }
+                btnEdit.disabled = false;
+                btnEdit.title = 'Edit document content';
             }
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = '';
                 btnImportFullDoc.disabled = false;
                 btnImportFullDoc.dataset.docId = state.activeDocId || '';
             }
+            const btnPushDoc = document.getElementById('btn-push-doc');
+            if (btnPushDoc) {
+                btnPushDoc.disabled = !isImported;
+                btnPushDoc.title = isImported
+                    ? 'Push local changes to the online source'
+                    : 'Import or edit this doc first to enable Push';
+            }
         }
 
         if (pages && pages.length > 0) {
             state.currentPages = pages;
+
+            // Multi-page doc auto-import-on-edit: the import wrote one file per
+            // page. Editing the whole doc isn't well-defined, so clear the
+            // pending flag and prompt the user to pick a page to edit.
+            if (state.editPending) {
+                state.editPending = false;
+                if (targetStatus) {
+                    targetStatus.textContent = `Imported ${pages.length} pages — select a page to edit`;
+                    targetStatus.style.color = 'var(--accent-teal)';
+                }
+            }
 
             let pageListHtml = '<div class="page-navigation" style="margin-bottom: 16px; padding: 12px; background: var(--panel-bg2); border: 1px solid var(--accent-teal-dim); border-radius: 4px;">';
             pageListHtml += '<div style="font-size: 11px; font-weight: 600; color: var(--accent-teal); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Pages</div>';
@@ -3239,6 +3238,19 @@
                     setTimeout(() => { statusEl2.textContent = ''; statusEl2.style.color = ''; }, 5000);
                 }
             }
+            return;
+        }
+
+        // Auto-import-on-edit: the importFullDocResult handler left editPending
+        // set and fired fetchPreview. Now that the fresh content has arrived,
+        // seed activeDocContent and enter edit mode. Placed before the
+        // unchanged-content early-return so an identical-content cache hit still
+        // enters the editor.
+        if (state.editPending) {
+            state.editPending = false;
+            state.activeDocContent = content || '';
+            targetPreview.innerHTML = renderMarkdown(content || '');
+            enterEditMode('docs');
             return;
         }
 
@@ -3805,6 +3817,21 @@
 
     function handleSyncResult(msg) {
         const { slugPrefix, success, error } = msg;
+
+        // Re-enable the Docs-tab Push button (the strip "Push" control). The
+        // per-row sync button path below early-returns when there is no matching
+        // imported-doc row, so handle the Push button here first.
+        const btnPush = document.getElementById('btn-push-doc');
+        if (btnPush) {
+            btnPush.disabled = false;
+            btnPush.textContent = 'Push';
+        }
+        if (success && btnPush) {
+            statusEl.textContent = msg.message || 'Pushed to remote';
+        } else if (!success) {
+            statusEl.textContent = `Push failed: ${error || 'Unknown error'}`;
+        }
+
         const docRow = document.querySelector(`.imported-doc-row[data-slug-prefix="${slugPrefix}"]`);
         if (!docRow) return;
 
@@ -3939,79 +3966,6 @@
             case 'error':
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 break;
-            case 'planningPanelSyncModeReady': {
-                const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
-                const mode = validModes.includes(msg.mode) ? msg.mode : 'no-sync';
-                const select = document.getElementById('docs-cache-mode');
-                if (select) {
-                    select.value = mode;
-                }
-                const picker = document.getElementById('docs-sync-container-picker');
-                if (picker) {
-                    picker.style.display = mode === 'sync-selected' ? 'flex' : 'none';
-                }
-                if (mode === 'sync-selected') {
-                    vscode.postMessage({ type: 'fetchAvailableSyncContainers' });
-                }
-                break;
-            }
-            case 'availableSyncContainersReady': {
-                const list = document.getElementById('docs-containers-list');
-                if (!list) break;
-                list.innerHTML = '';
-                
-                // Group by source
-                const bySource = {};
-                (msg.containers || []).forEach(c => {
-                    if (!bySource[c.sourceId]) bySource[c.sourceId] = [];
-                    bySource[c.sourceId].push(c);
-                });
-                
-                Object.entries(bySource).forEach(([sourceId, containers]) => {
-                    const sourceDiv = document.createElement('div');
-                    sourceDiv.style.marginRight = '16px';
-                    sourceDiv.style.marginBottom = '8px';
-                    
-                    const title = document.createElement('div');
-                    title.style.fontWeight = 'bold';
-                    title.style.color = 'var(--accent-teal)';
-                    title.style.marginBottom = '4px';
-                    title.textContent = sourceId.toUpperCase();
-                    sourceDiv.appendChild(title);
-                    
-                    containers.forEach(container => {
-                        const label = document.createElement('label');
-                        label.style.display = 'flex';
-                        label.style.alignItems = 'center';
-                        label.style.gap = '6px';
-                        label.style.cursor = 'pointer';
-                        label.style.margin = '2px 0';
-                        
-                        const checkbox = document.createElement('input');
-                        checkbox.type = 'checkbox';
-                        checkbox.value = `${sourceId}:${container.id}`;
-                        checkbox.checked = (msg.selectedContainers || []).includes(`${sourceId}:${container.id}`);
-                        
-                        checkbox.addEventListener('change', () => {
-                            const checked = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
-                            vscode.postMessage({
-                                type: 'setPlanningPanelSelectedContainers',
-                                containers: checked
-                            });
-                        });
-                        
-                        const span = document.createElement('span');
-                        span.textContent = container.name;
-                        
-                        label.appendChild(checkbox);
-                        label.appendChild(span);
-                        sourceDiv.appendChild(label);
-                    });
-                    
-                    list.appendChild(sourceDiv);
-                });
-                break;
-            }
             case 'workspaceItemsUpdated': {
                 _workspaceItems = msg.items || [];
                 _registeredDropdowns.forEach(d => {
@@ -4322,11 +4276,16 @@
             }
             case 'onlineDocCreated':
                 if (msg.success && msg.docId) {
-                    // Refresh and select the new doc
+                    // Refresh source list and the imported-docs list (auto-import
+                    // already ran on the backend via _handleImportFullDoc).
                     vscode.postMessage({ type: 'refreshSource', sourceId: msg.sourceId });
+                    vscode.postMessage({ type: 'fetchImportedDocs' });
                     setTimeout(() => {
                         loadDocumentPreview(msg.sourceId, msg.docId, msg.docName || 'New Document');
                     }, 800);
+                    if (msg.autoImported) {
+                        if (statusEl) statusEl.textContent = 'Document created and ready to edit';
+                    }
                 } else if (msg.error) {
                     if (statusEl) statusEl.textContent = `Create failed: ${msg.error}`;
                 }
@@ -4418,7 +4377,7 @@
                     // Update the imported docs list
                     vscode.postMessage({ type: 'fetchImportedDocs' });
 
-                    if (msg.savedPath && getActiveTabName() !== 'online') {
+                    if (msg.savedPath && getActiveTabName() !== 'online' && !state.editPending) {
                         switchToTab('local');
                         let found = null;
                         const nodes = document.querySelectorAll('.tree-node');
@@ -4444,6 +4403,17 @@
                 } else if (msg.error) {
                     statusEl.textContent = `Error: ${msg.error}`;
                     statusElOnline.textContent = `Error: ${msg.error}`;
+                    if (state.editPending) {
+                        state.editPending = false;
+                        statusEl.textContent = `Edit failed: ${msg.error || 'import failed'}`;
+                    }
+                }
+                if (msg.success && state.editPending) {
+                    // Keep editPending set — the fetchPreview fired below will
+                    // return previewReady with the freshly-imported content,
+                    // and handlePreviewReady enters edit mode then. Entering
+                    // edit mode here would load stale state.activeDocContent.
+                    if (statusEl) statusEl.textContent = 'Imported — loading editor…';
                 }
                 const btnImportFullDoc = document.getElementById('btn-import-full-doc');
                 if (btnImportFullDoc) btnImportFullDoc.disabled = false;
@@ -6971,7 +6941,42 @@ Return ONLY the drafted prompt with no additional commentary.`;
     const markdownEditorDocs = document.getElementById('markdown-editor');
 
     if (btnEditDocs) {
-        btnEditDocs.addEventListener('click', () => enterEditMode('docs'));
+        btnEditDocs.addEventListener('click', () => {
+            const isOnline = ONLINE_SOURCES.includes(state.activeSource);
+            const isImported = state.importedDocs.has(state.activeDocId);
+            if (isOnline && !isImported && state.activeDocId) {
+                // Auto-import first via the existing importFullDoc path (mirrors
+                // editTicket on the Tickets tab). _handleImportFullDoc preserves
+                // multi-page subpages, the duplicate check, and the concurrency
+                // guard. The importFullDocResult handler enters edit mode once
+                // the import succeeds (see state.editPending).
+                state.editPending = true;
+                vscode.postMessage({
+                    type: 'importFullDoc',
+                    sourceId: state.activeSource,
+                    docId: state.activeDocId,
+                    docName: state.activeDocName
+                });
+            } else {
+                enterEditMode('docs');
+            }
+        });
+    }
+    const btnPushDoc = document.getElementById('btn-push-doc');
+    if (btnPushDoc) {
+        btnPushDoc.addEventListener('click', () => {
+            const slugPrefix = resolveActiveOnlineSlugPrefix();
+            // importedDocs is keyed by slugPrefix, docId, AND docName, so the
+            // membership check succeeds regardless of which key activeDocId
+            // holds. Guard against pushing a doc that was never imported.
+            if (!slugPrefix || !state.importedDocs.has(state.activeDocId)) return;
+            btnPushDoc.disabled = true;
+            btnPushDoc.textContent = 'Pushing…';
+            vscode.postMessage({
+                type: 'syncToSource',
+                slugPrefix
+            });
+        });
     }
     if (btnSaveDocs) {
         btnSaveDocs.addEventListener('click', () => {
@@ -10917,7 +10922,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
-    vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
 
     window.addEventListener('pagehide', _stopTicketsFilePoll);
     window.addEventListener('beforeunload', _stopTicketsFilePoll);

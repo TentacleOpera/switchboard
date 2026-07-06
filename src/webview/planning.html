@@ -3566,24 +3566,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <option value="notion">Notion</option>
                     <option value="antigravity">Antigravity</option>
                 </select>
-                <select id="docs-cache-mode" class="workspace-filter-select" style="margin-right: 12px;" title="Document caching mode">
-                    <option value="no-sync" selected>Manual</option>
-                    <option value="auto-sync-all">Auto Sync All</option>
-                    <option value="sync-selected">Sync Selected Containers</option>
-                </select>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-edit" class="strip-btn" disabled>Edit</button>
                 <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel" class="strip-btn" style="display:none;">Cancel</button>
+                <button id="btn-push-doc" class="strip-btn" disabled title="Push local changes to the online source">Push</button>
                 <button id="btn-set-prd" class="strip-btn strip-btn--primary" disabled title="No projects in this workspace yet — create one in the Projects tab first.">Save as PRD</button>
                 <button id="btn-set-constitution" class="strip-btn strip-btn--primary" title="Copy the open document into this workspace's Constitution. If one already exists you can keep, append, or replace it.">Save as Constitution</button>
-                <button id="btn-sync-to-online" class="strip-btn" disabled>Sync to Online</button>
+                <button id="btn-sync-to-online" class="strip-btn" disabled>Copy to Online…</button>
                 <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status" style="margin-left: 0; display: none;"></span>
-            </div>
-            <div id="docs-sync-container-picker" style="display: none; padding: 8px 12px; background: var(--panel-bg2); border-bottom: 1px solid var(--border-dim); font-size: 11px; flex-direction: column; gap: 6px;">
-                <div style="font-weight: bold; color: var(--text-secondary); margin-bottom: 4px;">Sync Selected Containers:</div>
-                <div id="docs-containers-list" style="display: flex; flex-wrap: wrap; gap: 12px;"></div>
             </div>
             <div class="content-row">
                 <div id="tree-pane">

@@ -971,19 +971,6 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(openDesignPanelDisposable);
 
-    const triggerPlanningPanelSyncDisposable = vscode.commands.registerCommand(
-        'switchboard.triggerPlanningPanelSync',
-        async (mode?: string) => {
-            const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
-            if (workspaceRoot) {
-                await planningPanelProvider.triggerSync(workspaceRoot, mode);
-            } else {
-                vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
-            }
-        }
-    );
-    context.subscriptions.push(triggerPlanningPanelSyncDisposable);
-
     const openSetupPanelDisposable = vscode.commands.registerCommand('switchboard.openSetupPanel', async (section?: string) => {
         await setupPanelProvider.open(typeof section === 'string' ? section : undefined);
     });

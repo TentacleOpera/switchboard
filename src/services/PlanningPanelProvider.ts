@@ -572,16 +572,6 @@ export class PlanningPanelProvider {
         // Register adapters when panel opens
         this._ensureAdaptersRegistered();
 
-        // Start periodic sync if configured (unified config discovery across all roots)
-        const allRoots = this._getWorkspaceRoots();
-        const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
-        const { config, sourceRoot } = await this._resolveSyncConfig();
-        const syncMode = config.syncMode || 'no-sync';
-
-        if (syncMode !== 'no-sync' && sourceRoot) {
-            await this.triggerSync(sourceRoot, syncMode);
-        }
-
         this._disposables.push(
             vscode.window.onDidChangeActiveColorTheme(() => {
                 this._panel?.webview.postMessage({ type: 'themeChanged' });
@@ -6630,9 +6620,40 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     }
                     const result = await adapter.createDocument({ parentId, title });
                     if (result.success) {
+                        // Auto-import the created doc so it is immediately editable,
+                        // mirroring the Tickets tab's create-then-auto-import flow
+                        // (clickupCreateTask → switchboard.importTaskAsDocument).
+                        // Reuse _handleImportFullDoc wholesale to preserve the
+                        // concurrency guard, duplicate check, and multi-page
+                        // ClickUp subpage handling. Safe on a freshly-created
+                        // empty doc: ClickUp/Linear fetchContent returns '' for
+                        // empty content.
+                        let autoImported = false;
+                        if (result.docId) {
+                            try {
+                                const importRoot = this._resolveWorkspaceRoot(msg.workspaceRoot)
+                                    || this._getWorkspaceRoot() || '';
+                                if (importRoot) {
+                                    await this._handleImportFullDoc(importRoot, sourceId, result.docId, title);
+                                    autoImported = true;
+                                }
+                            } catch (importErr) {
+                                console.error('[PlanningPanel] Created online doc but local import failed:', importErr);
+                                // Don't fail the whole operation — the doc was created remotely.
+                            }
+                        }
                         // Refresh source
                         this._sendOnlineDocsReady();
-                        this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: true, docId: result.docId, url: result.url, sourceId });
+                        await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');
+                        this._panel?.webview.postMessage({
+                            type: 'onlineDocCreated',
+                            success: true,
+                            docId: result.docId,
+                            url: result.url,
+                            sourceId,
+                            docName: title,
+                            autoImported
+                        });
                     } else {
                         this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: result.error || 'Creation failed' });
                     }
@@ -6733,126 +6754,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 } catch (err) {
                     this._panel?.webview.postMessage({ type: 'syncConfigReady', uploadLocations: {}, docMappings: {} });
                 }
-                break;
-            }
-            case 'getPlanningPanelSyncMode': {
-                try {
-                    const { sourceRoot } = await this._resolveSyncConfig();
-                    const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
-                    if (!resolvedRoot) {
-                        this._panel?.webview.postMessage({
-                            type: 'planningPanelSyncModeReady',
-                            mode: 'no-sync',
-                            selectedContainers: []
-                        });
-                        break;
-                    }
-                    const db = KanbanDatabase.forWorkspace(resolvedRoot);
-                    const rawMode = await db.getConfig('planning.syncMode') || 'no-sync';
-                    const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
-                    const mode = validModes.includes(rawMode) ? rawMode : 'no-sync';
-                    const selectedContainers = await db.getConfigJson<string[]>('planning.selectedContainers', []);
-                    this._panel?.webview.postMessage({
-                        type: 'planningPanelSyncModeReady',
-                        mode,
-                        selectedContainers
-                    });
-                } catch (err) {
-                    this._panel?.webview.postMessage({
-                        type: 'planningPanelSyncModeReady',
-                        mode: 'no-sync',
-                        selectedContainers: []
-                    });
-                }
-                break;
-            }
-            case 'setPlanningPanelSyncMode': {
-                const validModes = ['no-sync', 'auto-sync-all', 'sync-selected'];
-                const syncMode = validModes.includes(msg.mode) ? msg.mode : 'no-sync';
-                const { sourceRoot } = await this._resolveSyncConfig();
-                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
-                if (!resolvedRoot) {
-                    break;
-                }
-                const db = KanbanDatabase.forWorkspace(resolvedRoot);
-                await db.setConfig('planning.syncMode', syncMode);
-                this._resolvedConfigCache = null;
-                await this.triggerSync(resolvedRoot, syncMode);
-                break;
-            }
-            case 'fetchAvailableSyncContainers': {
-                const { sourceRoot } = await this._resolveSyncConfig();
-                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
-                if (!resolvedRoot) {
-                    break;
-                }
-                
-                const containers: Array<{sourceId: string, id: string, name: string}> = [];
-                
-                // ClickUp
-                try {
-                    const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(resolvedRoot);
-                    if (clickUpAdapter && typeof clickUpAdapter.listContainers === 'function') {
-                        const clickUpContainers = await clickUpAdapter.listContainers();
-                        for (const c of clickUpContainers) {
-                            containers.push({ sourceId: 'clickup', id: String(c.id), name: String(c.name) });
-                        }
-                    }
-                } catch { }
-                
-                // Linear
-                try {
-                    const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(resolvedRoot);
-                    if (linearAdapter && typeof linearAdapter.listContainers === 'function') {
-                        const linearContainers = await linearAdapter.listContainers();
-                        for (const c of linearContainers) {
-                            containers.push({ sourceId: 'linear', id: String(c.id), name: String(c.name) });
-                        }
-                    }
-                } catch { }
-                
-                // Notion
-                try {
-                    const notionService = this._adapterFactories.getNotionService?.(resolvedRoot);
-                    if (notionService) {
-                        const notionConfig = await notionService.loadConfig();
-                        if (notionConfig?.setupComplete && notionConfig.pageTitle) {
-                            containers.push({ sourceId: 'notion', id: notionConfig.pageId || 'default', name: notionConfig.pageTitle });
-                        }
-                    }
-                } catch { }
-                
-                // Local folder
-                try {
-                    const localService = this._getLocalFolderService(resolvedRoot);
-                    if (localService) {
-                        const folderPath = localService.getFolderPath?.();
-                        if (folderPath) {
-                            containers.push({ sourceId: 'local-folder', id: 'root', name: path.basename(folderPath) });
-                        }
-                    }
-                } catch { }
-                
-                const db = KanbanDatabase.forWorkspace(resolvedRoot);
-                const selected = await db.getConfigJson<string[]>('planning.selectedContainers', []);
-                this._panel?.webview.postMessage({
-                    type: 'availableSyncContainersReady',
-                    containers,
-                    selectedContainers: selected
-                });
-                break;
-            }
-            case 'setPlanningPanelSelectedContainers': {
-                const { sourceRoot } = await this._resolveSyncConfig();
-                const resolvedRoot = sourceRoot || this._getWorkspaceRoot() || allRoots[0];
-                if (!resolvedRoot) {
-                    break;
-                }
-                const containers = Array.isArray(msg.containers) ? msg.containers.map((v: unknown) => String(v)) : [];
-                const db = KanbanDatabase.forWorkspace(resolvedRoot);
-                await db.setConfigJson('planning.selectedContainers', containers);
-                this._resolvedConfigCache = null;
-                await this.triggerSync(resolvedRoot, 'sync-selected');
                 break;
             }
             case 'loadInsights': {
@@ -8659,124 +8560,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
         }
     }
 
-    // Sync methods for Planning Panel
-    public async syncAllDocuments(workspaceRoot: string): Promise<void> {
-        if (!this._cacheService) {
-            this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
-        }
-        this._syncCancellationSource = new AbortController();
-        const signal = this._syncCancellationSource.signal;
-        this._currentSyncMode = 'auto-sync-all';
-
-        const sources = this._researchImportService.getAvailableSources();
-        
-        for (const sourceId of sources) {
-            if (signal.aborted || this._currentSyncMode !== 'auto-sync-all') { break; }
-            
-            const adapter = this._researchImportService.getAdapter(sourceId);
-            if (!adapter) { continue; }
-            
-            try {
-                // Use listFiles() to get all documents for this source
-                const docs = await adapter.listFiles();
-                
-                for (const doc of docs) {
-                    if (signal.aborted || this._currentSyncMode !== 'auto-sync-all') { break; }
-                    
-                    try {
-                        let content = '';
-                        let docName = doc.name;
-                        
-                        if ('fetchContent' in adapter) {
-                            content = await adapter.fetchContent(doc.id);
-                        } else if (sourceId === 'clickup' && 'fetchDocContent' in adapter) {
-                            const result = await (adapter as any).fetchDocContent(doc.id);
-                            if (result.success) {
-                                content = result.content || '';
-                                docName = result.docTitle || doc.name;
-                            }
-                        }
-                        
-                        await this._cacheService.cacheDocument(sourceId, doc.id, content, docName);
-                    } catch (error) {
-                        console.warn(`[PlanningPanel] Failed to cache ${sourceId}/${doc.id}:`, error);
-                    }
-                }
-            } catch (error) {
-                console.warn(`[PlanningPanel] Failed to list docs for ${sourceId}:`, error);
-            }
-        }
-    }
-
-    public async syncSelectedContainers(workspaceRoot: string, selectedContainers: string[]): Promise<void> {
-        if (!this._cacheService) {
-            this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
-        }
-        this._syncCancellationSource = new AbortController();
-        const signal = this._syncCancellationSource.signal;
-        this._currentSyncMode = 'sync-selected';
-
-        for (const containerSpec of selectedContainers) {
-            if (signal.aborted || this._currentSyncMode !== 'sync-selected') { break; }
-
-            const [sourceId, containerId] = containerSpec.split(':');
-            const adapter = this._researchImportService.getAdapter(sourceId);
-            if (!adapter) continue;
-
-            try {
-                const docs = await adapter.listDocumentsByContainer(containerId);
-
-                for (const doc of docs) {
-                    if (signal.aborted || this._currentSyncMode !== 'sync-selected') { break; }
-
-                    try {
-                        let content = '';
-                        let docName = doc.name;
-
-                        if ('fetchContent' in adapter) {
-                            content = await adapter.fetchContent(doc.id);
-                        } else if (sourceId === 'clickup' && 'fetchDocContent' in adapter) {
-                            const result = await (adapter as any).fetchDocContent(doc.id);
-                            if (result.success) {
-                                content = result.content || '';
-                                docName = result.docTitle || doc.name;
-                            }
-                        }
-
-                        await this._cacheService.cacheDocument(sourceId, doc.id, content, docName);
-                    } catch (error) {
-                        console.warn(`[PlanningPanel] Failed to cache ${sourceId}/${doc.id}:`, error);
-                    }
-                }
-            } catch (error) {
-                console.warn(`[PlanningPanel] Failed to sync container ${containerSpec}:`, error);
-            }
-        }
-    }
-
-    public startPeriodicSync(workspaceRoot: string, intervalMinutes: number = 30): void {
-        this.stopPeriodicSync();
-
-        const intervalMs = intervalMinutes * 60 * 1000;
-        this._periodicSyncTimer = setInterval(async () => {
-            try {
-                const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                const mode = await db.getConfig('planning.syncMode') || 'no-sync';
-                
-                if (mode === 'auto-sync-all') {
-                    await this.syncAllDocuments(workspaceRoot);
-                } else if (mode === 'sync-selected') {
-                    const selectedContainers = await db.getConfigJson<string[]>('planning.selectedContainers', []);
-                    await this.syncSelectedContainers(workspaceRoot, selectedContainers);
-                }
-            } catch { /* no config yet */ }
-        }, intervalMs);
-
-        this._disposables.push({
-            dispose: () => { this.stopPeriodicSync(); }
-        });
-    }
-
+    // Retained as a no-op safety call — dispose() still invokes it. The periodic
+    // sync timer / cancellation source are never started after the sync-mode
+    // dropdown removal, so this simply clears already-undefined values. Kept
+    // (rather than deleted) so any old panel instance disposing mid-session is
+    // harmless, matching the migration posture in CLAUDE.md.
     public stopPeriodicSync(): void {
         if (this._periodicSyncTimer) {
             clearInterval(this._periodicSyncTimer);
@@ -8784,31 +8572,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
         }
         this._syncCancellationSource?.abort();
         this._syncCancellationSource = undefined;
-    }
-
-    public async triggerSync(workspaceRoot: string, syncMode?: string): Promise<void> {
-        this.stopPeriodicSync();
-
-        // If no mode provided, read from unified config
-        let mode: string = syncMode || 'no-sync';
-        if (!syncMode) {
-            const { config } = await this._resolveSyncConfig();
-            mode = config.syncMode || 'no-sync';
-        }
-
-        this._currentSyncMode = mode;
-
-        if (mode === 'auto-sync-all') {
-            await this.syncAllDocuments(workspaceRoot);
-            this.startPeriodicSync(workspaceRoot);
-        } else if (mode === 'sync-selected') {
-            // Use unified config discovery for selected containers
-            const { configPath, config } = await this._resolveSyncConfig();
-            if (configPath && Array.isArray(config.selectedContainers)) {
-                await this.syncSelectedContainers(workspaceRoot, config.selectedContainers);
-            }
-            this.startPeriodicSync(workspaceRoot);
-        }
     }
 
 
