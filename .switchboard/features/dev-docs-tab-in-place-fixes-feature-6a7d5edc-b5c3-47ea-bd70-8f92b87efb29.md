@@ -23,6 +23,6 @@ Bring the Dev Docs tab up to (and past) the older Docs tab's baseline by fixing 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Dev Docs Tab — In-Place Fixes](../plans/dev-docs-tab-in-place-fixes.md) — **PLAN REVIEWED**
-- [ ] [Dev Docs — Agent-Assist Prompts](../plans/dev-docs-agent-prompts.md) — **PLAN REVIEWED**
+- [ ] [Dev Docs Tab — In-Place Fixes](../plans/dev-docs-tab-in-place-fixes.md) — **CODER CODED**
+- [ ] [Dev Docs — Agent-Assist Prompts](../plans/dev-docs-agent-prompts.md) — **CODER CODED**
 <!-- END SUBTASKS -->
