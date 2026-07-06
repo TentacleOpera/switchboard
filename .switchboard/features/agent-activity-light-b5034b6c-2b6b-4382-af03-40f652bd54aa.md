@@ -49,11 +49,44 @@ started, so nothing can decide whether it is still working. There is no
 
 Ordering — B-1 first; B-2 / B-4(sweep) / the UI depend on B-1; B-3 defines the marker B-2 parses.
 
+## Dependencies & sequencing
+
+- **Cross-feature dependencies:** none. This workstream is fully independent of the
+  remote-control / board-visibility feature (per the scope note above) — different code paths,
+  no shared dependency. All five subtasks close over changes internal to this feature.
+- **Shipping order within the feature:**
+  1. `working-state-model-and-dispatch-on.md` (B-1) **must land first** — it adds the
+     `dispatched_at` column, the derived `working` flag on `KanbanCard` (at all three card-build
+     sites), and the `buildBoardSignature` re-render hook. Every other subtask consumes one of
+     these.
+  2. `stage-complete-prompt-directive.md` (B-3) **before** `stage-complete-marker-clears-working-state.md`
+     (B-2): B-3 defines and exports the shared `STAGE_COMPLETE_LABEL` constant and emits the
+     directive; B-2's parser imports that same constant. If B-2 lands first, the parser
+     references a not-yet-existing export.
+  3. `stage-complete-marker-clears-working-state.md` (B-2) — the marker-driven OFF-switch
+     (adds `clearWorkingState` + the watcher update-branch wiring). Depends on B-1 (column) and
+     B-3 (label).
+  4. `working-state-timeout-sweep.md` (B-5) and `card-working-light-ui.md` (UI) depend **only**
+     on B-1 (the `dispatched_at` column / `working` flag / signature). They are independent of
+     B-2 and B-3, so they can proceed in parallel with the B-3 → B-2 chain once B-1 has landed.
+     B-5 is the timeout backstop; UI is the visible dot. Land them in either order.
+- **Prerequisites / guards:**
+  - The single shared `STAGE_COMPLETE_LABEL` constant must exist before B-2's parser uses it
+    (export from `agentPromptBuilder.ts`, import into `planMetadataUtils.ts`).
+  - B-1's `buildBoardSignature` change (`kanban.html:4607`) must ship with or before the UI
+    subtask, or the light renders once and never updates.
+  - B-1 must set `working` at **all three** card-build sites (`KanbanProvider.ts:1368-1400`,
+    `~2931-2964`, `~3102-3123`) — a missed site yields a board path with no light.
+  - **Open decision:** dispatches to untracked columns (BACKLOG, custom agent columns) hit
+    `_recordDispatchIdentity`'s early-return at `KanbanProvider.ts:2740` and will NOT light up.
+    Confirm whether that is desired or whether the early-return should be relaxed for the
+    activity light (flagged in B-1's User Review Required).
+
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **CREATED**
-- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **CREATED**
-- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **CREATED**
-- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **CREATED**
-- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **CREATED**
+- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **PLAN REVIEWED**
+- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **PLAN REVIEWED**
+- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **PLAN REVIEWED**
+- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **PLAN REVIEWED**
+- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

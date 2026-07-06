@@ -50,12 +50,15 @@ here (cheap) and enforced authoritatively by the B-5 sweep.
      `KanbanPlanRecord` (`KanbanDatabase.ts:35-65`).
 
 2. **Write the timestamp at dispatch.**
-   - Extend `updateDispatchInfoByPlanFile` (`KanbanDatabase.ts:6488`) to also set
-     `dispatched_at = ?` (ISO string) in its UPDATE.
-   - Set it centrally in `KanbanProvider._recordDispatchIdentity` (`KanbanProvider.ts:2721`)
-     so **all** dispatch entry points inherit it uniformly (drag-drop/CLI at
-     `KanbanProvider.ts:6437/6468/6968/6980`; terminal paths in `TaskViewerProvider.ts:3253/
-     3680/14623/16723`). Per the historical note in
+   - Extend `updateDispatchInfoByPlanFile` (`KanbanDatabase.ts:6929`; the UPDATE SQL is at
+     line 6936) to also set `dispatched_at = ?` (ISO string) in its UPDATE. Note
+     `_recordDispatchIdentity` actually calls the deprecated `updateDispatchInfo` wrapper
+     (`KanbanDatabase.ts:6942`) which looks up the plan by sessionId and funnels into
+     `updateDispatchInfoByPlanFile` — so editing the latter covers both call shapes.
+   - Set it centrally in `KanbanProvider._recordDispatchIdentity` (`KanbanProvider.ts:2723`)
+     so **all** dispatch entry points inherit it uniformly (the `_recordDispatchIdentity`
+     call sites are at `KanbanProvider.ts:6606, 6637, 7137, 7149`; terminal paths in
+     `TaskViewerProvider.ts:3253/3680/14623/16723`). Per the historical note in
      `move_kanban_cards_immediately_before_terminal_dispatch.md`, dispatch responsibility is
      split between `TaskViewerProvider` and `KanbanProvider` depending on
      `explicitTargetColumn` — centralizing the write in `_recordDispatchIdentity` avoids
@@ -63,14 +66,19 @@ here (cheap) and enforced authoritatively by the B-5 sweep.
      if any bypasses it, set `dispatched_at` there too.
 
 3. **Card payload + re-render signature.**
-   - Add `working?: boolean` to the `KanbanCard` interface (`KanbanProvider.ts:104-118`).
-   - Compute `working` when building card objects from rows at `KanbanProvider.ts:1366-1382`
-     (active) and `1384-1398` (completed), and the parallel builders at `2913-2940` and
-     `3084-3098`. Guard: never `working` for `status !== 'active'` or `kanban_column ===
-     'COMPLETED'`.
-   - Add `working` to the board-diff signature string at `kanban.html:4575` — it currently
-     includes `lastActivity` but no working flag, so **without this the light will not
-     re-render on state change.** (createCardHtml rendering itself is subtask B-6.)
+   - Add `working?: boolean` to the `KanbanCard` interface (`KanbanProvider.ts:106-120`).
+   - Compute `working` when building card objects from rows. There are **three** card-build
+     sites that must all set it (verified): the primary board builder at
+     `KanbanProvider.ts:1368-1384` (active) and `1386-1400` (completed); and the two
+     parallel builders at `~2929-2940` (active) + `~2952-2958` (completed) and
+     `~3102-3109` (active) + `~3117-3123` (completed). Guard: never `working` for
+     `status !== 'active'` or `kanban_column === 'COMPLETED'`. A build site that is missed
+     yields a board path where the light never appears.
+   - Add `working` to the board-diff signature string in `buildBoardSignature`
+     (`kanban.html:4604-4609`, the `.map(...)` at line 4607) — append
+     `|${card.working ? '1' : '0'}` to the per-card signature. It currently includes
+     `lastActivity` but no working flag, so **without this the light will not re-render on
+     state change.** (createCardHtml rendering itself is subtask B-6.)
 
 ## User Review Required
 
@@ -106,3 +114,75 @@ here (cheap) and enforced authoritatively by the B-5 sweep.
 - **Race:** the B-5 sweep and a fresh dispatch could interleave; since both are single-column
   writes on the same handle and the sweep only nulls rows older than 20 min, a just-set
   `dispatched_at` is never in scope for the sweep.
+
+## Dependencies
+
+- None upstream — this is the foundation subtask (B-1) of the *Agent activity light* feature.
+- Downstream (intra-feature): `stage-complete-marker-clears-working-state.md` (B-2) consumes
+  `dispatched_at` + a new `clearWorkingState` method; `working-state-timeout-sweep.md` (B-5)
+  consumes `dispatched_at` + adds `clearStaleWorkingState`; `card-working-light-ui.md` (UI)
+  consumes the `working` flag + the re-render signature change added here.
+
+## Proposed Changes
+
+A per-file change manifest (merge-surface map). Detailed steps live in **## Implementation** above.
+
+### src/services/KanbanDatabase.ts
+- **Context:** owns the `plans` schema, migrations, and the dispatch UPDATE.
+- **Logic:** add `dispatched_at TEXT DEFAULT NULL` to the `plans` DDL (~line 140, beside the
+  other dispatch columns) and to `KanbanPlanRecord` (lines 36-66); add an idempotent
+  `ALTER TABLE plans ADD COLUMN dispatched_at ...` migration block mirroring `MIGRATION_V7_SQL`
+  (lines 243-247); add `dispatched_at` to `PLAN_COLUMNS` / `_readRows()` so rows carry it;
+  extend the UPDATE in `updateDispatchInfoByPlanFile` (line 6936) with `dispatched_at = ?`.
+- **Edge cases:** NULL default = not working (correct for ~4,000 legacy installs, no backfill);
+  re-dispatch overwrites the timestamp (resets the 20-min clock); the deprecated
+  `updateDispatchInfo` wrapper (6942) funnels through this method so both paths are covered.
+
+### src/services/KanbanProvider.ts
+- **Context:** builds `KanbanCard` objects and records dispatch identity centrally.
+- **Logic:** add `working?: boolean` to `KanbanCard` (106-120); compute `working` at all three
+  card-build sites (1368-1384/1386-1400, ~2929-2958, ~3102-3123) with the active/completed
+  guard; `dispatched_at` is set via `updateDispatchInfoByPlanFile` reached through
+  `_recordDispatchIdentity` (2723) — no extra call-site edits needed once the DB method writes
+  the column.
+- **Edge cases:** `_recordDispatchIdentity` returns early at line 2740 for columns outside
+  `roleFromColumn` (custom columns, BACKLOG) — dispatches to those columns will NOT light up;
+  confirm whether that is desired or whether the early-return should be relaxed for the light.
+
+### src/webview/kanban.html
+- **Context:** `buildBoardSignature` drives the board's change-detection diff.
+- **Logic:** append `|${card.working ? '1' : '0'}` to the per-card signature in
+  `buildBoardSignature` (line 4607).
+- **Edge cases:** without this, the light renders once and never updates (works-in-DB,
+  invisible-in-UI). Rendering of the dot itself is the UI subtask.
+
+## Adversarial Synthesis
+
+Key risks: (1) three card-build sites must each set `working` — missing one yields a board
+path with a permanently absent light; (2) `_recordDispatchIdentity` early-returns for
+untracked columns, so custom-column/BACKLOG dispatches silently never light; (3) the
+re-render signature at `kanban.html:4607` is the single point that makes the light live-update
+— omit it and the feature is invisible. Mitigations: enumerate all three build sites in the
+PR diff; decide explicitly whether untracked columns should light; add `working` to the
+signature in the same commit as the backend flag.
+
+## Verification Plan
+
+> Per session directives: no automated tests, no compilation. Verify via the installed VSIX
+> (per CLAUDE.md, `dist/` is not used in dev — `src/` is the source of truth).
+
+### Manual checks
+- After migrating on an existing workspace, confirm `dispatched_at` column exists
+  (`sqlite3` on `kanban.db` `.schema plans`) and all existing rows are NULL (no light on
+  pre-existing cards).
+- Dispatch a card in a tracked column (e.g. PLAN REVIEWED / CODER CODED) → confirm the light
+  turns ON within one refresh.
+- Confirm the light does NOT appear for cards in BACKLOG / custom columns (matches the
+  `_recordDispatchIdentity` early-return) — or, if the decision is to light them, confirm it
+  does.
+- Confirm completed/inactive cards never show the light.
+- Re-dispatch an already-working card → confirm the light stays on and the 20-min clock
+  resets (visually: stays on past the prior window).
+
+### Recommendation
+Complexity 5 → **Send to Coder.**
