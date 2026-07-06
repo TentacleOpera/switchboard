@@ -3096,7 +3096,11 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
-    /** @deprecated session_id is no longer the unique key; use getPlanByPlanFile instead. */
+    /**
+     * @deprecated session_id is no longer the unique key; use resolvePlanByAnyId
+     *   for ambiguous-vintage lookups (plan_id first, session_id fallback).
+     *   Retained as the resolver's legacy fallback arm — do not remove.
+     */
     public async getPlanBySessionId(sessionId: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
         // First try session_id (legacy path)
@@ -3198,6 +3202,16 @@ export class KanbanDatabase {
         );
         const rows = this._readRows(stmt);
         return rows.length > 0 ? rows[0] : null;
+    }
+
+    /**
+     * Resolve a plan by an identifier of ambiguous vintage: plan_id first (the
+     * canonical key), then session_id (legacy sess_* rows from released versions).
+     * Empty/blank ids resolve to null — never let '' match a watcher-imported row.
+     */
+    public async resolvePlanByAnyId(id: string): Promise<KanbanPlanRecord | null> {
+        if (!id || !id.trim()) return null;
+        return (await this.getPlanByPlanId(id)) ?? (await this.getPlanBySessionId(id));
     }
 
     public async getFeaturePlans(workspaceId: string): Promise<KanbanPlanRecord[]> {
