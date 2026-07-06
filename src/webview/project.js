@@ -2419,11 +2419,16 @@
 
         const deleteBtn = hasPlanId ? `<button class="strip-btn" id="feature-subtask-meta-delete-btn" style="color:#ff6b6b;">Delete</button>` : '';
 
+        const copyLinkBtn = plan && plan.planFile
+            ? `<button class="strip-btn" id="feature-subtask-meta-copy-link-btn" title="Copy plan link to clipboard">Copy Link</button>`
+            : '';
+
         metaBar.innerHTML = `
             <div class="kanban-meta-group">
                 <span class="kanban-meta-label" style="color: var(--text-secondary); font-style: italic;">Subtask</span>
             </div>
             ${complexityGroup}
+            ${copyLinkBtn}
             <div class="kanban-meta-group" style="margin-left: auto;">
                 <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
@@ -2452,6 +2457,19 @@
                         tab: 'features'
                     });
                 }
+            });
+        }
+
+        // Copy Link — mirror kanban meta bar pattern (project.js:1830-1840)
+        const subtaskCopyLinkBtn = document.getElementById('feature-subtask-meta-copy-link-btn');
+        if (subtaskCopyLinkBtn) {
+            subtaskCopyLinkBtn.addEventListener('click', () => {
+                const path = plan.planFile;
+                navigator.clipboard.writeText(toAgentRef(path)).then(() => {
+                    const oldText = subtaskCopyLinkBtn.textContent;
+                    subtaskCopyLinkBtn.textContent = 'Copied';
+                    setTimeout(() => { subtaskCopyLinkBtn.textContent = oldText; }, 2000);
+                });
             });
         }
 
