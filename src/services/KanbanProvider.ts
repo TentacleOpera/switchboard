@@ -3986,6 +3986,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 destinationColumn: overrides?.destinationColumn,
             };
 
+            // §Git — work-on-main defaulting for custom agents. The UI radio `default`
+            // only governs rendering, not persistence; a custom agent whose Prompts-tab
+            // UI was never opened would otherwise get `undefined` strategies and emit no
+            // Branch/Commit/Push clauses, violating the work-on-main default (locked
+            // decision #2). Apply defaults to absent strategy fields after merging.
+            if (mergedAddons.gitBranchStrategy === undefined) mergedAddons.gitBranchStrategy = 'current';
+            if (mergedAddons.gitCommitStrategy === undefined) mergedAddons.gitCommitStrategy = 'whenDone';
+            if (mergedAddons.gitPushStrategy === undefined) mergedAddons.gitPushStrategy = 'noPush';
+
             if (mergedAddons.designSystemDoc) {
                 const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
                 mergedAddons.designSystemDocLink = designSystemDocLink;
@@ -4040,6 +4049,17 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             useWorktreesPerPlanEnabled: promptsConfig.useWorktreesPerPlanByRole?.[role] ?? false,
             switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
+            // §Git — granular strategies. `?? 'notSpecified'` so unmapped roles emit
+            // no clause (buildGitPolicyBlock treats 'notSpecified' as emit-nothing).
+            gitBranchStrategy: promptsConfig.gitBranchStrategyByRole?.[role] ?? 'notSpecified',
+            gitCommitStrategy: promptsConfig.gitCommitStrategyByRole?.[role] ?? 'notSpecified',
+            gitPushStrategy: promptsConfig.gitPushStrategyByRole?.[role] ?? 'notSpecified',
+            // Phone-a-Friend — only meaningful on coder/lead/intern; other roles map to false.
+            phoneAFriendEnabled: promptsConfig.phoneAFriendByRole?.[role] ?? false,
+            // §Phone-a-Friend — plumb the LocalApiServer port at build time (Option A) so
+            // worktree CWDs don't read the port file (which lives only in the main workspace
+            // root's .switchboard/). 0 when the server isn't running → directive omitted.
+            apiPort: this._taskViewerProvider?.getLocalApiServerPort() ?? 0,
             workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
             workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
             defaultPromptOverrides,
@@ -4211,6 +4231,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const analystConfig: any = this._getRoleConfig('analyst');
         const researcherConfig: any = this._getRoleConfig('researcher');
         const ticketUpdaterConfig: any = this._getRoleConfig('ticket_updater');
+        // §Git — claude_designer was previously absent from KanbanProvider entirely
+        // (it rode the `?? true` default at the resolvedOptions read site for the
+        // guardrail only). Load it here so its new granular git-policy radios take
+        // effect at dispatch via the *ByRole maps below.
+        const claudeDesignerConfig: any = this._getRoleConfig('claude_designer');
 
         return {
             workflowFilePathEnabledByRole: {
@@ -4297,6 +4322,48 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 analyst: analystConfig?.addons?.gitProhibition ?? true,
                 researcher: researcherConfig?.addons?.gitProhibition ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
+                claude_designer: claudeDesignerConfig?.addons?.gitProhibition ?? true,
+            },
+            // §Git — granular git-policy strategy maps. The `?? '<default>'` here is
+            // the SINGLE source of the work-on-main default for built-in code roles
+            // (locked decision #2). Non-code roles get 'notSpecified' so they emit no
+            // clause. buildGitPolicyBlock treats `undefined` and `'notSpecified'`
+            // identically (pure builder).
+            gitBranchStrategyByRole: {
+                planner: 'notSpecified',
+                lead: leadConfig?.addons?.gitBranchStrategy ?? 'current',
+                coder: coderConfig?.addons?.gitBranchStrategy ?? 'current',
+                intern: internConfig?.addons?.gitBranchStrategy ?? 'current',
+                claude_designer: claudeDesignerConfig?.addons?.gitBranchStrategy ?? 'current',
+                reviewer: 'notSpecified',
+                tester: 'notSpecified',
+                analyst: 'notSpecified',
+                researcher: 'notSpecified',
+                ticket_updater: 'notSpecified',
+            },
+            gitCommitStrategyByRole: {
+                planner: 'notSpecified',
+                lead: leadConfig?.addons?.gitCommitStrategy ?? 'whenDone',
+                coder: coderConfig?.addons?.gitCommitStrategy ?? 'whenDone',
+                intern: internConfig?.addons?.gitCommitStrategy ?? 'whenDone',
+                claude_designer: claudeDesignerConfig?.addons?.gitCommitStrategy ?? 'whenDone',
+                reviewer: 'notSpecified',
+                tester: 'notSpecified',
+                analyst: 'notSpecified',
+                researcher: 'notSpecified',
+                ticket_updater: 'notSpecified',
+            },
+            gitPushStrategyByRole: {
+                planner: 'notSpecified',
+                lead: leadConfig?.addons?.gitPushStrategy ?? 'noPush',
+                coder: coderConfig?.addons?.gitPushStrategy ?? 'noPush',
+                intern: internConfig?.addons?.gitPushStrategy ?? 'noPush',
+                claude_designer: claudeDesignerConfig?.addons?.gitPushStrategy ?? 'noPush',
+                reviewer: 'notSpecified',
+                tester: 'notSpecified',
+                analyst: 'notSpecified',
+                researcher: 'notSpecified',
+                ticket_updater: 'notSpecified',
             },
             switchboardSafeguardsByRole: {
                 planner: plannerConfig?.addons?.switchboardSafeguards ?? true,
@@ -4346,6 +4413,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 lead: leadConfig?.addons?.useWorktreesPerPlan === true,
                 coder: coderConfig?.addons?.useWorktreesPerPlan === true,
                 intern: internConfig?.addons?.useWorktreesPerPlan === true,
+            },
+            // Phone-a-Friend addon — only the three code-writing roles carry it.
+            phoneAFriendByRole: {
+                lead: leadConfig?.addons?.phoneAFriend === true,
+                coder: coderConfig?.addons?.phoneAFriend === true,
+                intern: internConfig?.addons?.phoneAFriend === true,
             },
             clearAntigravityContextByRole: {
                 planner: plannerConfig?.addons?.clearAntigravityContext ?? false,

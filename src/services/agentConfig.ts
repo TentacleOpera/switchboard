@@ -30,7 +30,17 @@ export interface CustomAgentAddons {
     customSubagentName?: string;
     useWorktreesPerPlan?: boolean;
 
-    // ignSystemDocLink?: string;
+    // Phone-a-Friend — when true, the coder/lead/intern prompt includes a directive
+    // to POST a notification to the LocalApiServer when the batch is done, which
+    // triggers a second-pass dispatch to the Phone-a-Friend terminal.
+    phoneAFriend?: boolean;
+
+    // Design doc (planning feature)
+
+
+    // Design System Doc
+    designSystemDoc?: boolean;
+    designSystemDocLink?: string;
     designSystemDocContent?: string;
 
     // Constitution
@@ -200,11 +210,25 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
         if (sanitized) a.customSubagentName = sanitized;
     }
     if (s.useWorktreesPerPlan === true) a.useWorktreesPerPlan = true;
+    if (s.phoneAFriend === true) a.phoneAFriend = true;
+
+    // Granular git policy — allowlist the enum values so custom-agent definitions
+    // persist the user's selection across reloads (mirrors subagentPolicy above).
+    if (s.gitBranchStrategy && ['current', 'newBranch', 'notSpecified'].includes(s.gitBranchStrategy as string)) {
+        a.gitBranchStrategy = s.gitBranchStrategy as 'current' | 'newBranch' | 'notSpecified';
+    }
+    if (s.gitCommitStrategy && ['whenDone', 'incremental', 'dontCommit', 'notSpecified'].includes(s.gitCommitStrategy as string)) {
+        a.gitCommitStrategy = s.gitCommitStrategy as 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
+    }
+    if (s.gitPushStrategy && ['noPush', 'pushWhenDone', 'notSpecified'].includes(s.gitPushStrategy as string)) {
+        a.gitPushStrategy = s.gitPushStrategy as 'noPush' | 'pushWhenDone' | 'notSpecified';
+    }
 
     if (s.designSystemDoc === true) a.designSystemDoc = true;
     if (s.designSystemDocLink) a.designSystemDocLink = String(s.designSystemDocLink).trim();
     if (!a.designSystemDoc && s.designSystemDocLink) a.designSystemDoc = true;
-    if (s.designSystemDocContent) {dDcContent).trim();
+    if (s.designSystemDocContent) {
+        const content = String(s.designSystemDocContent).trim();
         a.designSystemDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
     }
     if (s.constitutionLink && typeof s.constitutionLink === 'string') a.constitutionLink = s.constitutionLink.trim();
