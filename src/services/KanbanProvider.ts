@@ -1580,6 +1580,7 @@ export class KanbanProvider implements vscode.Disposable {
             await this._sendWorktreeConfig(resolvedWorkspaceRoot);
 
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
 
             this._panel.webview.postMessage({
@@ -3102,6 +3103,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 featureWorktrees
             });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
@@ -3251,6 +3253,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
             this._panel.webview.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
@@ -5745,6 +5748,28 @@ This step is what moves the plan forward in the Switchboard pipeline.
         this._configEpoch++;
     }
 
+    // ── Global Override: UI push helper (plan 03) ─────────────────────────
+    /** Push the current override state to the webview so toggles/indicator stay synced.
+     *  Called from toggle handlers, setProjectFilter, and the refresh push cluster. */
+    private _postOverrideState(): void {
+        if (!this._panel) return;
+        const projectSwitchEnabled = !!this._projectFilter && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+        const activeProjectName = projectSwitchEnabled ? this._projectFilter : null;
+        const activeScope = this._projectOverrideEnabled && projectSwitchEnabled
+            ? `Project '${this._projectFilter}'`
+            : this._workspaceOverrideEnabled
+                ? 'Workspace'
+                : 'Global (default)';
+        this._panel.webview.postMessage({
+            type: 'overrideState',
+            workspaceOverride: this._workspaceOverrideEnabled,
+            projectOverride: this._projectOverrideEnabled,
+            projectSwitchEnabled,
+            activeScope,
+            activeProjectName
+        });
+    }
+
     /**
      * Returns the project currently shown on the board for the given watched workspace
      * root, or null if the board isn't showing that workspace or is unfiltered/unassigned.
@@ -5862,6 +5887,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._reloadSettingsFromStore();
                 this._markConfigDirty();
             }
+            // Push override state so the Project toggle enablement tracks the new filter.
+            this._postOverrideState();
         }
     }
     public async queueIntegrationSyncForSession(
@@ -6987,6 +7014,46 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     break;
                 }
+            case 'setWorkspaceOverride': {
+                const enabled = !!msg.enabled;
+                // [Plan 04 insertion point: snapshot-before-activate when enabling]
+                this._workspaceOverrideEnabled = enabled;
+                const wsRoot1 = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const db1 = wsRoot1 ? this._getKanbanDb(wsRoot1) : undefined;
+                if (db1 && await db1.ensureReady()) {
+                    await db1.setConfigJson('kanban.workspaceOverrideEnabled', enabled);
+                }
+                this._loadOverrideFlags();
+                this._reloadSettingsFromStore();
+                this._markConfigDirty();
+                this._postOverrideState();
+                if (wsRoot1) { await this._refreshBoard(wsRoot1); }
+                break;
+            }
+            case 'setProjectOverride': {
+                const enabled = !!msg.enabled;
+                // Validate a specific project is selected (server-side authoritative).
+                const projectSwitchOk = !!this._projectFilter
+                    && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                if (!projectSwitchOk) {
+                    // Reject — push corrective state, revert checkbox, do not change flag.
+                    this._postOverrideState();
+                    break;
+                }
+                // [Plan 04 insertion point: snapshot-before-activate when enabling]
+                this._projectOverrideEnabled = enabled;
+                const wsRoot2 = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const db2 = wsRoot2 ? this._getKanbanDb(wsRoot2) : undefined;
+                if (db2 && await db2.ensureReady()) {
+                    await db2.setConfigJson('kanban.projectOverrideEnabled', enabled);
+                }
+                this._loadOverrideFlags();
+                this._reloadSettingsFromStore();
+                this._markConfigDirty();
+                this._postOverrideState();
+                if (wsRoot2) { await this._refreshBoard(wsRoot2); }
+                break;
+            }
             case 'toggleCliTriggers':
                 this._cliTriggersEnabled = !!msg.enabled;
                 this._markConfigDirty();
