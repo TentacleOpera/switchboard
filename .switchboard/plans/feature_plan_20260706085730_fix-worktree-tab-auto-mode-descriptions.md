@@ -114,3 +114,7 @@ Key changes:
 ## Recommendation
 
 Complexity is **1** → **Send to Intern**. This is a two-string text edit with no logic, no backend, and no migration surface. Safe to hand to the least-experienced coder; verification is a single visual check.
+
+## Review Findings
+
+Implementation matches the plan's "After" block verbatim (`src/webview/kanban.html:10124-10128`; line numbers drifted from the plan's cited 10000-10004 but content is exact). Regression trace confirms `opt.value` (`none`/`per-subtask`/`high-low`) is unchanged and still passes backend validation at `src/services/KanbanProvider.ts:9176`; `opt.desc` is consumed only via `descSpan.textContent` (line 10154 — no injection surface). Both factual claims in the new copy verified: manual creation buttons exist below ("Create Feature Worktree" @10193, "Create Project Worktree" @10269), and the parallel-subagent claim holds against `agentPromptBuilder.ts`. Files changed: `src/webview/kanban.html` only. No CRITICAL/MAJOR/NIT findings; no fixes applied. Validation: code inspection only (compile + tests skipped per session directive). Remaining risk: none.
