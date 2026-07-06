@@ -84,9 +84,9 @@ Ordering — B-1 first; B-2 / B-4(sweep) / the UI depend on B-1; B-3 defines the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **PLAN REVIEWED**
-- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **PLAN REVIEWED**
-- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **PLAN REVIEWED**
-- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **PLAN REVIEWED**
-- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **PLAN REVIEWED**
+- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **CODER CODED**
+- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **CODER CODED**
+- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **CODER CODED**
+- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **CODER CODED**
+- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **CODER CODED**
 <!-- END SUBTASKS -->
