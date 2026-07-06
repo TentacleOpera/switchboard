@@ -117,6 +117,20 @@ export interface KanbanCard {
     isFeature?: boolean;
     featureId?: string;
     subtaskCount?: number;
+    working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
+}
+
+// Activity-light window. A card is `working` while dispatched_at is set and younger than
+// this. The timeout sweep (GlobalPlanWatcherService) is the authoritative backstop that
+// nulls dispatched_at past this age; this read-time check keeps the light accurate between
+// sweeps. Kept in sync with the `switchboard.activityLight.timeoutMs` setting default.
+const WORKING_STATE_TIMEOUT_MS = 20 * 60 * 1000;
+
+function isWorkingState(dispatchedAt: string | null | undefined): boolean {
+    if (!dispatchedAt) return false;
+    const ts = Date.parse(dispatchedAt);
+    if (!Number.isFinite(ts)) return false;
+    return (Date.now() - ts) < WORKING_STATE_TIMEOUT_MS;
 }
 
 /**
@@ -1379,7 +1393,8 @@ export class KanbanProvider implements vscode.Disposable {
                     project: row.project || '',
                     isFeature: !!row.isFeature,
                     featureId: row.featureId || undefined,
-                    subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined
+                    subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
+                    working: isWorkingState(row.dispatchedAt)
                 };
             });
 
@@ -2904,7 +2919,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         worktreeId: row.worktreeId,
                         isFeature: !!row.isFeature,
                         featureId: row.featureId || undefined,
-                        subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined
+                        subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined,
+                        working: isWorkingState(row.dispatchedAt)
                     };
                 });
 
@@ -3071,7 +3087,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     createdAt: row.createdAt || '',
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
-                    project: row.project || ''
+                    project: row.project || '',
+                    working: isWorkingState(row.dispatchedAt)
                 };
             });
 
@@ -3949,6 +3966,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const mergedAddons = {
                 ...agentConfig?.addons,
                 ...(roleConfigAddons || {}),
+                destinationColumn: overrides?.destinationColumn,
             };
 
             if (mergedAddons.designSystemDoc) {
@@ -4846,14 +4864,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
             role = columnToPromptRole(roleSourceColumn);
         }
 
-        return this._generatePromptForDestinationRole(cards, role, workspaceRoot, sourceColumnLabel);
+        return this._generatePromptForDestinationRole(cards, role, workspaceRoot, sourceColumnLabel, destinationColumn || column);
     }
 
     private async _generatePromptForDestinationRole(
         cards: KanbanCard[],
         role: string | null,
         workspaceRoot: string,
-        sourceColumnLabel?: string
+        sourceColumnLabel?: string,
+        destinationColumn?: string
     ): Promise<string> {
         let targetRole = role;
         if (!targetRole || (
@@ -4870,7 +4889,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
 
         const plans = await this._cardsToPromptPlans(cards, workspaceRoot);
-        return this.generateUnifiedPrompt(targetRole, plans, workspaceRoot, { sourceColumnLabel });
+        return this.generateUnifiedPrompt(targetRole, plans, workspaceRoot, { sourceColumnLabel, destinationColumn });
     }
 
     private async _getEligibleSessionIds(sessionIds: string[], expectedColumn: string, workspaceRoot?: string): Promise<string[]> {

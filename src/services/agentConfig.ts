@@ -52,6 +52,9 @@ export interface CustomAgentAddons {
 
     // Prompt override (applied LAST, after all directives)
     defaultPromptOverride?: DefaultPromptOverride;
+
+    /** Destination kanban column the card is dispatched to (drives the Stage Complete marker directive). */
+    destinationColumn?: string;
 }
 
 export interface CustomAgentConfig {

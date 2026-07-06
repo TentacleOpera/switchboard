@@ -55,6 +55,7 @@ export interface KanbanPlanRecord {
     routedTo: string;        // agent role dispatched to: 'lead' | 'coder' | 'intern' | ''
     dispatchedAgent: string; // terminal/tool name: 'claude cli', 'copilot cli', etc.
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
+    dispatchedAt?: string | null; // ISO timestamp the card was dispatched; NULL = not working. Activity-light source.
     clickupTaskId?: string;
     linearIssueId?: string;
     notionPageId?: string;
@@ -139,6 +140,7 @@ CREATE TABLE IF NOT EXISTS plans (
     routed_to         TEXT DEFAULT '',
     dispatched_agent  TEXT DEFAULT '',
     dispatched_ide    TEXT DEFAULT '',
+    dispatched_at     TEXT DEFAULT NULL,
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
     notion_page_id    TEXT DEFAULT '',
@@ -305,6 +307,16 @@ const MIGRATION_V45_SQL: string[] = [
 // user data exists in these columns. The migration is idempotent: if the new columns already
 // exist (fresh DB or already migrated), it's a no-op.
 const MIGRATION_V46_SQL: string[] = [];
+
+// V51: Agent activity light — add dispatched_at timestamp. NULL = not working; a non-NULL
+// ISO UTC timestamp means "agent dispatched, light ON" (subject to the 20-min age check).
+// Cleared by clearWorkingState (Stage Complete marker) or clearStaleWorkingState (timeout).
+// No backfill — legacy rows correctly start as NULL (not working). Idempotent: gated on
+// the column not already existing, so a fresh DB (which ships the column in CREATE TABLE)
+// is a no-op.
+const MIGRATION_V51_SQL = [
+    `ALTER TABLE plans ADD COLUMN dispatched_at TEXT DEFAULT NULL`,
+];
 
 
 
@@ -616,7 +628,7 @@ const UPSERT_PLAN_SQL = `
 INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
-    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, dispatched_at,
     clickup_task_id, linear_issue_id, notion_page_id, worktree_id, is_feature, feature_id,
     workspace_name, project_id
  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -657,7 +669,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
-                       brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                       brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, dispatched_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id`;
 
@@ -1504,14 +1516,15 @@ export class KanbanDatabase {
                     record.routedTo || '',       // 18
                     record.dispatchedAgent || '', // 19
                     record.dispatchedIde || '',   // 20
-                    record.clickupTaskId || '',   // 21
-                    record.linearIssueId || '',   // 22
-                    record.notionPageId || '',    // 23
-                    record.worktreeId ?? null,      // 24
-                    record.isFeature ?? 0,              // 25 — DEFAULT 0, not NULL (prevents is_feature=NULL clobber)
-                    record.featureId || '',             // 26
-                    record.workspaceName || '',      // 27
-                    r.projectId          // 28 — resolved (auto-created if needed)
+                    record.dispatchedAt ?? null,  // 21 — dispatched_at (preserved on conflict via omitted ON CONFLICT clause)
+                    record.clickupTaskId || '',   // 22
+                    record.linearIssueId || '',   // 23
+                    record.notionPageId || '',    // 24
+                    record.worktreeId ?? null,      // 25
+                    record.isFeature ?? 0,              // 26 — DEFAULT 0, not NULL (prevents is_feature=NULL clobber)
+                    record.featureId || '',             // 27
+                    record.workspaceName || '',      // 28
+                    r.projectId          // 29 — resolved (auto-created if needed)
                 ]);
             }
             this._db.run('COMMIT');
@@ -6026,6 +6039,31 @@ export class KanbanDatabase {
                 console.error('[KanbanDatabase] V50 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
+
+        // V51: Agent activity light — add dispatched_at timestamp column. Idempotent: only
+        // ALTERs when the column is missing (pre-V51 DB). A fresh DB already has the column
+        // via CREATE TABLE, so this is a no-op there.
+        const v51 = await this.getMigrationVersion();
+        if (v51 < 51) {
+            const db = this._db;
+            try {
+                db.exec('BEGIN');
+                const colCheck = db.prepare(`SELECT COUNT(*) as c FROM pragma_table_info('plans') WHERE name = 'dispatched_at'`);
+                let hasCol = false;
+                try { if (colCheck.step()) { hasCol = Number((colCheck.getAsObject() as any).c) > 0; } } finally { colCheck.free(); }
+                if (!hasCol) {
+                    for (const sql of MIGRATION_V51_SQL) {
+                        db.exec(sql);
+                    }
+                }
+                db.exec('COMMIT');
+                await this.setMigrationVersion(51);
+                console.log('[KanbanDatabase] V51 migration completed: dispatched_at column present (activity-light source)');
+            } catch (e) {
+                try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V51 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
     }
 
     /**
@@ -6446,6 +6484,7 @@ FROM plans
                     routedTo: p.routed_to || p.routedTo || '',
                     dispatchedAgent: p.dispatched_agent || p.dispatchedAgent || '',
                     dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
+                    dispatchedAt: p.dispatched_at ?? p.dispatchedAt ?? null,
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
                     linearIssueId: p.linear_issue_id || p.linearIssueId || '',
                     notionPageId: p.notion_page_id || p.notionPageId || '',
@@ -6461,7 +6500,7 @@ FROM plans
                         record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
-                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.notionPageId || '',
+                        record.dispatchedIde, record.dispatchedAt ?? null, record.clickupTaskId, record.linearIssueId, record.notionPageId || '',
                         record.worktreeId ?? null,
                         record.isFeature ?? null, record.featureId || '',
                         record.workspaceName || '', record.projectId ?? null
@@ -6836,9 +6875,12 @@ FROM plans
         dispatchedIde: string;
     }): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
+        // dispatched_at = now marks the card as "agent working" (the activity-light source).
+        // Re-dispatch overwrites it (resets the 20-min clock). Cleared by clearWorkingState
+        // (marker parse) or clearStaleWorkingState (timeout sweep) — both NULL it.
         return this._persistedUpdate(
-            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, new Date().toISOString(), normalized, workspaceId]
+            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
         );
     }
 
@@ -6851,6 +6893,48 @@ FROM plans
         const plan = await this.getPlanBySessionId(sessionId);
         if (!plan) { return false; }
         return this.updateDispatchInfoByPlanFile(plan.planFile, plan.workspaceId, info);
+    }
+
+    /**
+     * Activity-light OFF-switch (marker-driven). Nulls `dispatched_at` so the derived
+     * `working` flag reads false on the next board render. Called by the plan watcher
+     * when a `**Stage Complete:**` marker is parsed from the plan file. No-op when
+     * already NULL. Scoped by workspace_id so a same-named file in another workspace
+     * is untouched.
+     */
+    public async clearWorkingState(planFile: string, workspaceId: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            'UPDATE plans SET dispatched_at = NULL WHERE plan_file = ? AND workspace_id = ?',
+            [normalized, workspaceId]
+        );
+    }
+
+    /**
+     * Activity-light timeout backstop. Nulls `dispatched_at` on every row in the
+     * workspace whose timestamp is older than `maxAgeMs` (compared as ISO-8601 UTC
+     * strings, which sort chronologically). Returns the count of rows cleared so the
+     * caller can gate a board refresh on `> 0` (avoids needless 10-second re-renders).
+     * A just-dispatched card is never in scope. Scoped by workspace_id.
+     */
+    public async clearStaleWorkingState(workspaceId: string, maxAgeMs: number): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+        const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+        try {
+            this._db.run('BEGIN');
+            this._db.run(
+                'UPDATE plans SET dispatched_at = NULL WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND dispatched_at < ?',
+                [workspaceId, cutoff]
+            );
+            const modified = this._db.getRowsModified();
+            this._db.run('COMMIT');
+            await this._persist();
+            return modified;
+        } catch (e) {
+            try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
+            console.error('[KanbanDatabase] clearStaleWorkingState failed:', e);
+            return 0;
+        }
     }
 
     /** Normalize paths to use forward slashes for cross-platform compatibility */
@@ -6976,6 +7060,7 @@ FROM plans
                     routedTo: String(row.routed_to || ""),
                     dispatchedAgent: String(row.dispatched_agent || ""),
                     dispatchedIde: String(row.dispatched_ide || ""),
+                    dispatchedAt: row.dispatched_at !== null && row.dispatched_at !== undefined ? String(row.dispatched_at) : null,
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
                     notionPageId: String(row.notion_page_id || ""),

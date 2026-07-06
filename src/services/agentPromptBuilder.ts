@@ -273,6 +273,8 @@ export interface PromptBuilderOptions {
     subtaskPlansForConsolidation?: Array<{ planId: string; topic: string; complexity?: string }>;
     /** The active project name to pin into generated plan files. When set, emits a PROJECT PIN directive instructing the agent to write `**Project:** <name>` into each plan's metadata. */
     manifestProject?: string;
+    /** The destination kanban column the card is being dispatched to. Drives the `**Stage Complete: <COLUMN>**` directive so the agent writes a matchable marker. */
+    destinationColumn?: string;
 }
 
 export function resolveBaseInstructions(
@@ -387,6 +389,27 @@ export const BATCH_EXECUTION_RULES = `CRITICAL INSTRUCTIONS:
 1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
 2. Execute each plan fully before moving to the next (if sequential).
 3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
+
+/**
+ * Activity-light OFF-switch. The exact label the agent appends to a plan file when it
+ * finishes a stage; the watcher (planMetadataUtils) parses this same constant to clear the
+ * card's `working` state. Shared so the emitter and parser cannot drift.
+ */
+export const STAGE_COMPLETE_LABEL = 'Stage Complete';
+
+/**
+ * Builds the mandatory "append `**Stage Complete:** <COLUMN>` when done" directive.
+ * Folded into the shared dispatch prefix so every role (and custom agents) receive it.
+ * The marker shape (`**Label:** value`, value outside the bold) matches the
+ * extractEmbeddedMetadata convention used for ClickUp/Linear IDs so the watcher's
+ * parser (planMetadataUtils) reads it cleanly. When `destinationColumn` is empty, the
+ * directive tells the agent to echo the column it was dispatched for (never emits a
+ * literal `undefined`).
+ */
+function buildStageCompleteDirective(destinationColumn?: string): string {
+    const column = destinationColumn && destinationColumn.trim() ? destinationColumn.trim() : '<the column you were dispatched for>';
+    return `STAGE COMPLETE (MANDATORY): When you have finished the stage for a plan, append a single line to that plan's .md file:\n**Stage Complete:** ${column}\nThis is the ONLY signal the board uses to turn off your card's activity light — the board cannot tell you have finished otherwise. Append it to EACH plan file you complete (one marker per file, not one for the whole batch).`;
+}
 
 /** §8 — Shared PRD reference block builder from raw refs. Used by both buildPrdReferenceBlock and buildCustomAgentPrompt. */
 function buildPrdReferenceBlockFromRefs(refs: Array<{ projectName: string; prdLink: string }> | undefined): string {
@@ -782,7 +805,9 @@ export function buildKanbanBatchPrompt(
     // suffixBlock (planner, lead, coder, reviewer, tester, …) without
     // touching each role branch — same pattern as the §11 remote-mode block.
     const prdBlock = buildPrdReferenceBlock(options, role);
-    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
+    // Activity-light OFF-switch directive — reaches every role via the shared prefix.
+    const stageCompleteBlock = buildStageCompleteDirective(options?.destinationColumn);
+    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock, stageCompleteBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
     // §3 — Feature directive is separated from planList so it can be placed
     // before the PLANS TO PROCESS heading rather than under it.
@@ -1473,6 +1498,10 @@ export function buildCustomAgentPrompt(
     if (subagentBlock) {
         prompt += '\n\n' + subagentBlock;
     }
+
+    // Activity-light OFF-switch — custom agents get the same Stage Complete directive as
+    // built-in roles so their cards clear `working` on completion, not just on timeout.
+    prompt += '\n\n' + buildStageCompleteDirective(addons?.destinationColumn);
 
     // Apply directives in defined order
     if (addons?.gitProhibitionEnabled) prompt += '\n\n' + GIT_PROHIBITION_DIRECTIVE;

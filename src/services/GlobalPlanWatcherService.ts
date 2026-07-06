@@ -154,6 +154,32 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 for (const folder of folders) {
                     await this._scanForNewFiles(folder);
                 }
+                // Activity-light timeout sweep: null dispatched_at on cards older than the
+                // configured timeout. The authoritative backstop for the read-time age check
+                // and the marker-driven clear. Runs inside the _scanInProgress guard so it
+                // never overlaps itself; gated per workspace on `cleared > 0` so the board
+                // only refreshes when a light actually turned off (no 10-second flicker).
+                const activityConfig = vscode.workspace.getConfiguration('switchboard.activityLight');
+                const timeoutMs = activityConfig.get<number>('timeoutMs', 20 * 60 * 1000);
+                for (const folder of folders) {
+                    try {
+                        const db = KanbanDatabase.forWorkspace(folder);
+                        await db.ensureReady();
+                        const wsId = await db.getWorkspaceId();
+                        if (!wsId) continue;
+                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs);
+                        if (cleared > 0) {
+                            this._outputChannel?.appendLine(
+                                `[GlobalPlanWatcher] Activity-light timeout sweep cleared ${cleared} stale working card(s) in ${folder}`
+                            );
+                            this._onPlanDiscovered.fire({ uri: vscode.Uri.file(folder), workspaceRoot: folder });
+                        }
+                    } catch (sweepErr) {
+                        this._outputChannel?.appendLine(
+                            `[GlobalPlanWatcher] Activity-light timeout sweep failed for ${folder}: ${sweepErr}`
+                        );
+                    }
+                }
             } finally {
                 this._scanInProgress = false;
             }
@@ -788,6 +814,34 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 // Durable **Feature:** frontmatter fact on re-save (apply-if-empty).
                 if (metadata.feature && !relativePath.startsWith('.switchboard/features/')) {
                     await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath);
+                }
+                // Activity-light OFF-switch: a `**Stage Complete:**` marker clears the
+                // card's working state (nulls dispatched_at). The mtime gate self-advances
+                // (updatedAt := fileMtime below), so the marker is observed on exactly this
+                // one handler pass — clear here, before the trailing _onPlanDiscovered.fire
+                // refreshes the board. Stale-marker guard: when the echoed column is
+                // non-empty and does not match the card's current column, skip the clear
+                // (a copied marker from a previous stage must not clear a re-dispatched
+                // light). An empty value (bare `**Stage Complete:**`) clears unguarded.
+                if (metadata.stageComplete !== undefined) {
+                    const echoed = metadata.stageComplete.trim();
+                    const currentCol = updatedRecord.kanbanColumn || '';
+                    if (echoed === '' || echoed === currentCol) {
+                        try {
+                            await db.clearWorkingState(relativePath, workspaceId);
+                            this._outputChannel?.appendLine(
+                                `[GlobalPlanWatcher] Stage Complete marker cleared working state for: ${relativePath}`
+                            );
+                        } catch (clearErr) {
+                            this._outputChannel?.appendLine(
+                                `[GlobalPlanWatcher] clearWorkingState failed for ${relativePath}: ${clearErr}`
+                            );
+                        }
+                    } else {
+                        this._outputChannel?.appendLine(
+                            `[GlobalPlanWatcher] Stage Complete marker column '${echoed}' != current '${currentCol}' — stale marker, not clearing: ${relativePath}`
+                        );
+                    }
                 }
                 plan = updatedRecord;
 

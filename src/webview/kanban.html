@@ -958,6 +958,30 @@
         .complexity-indicator.very-low { color: #00e5ff; }
         .complexity-indicator.unknown { color: #7f848e; }
 
+        /* Agent activity light — lit while a card is dispatched to an agent (within the
+           timeout window). Amber hue + subtle pulse keeps it distinct from the green
+           "done" badge and the green worktree "clean" dot. Low-key so a board with
+           several lit cards isn't visually overwhelming. */
+        .card-status-light {
+            display: inline-block;
+            margin-right: 5px;
+            font-size: 11px;
+            line-height: 1;
+            vertical-align: baseline;
+            color: transparent;
+        }
+        .card-status-light.is-on {
+            color: #e0a800;
+            animation: card-status-light-pulse 1.8s ease-in-out infinite;
+        }
+        @keyframes card-status-light-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.45; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .card-status-light.is-on { animation: none; }
+        }
+
         .card-actions {
             display: flex;
             gap: 6px;
@@ -4604,7 +4628,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}`)
                 .sort()
                 .join('||');
         }
@@ -5624,6 +5648,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const featureClass = card.isFeature ? ' feature-card' : '';
             const featureBadge = ''; // Badge removed; feature identity shown via purple border + meta line
+            // Activity light: lit while an agent is dispatched to this card (and within the
+            // timeout window). Suppressed for completed cards (backend never sets working
+            // there). Distinct amber hue + pulse so it never reads as the green "done"/"clean" dots.
+            const workingLight = (!isCompleted && card.working)
+                ? '<span class="card-status-light is-on" title="Agent working…">●</span>'
+                : '';
             
             const cardMetaContent = card.isFeature
                 ? `<span class="feature-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
@@ -5637,7 +5667,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const reviewTooltip = card.isFeature ? 'Review feature' : 'Review plan';
             return `
                 <div class="kanban-card${completedClass}${featureClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
-                    <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
+                    <div class="card-topic">${workingLight}${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px; flex-wrap: wrap;">

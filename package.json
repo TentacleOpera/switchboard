@@ -500,6 +500,14 @@
           "description": "Interval in milliseconds between periodic scans for new plan files. Minimum 2s, maximum 5m.",
           "scope": "resource"
         },
+        "switchboard.activityLight.timeoutMs": {
+          "type": "integer",
+          "default": 1200000,
+          "minimum": 60000,
+          "maximum": 3600000,
+          "description": "How long (ms) a card's agent-activity light stays lit after dispatch before the timeout sweep clears it. Default 20 minutes. Lowering it trades false-off for stuck-on.",
+          "scope": "resource"
+        },
         "switchboard.planAutoFetch.enabled": {
           "type": "boolean",
           "default": false,
