@@ -16005,6 +16005,9 @@ What would you like to find?`;
 
             if (cleanedTerminalName) {
                 this.clearTerminalAgentInfo(cleanedTerminalName);
+                // Clean up in-memory dispatch map for all terminal types (defensive: try both raw and suffixed keys)
+                this._registeredTerminals?.delete(cleanedTerminalName);
+                this._registeredTerminals?.delete(this._suffixedName(cleanedTerminalName));
             }
 
             await this._removeAutobanTerminalReferences(cleanedTerminalName || terminal.name);
