@@ -15234,49 +15234,59 @@ What would you like to find?`;
             // Get db reference early for Linear archive call
             const db = await this._getKanbanDb(resolvedWorkspaceRoot);
 
-            // Archive Linear issue if delete sync is enabled
+            // Archive Linear issue if delete sync is enabled.
+            // Fire-and-forget: the local deletion has already happened (files unlinked above),
+            // so the Linear/ClickUp archive calls are best-effort remote cleanup. Awaiting them
+            // adds 1-3s of network latency to the UI; not awaiting keeps the delete snappy
+            // (parity with project.html which makes no remote calls at all). Failures are logged.
             const planRecord = db ? await db.getPlanBySessionId(sessionId) : null;
             if (planRecord?.linearIssueId) {
-                try {
-                    const linear = this._getLinearService(resolvedWorkspaceRoot);
-                    const linearConfig = await linear.loadConfig();
-                    if (linearConfig?.deleteSyncEnabled === true) {  // default false — require explicit opt-in
-                        const archiveResult = await linear.archiveIssue(planRecord.linearIssueId);
-                        if (!archiveResult.success) {
-                            console.warn(
-                                `[TaskViewerProvider] _handleDeletePlan: Linear archive failed for issue ${planRecord.linearIssueId}: ${archiveResult.error}. ` +
-                                `Continuing with local deletion.`
-                            );
+                const linearIssueId = planRecord.linearIssueId;
+                void (async () => {
+                    try {
+                        const linear = this._getLinearService(resolvedWorkspaceRoot);
+                        const linearConfig = await linear.loadConfig();
+                        if (linearConfig?.deleteSyncEnabled === true) {  // default false — require explicit opt-in
+                            const archiveResult = await linear.archiveIssue(linearIssueId);
+                            if (!archiveResult.success) {
+                                console.warn(
+                                    `[TaskViewerProvider] _handleDeletePlan: Linear archive failed for issue ${linearIssueId}: ${archiveResult.error}. ` +
+                                    `Local deletion already completed.`
+                                );
+                            }
                         }
+                    } catch (archiveError) {
+                        console.warn(
+                            `[TaskViewerProvider] _handleDeletePlan: Linear archive threw for session ${sessionId}: ${archiveError}. ` +
+                            `Local deletion already completed.`
+                        );
                     }
-                } catch (archiveError) {
-                    console.warn(
-                        `[TaskViewerProvider] _handleDeletePlan: Linear archive threw for session ${sessionId}: ${archiveError}. ` +
-                        `Continuing with local deletion.`
-                    );
-                }
+                })();
             }
 
-            // Delete ClickUp task if delete sync is enabled
+            // Delete ClickUp task if delete sync is enabled (fire-and-forget, same rationale as Linear above)
             if (planRecord?.clickupTaskId) {
-                try {
-                    const clickup = this._getClickUpService(resolvedWorkspaceRoot);
-                    const clickupConfig = await clickup.loadConfig();
-                    if (clickupConfig?.deleteSyncEnabled === true) { // default false — require explicit opt-in
-                        const archiveResult = await clickup.archiveTask(planRecord.clickupTaskId);
-                        if (!archiveResult.success) {
-                            console.warn(
-                                `[TaskViewerProvider] _handleDeletePlan: ClickUp delete failed for task ` +
-                                `${planRecord.clickupTaskId}: ${archiveResult.error}. Continuing with local deletion.`
-                            );
+                const clickupTaskId = planRecord.clickupTaskId;
+                void (async () => {
+                    try {
+                        const clickup = this._getClickUpService(resolvedWorkspaceRoot);
+                        const clickupConfig = await clickup.loadConfig();
+                        if (clickupConfig?.deleteSyncEnabled === true) { // default false — require explicit opt-in
+                            const archiveResult = await clickup.archiveTask(clickupTaskId);
+                            if (!archiveResult.success) {
+                                console.warn(
+                                    `[TaskViewerProvider] _handleDeletePlan: ClickUp delete failed for task ` +
+                                    `${clickupTaskId}: ${archiveResult.error}. Local deletion already completed.`
+                                );
+                            }
                         }
+                    } catch (archiveError) {
+                        console.warn(
+                            `[TaskViewerProvider] _handleDeletePlan: ClickUp delete threw for session ` +
+                            `${sessionId}: ${archiveError}. Local deletion already completed.`
+                        );
                     }
-                } catch (archiveError) {
-                    console.warn(
-                        `[TaskViewerProvider] _handleDeletePlan: ClickUp delete threw for session ` +
-                        `${sessionId}: ${archiveError}. Continuing with local deletion.`
-                    );
-                }
+                })();
             }
 
             await log.deleteRunSheet(sessionId);
@@ -15287,8 +15297,17 @@ What would you like to find?`;
             console.log(`[TaskViewerProvider] _handleDeletePlan: runsheet deleted for sessionId=${sessionId}`);
 
             if (db && (!brainSourcePath || isManagedImport)) {
-                await db.deletePlan(sessionId);
-                console.log(`[TaskViewerProvider] _handleDeletePlan: db plan deleted for sessionId=${sessionId}`);
+                // Prefer the planId-keyed delete (avoids the extra getPlanBySessionId
+                // lookup that the deprecated session-keyed db.deletePlan performs).
+                // Fall back to the session-keyed path for legacy run sheets that
+                // predate the planId field on the run sheet.
+                const deletePlanId = sheet?.planId || sessionId;
+                if (sheet?.planId) {
+                    await db.deletePlanByPlanId(sheet.planId);
+                } else {
+                    await db.deletePlan(sessionId);
+                }
+                console.log(`[TaskViewerProvider] _handleDeletePlan: db plan deleted for planId=${deletePlanId}`);
             }
 
             // Update plan registry status to deleted
@@ -15305,13 +15324,12 @@ What would you like to find?`;
                 operation: 'delete_plan',
                 sessionId
             });
-            // Only sync if we actually deleted a file; otherwise the orphaned file will be re-discovered
-            if (mirrorPath || brainSourcePath) {
-                await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
-            } else {
-                // File deletion was not possible (no path resolved). Refresh sidebar manually without file scan.
-                await this._refreshRunSheets(resolvedWorkspaceRoot);
-            }
+            // Use the lightweight refresh (DB→run-sheet rebuild) instead of the full
+            // _syncFilesAndRefreshRunSheets (which includes _rescanAntigravityPlanSources —
+            // a directory scan of all configured IDE plan folders). The file watcher
+            // (GlobalPlanWatcherService) already detects the .md file deletion and updates
+            // the DB; the rescan is a legacy safety net that adds ~1-2s of latency.
+            await this._refreshRunSheets(resolvedWorkspaceRoot);
             console.log(`[TaskViewerProvider] _handleDeletePlan: completed successfully for sessionId=${sessionId}`);
             return true;
         } catch (e) {
