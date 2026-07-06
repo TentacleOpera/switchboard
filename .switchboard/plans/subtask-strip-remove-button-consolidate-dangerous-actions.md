@@ -201,3 +201,7 @@ Build (`npm run compile`) and reinstall the VSIX — the installed webview loads
 ## Recommendation
 
 Complexity **3** (routine single-file UI consolidation with one cross-webview footgun to avoid) → **Send to Intern**.
+
+## Review Findings
+
+Files changed: `src/webview/project.js` (Remove button + handler added to `renderFeatureSubtaskMetaBar`; sidebar Remove button + its `querySelectorAll` wiring loop stripped from `renderFeatureSubtasks`) and `src/webview/project.html` (dead `.feature-remove-subtask-btn` rule deleted). Validation: `node --check src/webview/project.js` passes; `feature-remove-subtask-btn` no longer appears in `project.*` (only in `planning.js`, i.e. the separate sidebar panel is untouched), and the CSS deletion left the surrounding `.feature-subtask-item` / `.feature-subtask-link:hover` rules valid. Remaining risk: the strip sends `plan.sessionId || plan.planId` to `_removeSubtaskFromFeature`, which resolves by `plan_id` only (`getPlanByPlanId`), so for legacy rows where `session_id ≠ plan_id` Remove would silently no-op — but this is **pre-existing** (the old sidebar button used the identical payload/resolver) and parity is preserved, so it is a UAT-verify item, not a regression, and the fix (`resolvePlanByAnyId`) is out of scope per this plan's Non-Goals. No CRITICAL/MAJOR issues found; no code fixes applied.
