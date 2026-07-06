@@ -522,6 +522,15 @@ export async function activate(context: vscode.ExtensionContext) {
             kanbanProvider?.recomputeFeatureColumnFromSubtasks(featurePlanId, watchedRoot) ?? Promise.resolve()
     );
 
+    // Let the watcher regenerate a feature's ## Subtasks block after a subtask .md is
+    // deleted directly on disk (agent, git, manual rm). The watcher captures feature_id
+    // before deletePlanByPlanFile and invokes this callback after, so the parent feature
+    // file drops the removed subtask without waiting for an extension restart. Mirrors
+    // the setFeatureColumnRecomputer injection pattern above.
+    globalPlanWatcher.setFeatureFileRegenerator(
+        (ws: string, fid: string) => kanbanProvider?.regenerateFeatureFile(ws, fid) ?? Promise.resolve()
+    );
+
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
 
     // Workspace exclusion management (replaces legacy _runGitignoreMigrationV1)

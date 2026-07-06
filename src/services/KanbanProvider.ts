@@ -9944,6 +9944,21 @@ ${FOCUS_DIRECTIVE}`;
     }
 
     /**
+     * Rewrite one feature's auto-generated ## Subtasks block from the live DB set.
+     * No-op if featureId is empty (non-subtask deletes carry no featureId). This is the
+     * targeted public entry point for delete/detach paths — never use
+     * regenerateAllFeatureFiles for a single-subtask removal (it rewrites every feature
+     * .md and risks a refresh storm). Also heals the ## Worktrees block and the derived
+     * **Complexity:** marker in the same pass (see _regenerateFeatureFile).
+     */
+    public async regenerateFeatureFile(workspaceRoot: string, featureId: string): Promise<void> {
+        if (!featureId) return;
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return;
+        await this._regenerateFeatureFile(workspaceRoot, featureId, db);
+    }
+
+    /**
      * Remove a single subtask from its parent feature. Shared entry point for BOTH the
      * webview `removeSubtaskFromFeature` message and the agent/API path (LocalApiServer
      * `/kanban/feature/remove` → TaskViewerProvider → here). Detaches the subtask,

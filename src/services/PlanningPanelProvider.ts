@@ -3546,6 +3546,12 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
+                    // Capture feature_id BEFORE the row is destroyed — the parent link
+                    // (plans.feature_id) is gone after deletePlanByPlanId, so a
+                    // post-delete read cannot recover it. Mirrors the verified
+                    // _removeSubtaskFromFeature capture-before-mutate pattern.
+                    const rec = await db.getPlanByPlanId(planId);
+                    const featureId = rec?.featureId || '';
                     await db.deletePlanByPlanId(planId);
                     // Delete the .md file from disk so the watcher doesn't re-import it
                     if (planFile) {
@@ -3558,6 +3564,15 @@ Start by checking which documents exist, then present the menu.`;
                             if (unlinkErr?.code !== 'ENOENT') {
                                 console.warn(`[PlanningPanelProvider] Failed to delete plan file ${resolvedPlanFile}:`, unlinkErr);
                             }
+                        }
+                    }
+                    // Regenerate the parent feature's ## Subtasks block now that the
+                    // subtask row is gone. No-op for non-subtask deletes (featureId === '').
+                    if (featureId) {
+                        try {
+                            await this._kanbanProvider?.regenerateFeatureFile(wsRoot, featureId);
+                        } catch (regenErr) {
+                            console.warn(`[PlanningPanelProvider] regenerateFeatureFile failed for ${featureId}:`, regenErr);
                         }
                     }
                     this._projectPanel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: true, planId });
@@ -3642,10 +3657,18 @@ Start by checking which documents exist, then present the menu.`;
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!subtaskSessionId || !wsRoot) break;
                 try {
-                    const db = KanbanDatabase.forWorkspace(wsRoot);
-                    const subtask = await db.getPlanByPlanId(subtaskSessionId);
-                    if (!subtask) break;
-                    await db.updateFeatureStatus(subtask.planId, 0, '');
+                    // Delegate to the shared KanbanProvider._removeSubtaskFromFeature — it
+                    // detaches, abandons the per-subtask worktree, regenerates the feature
+                    // file, refreshes the kanban board, and unlinks from external trackers.
+                    // The previous local body only did updateFeatureStatus and omitted regen,
+                    // worktree abandon, and tracker unlink. Same shape as the existing
+                    // TaskViewerProvider delegation (TaskViewerProvider.ts:1042).
+                    if (this._kanbanProvider) {
+                        await this._kanbanProvider._removeSubtaskFromFeature(wsRoot, subtaskSessionId);
+                    }
+                    // Preserve the planning-panel webview refresh — _removeSubtaskFromFeature's
+                    // _refreshBoard targets the kanban board, not this provider's _projectPanel.
+                    // Without this, the planning panel goes stale on every detach.
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
                     this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });

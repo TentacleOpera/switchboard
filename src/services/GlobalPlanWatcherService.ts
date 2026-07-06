@@ -72,6 +72,18 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._recomputeFeatureColumn = fn;
     }
 
+    /**
+     * Injected regen callback for the delete path. The watcher holds no KanbanProvider
+     * reference (only injected callbacks), so a parallel setter mirrors
+     * setFeatureColumnRecomputer. Invoked after deletePlanByPlanFile with the captured
+     * parent featureId so the feature .md's ## Subtasks block drops the removed subtask.
+     */
+    private _regenerateFeatureFile?: (workspaceRoot: string, featureId: string) => Promise<void>;
+
+    public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
+        this._regenerateFeatureFile = cb;
+    }
+
     constructor(
         private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
         outputChannel?: vscode.OutputChannel
@@ -914,6 +926,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                         this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping delete for archived completed plan: ${plan.planFile}`);
                         return;
                     }
+                    // Capture feature_id BEFORE deletePlanByPlanFile destroys the row — the
+                    // parent link (plans.feature_id) is gone after the delete, so a post-delete
+                    // read cannot recover it. Mirrors the _removeSubtaskFromFeature pattern.
+                    const featureId = plan.featureId || '';
                     const tombKey = `${relativePath}|${plan.workspaceId}`;
                     this._recentlyDeletedColumns.set(tombKey, { column: plan.kanbanColumn, ts: Date.now() });
                     setTimeout(() => this._recentlyDeletedColumns.delete(tombKey), 5000);
@@ -923,6 +939,18 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     await db.deletePlanByPlanFile(plan.planFile, plan.workspaceId);
                     this._outputChannel?.appendLine(`[GlobalPlanWatcher] Deleted plan: ${plan.planFile}`);
                     this._onPlanDiscovered.fire({ uri, workspaceRoot });
+                    // Regenerate the parent feature's ## Subtasks block now that the subtask
+                    // row is gone. No-op for non-subtask deletes (featureId === ''). For
+                    // in-app deletes the DB row is already gone before the .md is unlinked
+                    // (ordering rule), so getPlanByPlanFile above returned null and this
+                    // branch never ran — the callback only fires for true external deletions.
+                    if (featureId && this._regenerateFeatureFile) {
+                        try {
+                            await this._regenerateFeatureFile(workspaceRoot, featureId);
+                        } catch (regenErr) {
+                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] regenerateFeatureFile failed for ${featureId}: ${regenErr}`);
+                        }
+                    }
                 }
             }
         } catch (err) {

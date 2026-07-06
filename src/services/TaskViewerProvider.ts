@@ -15197,6 +15197,48 @@ What would you like to find?`;
                 }
             }
 
+            // Hoist the plan record read BEFORE any mutation. planRecord is the source for
+            // featureId (parent feature regen), linearIssueId (Linear archive), and
+            // clickupTaskId (ClickUp archive). All three must be captured before the DB row
+            // is destroyed — the reorder below deletes the row before unlinking the .md, so
+            // a late getPlanBySessionId would return null and lose the archive IDs. This is
+            // the critical refinement vs. the original plan which only mentioned featureId.
+            const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+            const planRecord = db ? await db.getPlanBySessionId(sessionId) : null;
+            const featureId = planRecord?.featureId || '';
+            const linearIssueId = planRecord?.linearIssueId || '';
+            const clickupTaskId = planRecord?.clickupTaskId || '';
+
+            // DB-delete-before-unlink: delete the row before the .md is unlinked so the
+            // GlobalPlanWatcherService._handlePlanDelete post-unlink read (getPlanByPlanFile)
+            // returns null and no-ops — guaranteeing exactly one regen runs (this path's),
+            // not a double regen. This is an optimization for the single-regen property; the
+            // unordered path is already correct because deletePlanByPlanId is idempotent and
+            // _regenerateFeatureFile's byte-identical skip dedupes a double-regen.
+            if (db && (!brainSourcePath || isManagedImport)) {
+                // Prefer the planId-keyed delete (avoids the extra getPlanBySessionId
+                // lookup that the deprecated session-keyed db.deletePlan performs).
+                // Fall back to the session-keyed path for legacy run sheets that
+                // predate the planId field on the run sheet.
+                const deletePlanId = sheet?.planId || sessionId;
+                if (sheet?.planId) {
+                    await db.deletePlanByPlanId(sheet.planId);
+                } else {
+                    await db.deletePlan(sessionId);
+                }
+                console.log(`[TaskViewerProvider] _handleDeletePlan: db plan deleted for planId=${deletePlanId}`);
+                // Regenerate the parent feature's ## Subtasks block now that the subtask
+                // row is gone. No-op for non-subtask deletes (featureId === '') and for
+                // brain-source plans with no DB row (planRecord null → featureId '').
+                if (featureId) {
+                    try {
+                        await this._kanbanProvider?.regenerateFeatureFile(resolvedWorkspaceRoot, featureId);
+                    } catch (regenErr) {
+                        console.warn(`[TaskViewerProvider] _handleDeletePlan: regenerateFeatureFile failed for ${featureId}:`, regenErr);
+                    }
+                }
+            }
+
             // AP-1: Atomic deletion — brain first, then mirror, then runsheet; halt on any failure
             if (brainSourcePath && fs.existsSync(brainSourcePath)) {
                 try {
@@ -15227,17 +15269,14 @@ What would you like to find?`;
                 }
             }
 
-            // Get db reference early for Linear archive call
-            const db = await this._getKanbanDb(resolvedWorkspaceRoot);
-
             // Archive Linear issue if delete sync is enabled.
             // Fire-and-forget: the local deletion has already happened (files unlinked above),
             // so the Linear/ClickUp archive calls are best-effort remote cleanup. Awaiting them
             // adds 1-3s of network latency to the UI; not awaiting keeps the delete snappy
             // (parity with project.html which makes no remote calls at all). Failures are logged.
-            const planRecord = db ? await db.getPlanBySessionId(sessionId) : null;
-            if (planRecord?.linearIssueId) {
-                const linearIssueId = planRecord.linearIssueId;
+            // linearIssueId / clickupTaskId were captured from the hoisted planRecord above,
+            // before the DB row was destroyed by the DB-delete-before-unlink reorder.
+            if (linearIssueId) {
                 void (async () => {
                     try {
                         const linear = this._getLinearService(resolvedWorkspaceRoot);
@@ -15261,8 +15300,7 @@ What would you like to find?`;
             }
 
             // Delete ClickUp task if delete sync is enabled (fire-and-forget, same rationale as Linear above)
-            if (planRecord?.clickupTaskId) {
-                const clickupTaskId = planRecord.clickupTaskId;
+            if (clickupTaskId) {
                 void (async () => {
                     try {
                         const clickup = this._getClickUpService(resolvedWorkspaceRoot);
@@ -15291,20 +15329,6 @@ What would you like to find?`;
                 this._activeDispatchSessions.delete(sheet.planId);
             }
             console.log(`[TaskViewerProvider] _handleDeletePlan: runsheet deleted for sessionId=${sessionId}`);
-
-            if (db && (!brainSourcePath || isManagedImport)) {
-                // Prefer the planId-keyed delete (avoids the extra getPlanBySessionId
-                // lookup that the deprecated session-keyed db.deletePlan performs).
-                // Fall back to the session-keyed path for legacy run sheets that
-                // predate the planId field on the run sheet.
-                const deletePlanId = sheet?.planId || sessionId;
-                if (sheet?.planId) {
-                    await db.deletePlanByPlanId(sheet.planId);
-                } else {
-                    await db.deletePlan(sessionId);
-                }
-                console.log(`[TaskViewerProvider] _handleDeletePlan: db plan deleted for planId=${deletePlanId}`);
-            }
 
             // Update plan registry status to deleted
             if (brainSourcePath && !isManagedImport) {
