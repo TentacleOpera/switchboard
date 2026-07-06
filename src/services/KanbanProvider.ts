@@ -207,6 +207,10 @@ export class KanbanProvider implements vscode.Disposable {
     private _projectFilterNeedsValidation: boolean = false;
     private _projectFilterSaveTimeout: NodeJS.Timeout | null = null;
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
+    // Global Override flags (plan 02). Live ONLY in the kanban.db config table
+    // (workspace tier) — never scope-resolved, never in globalState.
+    private _workspaceOverrideEnabled: boolean = false;
+    private _projectOverrideEnabled: boolean = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
     private _outputChannel?: vscode.OutputChannel;
@@ -216,6 +220,9 @@ export class KanbanProvider implements vscode.Disposable {
 
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
+        // Constructor's _reloadSettingsFromStore ran before the DB tier was reachable;
+        // this second pass is what actually applies scoped values on startup (plan 02 §6).
+        this._loadOverrideFlags();
         this._reloadSettingsFromStore();
     }
 
@@ -374,14 +381,14 @@ export class KanbanProvider implements vscode.Disposable {
                     .catch(e => console.warn('[KanbanProvider] constructor: failed to sync restored project filter to DB config:', e));
             }
         }
-        this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
-        this._dynamicComplexityRoutingEnabled = this._getSetting<boolean>(
+        this._cliTriggersEnabled = this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
+        this._dynamicComplexityRoutingEnabled = this._getScopedSetting<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
             true
         );
-        this._columnDragDropModes = this._getSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
-        this._routingMapConfig = this._getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
-        this._allowUnknownComplexityAutoMove = this._getSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
+        this._columnDragDropModes = this._getScopedSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
+        this._routingMapConfig = this._getScopedSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
+        this._allowUnknownComplexityAutoMove = this._getScopedSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
         this._clearTerminalBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
         this._clearTerminalBeforePromptDelay = Math.min(Math.max(
             vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000),
@@ -389,7 +396,7 @@ export class KanbanProvider implements vscode.Disposable {
         ), 10000);
 
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
-            this._getSetting<Record<string, number>>('kanban.orderOverrides', {})
+            this._getScopedSetting<Record<string, number>>('kanban.orderOverrides', {})
         );
         this._context.subscriptions.push(
             vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -513,17 +520,99 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
+    // ── Global Override: scope-aware settings layer (plan 02) ──────────────
+
+    /** Load the two override flags from the kanban.db config table (workspace tier).
+     *  Pre-wiring (no _taskViewerProvider / root): keep defaults (false). */
+    private _loadOverrideFlags(): void {
+        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+        if (!root) { return; }
+        try {
+            const db = KanbanDatabase.forWorkspace(root);
+            if (db.isOpen()) {
+                this._workspaceOverrideEnabled = db.getConfigJsonSync<boolean>('kanban.workspaceOverrideEnabled', false);
+                this._projectOverrideEnabled = db.getConfigJsonSync<boolean>('kanban.projectOverrideEnabled', false);
+            }
+        } catch { /* keep defaults */ }
+    }
+
+    /** Scope-aware read. Resolution: project → workspace → globalState → (legacy) db config → default.
+     *  Both overrides OFF = bit-identical to _getSetting (globalState → db config). */
+    private _getScopedSetting<T>(key: string, defaultValue: T): T {
+        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+        if (root) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                if (db.isOpen()) {
+                    // 1. Project tier (only if a specific project is selected)
+                    if (this._projectOverrideEnabled && this._projectFilter
+                        && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                        const projectVal = db.getProjectConfigJsonSync<T | undefined>(this._projectFilter, key, undefined);
+                        if (projectVal !== undefined) return projectVal;
+                    }
+                    // 2. Workspace tier (db config takes precedence over globalState)
+                    if (this._workspaceOverrideEnabled) {
+                        const wsVal = db.getConfigJsonSync<T | undefined>(key, undefined);
+                        if (wsVal !== undefined) return wsVal;
+                    }
+                }
+            } catch { /* fall through to globalState */ }
+        }
+        // 3. globalState
+        const val = this._context.globalState.get<T>(key);
+        if (val !== undefined) return val;
+        // 4. Legacy fallback (both OFF): db config — today's behavior
+        if (root && this._taskViewerProvider) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                if (db.isOpen()) {
+                    const dbVal = db.getConfigJsonSync<T | undefined>(key, undefined);
+                    if (dbVal !== undefined) return dbVal;
+                }
+            } catch { /* fall through */ }
+        }
+        return defaultValue;
+    }
+
+    /** Scope-aware write. Project-ON → project_config only. Workspace-ON → db config only.
+     *  Both OFF → globalState + db config mirror (verbatim _updateSetting body). */
+    private async _updateScopedSetting<T>(key: string, value: T): Promise<void> {
+        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+        const db = root ? KanbanDatabase.forWorkspace(root) : undefined;
+        if (this._projectOverrideEnabled && this._projectFilter
+                && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER
+                && db && await db.ensureReady()) {
+            await db.setProjectConfigJson(this._projectFilter, key, value);
+            return;
+        }
+        if (this._workspaceOverrideEnabled && db && await db.ensureReady()) {
+            await db.setConfigJson(key, value);
+            return;
+        }
+        // Both OFF — verbatim _updateSetting
+        await this._context.globalState.update(key, value);
+        if (root && db) {
+            try {
+                await db.ensureReady();
+                await db.setConfigJson(key, value);
+            } catch (e) {
+                console.error(`[KanbanProvider] Failed to mirror config key ${key} to DB:`, e);
+            }
+        }
+    }
+
     private _reloadSettingsFromStore(): void {
-        this._cliTriggersEnabled = this._getSetting<boolean>('kanban.cliTriggersEnabled', true);
-        this._dynamicComplexityRoutingEnabled = this._getSetting<boolean>(
+        this._loadOverrideFlags();
+        this._cliTriggersEnabled = this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
+        this._dynamicComplexityRoutingEnabled = this._getScopedSetting<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
             true
         );
-        this._columnDragDropModes = this._getSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
-        this._routingMapConfig = this._getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
-        this._allowUnknownComplexityAutoMove = this._getSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
+        this._columnDragDropModes = this._getScopedSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
+        this._routingMapConfig = this._getScopedSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
+        this._allowUnknownComplexityAutoMove = this._getScopedSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
-            this._getSetting<Record<string, number>>('kanban.orderOverrides', {})
+            this._getScopedSetting<Record<string, number>>('kanban.orderOverrides', {})
         );
     }
 
@@ -619,7 +708,7 @@ export class KanbanProvider implements vscode.Disposable {
     public async setKanbanOrderOverrides(overrides: Record<string, number>, workspaceRoot?: string): Promise<void> {
         const normalized = this._sanitizeKanbanOrderOverrides(overrides);
         this._kanbanOrderOverrides = normalized;
-        await this._updateSetting('kanban.orderOverrides', normalized);
+        await this._updateScopedSetting('kanban.orderOverrides', normalized);
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (resolvedWorkspaceRoot) {
             this._scheduleBoardRefresh(resolvedWorkspaceRoot);
@@ -2082,7 +2171,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     private _resolveDevDocsDirForSync(root: string): string {
         const cfg = vscode.workspace.getConfiguration('switchboard').get<string>('devDocsFolder', 'docs') || 'docs';
         const p = path.resolve(root, cfg);
-        return p.startsWith(path.resolve(root)) ? p : path.resolve(root, 'docs');
+        // Strictly inside root — bare startsWith(root) leaks a sibling dir into
+        // the sync bundle. Require the path separator (mirror _devDocsFolder).
+        const rootResolved = path.resolve(root);
+        return p.startsWith(rootResolved + path.sep) ? p : path.resolve(root, 'docs');
     }
 
     /** Resolve the root README.md path (case-insensitive lookup) for the sync bundle, or undefined. */
@@ -5212,8 +5304,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             this._columnDragDropModes = {};
             this._markConfigDirty();
             await Promise.all([
-                this._updateSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
-                this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes)
+                this._updateScopedSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
+                this._updateScopedSetting('kanban.columnDragDropModes', this._columnDragDropModes)
             ]);
             this._scheduleBoardRefresh(resolvedWorkspaceRoot);
             return;
@@ -5244,8 +5336,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
         this._markConfigDirty();
 
         await Promise.all([
-            this._updateSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
-            this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes)
+            this._updateScopedSetting('kanban.orderOverrides', this._kanbanOrderOverrides),
+            this._updateScopedSetting('kanban.columnDragDropModes', this._columnDragDropModes)
         ]);
         this._scheduleBoardRefresh(resolvedWorkspaceRoot);
     }
@@ -5762,6 +5854,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
             this._projectFilterSaveTimeout = setTimeout(async () => {
                 await this._context.workspaceState.update(`kanban.projectFilter.${resolvedRoot}`, filter);
             }, 100);
+
+            // Global Override (plan 02 §6): when project override is ON, switching projects
+            // must swap the effective settings atomically with the board refresh — reload
+            // scoped settings + bump epoch so the board renders with the new project's values.
+            if (this._projectOverrideEnabled) {
+                this._reloadSettingsFromStore();
+                this._markConfigDirty();
+            }
         }
     }
     public async queueIntegrationSyncForSession(
@@ -6012,7 +6112,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return;
         }
         try {
-            await this._updateSetting('kanban.routingMapConfig', config);
+            await this._updateScopedSetting('kanban.routingMapConfig', config);
             this._routingMapConfig = config;
             console.log('[KanbanProvider] Routing config saved:', config);
         } catch (err) {
@@ -6890,7 +6990,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'toggleCliTriggers':
                 this._cliTriggersEnabled = !!msg.enabled;
                 this._markConfigDirty();
-                await this._updateSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
+                await this._updateScopedSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
                 break;
             case 'setFeatureWorkflowMode': {
                 // New shape: { ultracode: boolean, goal: boolean }
@@ -6918,7 +7018,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._dynamicComplexityRoutingEnabled = !!msg.enabled;
                 this._markConfigDirty();
                 try {
-                    await this._updateSetting(
+                    await this._updateScopedSetting(
                         'kanban.dynamicComplexityRoutingEnabled',
                         this._dynamicComplexityRoutingEnabled
                     );
@@ -6930,7 +7030,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._allowUnknownComplexityAutoMove = !!msg.enabled;
                 this._markConfigDirty();
                 try {
-                    await this._updateSetting(
+                    await this._updateScopedSetting(
                         'kanban.allowUnknownComplexityAutoMove',
                         this._allowUnknownComplexityAutoMove
                     );
@@ -6985,7 +7085,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (columnId && (mode === 'cli' || mode === 'prompt')) {
                     this._columnDragDropModes[columnId] = mode;
                     this._markConfigDirty();
-                    await this._updateSetting('kanban.columnDragDropModes', this._columnDragDropModes);
+                    await this._updateScopedSetting('kanban.columnDragDropModes', this._columnDragDropModes);
                 }
                 break;
             }
@@ -8366,7 +8466,7 @@ ${FOCUS_DIRECTIVE}`;
                 if (key.startsWith('roleConfig_') && this._taskViewerProvider) {
                     await this._taskViewerProvider.saveRoleConfig(key, value);
                 } else {
-                    await this._updateSetting(fullKey, value);
+                    await this._updateScopedSetting(fullKey, value);
                 }
                 break;
             }
@@ -8382,7 +8482,7 @@ ${FOCUS_DIRECTIVE}`;
                 } else if (key.startsWith('roleConfig_') && this._taskViewerProvider) {
                     value = this._taskViewerProvider.getRoleConfig(key);
                 } else {
-                    value = this._getSetting(fullKey, undefined);
+                    value = this._getScopedSetting(fullKey, undefined);
                 }
                 
                 this._panel?.webview.postMessage({ type: 'settingResult', key, value });
