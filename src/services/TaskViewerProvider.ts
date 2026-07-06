@@ -635,19 +635,33 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // This ensures kanban card copy buttons reflect the latest custom prompts
         // without requiring the user to reopen the Prompts Tab.
         if (key.startsWith('roleConfig_')) {
-            const workspaceRoot = this._getWorkspaceRoot();
-            if (workspaceRoot) {
-                try {
-                    this._cachedDefaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-                } catch {
-                    // Silently ignore — cache will be refreshed next time the Prompts Tab is opened
-                }
+            await this.refreshPromptOverridesCache();
+        }
+    }
+
+    /** Rebuild the cached prompt overrides from the current scope (plan 05).
+     *  Public so KanbanProvider can call it on override toggle / project-filter change. */
+    public async refreshPromptOverridesCache(): Promise<void> {
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (workspaceRoot) {
+            try {
+                this._cachedDefaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+            } catch {
+                // Silently ignore — cache will be refreshed next time the Prompts Tab is opened
             }
         }
     }
 
     public getRoleConfig(key: string): unknown {
         return this.getSetting(`switchboard.prompts.${key}`, undefined);
+    }
+
+    /** Scope-aware role config read for TaskViewerProvider's own prompt-assembly paths
+     *  (plan 05). Delegates to KanbanProvider's scoped resolver; falls back to the
+     *  existing globalState read when _kanbanProvider is unset (sidebar-only flows). */
+    private _readRoleConfigScoped(role: string): any {
+        return this._kanbanProvider?.getScopedRoleConfig(role)
+            ?? this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
     }
 
     public async exportPromptSettings(): Promise<boolean> {
@@ -679,11 +693,49 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            const data = {
+            // Additive scoped sections (plan 05): workspace-scoped and project-scoped
+            // role configs from the DB, so the export captures the full scope stack.
+            // Legacy `roleConfigs` shape is untouched (import-compatible superset).
+            const workspaceRoleConfigs: Record<string, unknown> = {};
+            const projectRoleConfigs: { project: string; configs: Record<string, unknown> }[] = [];
+            try {
+                const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                if (await db.ensureReady()) {
+                    // Workspace-scoped: enumerate db config keys with the roleConfig prefix.
+                    // getConfigJsonSync reads a single key; use the known role list for enumeration.
+                    const wsRoles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'claude_designer'];
+                    for (const role of wsRoles) {
+                        const fullKey = `switchboard.prompts.roleConfig_${role}`;
+                        const val = db.getConfigJsonSync<any>(fullKey, undefined);
+                        if (val !== undefined) { workspaceRoleConfigs[role] = val; }
+                    }
+                    // Project-scoped: only for the active project when project override is ON.
+                    const activeProject = db.getConfigSync('kanban.activeProjectFilter');
+                    const projectOverrideOn = db.getConfigJsonSync<boolean>('kanban.projectOverrideEnabled', false);
+                    if (projectOverrideOn && activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                        const allProjectConfigs = await db.getAllProjectConfigJson(activeProject);
+                        const projConfigs: Record<string, unknown> = {};
+                        for (const [k, v] of Object.entries(allProjectConfigs)) {
+                            if (k.startsWith('switchboard.prompts.roleConfig_')) {
+                                projConfigs[k.replace('switchboard.prompts.roleConfig_', '')] = v;
+                            }
+                        }
+                        if (Object.keys(projConfigs).length > 0) {
+                            projectRoleConfigs.push({ project: activeProject, configs: projConfigs });
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('[TaskViewerProvider] exportPromptSettings: scoped-section enumeration failed:', e);
+            }
+
+            const data: any = {
                 version: 1,
                 exportedAt: new Date().toISOString(),
                 roleConfigs
             };
+            if (Object.keys(workspaceRoleConfigs).length > 0) { data.workspaceRoleConfigs = workspaceRoleConfigs; }
+            if (projectRoleConfigs.length > 0) { data.projectRoleConfigs = projectRoleConfigs; }
 
             const settingsDir = path.join(workspaceRoot, '.switchboard');
             await fs.promises.mkdir(settingsDir, { recursive: true });
@@ -7986,7 +8038,7 @@ Each plan file must include:
         // Merge with roleConfigs from globalState
         const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
         for (const role of roles) {
-            const config: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
+            const config: any = this._readRoleConfigScoped(role);
             if (config && config.prompt?.trim()) {
                 overrides[role] = {
                     text: config.prompt.trim(),
@@ -16312,28 +16364,28 @@ What would you like to find?`;
 
 
     private _isAccurateCodingEnabled(): boolean {
-        const coderConfig: any = this.getSetting('switchboard.prompts.roleConfig_coder', undefined);
-        const leadConfig: any = this.getSetting('switchboard.prompts.roleConfig_lead', undefined);
+        const coderConfig: any = this._readRoleConfigScoped('coder');
+        const leadConfig: any = this._readRoleConfigScoped('lead');
         if (coderConfig?.addons?.accurateCoding !== undefined) return coderConfig.addons.accurateCoding;
         if (leadConfig?.addons?.accurateCoding !== undefined) return leadConfig.addons.accurateCoding;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('accurateCoding.enabled', false);
     }
 
     private _isAdvancedReviewerEnabled(): boolean {
-        const reviewerConfig: any = this.getSetting('switchboard.prompts.roleConfig_reviewer', undefined);
+        const reviewerConfig: any = this._readRoleConfigScoped('reviewer');
         if (reviewerConfig?.addons?.advancedRegression !== undefined) return reviewerConfig.addons.advancedRegression;
         return vscode.workspace.getConfiguration('switchboard')
             .get<boolean>('reviewer.advancedMode', false);
     }
 
     private _isLeadInlineChallengeEnabled(): boolean {
-        const leadConfig: any = this.getSetting('switchboard.prompts.roleConfig_lead', undefined);
+        const leadConfig: any = this._readRoleConfigScoped('lead');
         if (leadConfig?.addons?.leadChallenge !== undefined) return leadConfig.addons.leadChallenge;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('leadCoder.inlineChallenge', false);
     }
 
     private _isAggressivePairProgrammingEnabled(): boolean {
-        const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
+        const plannerConfig: any = this._readRoleConfigScoped('planner');
         if (plannerConfig?.addons?.aggressivePairProgramming !== undefined) return plannerConfig.addons.aggressivePairProgramming;
         const switchboardConfig = vscode.workspace.getConfiguration('switchboard');
         const newInspect = switchboardConfig.inspect<boolean>('pairProgramming.aggressive');
@@ -16350,7 +16402,7 @@ What would you like to find?`;
 
 
     private _isDesignSystemDocEnabled(): boolean {
-        const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
+        const plannerConfig: any = this._readRoleConfigScoped('planner');
         if (plannerConfig?.addons?.designSystemDoc !== undefined) return plannerConfig.addons.designSystemDoc;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.designSystemDocEnabled', false);
     }
@@ -16723,7 +16775,7 @@ What would you like to find?`;
         const { baseInstruction, includeInlineChallenge } = this._getPromptInstructionOptions(role, instruction);
         const customAgents = await this.getCustomAgents(resolvedWorkspaceRoot);
         const customAgent = findCustomAgentByRole(customAgents, role);
-        const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
+        const roleConfig: any = this._readRoleConfigScoped(role);
 
         let gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
         if (options?.gitProhibitionEnabled !== undefined) {

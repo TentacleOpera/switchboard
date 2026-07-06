@@ -498,10 +498,55 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getRoleConfig(role: string): any {
-        if (this._taskViewerProvider) {
-            return this._taskViewerProvider.getRoleConfig(`roleConfig_${role}`);
+        return this.getScopedRoleConfig(role);
+    }
+
+    // ── Global Override: scope-aware role config (plan 05) ────────────────
+    /** Scope-aware role config read. Resolution: project_config → db config → global.
+     *  Public so TaskViewerProvider can delegate through its _kanbanProvider ref. */
+    public getScopedRoleConfig(role: string): any {
+        const key = `switchboard.prompts.roleConfig_${role}`;
+        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+        if (root) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                if (db.isOpen()) {
+                    // 1. Project tier
+                    if (this._projectOverrideEnabled && this._projectFilter
+                        && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                        const projectVal = db.getProjectConfigJsonSync<any>(this._projectFilter, key, undefined);
+                        if (projectVal !== undefined) return projectVal;
+                    }
+                    // 2. Workspace tier
+                    if (this._workspaceOverrideEnabled) {
+                        const wsVal = db.getConfigJsonSync<any>(key, undefined);
+                        if (wsVal !== undefined) return wsVal;
+                    }
+                }
+            } catch { /* fall through to global */ }
         }
-        return this._getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
+        // 3. Global (existing behavior)
+        return this._taskViewerProvider?.getRoleConfig(`roleConfig_${role}`)
+            ?? this._getSetting(key, undefined);
+    }
+
+    /** Scope-aware role config write. Project-ON → project_config only.
+     *  Workspace-ON → db config only. Both OFF → today's saveRoleConfig path. */
+    public async updateScopedRoleConfig(role: string, value: unknown): Promise<void> {
+        const key = `switchboard.prompts.roleConfig_${role}`;
+        const root = this._taskViewerProvider?._resolveWorkspaceRoot();
+        const db = root ? KanbanDatabase.forWorkspace(root) : undefined;
+        if (this._projectOverrideEnabled && this._projectFilter
+                && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER
+                && db && await db.ensureReady()) {
+            await db.setProjectConfigJson(this._projectFilter, key, value);
+        } else if (this._workspaceOverrideEnabled && db && await db.ensureReady()) {
+            await db.setConfigJson(key, value);
+        } else {
+            await this._taskViewerProvider?.saveRoleConfig(`roleConfig_${role}`, value);
+        }
+        // Cache invalidation for the scoped branches (saveRoleConfig handles its own).
+        await this._taskViewerProvider?.refreshPromptOverridesCache();
     }
 
     private async _updateSetting<T>(key: string, value: T): Promise<void> {
@@ -5941,6 +5986,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (this._projectOverrideEnabled) {
                 this._reloadSettingsFromStore();
                 this._markConfigDirty();
+                void this._taskViewerProvider?.refreshPromptOverridesCache();
             }
             // Push override state so the Project toggle enablement tracks the new filter.
             this._postOverrideState();
@@ -7086,6 +7132,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._reloadSettingsFromStore();
                 this._markConfigDirty();
                 this._postOverrideState();
+                await this._taskViewerProvider?.refreshPromptOverridesCache();
                 if (wsRoot1) { await this._refreshBoard(wsRoot1); }
                 break;
             }
@@ -7120,6 +7167,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._reloadSettingsFromStore();
                 this._markConfigDirty();
                 this._postOverrideState();
+                await this._taskViewerProvider?.refreshPromptOverridesCache();
                 if (wsRoot2) { await this._refreshBoard(wsRoot2); }
                 break;
             }
@@ -8599,8 +8647,9 @@ ${FOCUS_DIRECTIVE}`;
                     break;
                 }
 
-                if (key.startsWith('roleConfig_') && this._taskViewerProvider) {
-                    await this._taskViewerProvider.saveRoleConfig(key, value);
+                if (key.startsWith('roleConfig_')) {
+                    const roleName = key.replace('roleConfig_', '');
+                    await this.updateScopedRoleConfig(roleName, value);
                 } else {
                     await this._updateScopedSetting(fullKey, value);
                 }
@@ -8615,8 +8664,9 @@ ${FOCUS_DIRECTIVE}`;
                 if (key === 'selectedRole') {
                     // selectedRole is ephemeral UI state and should remain workspace-scoped
                     value = this._context.workspaceState.get(fullKey);
-                } else if (key.startsWith('roleConfig_') && this._taskViewerProvider) {
-                    value = this._taskViewerProvider.getRoleConfig(key);
+                } else if (key.startsWith('roleConfig_')) {
+                    const roleName = key.replace('roleConfig_', '');
+                    value = this.getScopedRoleConfig(roleName);
                 } else {
                     value = this._getScopedSetting(fullKey, undefined);
                 }
