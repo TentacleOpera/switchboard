@@ -1378,13 +1378,97 @@ export class KanbanDatabase {
         return this._persist();
     }
 
+    /**
+     * Resolve a project name to its numeric id, auto-creating the `projects` row on
+     * miss. Uses `INSERT OR IGNORE` (NOT addProject, which uses a plain INSERT and
+     * swallows the UNIQUE-constraint error as a generic `return false`, making
+     * "already existed" indistinguishable from real failure). Re-selects after the
+     * insert to pick up the id whether this call created the row or a concurrent one
+     * won the UNIQUE race. Parameterized — no injection surface.
+     */
+    private async _resolveOrCreateProjectId(workspaceId: string, projectName: string): Promise<number | null> {
+        if (!this._db || !projectName) return null;
+        const existing = await this.getProjectIdByName(workspaceId, projectName);
+        if (existing !== null) return existing;
+        try {
+            this._db.run(
+                'INSERT OR IGNORE INTO projects (name, workspace_id) VALUES (?, ?)',
+                [projectName, workspaceId]
+            );
+        } catch (e) {
+            console.error('[KanbanDatabase] _resolveOrCreateProjectId: INSERT OR IGNORE failed:', e);
+            return null;
+        }
+        return await this.getProjectIdByName(workspaceId, projectName);
+    }
+
+    /**
+     * Public wrapper over the auto-create helper, for callers outside the insert
+     * paths (e.g. KanbanProvider's restored-filter validation in _refreshBoardImpl).
+     */
+    public async ensureProjectExists(workspaceId: string, projectName: string): Promise<number | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        return this._resolveOrCreateProjectId(workspaceId, projectName);
+    }
+
+    /**
+     * Single choke point for project assignment on plan INSERT. Encodes the
+     * precedence rule that makes plan→project assignment deterministic:
+     *   1. Explicit pin / caller-supplied record.project — always wins.
+     *   2. Active project at row-creation time (kanban.activeProjectFilter config),
+     *      read ONLY on fresh INSERT (isExisting=false) — fallback when no pin.
+     *   3. Unassigned ('' / null).
+     * Also resolves project_id from the (possibly newly stamped) name, auto-creating
+     * the projects row on miss (Phase 3). On conflict-update (existing row) the
+     * caller's UPSERT COALESCE clauses preserve the prior DB values, so this helper
+     * only shapes what gets bound for the INSERT/excluded side.
+     */
+    private async _resolveProjectForInsert(
+        record: KanbanPlanRecord,
+        isExisting: boolean
+    ): Promise<{ project: string; projectId: number | null }> {
+        // Precedence #1 — explicit pin / caller intent.
+        if (record.project && record.project.trim() !== '') {
+            const project = record.project.trim();
+            let projectId = record.projectId ?? null;
+            if (projectId === null) {
+                projectId = await this._resolveOrCreateProjectId(record.workspaceId, project);
+            }
+            return { project, projectId };
+        }
+        // Precedence #2 — active project at row-creation time (fresh INSERT only).
+        if (!isExisting) {
+            const active = this.getConfigSync('kanban.activeProjectFilter');
+            if (active && active !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                const projectId = await this._resolveOrCreateProjectId(record.workspaceId, active);
+                return { project: active, projectId };
+            }
+        }
+        // Precedence #3 — unassigned.
+        return { project: '', projectId: record.projectId ?? null };
+    }
+
     public async upsertPlans(records: KanbanPlanRecord[]): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         if (records.length === 0) return true;
 
+        // Pre-pass: resolve project + project_id for each record BEFORE opening the
+        // transaction, so the batch loop stays synchronous (no async yields inside
+        // BEGIN/COMMIT on sql.js's single shared connection). The existence check
+        // gates the config read — hot update paths (existing rows) pay one SELECT
+        // and zero config reads; only fresh-INSERT records with an empty project
+        // consult kanban.activeProjectFilter. See _resolveProjectForInsert.
+        const resolved: Array<{ project: string; projectId: number | null }> = [];
+        for (const record of records) {
+            const isExisting = await this.hasPlanByPlanFile(record.planFile, record.workspaceId);
+            resolved.push(await this._resolveProjectForInsert(record, isExisting));
+        }
+
         this._db.run('BEGIN');
         try {
-            for (const record of records) {
+            for (let i = 0; i < records.length; i++) {
+                const record = records[i];
+                const r = resolved[i];
                 this._db.run(UPSERT_PLAN_SQL, [
                     record.planId,        // 1
                     record.sessionId,     // 2
@@ -1395,7 +1479,7 @@ export class KanbanDatabase {
                     record.complexity,    // 7
                     record.tags || '',    // 8
                     record.repoScope || '', // 9
-                    record.project || '',   // 10
+                    r.project,            // 10 — resolved (pin > active-project > '')
                     record.workspaceId,   // 11
                     record.createdAt,     // 12
                     record.updatedAt,     // 13
@@ -1413,7 +1497,7 @@ export class KanbanDatabase {
                     record.isFeature ?? 0,              // 25 — DEFAULT 0, not NULL (prevents is_feature=NULL clobber)
                     record.featureId || '',             // 26
                     record.workspaceName || '',      // 27
-                    record.projectId ?? null         // 28
+                    r.projectId          // 28 — resolved (auto-created if needed)
                 ]);
             }
             this._db.run('COMMIT');
@@ -1448,25 +1532,14 @@ export class KanbanDatabase {
         const relativePlanFile = this._ensureRelativePlanFile(record.planFile);
         const isExisting = await this.hasPlanByPlanFile(relativePlanFile, record.workspaceId);
 
-        // Resolve project_id from the denormalized project name. The kanban board's
-        // project filter JOINs on project_id (NOT the `project` text column), so a plan
-        // imported with only `project` set and project_id NULL never appears on its
-        // project board — it drops to the unassigned/base board. This historically
-        // affected every file-watcher import (the old INSERT omitted project_id entirely).
-        let resolvedProjectId: number | null = record.projectId ?? null;
-        if (resolvedProjectId === null && record.project) {
-            const psel = this._db.prepare(
-                'SELECT id FROM projects WHERE name = ? AND workspace_id = ?',
-                [record.project, record.workspaceId]
-            );
-            try {
-                if (psel.step()) {
-                    resolvedProjectId = Number(psel.getAsObject().id);
-                }
-            } finally {
-                psel.free();
-            }
-        }
+        // Single choke point for project assignment on INSERT. Encodes the
+        // precedence: explicit pin (record.project) > active project at row-creation
+        // time (kanban.activeProjectFilter, fresh INSERT only) > unassigned. Also
+        // resolves project_id from the stamped name, auto-creating the projects row
+        // on miss so the board's project_id JOIN does not drop the plan to
+        // Unassigned. See _resolveProjectForInsert.
+        const { project: resolvedProject, projectId: resolvedProjectId } =
+            await this._resolveProjectForInsert(record, isExisting);
 
         // is_feature floor: a file under .switchboard/features/ IS a feature, no matter
         // which caller built the record. Prevents any lossy record shape (registry
@@ -1503,7 +1576,7 @@ export class KanbanDatabase {
                 relativePlanFile,
                 record.complexity,
                 record.tags || '',
-                record.project || '',
+                resolvedProject,
                 resolvedProjectId,
                 record.workspaceId,
                 record.createdAt,
@@ -2706,6 +2779,16 @@ export class KanbanDatabase {
                 "UPDATE plans SET project = '', project_id = NULL WHERE workspace_id = ? AND project = ?",
                 [workspaceId, projectName]
             );
+            // Clear the active-project config key if it names the project just deleted,
+            // so a reload cannot resurrect it via Phase 4's auto-recreate-on-validation.
+            // Conditional: only clear when the active filter IS the deleted project —
+            // deleting project X while viewing project Y must not wipe Y's config.
+            const active = this.getConfigSync('kanban.activeProjectFilter');
+            if (active && active === projectName) {
+                this._db.run(
+                    "INSERT INTO config (key, value) VALUES ('kanban.activeProjectFilter', '') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                );
+            }
             return await this._persist();
         } catch (e) {
             console.error('[KanbanDatabase] deleteProject failed:', e);
@@ -5860,6 +5943,73 @@ export class KanbanDatabase {
             } catch (e) {
                 try { db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V49 migration FAILED — rolled back. DB unchanged. Error:', e);
+            }
+        }
+
+        // V50 — Backfill project_id on plans that carry a project name but NULL id.
+        // Root cause: the historic insert paths (insertFileDerivedPlan and upsertPlans)
+        // either omitted project_id on fresh INSERT or never resolved name→id, so a
+        // plan with project='Switchboard' and project_id=NULL never appeared on its
+        // project board (the board's project filter JOINs on project_id, not the text
+        // column). Going forward (Phase 2/3 of the plan-project-assignment fix) both
+        // insert paths auto-create the projects row and resolve the id. This one-time
+        // backfill repairs shipped-state installs (~4,000) where rows already exist
+        // with the gap. For each distinct (project, workspace_id) needing repair, the
+        // backfill auto-creates the projects row (INSERT OR IGNORE — idempotent under
+        // the UNIQUE(name, workspace_id) constraint) and sets project_id on the
+        // affected plans. A user who deliberately deleted a project named in a stale
+        // row will see it recreated here (one-time cost); they can delete it again
+        // post-migration. Idempotent via the version gate; never edit a shipped
+        // MIGRATION_Vnn_SQL body.
+        const v50 = await this.getMigrationVersion();
+        if (v50 < 50) {
+            const db = this._db;
+            try {
+                db.exec('BEGIN');
+                const sel = db.prepare(
+                    "SELECT DISTINCT project, workspace_id FROM plans WHERE project != '' AND project_id IS NULL"
+                );
+                const toBackfill: Array<{ project: string; workspaceId: string }> = [];
+                while (sel.step()) {
+                    const row = sel.getAsObject();
+                    toBackfill.push({
+                        project: String(row.project ?? ''),
+                        workspaceId: String(row.workspace_id ?? '')
+                    });
+                }
+                sel.free();
+                let repairedNames = 0;
+                for (const { project, workspaceId } of toBackfill) {
+                    if (!project || !workspaceId) continue;
+                    // Auto-create the projects row if missing (UNIQUE-safe).
+                    db.run(
+                        'INSERT OR IGNORE INTO projects (name, workspace_id) VALUES (?, ?)',
+                        [project, workspaceId]
+                    );
+                    // Resolve the id (whether this call created the row or a concurrent one did).
+                    const psel = db.prepare(
+                        'SELECT id FROM projects WHERE name = ? AND workspace_id = ?',
+                        [project, workspaceId]
+                    );
+                    let id: number | null = null;
+                    if (psel.step()) {
+                        id = Number(psel.getAsObject().id);
+                    }
+                    psel.free();
+                    if (id !== null) {
+                        db.run(
+                            'UPDATE plans SET project_id = ? WHERE project = ? AND workspace_id = ? AND project_id IS NULL',
+                            [id, project, workspaceId]
+                        );
+                        repairedNames++;
+                    }
+                }
+                db.exec('COMMIT');
+                await this.setMigrationVersion(50);
+                console.log(`[KanbanDatabase] V50 migration completed: backfilled project_id on ${repairedNames} distinct project name(s) (${toBackfill.length} name(s) examined).`);
+            } catch (e) {
+                try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+                console.error('[KanbanDatabase] V50 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
         }
     }

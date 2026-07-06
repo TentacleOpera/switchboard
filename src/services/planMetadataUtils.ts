@@ -93,7 +93,10 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
     }
 
     let project: string | undefined;
-    const projectMatch = content.match(/^\*\*Project(?:\*\*:\s*|:\*\*)\s*(.+)$/im);
+    // Tolerate the same list-item prefixes as the Tags regex above (line 90):
+    // agents write `- **Project:** X` / `> **Project:** X` / `2. **Project:** X`
+    // under ## Metadata. The old line-anchored regex silently dropped those pins.
+    const projectMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Project(?:\*\*:\s*|:\*\*)\s*(.+)$/im);
     if (projectMatch) {
         project = projectMatch[1].trim() || undefined;
     }

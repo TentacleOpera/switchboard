@@ -525,15 +525,15 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             if (!plan) {
-                // The board syncs the currently-displayed project name into this DB's
-                // config table on every refresh (KanbanProvider._refreshBoardImpl) and
-                // on constructor restore from workspaceState. Read it straight back from
-                // the SAME db handle we're importing into — no resolver, no in-memory
-                // mirror, no workspace-root comparison to drift out of sync.
-                // insertFileDerivedPlan resolves project_id from this name using the
-                // exact same lookup the manual "Assign to project" button uses.
-                const activeProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
-                const project = metadata.project || activeProject;
+                // Project assignment is now resolved inside the DB layer
+                // (insertFileDerivedPlan → _resolveProjectForInsert): an explicit
+                // **Project:** pin in the file (metadata.project) wins; otherwise the
+                // active project (kanban.activeProjectFilter) is stamped on fresh
+                // INSERT only. The watcher no longer reads the config itself — the DB
+                // layer is the single choke point so the run-sheet/session upsert path
+                // and the watcher path cannot drift. metadata.project still flows in
+                // via the record so the pin is honored.
+                const project = metadata.project;
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
                 //
                 // For feature files named `feature-<uuid>.md`, reuse the embedded UUID as the

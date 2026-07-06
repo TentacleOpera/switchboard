@@ -2843,10 +2843,33 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
             if (workspaceId && dbReady) {
                 if (this._projectFilterNeedsValidation) {
+                    // Validate the restored in-memory project filter against the projects
+                    // table. Previously a restored filter naming a project missing from
+                    // getProjects() was silently reset to UNASSIGNED — which then got
+                    // written back to the config key as '' on every refresh, wiping the
+                    // user's selection without any action. With Phase 3's auto-create, a
+                    // missing row is legitimate (the name was pinned/imported before the
+                    // row existed); we now keep the filter and auto-create the row instead
+                    // of nulling the filter. An empty getProjects() result (DB race —
+                    // dbReady true but projects table not yet populated) must NEVER wipe a
+                    // non-empty restored filter: retry next refresh instead.
                     this._projectFilterNeedsValidation = false;
                     const projects = await db.getProjects(workspaceId);
-                    if (this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER && !projects.includes(this._projectFilter ?? '')) {
-                        this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                    if (this._projectFilter && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                        if (projects.length === 0) {
+                            // DB race window — leave the filter intact and retry next refresh.
+                            this._projectFilterNeedsValidation = true;
+                        } else if (!projects.includes(this._projectFilter)) {
+                            // Project row missing — auto-create it (Phase 3 semantics) and
+                            // keep the filter. ensureProjectExists returns null only on real
+                            // failure, in which case fall back to UNASSIGNED to avoid a
+                            // stuck phantom filter that matches no board.
+                            const id = await db.ensureProjectExists(workspaceId, this._projectFilter);
+                            if (id === null) {
+                                this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                            }
+                        }
+                        // else: filter names an existing project — keep it as-is.
                     }
                 }
                 const projectFilter = this._projectFilter;

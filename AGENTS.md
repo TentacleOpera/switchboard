@@ -137,7 +137,13 @@ When creating plan files in multi-workspace setups, use this decision tree to de
 
 ### 📌 Plan Project Pinning
 
-When a chat or memo dispatch prompt carries a PROJECT PIN directive, write `**Project:** <name>` into each plan file's metadata block. The watcher prefers this field over the board's active project at import time, preventing the project race when the user switches projects between copying and running the prompt. No manifest is needed for project pinning — the .md metadata is the carrier.
+When creating any plan file:
+1. If the user named a target project in their request, pin that: write `**Project:** <name>` in the metadata block. The user's words always beat board state.
+2. Otherwise, resolve the active project **once, at the start of the task** (read `kanban.activeProjectFilter` from the workspace's `kanban.db` config table) and pin that snapshot in every plan file written for the task. Do not re-read it at file-write time — the user may browse other boards while you work.
+3. State the pin in your reply ("Pinning to *<name>*") so a wrong snapshot is visible immediately.
+4. If neither exists (no named project, empty config), omit the line — the plan lands unassigned and can be reassigned on the board.
+
+Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both parse. No manifest is needed for project pinning — the .md metadata is the carrier.
 
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
