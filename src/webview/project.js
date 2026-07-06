@@ -2417,6 +2417,9 @@
             </div>
         ` : '';
 
+        const removeBtn = hasPlanId
+            ? `<button class="strip-btn" id="feature-subtask-meta-remove-btn" title="Detach this subtask from the feature (keeps the plan)">Remove</button>`
+            : '';
         const deleteBtn = hasPlanId ? `<button class="strip-btn" id="feature-subtask-meta-delete-btn" style="color:#ff6b6b;">Delete</button>` : '';
 
         const copyLinkBtn = plan && plan.planFile
@@ -2433,6 +2436,7 @@
                 <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-features" style="${state.editMode.features ? '' : 'display:none;'}">Cancel</button>
+                ${removeBtn}
                 ${deleteBtn}
             </div>
         `;
@@ -2502,6 +2506,25 @@
                     else metaBar.style.display = 'none';
                 });
             }
+
+            // Remove (detach subtask from feature — non-destructive; keeps the plan)
+            const rmBtn = document.getElementById('feature-subtask-meta-remove-btn');
+            if (rmBtn) {
+                rmBtn.addEventListener('click', () => {
+                    vscode.postMessage({
+                        type: 'removeSubtaskFromFeature',
+                        subtaskSessionId: plan.sessionId || plan.planId,
+                        workspaceRoot: plan.workspaceRoot
+                    });
+                    // Detach cleanup — mirror the Delete handler: the subtask leaves the
+                    // feature, so return the preview pane to the selected feature.
+                    _featureSubtaskPreview = null;
+                    _featurePreviewFilePath = _featureSelectedPlan ? _featureSelectedPlan.planFile : null;
+                    if (featuresPreviewContent) featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a feature to preview</div>';
+                    if (_featureSelectedPlan) renderFeatureMetaBar(_featureSelectedPlan);
+                    else metaBar.style.display = 'none';
+                });
+            }
         }
     }
 
@@ -2515,7 +2538,6 @@
         subtasksDiv.innerHTML = subtasks.map(st => `
             <div class="feature-subtask-item">
                 <span class="feature-subtask-link" data-plan-file="${escapeHtml(st.planFile || '')}" style="cursor: pointer; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">• ${escapeHtml(st.topic)} (${escapeHtml(st.kanbanColumn)})</span>
-                <button class="feature-remove-subtask-btn" data-subtask-session="${escapeHtml(st.sessionId || st.planId)}" data-workspace-root="${escapeHtml(feature.workspaceRoot)}">Remove</button>
             </div>
         `).join('');
 
@@ -2537,17 +2559,6 @@
                     type: 'fetchKanbanPlanPreview',
                     filePath: planFile,
                     requestId: ++_kanbanPreviewRequestId
-                });
-            });
-        });
-
-        subtasksDiv.querySelectorAll('.feature-remove-subtask-btn').forEach(btn => {
-            btn.addEventListener('click', e => {
-                e.stopPropagation();
-                vscode.postMessage({
-                    type: 'removeSubtaskFromFeature',
-                    subtaskSessionId: btn.dataset.subtaskSession,
-                    workspaceRoot: btn.dataset.workspaceRoot
                 });
             });
         });
