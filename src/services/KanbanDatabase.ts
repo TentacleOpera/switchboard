@@ -155,6 +155,12 @@ CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS project_config (
+    project TEXT NOT NULL,
+    key     TEXT NOT NULL,
+    value   TEXT NOT NULL,
+    PRIMARY KEY (project, key)
+);
 CREATE TABLE IF NOT EXISTS migration_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -316,6 +322,17 @@ const MIGRATION_V46_SQL: string[] = [];
 // is a no-op.
 const MIGRATION_V51_SQL = [
     `ALTER TABLE plans ADD COLUMN dispatched_at TEXT DEFAULT NULL`,
+];
+
+// V52: project_config table — project-scoped settings store (Global Override feature).
+// Additive CREATE TABLE IF NOT EXISTS; fresh DBs already get it from SCHEMA_TABLES_SQL.
+const MIGRATION_V52_SQL = [
+    `CREATE TABLE IF NOT EXISTS project_config (
+        project TEXT NOT NULL,
+        key     TEXT NOT NULL,
+        value   TEXT NOT NULL,
+        PRIMARY KEY (project, key)
+    )`,
 ];
 
 
@@ -3550,6 +3567,89 @@ export class KanbanDatabase {
         try { return JSON.parse(raw) as T; } catch { return defaultValue; }
     }
 
+    // ── project_config table (project-scoped settings — Global Override feature) ──
+    // Mirrors the config-table idiom: positional ? binding, prepare/step/getAsObject/free
+    // for reads, run + _persist() for writes. Sentinel: __unassigned__ or falsy/empty
+    // project means "all projects" — no project tier to address (guarded no-op / default).
+
+    /** Sync read of a project-scoped JSON setting. Requires this._db already open
+     *  (same contract as getConfigSync); returns defaultValue otherwise. */
+    public getProjectConfigJsonSync<T>(project: string, key: string, defaultValue: T): T {
+        if (!this._db) return defaultValue;
+        if (!project || project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return defaultValue;
+        const stmt = this._db.prepare(
+            'SELECT value FROM project_config WHERE project = ? AND key = ? LIMIT 1',
+            [project, key]
+        );
+        try {
+            if (!stmt.step()) return defaultValue;
+            const raw = String(stmt.getAsObject().value ?? '');
+            try { return JSON.parse(raw) as T; } catch { return defaultValue; }
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /** Async write of a project-scoped JSON setting (upsert + persist). */
+    public async setProjectConfigJson(project: string, key: string, value: unknown): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (!project || project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return false;
+        this._db.run(
+            'INSERT INTO project_config (project, key, value) VALUES (?, ?, ?) ON CONFLICT(project, key) DO UPDATE SET value = excluded.value',
+            [project, key, JSON.stringify(value)]
+        );
+        return this._persist();
+    }
+
+    /** Batched write — runs all upserts then a SINGLE _persist() (avoids persist storm
+     *  during snapshot-on-toggle, plan 04). */
+    public async setProjectConfigJsonMany(project: string, entries: Record<string, unknown>): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (!project || project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return false;
+        for (const [key, value] of Object.entries(entries)) {
+            this._db.run(
+                'INSERT INTO project_config (project, key, value) VALUES (?, ?, ?) ON CONFLICT(project, key) DO UPDATE SET value = excluded.value',
+                [project, key, JSON.stringify(value)]
+            );
+        }
+        return this._persist();
+    }
+
+    /** Delete a single project-scoped key (for "reset to inherited"). */
+    public async deleteProjectConfigJson(project: string, key: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (!project || project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return false;
+        this._db.run('DELETE FROM project_config WHERE project = ? AND key = ?', [project, key]);
+        return this._persist();
+    }
+
+    /** Return all keys for a project as a map (for snapshot/export). Unparseable rows skipped. */
+    public async getAllProjectConfigJson(project: string): Promise<Record<string, unknown>> {
+        const out: Record<string, unknown> = {};
+        if (!(await this.ensureReady()) || !this._db) return out;
+        if (!project || project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return out;
+        const stmt = this._db.prepare('SELECT key, value FROM project_config WHERE project = ?', [project]);
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject() as any;
+                const key = String(row.key ?? '');
+                const raw = String(row.value ?? '');
+                try { out[key] = JSON.parse(raw); } catch { /* skip unparseable row */ }
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    /** Remove all rows for a project only (other projects untouched). For full reset. */
+    public async clearAllProjectConfig(project: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        if (!project || project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) return false;
+        this._db.run('DELETE FROM project_config WHERE project = ?', [project]);
+        return this._persist();
+    }
+
     /** Reads a legacy .switchboard JSON file, writes selected keys to the config
      *  table, then archives the file as `<name>.migrated.bak` so upgrading
      *  users keep a recoverable copy. No-op if the file is absent. A corrupt
@@ -6077,6 +6177,17 @@ export class KanbanDatabase {
                 try { db.exec('ROLLBACK'); } catch { /* ignore */ }
                 console.error('[KanbanDatabase] V51 migration FAILED — rolled back. DB unchanged. Error:', e);
             }
+        }
+
+        // V52: project_config table — project-scoped settings store (Global Override feature).
+        // Additive CREATE TABLE IF NOT EXISTS; safe on fresh DBs (already created in schema) and existing DBs.
+        const v52 = await this.getMigrationVersion();
+        if (v52 < 52) {
+            for (const sql of MIGRATION_V52_SQL) {
+                try { this._db.exec(sql); } catch { /* already exists */ }
+            }
+            await this.setMigrationVersion(52);
+            console.log('[KanbanDatabase] V52 migration completed: project_config table present');
         }
     }
 
