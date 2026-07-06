@@ -3021,8 +3021,6 @@
         
         rerenderUnifiedDocs();
 
-
-
         renderFolderListModal();
         populateResearchFolderSelect(getCurrentFolderPaths(state.localFolderPathsByRoot, researchWorkspaceRoot));
 
@@ -7618,7 +7616,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
         }
         modal.style.display = 'flex';
-
         // Render folder list from current state (fast-path for pre-warmed state)
         renderFolderListModal();
         // Request fresh folder list from backend to ensure sync (catches startup race)
@@ -7681,8 +7678,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             handleSidebarArrowKeydown(e, pane);
         }
     });
-
-
 
     // Modal folder management buttons
     document.getElementById('btn-refresh-folders-modal').addEventListener('click', () => {

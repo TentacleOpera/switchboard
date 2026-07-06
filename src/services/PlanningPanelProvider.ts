@@ -2657,7 +2657,6 @@ Start by checking which documents exist, then present the menu.`;
                 await this._handleFetchPageContent(workspaceRoot, msg.sourceId, msg.docId, msg.pageId, msg.requestId);
                 break;
             }
-
             case 'fetchAntigravityArtifact': {
                 const artifactPath = msg.artifactPath;
                 const requestId = msg.requestId || -1;

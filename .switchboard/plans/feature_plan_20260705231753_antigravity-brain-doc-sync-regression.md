@@ -349,3 +349,7 @@ Skipped per session directive. At implementation time the coder may optionally r
 ## Recommendation
 
 Complexity 4/10 → **Send to Coder**. Routine removal across six files; no new logic, no architectural change, no data migration. The coder should grep for `antigravityEnabled`, `antigravityBrainEnabled`, `toggleAntigravityBrain`, and `antigravity-toggle-modal` after edits to confirm zero remaining references in `src/`, `package.json`, `README.md`, and `docs/`.
+
+## Review Findings
+
+**Reviewer pass completed in-place.** All eight plan changes were applied correctly: the three config-flag gates (`_sendLocalDocsReady`, `_setupAntigravityWatcher`, `renderAntigravitySessions`) are removed, the `toggleAntigravityBrain` handler is gone with no orphan callers, the `antigravityEnabled` message field and `agEnabled`/`agConfig` variables are fully purged, and the `package.json` schema entry plus both doc references are removed. Grep confirms zero remaining references to all four identifiers (`antigravityBrainEnabled`, `toggleAntigravityBrain`, `antigravity-toggle-modal`, `antigravityEnabled`) across `src/`, `package.json`, `README.md`, and `docs/`. Five NIT-level blank-line debris spots from the removals were cleaned up (planning.js ×3, planning.html ×1, PlanningPanelProvider.ts ×1). No CRITICAL or MAJOR findings; no regressions detected in the full execution path (dropdown → filter → render, watcher → refresh → dedup → render). Compilation and tests skipped per session directive. Remaining risk: none — the change is pure surgical removal with no new logic.
