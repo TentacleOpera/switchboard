@@ -185,3 +185,7 @@ Session directive: no compilation or automated test runs in this pass. Acceptanc
 ---
 
 **Recommendation: Send to Coder**
+
+## Review Findings
+
+MAJOR fixed: `_snapshotSettingsToScope` read via `_getSetting` (globalState-first), so snapshotting while a higher tier was already active (e.g. Project-ON while Workspace-ON) captured stale globalState and visibly changed the board — the exact defect this snapshot exists to prevent; switched to `_getScopedSetting`, which runs before the flag flips (so it cannot read the tier being activated) and captures the true current effective value, staying bit-identical to `_getSetting` in the both-OFF case. Skip-if-populated, batched project persist, no-delete-on-OFF, and before-flip ordering were correct and left unchanged. Files changed: `src/services/KanbanProvider.ts` (`_snapshotSettingsToScope` + doc comment). Validation: static review only (SKIP COMPILATION/TESTS); `_getScopedSetting` confirmed defined and the snapshot loop now calls it. Remaining risk: workspace-tier partial dormancy while OFF is by design (documented).

@@ -152,3 +152,7 @@ Session directive: no compilation or automated test runs in this pass. The check
 ---
 
 **Recommendation: Send to Coder**
+
+## Review Findings
+
+Reviewed the `project_config` table + six CRUD methods in `KanbanDatabase.ts`; no code changes required — the implementation mirrors the existing `config` idiom (positional `?` binding, `prepare/step/free` reads, `run`+`_persist()` writes), guards the `__unassigned__`/empty-project sentinel on every method, and gates migration V52 after V51 with an idempotent `CREATE TABLE IF NOT EXISTS`. Grep confirms `setProjectConfigJsonMany` is the single-persist batch path the plan-04 snapshot consumes. Files changed: none. Validation: static review only (SKIP COMPILATION/TESTS). Remaining risk: none beyond the accepted last-persist-wins concurrency already shared with the `config` table.

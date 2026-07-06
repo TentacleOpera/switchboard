@@ -232,3 +232,7 @@ Session directive: no compilation or automated test runs in this pass. Acceptanc
 ---
 
 **Recommendation: Send to Coder**
+
+## Review Findings
+
+The GLOBAL OVERRIDE section renders as the first Setup `db-subsection` using the verified toggle idiom, the `overrideState` switch case is brace-wrapped, `.checked` is set programmatically (no `change` re-fire/loop), and `setProjectOverride` re-validates the project filter server-side with a corrective push on rejection. NIT fixed: the project hint used to read "All settings apply only to 'X', overriding workspace" whenever a project was merely selected; it now branches on `projectOverride` to show a distinct "Toggle ON to apply…" message in the selected-but-OFF state. Files changed: `src/webview/kanban.html` (`overrideState` hint text). Deferred NIT: `overrideState` is pushed twice per toggle (handler + `refreshWithData`, idempotent). Remaining risk: none material.

@@ -204,3 +204,7 @@ Session directive: no compilation or automated test runs in this pass. Acceptanc
 ---
 
 **Recommendation: Send to Lead Coder**
+
+## Review Findings
+
+Verified all six `kanban.*` keys + the generic `switchboard.prompts.*` path route through `_getScopedSetting`/`_updateScopedSetting` (grep shows no leftover raw `_getSetting`/`_updateSetting` on scoped keys), both-OFF resolution is bit-identical to the old `_getSetting` (globalState→db→default), and the `setTaskViewerProvider` reload hook applies scoped values post-wiring. No code changes required. Files changed: none. Deferred NITs: the step-4 legacy db fallback re-queries redundantly on a miss, and `_updateSetting` is now dead code — both harmless. Remaining risk: toggle-handler flag persistence resolves the root via `msg.workspaceRoot` while reads use `TVP._resolveWorkspaceRoot()`; both converge on `_currentWorkspaceRoot` in normal operation, so divergence is only a self-correcting stale-webview race.

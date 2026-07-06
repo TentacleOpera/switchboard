@@ -6702,9 +6702,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (projLabel) { projLabel.style.opacity = projectSwitchEnabled ? '1' : '0.5'; }
                     const hintEl = document.getElementById('project-override-hint');
                     if (hintEl) {
-                        hintEl.textContent = projectSwitchEnabled
-                            ? `All settings apply only to '${activeProjectName}', overriding workspace`
-                            : 'Select a project to enable project-scoped settings';
+                        hintEl.textContent = !projectSwitchEnabled
+                            ? 'Select a project to enable project-scoped settings'
+                            : projectOverride
+                                ? `All settings apply only to '${activeProjectName}', overriding workspace`
+                                : `Toggle ON to apply all settings only to '${activeProjectName}', overriding workspace`;
                     }
                     const indicator = document.getElementById('active-scope-indicator');
                     if (indicator) { indicator.textContent = `Active scope: ${activeScope}`; }

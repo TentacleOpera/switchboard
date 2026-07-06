@@ -540,13 +540,15 @@ export class KanbanProvider implements vscode.Disposable {
                 && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER
                 && db && await db.ensureReady()) {
             await db.setProjectConfigJson(this._projectFilter, key, value);
+            // Scoped write bypasses saveRoleConfig, so invalidate the prompt cache here.
+            await this._taskViewerProvider?.refreshPromptOverridesCache();
         } else if (this._workspaceOverrideEnabled && db && await db.ensureReady()) {
             await db.setConfigJson(key, value);
+            await this._taskViewerProvider?.refreshPromptOverridesCache();
         } else {
+            // Both-OFF: saveRoleConfig writes globalState+mirror AND rebuilds the cache itself.
             await this._taskViewerProvider?.saveRoleConfig(`roleConfig_${role}`, value);
         }
-        // Cache invalidation for the scoped branches (saveRoleConfig handles its own).
-        await this._taskViewerProvider?.refreshPromptOverridesCache();
     }
 
     private async _updateSetting<T>(key: string, value: T): Promise<void> {
@@ -676,14 +678,20 @@ export class KanbanProvider implements vscode.Disposable {
         return [...promptKeys];
     }
 
-    /** Copy current effective values (flat pre-toggle resolution) into the scoped store.
-     *  MUST run before the override flag flips and uses _getSetting explicitly — belt and braces.
+    /** Copy current effective values into the scoped store so the board looks identical
+     *  before and after the toggle. MUST run BEFORE the override flag flips: because the
+     *  tier being activated is still OFF, _getScopedSetting cannot read it, so it returns
+     *  the CURRENT effective value (workspace-tier value when workspace override is already
+     *  ON, else globalState/db — bit-identical to _getSetting in the both-OFF case). Using
+     *  _getSetting here would read globalState-first and snapshot a stale value whenever a
+     *  higher tier is already active (e.g. Project-ON while Workspace-ON) — the exact
+     *  "settings appear to reset" defect this snapshot exists to prevent.
      *  Skips keys with no value anywhere. Project target uses batched persist (plan 01). */
     private async _snapshotSettingsToScope(target: 'workspace' | 'project', project?: string): Promise<void> {
         const keys = [...KanbanProvider.SCOPE_AWARE_KEYS, ...this._discoverPromptKeys()];
         const entries: Record<string, unknown> = {};
         for (const key of keys) {
-            const currentValue = this._getSetting<any>(key, undefined);
+            const currentValue = this._getScopedSetting<any>(key, undefined);
             if (currentValue === undefined) continue;
             entries[key] = currentValue;
         }

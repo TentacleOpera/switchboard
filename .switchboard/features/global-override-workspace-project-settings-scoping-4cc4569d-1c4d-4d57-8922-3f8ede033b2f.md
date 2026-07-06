@@ -30,9 +30,22 @@ Add a GLOBAL OVERRIDE section to the Setup tab with two independent switches (Wo
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
+- [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **CODE REVIEWED**
+- [ ] [Global Override 02: Scope-Aware Settings Read/Write Layer](../plans/global-override-02-scope-aware-settings-layer.md) — **CODE REVIEWED**
+- [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **CODE REVIEWED**
+- [ ] [Global Override 04: Snapshot-on-Toggle Mechanism](../plans/global-override-04-snapshot-on-toggle.md) — **CODE REVIEWED**
+- [ ] [Global Override 05: Role Config Scope Awareness](../plans/global-override-05-role-config-scope-awareness.md) — **CODE REVIEWED**
+<!-- END SUBTASKS -->
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
 - [ ] [Global Override 01: project_config Storage Layer](../plans/global-override-01-project-config-storage-layer.md) — **LEAD CODED**
 - [ ] [Global Override 02: Scope-Aware Settings Read/Write Layer](../plans/global-override-02-scope-aware-settings-layer.md) — **LEAD CODED**
 - [ ] [Global Override 03: GLOBAL OVERRIDE UI Section & Toggle Handlers](../plans/global-override-03-ui-and-toggle-handlers.md) — **LEAD CODED**
 - [ ] [Global Override 04: Snapshot-on-Toggle Mechanism](../plans/global-override-04-snapshot-on-toggle.md) — **LEAD CODED**
 - [ ] [Global Override 05: Role Config Scope Awareness](../plans/global-override-05-role-config-scope-awareness.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Reviewer pass across all five subtasks (files: `KanbanDatabase.ts`, `KanbanProvider.ts`, `TaskViewerProvider.ts`, `kanban.html`) with advanced regression analysis. One MAJOR fixed in plan 04 — the snapshot read effective values via globalState-first `_getSetting`, changing the board on Project-ON-while-Workspace-ON; switched to `_getScopedSetting` (safe because it runs before the flag flips). One NIT fixed in plan 05 — removed a double prompt-overrides cache rebuild on both-OFF role saves. Plans 01/02/03 verified clean (all six scoped keys + role-config reads correctly routed, both-OFF resolution bit-identical, server-side toggle validation present). Validation: static review only per SKIP COMPILATION/TESTS; remaining risks are the documented workspace-tier partial dormancy and a self-correcting stale-webview resolver race — neither material.

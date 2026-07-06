@@ -195,3 +195,7 @@ Session directive: no compilation or automated test runs in this pass. Acceptanc
 ---
 
 **Recommendation: Send to Lead Coder**
+
+## Review Findings
+
+All seven prompt-assembly read sites (cache-builder loop, six addon getters, dispatch git-policy) are rerouted through `_readRoleConfigScoped`, cache-rebuild hooks fire on override toggle and project-filter change, and export gains additive scoped sections — grep confirms no read site missed. NIT fixed: both-OFF `updateScopedRoleConfig` rebuilt the prompt-overrides cache twice (`saveRoleConfig` + a trailing unconditional call); the `refreshPromptOverridesCache()` call now lives inside the two scoped branches only, matching the code's own comment. Files changed: `src/services/KanbanProvider.ts` (`updateScopedRoleConfig`). Validation: static review only (SKIP COMPILATION/TESTS). Remaining risk: `exportPromptSettings` hardcodes a 10-role list vs the cache loop's 9 — acknowledged divergence, superset covers all known roles.
