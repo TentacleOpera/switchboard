@@ -508,10 +508,10 @@
         },
         "switchboard.activityLight.timeoutMs": {
           "type": "integer",
-          "default": 1200000,
+          "default": 600000,
           "minimum": 60000,
           "maximum": 3600000,
-          "description": "How long (ms) a card's agent-activity light stays lit after dispatch before the timeout sweep clears it. Default 20 minutes. Lowering it trades false-off for stuck-on.",
+          "description": "How long (ms) a card's agent-activity light stays lit after dispatch before the timeout sweep clears it. Default 10 minutes. Lowering it trades false-off for stuck-on.",
           "scope": "resource"
         },
         "switchboard.planAutoFetch.enabled": {

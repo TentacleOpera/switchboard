@@ -172,7 +172,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 // never overlaps itself; gated per workspace on `cleared > 0` so the board
                 // only refreshes when a light actually turned off (no 10-second flicker).
                 const activityConfig = vscode.workspace.getConfiguration('switchboard.activityLight');
-                const timeoutMs = activityConfig.get<number>('timeoutMs', 20 * 60 * 1000);
+                const timeoutMs = activityConfig.get<number>('timeoutMs', 10 * 60 * 1000);
                 for (const folder of folders) {
                     try {
                         const db = KanbanDatabase.forWorkspace(folder);

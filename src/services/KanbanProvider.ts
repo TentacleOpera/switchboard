@@ -125,7 +125,7 @@ export interface KanbanCard {
 // authoritative backstop that nulls dispatched_at past this age; this read-time check keeps
 // the light accurate between sweeps. Reads the live `switchboard.activityLight.timeoutMs`
 // setting so the read-time check and the sweep stay in sync when the user changes it.
-const DEFAULT_WORKING_STATE_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_WORKING_STATE_TIMEOUT_MS = 10 * 60 * 1000;
 
 function isWorkingState(dispatchedAt: string | null | undefined): boolean {
     if (!dispatchedAt) return false;
@@ -1576,6 +1576,10 @@ export class KanbanProvider implements vscode.Disposable {
             // any assigned project while the board shows "__unassigned__") are excluded and
             // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
             const subtaskCountMap = await db.getSubtaskCountsByFeature(workspaceId ?? '');
+            const featureWorkingMap = await db.getFeatureWorkingStates(
+                workspaceId ?? '',
+                vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS)
+            );
 
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
@@ -1593,7 +1597,7 @@ export class KanbanProvider implements vscode.Disposable {
                     isFeature: !!row.isFeature,
                     featureId: row.featureId || undefined,
                     subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
-                    working: isWorkingState(row.dispatchedAt)
+                    working: row.isFeature ? (featureWorkingMap.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
                 };
             });
 
@@ -3119,6 +3123,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // and must not shrink to 0 when its subtasks fall outside the board's
                 // project/repo filter. See getSubtaskCountsByFeature.
                 const subtaskCountMap2 = await db.getSubtaskCountsByFeature(workspaceId);
+                const featureWorkingMap2 = await db.getFeatureWorkingStates(
+                    workspaceId,
+                    vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS)
+                );
 
                 cards = activeRows.map(row => {
                     return {
@@ -3136,7 +3144,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         isFeature: !!row.isFeature,
                         featureId: row.featureId || undefined,
                         subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined,
-                        working: isWorkingState(row.dispatchedAt)
+                        working: row.isFeature ? (featureWorkingMap2.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
                     };
                 });
 
@@ -3304,6 +3312,21 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
+            let featureWorkingMap3 = new Map<string, boolean>();
+            try {
+                const db = KanbanDatabase.forWorkspace(resolvedWorkspaceRoot);
+                await db.ensureReady();
+                const wsId = await db.getWorkspaceId();
+                if (wsId) {
+                    featureWorkingMap3 = await db.getFeatureWorkingStates(
+                        wsId,
+                        vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS)
+                    );
+                }
+            } catch (err) {
+                console.error('[KanbanProvider] Site 3 getFeatureWorkingStates failed:', err);
+            }
+
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
                 return {
                     planId: row.planId,
@@ -3316,7 +3339,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
                     project: row.project || '',
-                    working: isWorkingState(row.dispatchedAt)
+                    working: row.isFeature ? (featureWorkingMap3.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
                 };
             });
 

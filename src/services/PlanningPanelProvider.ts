@@ -791,9 +791,6 @@ export class PlanningPanelProvider {
             this._setupFeatureDocsWatcher();
             this._setupConstitutionWatcher();
             this._setupInsightsWatcher();
-        }
-
-
     }
 
 

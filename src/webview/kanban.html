@@ -4691,6 +4691,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return columnDefinitions.find(def => def.id === col) || null;
         }
 
+        // NOTE: If you change which card fields are included here, ensure any fields
+        // used by the workingChanged check in the updateBoard handler are preserved.
+        // Otherwise, working-state changes will be swallowed during the optimistic window.
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
@@ -6538,7 +6541,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     const optimisticActive = Date.now() < optimisticMoveUntil;
                     if (nextBoardSignature !== lastBoardSignature) {
+                        let workingChanged = false;
                         if (optimisticActive) {
+                            workingChanged = nextCards.some(nc => {
+                                const cur = currentCards.find(cc => (cc.planId || cc.sessionId) === (nc.planId || nc.sessionId));
+                                return !!cur && !!nc.working !== !!cur.working;
+                            });
+                        }
+                        if (optimisticActive && !workingChanged) {
                             // Optimistic drag in-flight: backend hasn't processed the move yet, so
                             // nextCards is stale w.r.t. the user's intent. Absorb the data (so the next
                             // authoritative render — a moveCards delta or a post-window updateBoard —

@@ -4675,6 +4675,35 @@ export class KanbanDatabase {
     }
 
     /**
+     * Map of feature ID to active subtask working status.
+     * A feature is working if any of its active subtasks has a live dispatched_at.
+     */
+    public async getFeatureWorkingStates(workspaceId: string, timeoutMs: number): Promise<Map<string, boolean>> {
+        const workingStates = new Map<string, boolean>();
+        if (!(await this.ensureReady()) || !this._db || !workspaceId) return workingStates;
+        const cutoff = new Date(Date.now() - timeoutMs).toISOString();
+        const stmt = this._db.prepare(
+            `SELECT feature_id AS featureId,
+                    MAX(dispatched_at IS NOT NULL AND dispatched_at >= ?) AS anyWorking
+             FROM plans
+             WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
+               AND status = 'active' AND is_feature = 0
+             GROUP BY feature_id`,
+            [cutoff, workspaceId]
+        );
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                const featureId = String(row.featureId ?? '');
+                if (featureId) workingStates.set(featureId, Boolean(row.anyWorking));
+            }
+        } finally {
+            stmt.free();
+        }
+        return workingStates;
+    }
+
+    /**
      * Active, non-feature plans whose `complexity` column is still 'Unknown'.
      * Used by the one-time backfill reconciliation pass
      * (`KanbanProvider._backfillComplexityColumn`) to self-heal pre-fix installs
@@ -7357,6 +7386,8 @@ FROM plans
         // dispatched_at = now marks the card as "agent working" (the activity-light source).
         // Re-dispatch overwrites it (resets the 20-min clock). Cleared by clearWorkingState
         // (marker parse) or clearStaleWorkingState (timeout sweep) — both NULL it.
+        // NOTE: For feature cards, the working flag is derived from subtasks' dispatched_at
+        // values, but we still write/clear the feature row's own dispatched_at for dispatch-identity.
         return this._persistedUpdate(
             'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
             [info.routedTo, info.dispatchedAgent, info.dispatchedIde, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
