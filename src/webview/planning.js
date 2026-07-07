@@ -8878,7 +8878,27 @@ Instructions:
         _lastTicketsClickUpDetailContentHtml = '';
         _lastTicketsDetailContentHtml = '';
         detailContent.innerHTML = html;
+        detailContent.classList.add('edit-mode');
         document.getElementById('ticket-edit-description')?.focus();
+
+        const descTextarea = document.getElementById('ticket-edit-description');
+        if (descTextarea && window.SwitchboardMarkdownEditor) {
+            window.SwitchboardMarkdownEditor.attach(descTextarea, {
+                renderPreview: (markdown) => new Promise((resolve, reject) => {
+                    const requestId = Date.now() + Math.random();
+                    const handler = (event) => {
+                        const msg = event.data;
+                        if (msg.type === 'markdownLiveRendered' && msg.requestId === requestId) {
+                            window.removeEventListener('message', handler);
+                            if (msg.error) reject(msg.error);
+                            else resolve(msg.html || msg.htmlContent || '');
+                        }
+                    };
+                    window.addEventListener('message', handler);
+                    vscode.postMessage({ type: 'renderMarkdownLive', requestId, content: markdown });
+                })
+            });
+        }
     }
 
     function exitTicketsEditMode() {
@@ -8891,6 +8911,10 @@ Instructions:
         document.getElementById('btn-cancel-ticket-edit').style.display = 'none';
         _lastTicketsClickUpDetailContentHtml = '';
         _lastTicketsDetailContentHtml = '';
+        const detailContent = document.getElementById('tickets-detail-content');
+        if (detailContent) {
+            detailContent.classList.remove('edit-mode');
+        }
         renderTicketsTab();
         _refreshSelectedTicketFromFile();
     }
