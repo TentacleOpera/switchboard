@@ -8,6 +8,9 @@ description: Implement with high accuracy and self-review (optimized for per-pro
 ## File Creation Rules
 - When creating files in `.switchboard/`, always use `IsArtifact: false` to prevent path validation errors.
 
+## No-Artifact Rule
+- `/accuracy` is a solo, in-conversation workflow. Do NOT write out artifacts to disk as part of execution — no `task.md`, no plan files, no Red Team Findings file, no progress logs. All planning, progress tracking, and review output belongs in your reply to the user. The only files you create or modify are the actual code files required by the task itself.
+
 ## Quick Reference
 - **Valid Actions**: None (solo workflow, no cross-agent delegation)
 
@@ -20,10 +23,10 @@ description: Implement with high accuracy and self-review (optimized for per-pro
    - MUST read existing tests, types, and interfaces related to the task.
    - MUST identify every dependency and side-effect BEFORE writing any code.
    - **WHY**: Missing context causes mistakes. Mistakes cause rework. Rework costs extra prompts.
-   - Mark Phase 1 complete in your task tracking (e.g., update task.md or use Kanban UI if available).
+   - Mark Phase 1 complete in your reply (a brief checklist is fine) or via the Kanban UI if available. Do NOT create any tracking files on disk.
 
 3. **Thorough Plan**:
-   - MUST create a detailed plan listing every change, which files are affected, and how to verify each.
+   - MUST produce a detailed plan in your reply listing every change, which files are affected, and how to verify each. Do NOT write a plan file to disk — plan files are the domain of `/improve-plan`, not `/accuracy`.
    - MUST map dependencies between changes — which must happen first?
    - MUST identify risks: what could break? What edge cases exist?
    - **DESTRUCTION CHECK**: If deleting files, MUST run `grep_search` to confirm nothing depends on them.
@@ -37,7 +40,7 @@ description: Implement with high accuracy and self-review (optimized for per-pro
      3. If verification fails: fix immediately. If fix fails twice, **HALT** and notify user.
      4. NEVER proceed to the next group with a broken build.
    - Do as many groups as possible within one prompt — but NEVER skip the verification gate.
-   - MUST update `task.md` as you go: mark completed items `[x]`.
+   - MUST track progress in your reply as you go: mark completed items `[x]` in an in-context checklist. Do NOT create or update any `task.md` (or other tracking) file on disk.
 
 5. **Self-Review (Red Team)** — catch issues before they become rework:
    - Review ALL changes holistically as a hostile reviewer.
@@ -47,14 +50,14 @@ description: Implement with high accuracy and self-review (optimized for per-pro
      - Is it consistent with existing code style?
      - Could it break anything else in the codebase?
    - MUST list ≥3 concrete potential failure modes per modified file.
-   - Document findings in `### Red Team Findings` with specific line numbers.
+   - Document findings in your reply under a `### Red Team Findings` heading with specific line numbers. Do NOT write these findings to a file.
    - Fix all issues found — NEVER leave them for a future prompt.
 
 6. **Final Verification & Complete**:
    - MUST run final compile/test across the whole project via `run_command`.
    - Review the complete diff for consistency.
    - Output: `**ACCURACY VERIFICATION COMPLETE**`
-   - Mark Phase 5 complete in your task tracking. The workflow automatically terminates when all phases are done.
+   - Mark Phase 5 complete in your reply. The workflow automatically terminates when all phases are done. Do NOT create or update any tracking file on disk.
 
 ## Final-Phase Recovery Rule
 - Phase 5 is terminal for `accuracy`. Do NOT proceed to phase 6.
