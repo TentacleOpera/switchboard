@@ -187,3 +187,9 @@ The worktree Merge button ships in released versions, but this change touches **
 **Recommendation:** Complexity 6 → **Send to Coder.** Majority of the work reuses the existing kind-branched cleanup skeleton; the moderate risks (per-row clipboard selector, three-point API wiring, `git -C` prompt correctness, name disambiguation) are well-scoped and documented above.
 
 **Stage Complete:** LEAD CODED
+
+## Review Findings
+
+Reviewed the implementation in commit `a6a0bef` against the plan. Two MAJOR prompt-correctness issues fixed in `src/services/KanbanProvider.ts`: (1) the "no active integration worktree" case still emitted a `git -C <workspaceRoot> merge` command that would bypass the integration branch and land a subtask on main directly — now emits a no-target prompt that asks the user instead; (2) the prompt hardcoded "integration checkout" prose for all worktree kinds, mislabeling the main checkout for integration/plain worktrees — now uses a dynamic `checkoutLabel`. One NIT fixed in `src/webview/kanban.html`: dead ternary `msg.error ? 'ERROR' : 'ERROR'` collapsed to `'ERROR'`. No orphaned references to removed `mergeWorktree`/`_mergeSubtaskIntoIntegration`/`_mergeFeatureIntegrationIntoMain` in `src/`. The `data-wt-id` per-row selector, kind-aware `_cleanupWorktree`, three-point API wiring, and name disambiguation (`copyWorktreeMergePrompt` vs `TaskViewerProvider.copyMergePrompt`) all match the plan. Compilation and tests skipped per session directive. Remaining risk: the skill doc claims `switchboard.apiToken` is required, but `_checkAuth` is a no-op — consistent with peer skills, so left as-is.
+
+**Stage Complete:** CODE REVIEWED

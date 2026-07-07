@@ -9232,33 +9232,47 @@ ${FOCUS_DIRECTIVE}`;
                     break;
                 }
 
+                const defaultBranch = wtRow.base_branch || await this._resolveDefaultBranch(workspaceRoot);
                 let targetPath = workspaceRoot;
-                let targetBranch = wtRow.base_branch || await this._resolveDefaultBranch(workspaceRoot);
+                let targetBranch = defaultBranch;
+                let checkoutLabel = 'main checkout';
                 let note = '';
+                let noTarget = false;
 
-                // subtask/tier worktree
+                // subtask/tier worktree → converges into the feature integration worktree
                 if ((wtRow.subtask_plan_id && wtRow.feature_id) || (wtRow.tier && wtRow.feature_id)) {
                     const integrationWt = allWorktrees.find(w => String(w.feature_id) === String(wtRow.feature_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
                     if (integrationWt) {
                         targetPath = integrationWt.path;
                         targetBranch = integrationWt.branch;
+                        checkoutLabel = 'feature integration checkout';
                     } else {
-                        note = '\n> *Note: No active feature integration worktree found for this branch. Please merge manually into the correct target branch.*';
+                        // No integration worktree — do NOT emit a merge command that would
+                        // bypass the integration branch and land the subtask on main directly.
+                        noTarget = true;
+                        note = '*Note: No active feature integration worktree was found for this branch. Do NOT merge into main directly — ask the user which branch to merge into.*';
                     }
                 } else if (wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier) {
-                    // integration worktree
+                    // integration worktree → merges into main; children must converge first
                     const hasChildren = allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.feature_id) === String(wtRow.feature_id));
                     if (hasChildren) {
                         note = '\n> *Note: This is the feature integration worktree. Ensure all child/subtask branches are merged into this branch first.*';
                     }
                 }
 
+                const steps = noTarget
+                    ? `1. Ensure \`${wtRow.branch}\` has all intended work committed.
+2. Ask the user which branch this should merge into (the integration worktree is missing).
+3. Once the user confirms the target, run the merge there with an explicit \`git -C <target path> merge ${wtRow.branch}\` and resolve any conflicts.
+4. Verify the result builds/tests as appropriate.`
+                    : `1. Ensure \`${wtRow.branch}\` has all intended work committed.
+2. In the ${checkoutLabel} at \`${targetPath}\` (branch \`${targetBranch}\`), run: \`git -C ${targetPath} merge ${wtRow.branch}\`.
+3. If there are conflicts, resolve them (keep both sides' intent; prefer the incoming feature work where they overlap), then commit the merge. Do not run \`git merge --abort\` unless the user tells you to.
+4. Verify the result builds/tests as appropriate.`;
+
                 const prompt = `You are working in the git worktree at \`${wtRow.path}\` on branch \`${wtRow.branch}\`. Merge this branch back into its integration target and resolve any conflicts.
 ${note}
-1. Ensure \`${wtRow.branch}\` has all intended work committed.
-2. In the integration checkout at \`${targetPath}\` (branch \`${targetBranch}\`), run: \`git -C ${targetPath} merge ${wtRow.branch}\`.
-3. If there are conflicts, resolve them (keep both sides' intent; prefer the incoming feature work where they overlap), then commit the merge. Do not run \`git merge --abort\` unless the user tells you to.
-4. Verify the result builds/tests as appropriate.
+${steps}
 
 After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree_cleanup\` skill (\`.agents/skills/worktree_cleanup.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
 

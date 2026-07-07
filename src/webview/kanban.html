@@ -6624,7 +6624,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         });
                     } else if (btn) {
                         const oldText = btn.textContent;
-                        btn.textContent = msg.error ? 'ERROR' : 'ERROR';
+                        btn.textContent = 'ERROR';
                         setTimeout(() => {
                             btn.textContent = oldText;
                         }, 2000);

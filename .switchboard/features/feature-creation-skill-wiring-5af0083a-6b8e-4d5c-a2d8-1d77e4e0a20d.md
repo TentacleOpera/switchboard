@@ -15,10 +15,10 @@ Ensure that every agent instructed to create a Switchboard feature uses the auth
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add Direct "Create Feature from Plans" Skill + Wire Into Planner & Improve-Plan](../plans/add-direct-create-feature-skill.md) — **PLAN REVIEWED**
-- [ ] [Fix: kanban-board.md snapshot gets stale — refresh more reliably](../plans/feature_plan_20260707124454_suggest-features-board-snapshot-staleness.md) — **PLAN REVIEWED**
-- [ ] [Fix: Suggest Features prompt — project-scope section is wildly over-worded](../plans/feature_plan_20260707124454_suggest-features-project-scope-wording.md) — **PLAN REVIEWED**
-- [ ] [Fix: Feature-creation prompts must reference the create-feature skill, not "see the format"](../plans/feature_plan_20260707132952_feature-creation-must-use-skill-not-handwrite.md) — **PLAN REVIEWED**
+- [ ] [Add Direct "Create Feature from Plans" Skill + Wire Into Planner & Improve-Plan](../plans/add-direct-create-feature-skill.md) — **CODER CODED**
+- [ ] [Fix: kanban-board.md snapshot gets stale — refresh more reliably](../plans/feature_plan_20260707124454_suggest-features-board-snapshot-staleness.md) — **CODER CODED**
+- [ ] [Fix: Suggest Features prompt — project-scope section is wildly over-worded](../plans/feature_plan_20260707124454_suggest-features-project-scope-wording.md) — **CODER CODED**
+- [ ] [Fix: Feature-creation prompts must reference the create-feature skill, not "see the format"](../plans/feature_plan_20260707132952_feature-creation-must-use-skill-not-handwrite.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
