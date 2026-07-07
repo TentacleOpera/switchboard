@@ -23,7 +23,7 @@ The codebase already contains the correct pattern for a *different* import path:
 ## Metadata
 
 **Complexity:** 4
-**Tags:** bugfix, backend, protocol, data-integrity, projects
+**Tags:** bugfix, backend, database, reliability
 
 ## User Review Required
 
@@ -39,14 +39,25 @@ None — the desired behavior is specified by the user and encoded here:
 
 ### Complex / Risky
 - **Not regressing legitimate assignment.** A pin naming a project the user *did* create must still resolve and stamp correctly — resolve-only handles this (SELECT hits). Only genuinely-unknown pins fall to unassigned. Verify the board's own project-filter creation path (`KanbanProvider` `ensureProjectExists`, `KanbanProvider.ts:3061`) is untouched — that path is the user *explicitly* creating a project and must keep working.
-- **Precedence #2 (activeProjectFilter).** Local fresh-insert reads the board's active project — a value that only exists because the user selected/created that project, so resolve-only would still find it. Leave #2's behavior intact (it's a trusted local signal, not a cross-machine file pin); the fix targets #1 (file pins) only.
+- **Precedence #2 (activeProjectFilter).** Local fresh-insert reads the board's active project — a value that only exists because the user selected/created that project, so resolve-only would still find it. Leave #2's behavior intact (it's a trusted local signal, not a cross-machine file pin); the fix targets #1 (file pins) only. **Known crack (out of scope, future hardening):** `deleteProject` only clears `activeProjectFilter` when it *equals* the deleted project, so a stale/corrupt filter naming a never-created project would still mint it on the next fresh INSERT via #2. Not touched here; note for a follow-up.
+- **`record.projectId ??` trust (known residual, out of scope).** The proposed code honors a caller-supplied `record.projectId` without re-validating it against the resolved name. On the **file-watcher** path (`insertFileDerivedPlan`) `record.projectId` is always null (the file carries only a name), so resolve-only is genuine there. But `_resolveProjectForInsert` is **shared** with `upsertPlans` (Notion restore, manifest ingest), where a foreign/teammate DB-sourced record could carry a bogus `projectId` that `COALESCE(excluded.project_id, plans.project_id)` would honor. Closing this means re-validating the supplied id against `resolveProjectId(pin, …)` — a separate trust-boundary refactor of the `upsertPlans` path, deliberately deferred. Documented here so it is not mistaken for closed.
 
 ## Edge-Case & Dependency Audit
 
+### Race Conditions
+- **No new async-in-transaction hazard.** `_resolveProjectForInsert` is called in the **pre-pass** of `upsertPlans` (`:1517–1521`) and once in `insertFileDerivedPlan` (`:1598–1599`) — both **outside** the `BEGIN`/`COMMIT` block, precisely because sql.js's single shared connection cannot yield async ops inside the transaction (comment `:1511–1514`). Adding `await this._isWorkspaceName(...)` to the helper keeps it async but it still runs in the pre-pass, so the transaction stays synchronous. Safe.
+- **Watcher/UPSERT interleaving.** A re-import that fires while the user is mid-edit on the board is handled by the conflict-update COALESCE (see next section) — the file never overwrites a DB-owned corrected assignment.
+
 ### Correctness
-- **Unknown pin ⇒ fully unassigned.** On a miss, set `project = ''` and `projectId = null` (do not retain the orphan denormalized string — an orphan `project` text with null id causes exactly the filter confusion seen here). This is stricter than the manifest path's "keep the string," deliberately.
-- **Workspace-name guard (belt-and-suspenders).** Even resolve-only, if a user coincidentally has a real project named identically to the workspace, a workspace-name pin would resolve to it. Add an explicit check: a pin equal to a workspace display name is dropped to unassigned. Primary safety is resolve-only; this is the secondary guard.
-- **Placeholder guard.** Drop pins matching `/^\s*<.*>\s*$/` (e.g. `<project>`) or empty-after-trim.
+- **Conflict-update (re-import) guarantee — load-bearing, document it.** `UPSERT_PLAN_SQL` (`:675`, `:694`) binds on conflict:
+  ```sql
+  project    = COALESCE(NULLIF(excluded.project, ''), plans.project),
+  project_id = COALESCE(excluded.project_id, plans.project_id)
+  ```
+  Because the resolve-only change produces `excluded.project=''` and `excluded.project_id=null` for a phantom/unknown pin, COALESCE **falls through to the existing DB value**. So re-importing a teammate's stale `**Project:** Switchboard` file after you've corrected the card to unassigned (or to a real project "Foo") **does not clobber** the correction — the empty excluded value loses to the DB value. This is the single most important correctness guarantee of the fix and the first thing a future "tidy the COALESCE" refactor could break; it must be cited in the code comment alongside the resolve-only switch.
+- **Unknown pin ⇒ fully unassigned.** On a miss, set `project = ''` and `projectId = null` (do not retain the orphan denormalized string — an orphan `project` text with null id causes exactly the filter confusion seen here). This is stricter than the manifest path's "keep the string," deliberately. Combined with the COALESCE above, a miss on a *fresh* INSERT writes `''/null`; on a *re-import* it preserves the prior DB value.
+- **Workspace-name guard (best-effort secondary, NOT a true guard).** Even resolve-only, if a user coincidentally has a real project named identically to the workspace, a workspace-name pin would resolve to it. Add an explicit check: a pin equal to a workspace display name is dropped to unassigned. **Resolve-only is the load-bearing primary** — the workspace-name check is best-effort cosmetics: it sources from `plans.workspace_name` (per-row, V35-backfilled from config JSON), so if `workspace_name` is empty for that workspace the check silently no-ops, and safety still holds via resolve-only. Call it what it is.
+- **Placeholder guard (authoritative form).** Drop pins matching `/^<.*>$/` **after** `pin = record.project.trim()` (the post-trim tighter form), or empty-after-trim. This is the single authoritative regex; the looser `/^\s*<.*>\s*$/` form in earlier notes is equivalent only pre-trim and should not be duplicated.
 
 ### Shipped-state / migration
 - **No schema migration.** Behavior-only change to resolution. Existing correctly-assigned cards are unaffected (their pins still resolve).
@@ -63,7 +74,7 @@ None. Complements the other watcher-hardening plans (`guard-watcher-against-git-
 
 ## Adversarial Synthesis
 
-Risks: (1) breaking legitimate project assignment — mitigated by resolve-only still resolving real projects, and by leaving the board's explicit `ensureProjectExists` creation path alone; (2) the workspace-name guard needing the workspace display name(s) — source it from the existing workspace/`workspace_name` data the DB already tracks; if unavailable, resolve-only alone still prevents phantom creation, so the guard degrades safely; (3) agents ignoring the protocol text — which is exactly why Hole B (the import guard) is the non-negotiable backstop and Hole A (protocol) is the first line, not the only line.
+Key risks: (1) the conflict-update COALESCE guarantee (`UPSERT_PLAN_SQL:675,694`) that makes re-imports non-clobbering is load-bearing but invisible — it must be cited in the code comment or a future refactor silently re-breaks resurrection safety; (2) `record.projectId ??` trusts a caller-supplied id without re-validation — a genuine but pre-existing residual on the `upsertPlans` (Notion/manifest) path, deferred as out of scope; (3) the workspace-name check is best-effort (no-ops when `workspace_name` is empty) and must not be advertised as a true guard — resolve-only is the load-bearing primary. Mitigations: document the COALESCE invariant in-code, record the `record.projectId` residual as known-open, and ship resolve-only as the non-negotiable backstop with the workspace-name check as cosmetic secondary. Hole B (import guard) is the backstop; Hole A (protocol) is the first line, not the only line.
 
 ## Proposed Changes
 
@@ -91,7 +102,9 @@ if (record.project && record.project.trim() !== '') {
     return projectId === null ? { project: '', projectId: null } : { project: pin, projectId };
 }
 ```
-- Add `_isWorkspaceName(name, workspaceId)` comparing against the workspace display name(s) the DB already tracks (`plans.workspace_name` / the workspaces source). If that data isn't readily available, ship resolve-only first (it alone prevents phantom creation) and add the workspace-name check as a follow-up.
+- **Cite the COALESCE invariant in the code comment.** The resolve-only switch is safe on re-import *only because* `UPSERT_PLAN_SQL` (`:675`, `:694`) uses `COALESCE(NULLIF(excluded.project, ''), plans.project)` and `COALESCE(excluded.project_id, plans.project_id)` — the empty/null excluded value for a dropped pin falls through to the existing DB value, so a stale teammate file cannot clobber a corrected assignment. Put this in the comment above the guard so the next refactor of the UPSERT clauses sees the dependency.
+- **`record.projectId ??` is a known residual (do not expand scope here).** On the file-watcher path it is always null; on the `upsertPlans` path a foreign id could be honored. Re-validating it is a separate trust-boundary refactor, deferred. Note it in the comment as "caller-supplied id trusted on non-file paths — see plan."
+- Add `_isWorkspaceName(name, workspaceId)` comparing against the workspace display name(s) the DB already tracks (`plans.workspace_name`, per-row, V35-backfilled from config JSON). Best-effort: if `workspace_name` is empty for that workspace the check no-ops and resolve-only still carries safety. If that data isn't readily available, ship resolve-only first and add the workspace-name check as a follow-up.
 - Leave `_resolveOrCreateProjectId` in place for the **board's explicit** project-creation path (`ensureProjectExists`, used by `KanbanProvider.ts:3061` when the user selects/creates a project filter) — that is the user creating a project and must keep working.
 - Leave Precedence #2 (activeProjectFilter) unchanged.
 
@@ -104,16 +117,25 @@ if (record.project && record.project.trim() !== '') {
 
 ## Verification Plan
 
-No automated tests / no compile this pass (project convention: test via installed VSIX; `src/` is source of truth). Suggested later test: seed a workspace, import a plan record with `project:'Switchboard'` (a name with no projects row) and assert **no** projects row is created and the plan lands `project=''`, `project_id=null`; then create project "Foo" on the board, import a record pinning "Foo", assert it resolves to Foo's id.
+### Automated Tests
 
-Manual (installed VSIX):
+None this pass (session directive: skip tests + skip compile; project convention: test via installed VSIX, `src/` is source of truth). Suggested later test: seed a workspace, import a plan record with `project:'Switchboard'` (a name with no projects row) and assert **no** projects row is created and the plan lands `project=''`, `project_id=null`; then create project "Foo" on the board, import a record pinning "Foo", assert it resolves to Foo's id. Add a re-import-non-clobber case: assign an existing card to "Foo" via the board, then re-import a stale file pinning "Switchboard", assert the card stays on "Foo" (COALESCE guarantee).
+
+### Manual (installed VSIX)
+
 1. **The exact bug** — with the phantom projects gone, drop a plan `.md` containing `**Project:** Switchboard` into `.switchboard/plans/`; confirm **no** "Switchboard" project appears and the card lands unassigned/visible.
 2. **Placeholder** — a plan pinning `**Project:** <project>`; confirm it's ignored (unassigned), no project created.
 3. **Legitimate pin** — create project "Foo" on the board, then import a plan pinning `**Project:** Foo`; confirm it resolves to Foo (no regression).
 4. **Board project creation** — create a project via the board's project dropdown; confirm that still works (explicit user creation path untouched).
 5. **Re-import safety** — re-import the existing orchestration files (with their `**Project:** Switchboard` pins); confirm the deleted phantom projects do **not** come back.
-6. **Protocol** — run a remote plan-authoring flow with no user-named project; confirm the produced `.md` has **no** `**Project:**` line (not the workspace name).
+6. **Re-import non-clobber (COALESCE)** — manually reassign a card to a real project "Foo", then trigger a re-import of its stale file (still pinning `**Project:** Switchboard`); confirm the card **stays** on "Foo" and is not reset to unassigned.
+7. **Protocol** — run a remote plan-authoring flow with no user-named project; confirm the produced `.md` has **no** `**Project:**` line (not the workspace name).
 
 ---
 
-**Recommendation:** Complexity 4 (mostly routine; one careful spot preserving legitimate resolution + the board's explicit-create path). **Send to Coder.**
+**Recommendation:** Complexity 4 (mostly routine; one careful spot preserving legitimate resolution + the board's explicit-create path, plus documenting the COALESCE invariant). **Send to Coder.**
+
+**Stage Complete:** PLAN REVIEWED
+
+
+**Stage Complete:** LEAD CODED

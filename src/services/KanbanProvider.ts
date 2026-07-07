@@ -3040,15 +3040,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (workspaceId && dbReady) {
                 if (this._projectFilterNeedsValidation) {
                     // Validate the restored in-memory project filter against the projects
-                    // table. Previously a restored filter naming a project missing from
-                    // getProjects() was silently reset to UNASSIGNED — which then got
-                    // written back to the config key as '' on every refresh, wiping the
-                    // user's selection without any action. With Phase 3's auto-create, a
-                    // missing row is legitimate (the name was pinned/imported before the
-                    // row existed); we now keep the filter and auto-create the row instead
-                    // of nulling the filter. An empty getProjects() result (DB race —
-                    // dbReady true but projects table not yet populated) must NEVER wipe a
-                    // non-empty restored filter: retry next refresh instead.
+                    // table. A restored filter naming a project missing from getProjects()
+                    // is a phantom (e.g. a stale pin that was read back as the active
+                    // filter, or a project the user deleted). Do NOT auto-create it — that
+                    // was a source of spam projects. Reset to UNASSIGNED. The plan's
+                    // project field is preserved (it's a TEXT column, not a FK), so no
+                    // data is lost. An empty getProjects() result (DB race — dbReady true
+                    // but projects table not yet populated) must NEVER wipe a non-empty
+                    // restored filter: retry next refresh instead.
                     this._projectFilterNeedsValidation = false;
                     const projects = await db.getProjects(workspaceId);
                     if (this._projectFilter && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
@@ -3056,14 +3055,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                             // DB race window — leave the filter intact and retry next refresh.
                             this._projectFilterNeedsValidation = true;
                         } else if (!projects.includes(this._projectFilter)) {
-                            // Project row missing — auto-create it (Phase 3 semantics) and
-                            // keep the filter. ensureProjectExists returns null only on real
-                            // failure, in which case fall back to UNASSIGNED to avoid a
-                            // stuck phantom filter that matches no board.
-                            const id = await db.ensureProjectExists(workspaceId, this._projectFilter);
-                            if (id === null) {
-                                this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
-                            }
+                            // The filter names a project that doesn't exist in the projects
+                            // table. Do NOT auto-create it — this was a source of spam
+                            // projects. Reset to UNASSIGNED. The plan's project field is
+                            // preserved (it's a TEXT column, not a FK), so no data is lost.
+                            this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
                         }
                         // else: filter names an existing project — keep it as-is.
                     }
@@ -3179,7 +3175,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
-            const projects = workspaceId && dbReady ? await db.getProjects(workspaceId) : [];
+            let projects = workspaceId && dbReady ? await db.getProjects(workspaceId) : [];
+            // Clean up unreferenced auto-created projects (from the now-removed
+            // auto-create vectors). User-created projects (source='user') are
+            // never touched. Referenced auto-created duplicates survive — the
+            // user deletes those manually via deleteProject.
+            if (workspaceId && dbReady) {
+                const removed = await db.cleanupAutoProjects(workspaceId);
+                if (removed > 0) {
+                    // Re-fetch if we removed any — the dropdown needs the cleaned list.
+                    projects = await db.getProjects(workspaceId);
+                }
+            }
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             const cpStatus2 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);

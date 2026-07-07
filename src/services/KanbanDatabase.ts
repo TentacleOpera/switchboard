@@ -348,6 +348,15 @@ const MIGRATION_V53_SQL = [
      WHERE key IN ('epic_worktree_mode', 'epic_lock_columns', 'epic_prompt_template')`,
 ];
 
+// V54: distinguish user-created projects from auto-created ones so
+// cleanupAutoProjects can safely remove unreferenced auto rows without ever
+// touching user-created projects. Existing rows backfill to 'user' (SQLite
+// ADD COLUMN with a constant DEFAULT populates existing rows). Safe/idempotent
+// under the version gate; never edit a shipped Vnn body.
+const MIGRATION_V54_SQL = [
+    `ALTER TABLE projects ADD COLUMN source TEXT NOT NULL DEFAULT 'user'`,
+];
+
 
 
 const MIGRATION_V13_SQL = [
@@ -1438,6 +1447,13 @@ export class KanbanDatabase {
      * insert to pick up the id whether this call created the row or a concurrent one
      * won the UNIQUE race. Parameterized — no injection surface.
      */
+    /**
+     * @deprecated Import paths must not auto-create projects — use
+     * getProjectIdByName (resolve-only). Retained for potential re-wiring of
+     * the board's explicit-create path; do not call from insert/upsert paths.
+     * Any new row minted here is marked source='auto' so cleanupAutoProjects
+     * can reclaim it.
+     */
     private async _resolveOrCreateProjectId(workspaceId: string, projectName: string): Promise<number | null> {
         if (!this._db || !projectName) return null;
         // Normalize: trim so " Switchboard " and "Switchboard" don't create duplicate rows.
@@ -1447,10 +1463,10 @@ export class KanbanDatabase {
         if (existing !== null) return existing;
         try {
             this._db.run(
-                'INSERT OR IGNORE INTO projects (name, workspace_id) VALUES (?, ?)',
-                [trimmedName, workspaceId]
+                'INSERT OR IGNORE INTO projects (name, workspace_id, source) VALUES (?, ?, ?)',
+                [trimmedName, workspaceId, 'auto']
             );
-            console.debug(`[KanbanDatabase] _resolveOrCreateProjectId: created projects row "${trimmedName}" (workspace=${workspaceId})`);
+            console.debug(`[KanbanDatabase] _resolveOrCreateProjectId: created projects row "${trimmedName}" (workspace=${workspaceId}, source=auto)`);
         } catch (e) {
             console.error('[KanbanDatabase] _resolveOrCreateProjectId: INSERT OR IGNORE failed:', e);
             return null;
@@ -1459,8 +1475,12 @@ export class KanbanDatabase {
     }
 
     /**
-     * Public wrapper over the auto-create helper, for callers outside the insert
-     * paths (e.g. KanbanProvider's restored-filter validation in _refreshBoardImpl).
+     * @deprecated Public wrapper over the auto-create helper. Import paths must
+     * not auto-create projects — use getProjectIdByName (resolve-only). The
+     * restored-filter validation in KanbanProvider._refreshBoardImpl now resets
+     * a phantom filter to UNASSIGNED instead of calling this. Retained for
+     * potential re-wiring of the board's explicit-create path; do not call
+     * from insert/upsert paths.
      */
     public async ensureProjectExists(workspaceId: string, projectName: string): Promise<number | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
@@ -1474,34 +1494,123 @@ export class KanbanDatabase {
      *   2. Active project at row-creation time (kanban.activeProjectFilter config),
      *      read ONLY on fresh INSERT (isExisting=false) — fallback when no pin.
      *   3. Unassigned ('' / null).
-     * Also resolves project_id from the (possibly newly stamped) name, auto-creating
-     * the projects row on miss (Phase 3). On conflict-update (existing row) the
-     * caller's UPSERT COALESCE clauses preserve the prior DB values, so this helper
-     * only shapes what gets bound for the INSERT/excluded side.
+     * Also resolves project_id from the (possibly newly stamped) name. RESOLVE-ONLY:
+     * an unknown pin does NOT auto-create a projects row — only the user creates
+     * projects (on the board, via addProject). On a miss the plan drops to fully
+     * unassigned (`project=''`, `projectId=null`). On conflict-update (existing
+     * row) the caller's UPSERT COALESCE clauses preserve the prior DB values, so
+     * this helper only shapes what gets bound for the INSERT/excluded side.
      */
     private async _resolveProjectForInsert(
         record: KanbanPlanRecord,
         isExisting: boolean
     ): Promise<{ project: string; projectId: number | null }> {
         // Precedence #1 — explicit pin / caller intent.
+        //
+        // RESOLVE-ONLY: a file-supplied `**Project:**` pin must NEVER mint a
+        // `projects` row. Only the user creates projects (on the board, via
+        // addProject). Unknown / placeholder / workspace-name pins drop to
+        // fully unassigned (`project=''`, `projectId=null`) — NOT the orphan
+        // denormalized string, which would split the board's two filter paths
+        // (getBoardFilteredByProject filters Unassigned on project_id IS NULL;
+        // getPlansByColumn filters on project='').
+        //
+        // Re-import safety (load-bearing): this is only non-clobbering because
+        // UPSERT_PLAN_SQL's ON CONFLICT clause binds
+        //   project    = COALESCE(NULLIF(excluded.project, ''), plans.project),
+        //   project_id = COALESCE(excluded.project_id, plans.project_id)
+        // so the empty/null excluded value for a dropped pin falls through to
+        // the existing DB value. Re-importing a teammate's stale
+        // `**Project:** Switchboard` file after you corrected the card to
+        // unassigned (or to a real project "Foo") does NOT clobber the
+        // correction. Do NOT tidy these COALESCE clauses without re-reading
+        // this invariant.
+        //
+        // `record.projectId ??` trusts a caller-supplied id without
+        // re-validation. On the file-watcher path (insertFileDerivedPlan) it
+        // is always null, so resolve-only is genuine there. On the upsertPlans
+        // path (Notion restore, manifest ingest) a foreign/teammate DB-sourced
+        // record could carry a bogus projectId that the COALESCE above would
+        // honor — re-validating it is a separate trust-boundary refactor,
+        // deliberately deferred (see plan
+        // fix-project-pin-workspace-conflation-and-import-guard.md).
         if (record.project && record.project.trim() !== '') {
-            const project = record.project.trim();
+            const pin = record.project.trim();
+            // Drop literal placeholders (e.g. `<project>`) and empty-after-trim.
+            // Authoritative regex: tight form applied post-trim.
+            if (/^<.*>$/.test(pin)) {
+                return { project: '', projectId: null };
+            }
+            // Best-effort workspace-name guard (secondary, NOT a true guard).
+            // A pin equal to a workspace display name is dropped to unassigned.
+            // Resolve-only is the load-bearing primary; this is cosmetic — if
+            // workspace_name is empty for this workspace the check no-ops and
+            // safety still holds via resolve-only.
+            if (await this._isWorkspaceName(pin, record.workspaceId)) {
+                return { project: '', projectId: null };
+            }
             let projectId = record.projectId ?? null;
             if (projectId === null) {
-                projectId = await this._resolveOrCreateProjectId(record.workspaceId, project);
+                // SELECT-only — never auto-create. Reuses the existing
+                // getProjectIdByName lookup (identical to resolveProjectId).
+                projectId = await this.getProjectIdByName(record.workspaceId, pin);
             }
-            return { project, projectId };
+            // On a resolve miss, drop the orphan string too (see header comment).
+            if (projectId === null) {
+                return { project: '', projectId: null };
+            }
+            return { project: pin, projectId };
         }
         // Precedence #2 — active project at row-creation time (fresh INSERT only).
+        // This reads the board's *active* project — a value that only exists
+        // because the user selected/created that project on the board — so for
+        // a correctly-running install getProjectIdByName will hit. A miss here
+        // means the active filter names a phantom/deleted project; dropping to
+        // unassigned is the correct recovery (consistent with Change 4's
+        // reset-to-UNASSIGNED in KanbanProvider._refreshBoardImpl). Resolve-only.
         if (!isExisting) {
             const active = this.getConfigSync('kanban.activeProjectFilter');
             if (active && active !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-                const projectId = await this._resolveOrCreateProjectId(record.workspaceId, active);
+                const projectId = await this.getProjectIdByName(record.workspaceId, active);
+                if (projectId === null) {
+                    return { project: '', projectId: null };
+                }
                 return { project: active, projectId };
             }
         }
         // Precedence #3 — unassigned.
         return { project: '', projectId: record.projectId ?? null };
+    }
+
+    /**
+     * Best-effort check whether a name equals a workspace display name tracked
+     * by the DB. Sources `plans.workspace_name` (per-row, V35-backfilled from
+     * config JSON). Returns false when the workspace name is empty/unknown so
+     * the check silently no-ops — resolve-only in _resolveProjectForInsert
+     * remains the load-bearing primary guard either way. NOT a true guard.
+     */
+    private async _isWorkspaceName(name: string, workspaceId: string): Promise<boolean> {
+        if (!name || !this._db) return false;
+        try {
+            const stmt = this._db.prepare(
+                `SELECT DISTINCT workspace_name FROM plans
+                 WHERE workspace_id = ? AND workspace_name IS NOT NULL AND workspace_name != ''`,
+                [workspaceId]
+            );
+            try {
+                while (stmt.step()) {
+                    const wsName = String(stmt.getAsObject().workspace_name || '').trim();
+                    if (wsName && wsName.toLowerCase() === name.toLowerCase()) {
+                        return true;
+                    }
+                }
+            } finally {
+                stmt.free();
+            }
+        } catch (e) {
+            console.debug('[KanbanDatabase] _isWorkspaceName check failed (best-effort no-op):', e);
+        }
+        return false;
     }
 
     public async upsertPlans(records: KanbanPlanRecord[]): Promise<boolean> {
@@ -2815,8 +2924,8 @@ export class KanbanDatabase {
         if (!(await this.ensureReady()) || !this._db) return false;
         try {
             this._db.run(
-                'INSERT INTO projects (name, workspace_id) VALUES (?, ?)',
-                [projectName, workspaceId]
+                'INSERT INTO projects (name, workspace_id, source) VALUES (?, ?, ?)',
+                [projectName, workspaceId, 'user']
             );
             return await this._persist();
         } catch (e) {
@@ -2850,6 +2959,48 @@ export class KanbanDatabase {
         } catch (e) {
             console.error('[KanbanDatabase] deleteProject failed:', e);
             return false;
+        }
+    }
+
+    /**
+     * Delete projects rows that were auto-created (source='auto') and are not
+     * referenced by any plan's project field. Safe to call on every board
+     * refresh. User-created projects (source='user') are never deleted by this
+     * method. NOTE: referenced auto-created duplicates (e.g. case variants each
+     * with plans pointing at them) are NOT removed — the user must delete those
+     * manually via deleteProject.
+     */
+    public async cleanupAutoProjects(workspaceId: string): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+        try {
+            // Count victims first (for logging / caller re-fetch decision).
+            const countStmt = this._db.prepare(
+                `SELECT COUNT(*) AS n FROM projects
+                 WHERE workspace_id = ? AND source = 'auto'
+                 AND name NOT IN (SELECT DISTINCT project FROM plans
+                                  WHERE workspace_id = ? AND project IS NOT NULL AND project != '')`,
+                [workspaceId, workspaceId]
+            );
+            let victimCount = 0;
+            if (countStmt.step()) {
+                victimCount = Number(countStmt.getAsObject().n ?? 0);
+            }
+            countStmt.free();
+            if (victimCount === 0) return 0;
+
+            this._db.run(
+                `DELETE FROM projects
+                 WHERE workspace_id = ? AND source = 'auto'
+                 AND name NOT IN (SELECT DISTINCT project FROM plans
+                                  WHERE workspace_id = ? AND project IS NOT NULL AND project != '')`,
+                [workspaceId, workspaceId]
+            );
+            await this._persist();
+            console.debug(`[KanbanDatabase] cleanupAutoProjects: removed ${victimCount} unreferenced auto-created projects`);
+            return victimCount;
+        } catch (e) {
+            console.error('[KanbanDatabase] cleanupAutoProjects failed:', e);
+            return 0;
         }
     }
 
