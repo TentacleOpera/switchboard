@@ -13,10 +13,16 @@ Two related issues with the Prompts tab git strategy UI: (1) add-ons render as a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Prompts tab layout — group ungrouped prompts first, make git subsections accordions, add option descriptions](../plans/feature_plan_20260707125810_prompts-tab-layout-accordions-grouping.md) — **INTERN CODED**
-- [ ] [Fix: Git strategy defaults should be "Not Specified" for all three; remove meaningless "Incremental Commits" option](../plans/feature_plan_20260707125920_git-strategy-defaults-notspecified-remove-incremental.md) — **INTERN CODED**
+- [ ] [Fix: Prompts tab layout — group ungrouped prompts first, make git subsections accordions, add option descriptions](../plans/feature_plan_20260707125810_prompts-tab-layout-accordions-grouping.md) — **CODE REVIEWED**
+- [ ] [Fix: Git strategy defaults should be "Not Specified" for all three; remove meaningless "Incremental Commits" option](../plans/feature_plan_20260707125920_git-strategy-defaults-notspecified-remove-incremental.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
 
 No hard ordering constraint — both plans edit the same sharedDefaults.js radio objects but different fields (group vs default/options). The plans explicitly note no conflict — different fields of the same objects. Coordinate merge order so both land cleanly. Subtasks can be executed in parallel.
+
+## Review Findings
+
+Both subtasks landed together in commit `04fa5e9` and were reviewed inline as one pass (shared-file overlap made parallel worktree agents unsafe). Subtask 1 (layout/accordions): helper extraction preserves the critical per-addon `textInputsToToggle` closure, git radios render as a collapsed themed accordion with visible option descriptions, and `saveRoleConfig` is DOM-structure-independent so state survives. Subtask 2 (defaults): all five default sites flipped to `notSpecified`, `incremental` removed across options/types/allow-list/clause map with a read-time normaliser for stale values and rewritten locked-decision comments. No CRITICAL/MAJOR findings across either subtask; no code fixes applied; compile/tests skipped per session directive. Only remaining risk is a documented, graceful degradation (custom agent with a saved `incremental` shows no radio selected).
+
+**Stage Complete:** CODE REVIEWED

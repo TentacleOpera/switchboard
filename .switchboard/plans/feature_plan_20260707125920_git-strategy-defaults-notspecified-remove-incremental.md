@@ -291,3 +291,9 @@ None — verification is manual via an installed VSIX plus a TypeScript compile 
 **Complexity 3 → Send to Intern.** Five-site default change (`'current'`/`'whenDone'`/`'noPush'` → `'notSpecified'`), one option removal (`incremental`) across type unions + clause vocabulary + sanitisation allow-list, a stale-value normalisation pinned to one read site, and a comment rewrite. All sites are identified with line numbers; no new architecture. The only migration concern (stale persisted `incremental`) is handled by allow-list narrowing + read-time normalisation + the `GIT_COMMIT_CLAUSES` map no longer containing the key. Land before the sibling layout plan (see `## Dependencies`).
 
 **Stage Complete:** LEAD CODED
+
+## Review Findings
+
+Reviewed commit `04fa5e9`. Files changed: `sharedDefaults.js` (radio defaults + `DEFAULT_ROLE_CONFIG` → `notSpecified`, `incremental` option removed), `kanban.html` (custom-agent fallback defaults + `incremental` removed), `KanbanProvider.ts` (merge fallback 4230-4232, per-role maps 4587-4620 → `notSpecified`, inline `incremental`→`notSpecified` normalisation for all four code roles, locked-decision-#2 comments rewritten), `agentConfig.ts` and `agentPromptBuilder.ts` (`incremental` dropped from type unions, allow-list, and `GIT_COMMIT_CLAUSES`). Grep guard confirms no stray git-strategy `incremental` references remain; the custom-agent path degrades gracefully to no clause for stale `incremental` (allow-list drop + missing clause key, no crash). No CRITICAL/MAJOR findings; no code fixes applied. Remaining risk (documented, acceptable): a custom agent with a previously-saved `incremental` shows no radio selected rather than snapping to Not Specified. Compile/tests skipped per session directive.
+
+**Stage Complete:** CODE REVIEWED

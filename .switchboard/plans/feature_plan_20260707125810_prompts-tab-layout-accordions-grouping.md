@@ -226,3 +226,9 @@ None — verification is manual via an installed VSIX, per project convention (`
 **Complexity 4 → Send to Coder.** Single-file (`kanban.html`) layout refactor plus a data-only `group` field in `sharedDefaults.js`; reuses existing radio/checkbox rendering logic. The one moderate risk — the `renderAddon()` helper extraction preserving `textInputsToToggle` per-addon scope — is now called out explicitly in §2 and guarded by verification step 6. Land after the sibling defaults plan (see `## Dependencies`).
 
 **Stage Complete:** LEAD CODED
+
+## Review Findings
+
+Reviewed commit `04fa5e9`. Files changed: `src/webview/kanban.html` (renderAddon helper extraction, general/subsection partition, collapsed `<details>` git accordion, visible `.addon-option-desc` helper text, accordion CSS) and the `group: 'git'` tag on the git radios in `sharedDefaults.js` + the custom-agent fallback. Verified the critical concern: `textInputsToToggle` stays per-addon inside `renderAddon` (kanban.html:3484), and `saveRoleConfig` serialises the `roleConfigs` object rather than scraping the DOM, so relocating radios into `<details>` cannot lose state. Accordion CSS vars (`--border-color`/`--panel-bg2`/`--text-secondary`) are all defined in kanban.html, so styling themes correctly. No CRITICAL/MAJOR findings — only NITs (per-render helper redeclaration, option-desc now also shows on general-group `subagentPolicy` radios); no code fixes applied; compile/tests skipped per session directive.
+
+**Stage Complete:** CODE REVIEWED
