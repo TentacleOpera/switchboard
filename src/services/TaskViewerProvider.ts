@@ -85,7 +85,13 @@ import {
     SingleColumnAutobanConfig,
     normalizeSingleColumnConfig,
     DEFAULT_SINGLE_COLUMN_CONFIG,
-    isWatchColumn
+    isWatchColumn,
+    OrchestrationConfig,
+    DEFAULT_ORCHESTRATION_CONFIG,
+    ORCHESTRATION_TICK_KEY,
+    ORCHESTRATOR_TERMINAL_NAME,
+    ORCHESTRATION_MAX_SKIPPED_WAKES,
+    ORCHESTRATION_MAX_FAILED_WAKES
 } from './autobanState';
 import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory } from './complexityScale';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
@@ -348,6 +354,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
     private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private _activeDispatchSessions = new Map<string, string>();
+    // Orchestration wake counters for auto-stop gating.
+    private _orchestrationSkippedWakes = 0;
+    private _orchestrationFailedWakes = 0;
 
     /** Get the primary identifier for a dispatch card (planId-first, sessionId-legacy). */
     private _dispatchCardId(card: KanbanDispatchCard): string {
@@ -1024,6 +1033,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             getClickUpService: () => this._getClickUpService(effectiveRoot),
             getLinearService: () => this._getLinearService(effectiveRoot),
             getNotionService: () => this._getNotionService(effectiveRoot),
+            getKanbanDatabase: async (wsRoot?: string) => this._getKanbanDb(wsRoot || effectiveRoot),
             getAuthToken: async () => {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
@@ -1137,6 +1147,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // The callback handles the silent drop internally and MUST NOT throw on
                 // "no terminal" (a throw becomes a 500 and breaks the best-effort signal).
                 await this._dispatchPhoneAFriend(planFile, originRole || 'coder');
+            },
+            onOrchestratorRequest: async (request, workspaceRoot) => {
+                return await this._handleOrchestratorInboxRequest(request, workspaceRoot);
+            },
+            orchestrationDispatch: async (wsRoot, featurePlanId) => {
+                return await this._orchestrationDispatchFeature(wsRoot, featurePlanId);
             }
         });
 
@@ -2990,6 +3006,54 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await withTerminalSendLock(sendLockKey, async () => {
             await sendRobustText(terminal!, text, true);
         });
+    }
+
+    /**
+     * Host callback for the `POST /orchestrator/request` endpoint. Resolves the
+     * workspace root, bootstraps `.switchboard/orchestrator/inbox/` (+`processed/`),
+     * and writes the request as a uniquely-named markdown file with YAML
+     * frontmatter. Frontmatter values are flattened to single lines (strip
+     * newlines) so a malicious/clumsy body cannot forge extra keys; the
+     * free-form body lives below the closing `---` and is never parsed.
+     */
+    private async _handleOrchestratorInboxRequest(
+        request: { stage: string; type: string; from?: string; planId?: string; feature?: string; body: string; worktreePath?: string; },
+        workspaceRoot?: string
+    ): Promise<{ success: boolean; file?: string; error?: string }> {
+        try {
+            const root = this._resolveWorkspaceRoot(workspaceRoot);
+            if (!root) {
+                return { success: false, error: 'No workspace root resolved' };
+            }
+            const inboxDir = path.join(root, '.switchboard', 'orchestrator', 'inbox');
+            const processedDir = path.join(inboxDir, 'processed');
+            await fs.promises.mkdir(processedDir, { recursive: true });
+
+            const flatten = (s: string) => String(s || '').replace(/[\r\n]+/g, ' ').trim();
+            const now = new Date();
+            const iso = now.toISOString();
+            // Compact UTC timestamp: 20260707T031500Z
+            const compact = iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+            const rand = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+            const filename = `req-${compact}-${request.stage}-${rand}.md`;
+            const filePath = path.join(inboxDir, filename);
+
+            const fmLines: string[] = ['---'];
+            if (request.from) fmLines.push(`from: ${flatten(request.from)}`);
+            fmLines.push(`stage: ${flatten(request.stage)}`);
+            fmLines.push(`type: ${flatten(request.type)}`);
+            if (request.planId) fmLines.push(`planId: ${flatten(request.planId)}`);
+            if (request.feature) fmLines.push(`feature: ${flatten(request.feature)}`);
+            if (request.worktreePath) fmLines.push(`worktreePath: ${flatten(request.worktreePath)}`);
+            fmLines.push(`created: ${iso}`);
+            fmLines.push('---');
+            fmLines.push('');
+            fmLines.push(request.body);
+            await fs.promises.writeFile(filePath, fmLines.join('\n'), 'utf8');
+            return { success: true, file: filePath };
+        } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
     }
 
     /**
@@ -7108,6 +7172,11 @@ Each plan file must include:
         if (!this._autobanState.enabled) {
             return false;
         }
+        // Orchestration mode manages its own completion via the batch-complete marker;
+        // the empty-column sweep does not apply.
+        if (this._autobanState.automationMode === 'orchestration') {
+            return false;
+        }
         if (this._hasActiveWatchColumn()) {
             return false; // standing watcher — never auto-stop on empty
         }
@@ -7479,9 +7548,295 @@ Each plan file must include:
         this._postAutobanStateNow();
     }
 
+    /**
+     * Called by the Kanban AUTOMATION tab (Start orchestrator). Launches (or
+     * reuses) the Orchestrator terminal, boots the lead CLI, injects the
+     * kickoff prompt, and arms the session. The wake tick (subtask 5) reuses
+     * the terminal-launch portion for delivery-failure recovery.
+     */
+    public async startOrchestratorFromKanban(workspaceRoot?: string): Promise<void> {
+        const root = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!root) {
+            vscode.window.showErrorMessage('No workspace folder found. Cannot start the orchestrator.');
+            return;
+        }
+
+        // Reuse a live Orchestrator terminal if one is registered; otherwise
+        // create one. NOT via _createAutobanTerminal — its role gate rejects
+        // non-pool roles like 'orchestrator'. Replicate the createTerminal +
+        // onDidStartTerminalShellExecution startup wait inline.
+        let terminal: vscode.Terminal | undefined;
+        const candidates = [ORCHESTRATOR_TERMINAL_NAME, this._suffixedName(ORCHESTRATOR_TERMINAL_NAME)];
+        if (this._registeredTerminals) {
+            for (const name of candidates) {
+                const t = this._registeredTerminals.get(name);
+                if (t && t.exitStatus === undefined) { terminal = t; break; }
+            }
+            if (!terminal) {
+                const normalized = this._normalizeAgentKey(ORCHESTRATOR_TERMINAL_NAME);
+                for (const [name, t] of this._registeredTerminals.entries()) {
+                    if (t.exitStatus !== undefined) continue;
+                    if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
+                        terminal = t; break;
+                    }
+                }
+            }
+        }
+        if (!terminal) {
+            terminal = vscode.window.terminals.find(t =>
+                this._normalizeAgentKey(t.name) === this._normalizeAgentKey(ORCHESTRATOR_TERMINAL_NAME)
+                && t.exitStatus === undefined
+            );
+        }
+
+        let createdNew = false;
+        if (!terminal) {
+            createdNew = true;
+            terminal = vscode.window.createTerminal({
+                name: ORCHESTRATOR_TERMINAL_NAME,
+                location: vscode.TerminalLocation.Panel,
+                cwd: root
+            });
+            const suffixed = this._suffixedName(ORCHESTRATOR_TERMINAL_NAME);
+            this._registeredTerminals?.set(suffixed, terminal);
+            terminal.show();
+
+            // Register in state.terminals with the orchestrator purpose.
+            const suffixedForState = suffixed;
+            void this._waitWithTimeout(terminal.processId, 10000, undefined)
+                .then(pid => {
+                    if (pid) {
+                        void this.updateState(async (state) => {
+                            if (state.terminals?.[suffixedForState]) {
+                                state.terminals[suffixedForState].pid = pid;
+                                state.terminals[suffixedForState].childPid = pid;
+                            }
+                        });
+                        this._refreshTerminalStatuses();
+                    }
+                })
+                .catch(() => { /* PID resolution best-effort */ });
+
+            await this.updateState(async (state) => {
+                if (!state.terminals) state.terminals = {};
+                state.terminals[suffixedForState] = {
+                    purpose: 'orchestrator',
+                    role: 'orchestrator',
+                    pid: undefined,
+                    childPid: undefined,
+                    startTime: new Date().toISOString(),
+                    status: 'active',
+                    friendlyName: ORCHESTRATOR_TERMINAL_NAME,
+                    icon: 'terminal',
+                    color: 'cyan',
+                    lastSeen: new Date().toISOString(),
+                    ideName: vscode.env.appName,
+                    worktreePath: undefined
+                };
+            });
+
+            // Boot the lead CLI (most capable configured CLI). Subtask 2's
+            // persona is injected as the kickoff prompt below; the boot command
+            // is the CLI binary, not the persona.
+            const startupCommands = await this.getStartupCommands(root);
+            const startupCommand = startupCommands['lead'] || startupCommands['coder'] || '';
+            if (startupCommand && startupCommand.trim()) {
+                await new Promise<void>((resolve) => {
+                    let sent = false;
+                    let disposed = false;
+                    const cleanup = () => {
+                        if (disposed) return;
+                        disposed = true;
+                        shellExecDisposable.dispose();
+                        closeDisposable.dispose();
+                        clearTimeout(safetyTimer);
+                    };
+                    const sendOnce = () => {
+                        if (sent) return;
+                        sent = true;
+                        if (terminal!.exitStatus === undefined) {
+                            terminal!.sendText(startupCommand.trim(), true);
+                        }
+                    };
+                    const shellExecDisposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+                        if (e.terminal === terminal) { sendOnce(); cleanup(); resolve(); }
+                    });
+                    const closeDisposable = vscode.window.onDidCloseTerminal((closed) => {
+                        if (closed === terminal) { cleanup(); resolve(); }
+                    });
+                    const safetyTimer = setTimeout(() => {
+                        if (!disposed) {
+                            console.warn(`[TaskViewerProvider] Shell init timeout for Orchestrator terminal, sending startup command via fallback`);
+                            sendOnce();
+                            cleanup();
+                            resolve();
+                        }
+                    }, 5000);
+                });
+
+                const binary = startupCommand.trim().split(/\s+/)[0];
+                const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                this._terminalAgentInfo.set(suffixedForState, { role: 'orchestrator', displayName });
+            }
+            this._refreshTerminalStatuses();
+        }
+
+        // Inject the kickoff prompt. The persona workflow (.agents/workflows/orchestrator.md)
+        // encodes the full Kickoff Protocol; this prompt points the agent at it and injects
+        // the runtime context (UNATTENDED flag, workspace root, active project filter, and
+        // the fan-out endpoint). The dispatch path uses sendRobustText (clipboard-paste for
+        // long payloads).
+        const personaPath = path.join(root, '.agents', 'workflows', 'orchestrator.md');
+        let projectFilter = '';
+        try {
+            const db = await this._getKanbanDb(root);
+            if (db && await db.ensureReady()) {
+                projectFilter = (await db.getConfig('kanban.activeProjectFilter')) || '';
+            }
+        } catch { /* best-effort */ }
+        let kickoffPrompt: string;
+        try {
+            await fs.promises.access(personaPath);
+            kickoffPrompt = [
+                `You are the Switchboard orchestrator. Read and follow .agents/workflows/orchestrator.md now — begin with the Kickoff Protocol.`,
+                ``,
+                `UNATTENDED=true`,
+                `WORKSPACE_ROOT=${root}`,
+                `ACTIVE_PROJECT_FILTER=${projectFilter || ''}`,
+                ``,
+                `After grouping completes (including the Miscellaneous sweep), dispatch each feature's subtasks by calling:`,
+                `  curl -s -X POST http://127.0.0.1:$(cat ${root}/.switchboard/api-server-port.txt)/kanban/orchestration/dispatch -H "Content-Type: application/json" -d '{"workspaceRoot":"${root.replace(/"/g, '\\"')}","featurePlanId":"<feature planId>"}'`,
+                `One call per feature. Use the featurePlanId that create-feature.js prints on success.`,
+                `Then report "kickoff complete, sleeping" and STOP. Do not poll — the system wakes you later.`
+            ].join('\n');
+        } catch {
+            kickoffPrompt = `You are the Switchboard orchestrator. The orchestrator workflow is not yet installed (.agents/workflows/orchestrator.md). Stand by — do not take autonomous action.`;
+        }
+        // Small delay so a freshly-created terminal's CLI is ready to receive.
+        if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
+        await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, kickoffPrompt, { orchestrationKickoff: true });
+
+        // Arm the session: enable the autoban engine so the wake tick fires.
+        // The engine's orchestration branch sets up a single wake-timer.
+        this._autobanState = normalizeAutobanConfigState({
+            ...this._autobanState,
+            enabled: true,
+            automationMode: 'orchestration',
+            orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: true }
+        });
+        await this._persistAutobanState();
+        this._resetAutobanSessionCounters();
+        this._startAutobanEngine();
+        this._postAutobanStateNow();
+    }
+
+    /**
+     * Called by the Kanban AUTOMATION tab (Stop orchestrator). Disarms the
+     * session. Does NOT dispose the terminal — a running agent may hold
+     * uncommitted context; killing it is the user's call via the terminal UI.
+     */
+    public async stopOrchestratorFromKanban(): Promise<void> {
+        this._autobanState = normalizeAutobanConfigState({
+            ...this._autobanState,
+            enabled: false,
+            orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
+        });
+        this._stopAutobanEngine();
+        await this._persistAutobanState();
+        this._postAutobanStateNow();
+    }
+
+    /**
+     * Orchestration fan-out: dispatch a feature's PLAN REVIEWED subtasks to their
+     * worktree terminals. Routes by complexity (>=7 → lead, <7 → coder), resolves
+     * each subtask's worktree terminal, and dispatches via the established
+     * handleKanbanBatchTrigger path. Respects the maxConcurrentSubtasks cap —
+     * surplus subtasks are skipped for a later wake tick. Only PLAN REVIEWED
+     * subtasks are dispatched; CREATED subtasks stay for human planning.
+     */
+    public async _orchestrationDispatchFeature(
+        workspaceRoot: string,
+        featurePlanId: string
+    ): Promise<{ success: boolean; dispatched?: string[]; skipped?: Array<{ planId: string; reason: string }>; error?: string }> {
+        try {
+            const root = this._resolveWorkspaceRoot(workspaceRoot);
+            if (!root) {
+                return { success: false, error: 'No workspace root resolved' };
+            }
+            const db = await this._getKanbanDb(root);
+            if (!db || !await db.ensureReady()) {
+                return { success: false, error: 'Kanban database not ready' };
+            }
+
+            const subtasks = await db.getSubtasksByFeatureId(featurePlanId);
+            if (subtasks.length === 0) {
+                return { success: true, dispatched: [], skipped: [] };
+            }
+
+            // Filter to PLAN REVIEWED only — CREATED subtasks stay for human planning.
+            const eligible = subtasks.filter((st: KanbanPlanRecord) =>
+                st.kanbanColumn === 'PLAN REVIEWED' && st.status === 'active'
+            );
+            const skipped: Array<{ planId: string; reason: string }> = [];
+            for (const st of subtasks) {
+                if (st.status !== 'active') {
+                    skipped.push({ planId: st.planId, reason: `status=${st.status}` });
+                } else if (st.kanbanColumn !== 'PLAN REVIEWED') {
+                    skipped.push({ planId: st.planId, reason: `column=${st.kanbanColumn}` });
+                }
+            }
+            if (eligible.length === 0) {
+                return { success: true, dispatched: [], skipped };
+            }
+
+            // Concurrency cap: dispatch up to maxConcurrentSubtasks; skip the rest.
+            const maxConcurrent = this._autobanState.orchestrationConfig?.maxConcurrentSubtasks ?? 5;
+            const toDispatch = eligible.slice(0, maxConcurrent);
+            for (const st of eligible.slice(maxConcurrent)) {
+                skipped.push({ planId: st.planId, reason: 'concurrency cap' });
+            }
+
+            // Build worktree path map for subtask→worktree terminal resolution.
+            const wts = await db.getWorktrees();
+            const subtaskWtMap = new Map<string, string>();
+            for (const wt of wts) {
+                if (wt.subtask_plan_id) { subtaskWtMap.set(String(wt.subtask_plan_id), wt.path); }
+            }
+
+            const dispatched: string[] = [];
+            // Dispatch each subtask individually — each goes to its own worktree terminal.
+            for (const st of toDispatch) {
+                const worktreePath = subtaskWtMap.get(st.planId);
+                const complexityScore = parseInt(st.complexity || '0', 10);
+                const role = complexityScore >= 7 ? 'lead' : 'coder';
+                const targetAgent = await this._resolveAgentTerminalForPlan(role, root, worktreePath);
+                if (!targetAgent) {
+                    skipped.push({ planId: st.planId, reason: `no terminal for role=${role}` });
+                    continue;
+                }
+                const ok = await this.handleKanbanBatchTrigger(
+                    role,
+                    [st.sessionId],
+                    undefined,
+                    root,
+                    targetAgent
+                );
+                if (ok) {
+                    dispatched.push(st.planId);
+                } else {
+                    skipped.push({ planId: st.planId, reason: 'dispatch failed' });
+                }
+            }
+
+            return { success: true, dispatched, skipped };
+        } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
     public async setAutomationModeFromKanban(msg: any): Promise<void> {
         const newMode = msg.mode;
-        if (!['single-column', 'multi-column', 'antigravity-batch'].includes(newMode)) return;
+        if (!['single-column', 'multi-column', 'antigravity-batch', 'orchestration'].includes(newMode)) return;
 
         const wasEnabled = this._autobanState.enabled;
 
@@ -7534,12 +7889,16 @@ Each plan file must include:
                 this._startAutobanEngine();
             }
         } else {
-            // multi-column or antigravity-batch
+            // multi-column, antigravity-batch, or orchestration
             const enabled = newMode === 'multi-column' ? (msg.enabled !== undefined ? !!msg.enabled : wasEnabled) : false;
             this._autobanState = normalizeAutobanConfigState({
                 ...this._autobanState,
                 enabled,
-                automationMode: newMode
+                automationMode: newMode,
+                // Switching away from orchestration disarms the session status line.
+                orchestrationConfig: newMode !== 'orchestration'
+                    ? { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
+                    : { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig }
             });
 
             if (enabled) {
@@ -8748,10 +9107,118 @@ Each plan file must include:
         });
     }
 
+    /**
+     * Enqueue a single orchestration wake tick. Serialized via the same
+     * _autobanTickQueue so wakes never overlap. The wake dispatches the Wake
+     * Protocol prompt to the orchestrator terminal; the agent does the rest.
+     * Skipped wakes (orchestration disabled, batch complete, or terminal gone)
+     * increment a skip counter; ORCHESTRATION_MAX_SKIPPED_WAKES consecutive
+     * skips auto-stop the engine.
+     */
+    private _enqueueOrchestrationWake(): void {
+        this._autobanTickQueue = this._autobanTickQueue.then(async () => {
+            if (!this._autobanState.enabled) { return; }
+            if (this._autobanState.automationMode !== 'orchestration') { return; }
+            const root = this._resolveWorkspaceRoot();
+            if (!root) { return; }
+
+            // Batch-complete guard: if the marker exists, stop the engine.
+            try {
+                const batchCompletePath = path.join(root, '.switchboard', 'orchestrator', 'batch-complete');
+                await fs.promises.access(batchCompletePath);
+                console.log('[Autoban] Orchestration batch-complete marker found — stopping engine.');
+                this._autobanState = normalizeAutobanConfigState({
+                    ...this._autobanState,
+                    enabled: false,
+                    orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
+                });
+                await this._persistAutobanState();
+                this._stopAutobanEngine();
+                this._postAutobanState();
+                return;
+            } catch { /* no marker — continue */ }
+
+            // Single-flight gate: if last-wake-complete marker is fresher than
+            // the interval, skip this wake (a prior wake is still in progress
+            // or just finished and the system hasn't waited long enough).
+            try {
+                const lastWakePath = path.join(root, '.switchboard', 'orchestrator', 'last-wake-complete');
+                const stat = await fs.promises.stat(lastWakePath);
+                const elapsed = Date.now() - stat.mtimeMs;
+                const intervalMs = Math.max(this._autobanState.orchestrationConfig?.intervalMinutes ?? 10, 1) * 60 * 1000;
+                if (elapsed < intervalMs * 0.9) {
+                    console.log('[Autoban] Orchestration wake skipped — last-wake-complete marker is fresh.');
+                    this._orchestrationSkippedWakes++;
+                    if (this._orchestrationSkippedWakes >= ORCHESTRATION_MAX_SKIPPED_WAKES) {
+                        console.warn(`[Autoban] Orchestration: ${ORCHESTRATION_MAX_SKIPPED_WAKES} consecutive skipped wakes — stopping engine.`);
+                        this._autobanState = normalizeAutobanConfigState({
+                            ...this._autobanState,
+                            enabled: false,
+                            orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
+                        });
+                        await this._persistAutobanState();
+                        this._stopAutobanEngine();
+                        this._postAutobanState();
+                    }
+                    return;
+                }
+            } catch { /* no marker — first wake or after manual delete */ }
+
+            // Dispatch the Wake Protocol prompt to the orchestrator terminal.
+            const wakePrompt = `You are the Switchboard orchestrator. The system woke you. Read and follow .agents/workflows/orchestrator.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
+            try {
+                await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt, { orchestrationWake: true });
+                this._orchestrationSkippedWakes = 0;
+                this._orchestrationFailedWakes = 0;
+                // Update lastWakeAt in config state for UI status display.
+                this._autobanState = normalizeAutobanConfigState({
+                    ...this._autobanState,
+                    orchestrationConfig: {
+                        ...DEFAULT_ORCHESTRATION_CONFIG,
+                        ...this._autobanState.orchestrationConfig,
+                        lastWakeAt: Date.now()
+                    }
+                });
+                await this._persistAutobanState();
+            } catch (err) {
+                console.error('[Autoban] Orchestration wake dispatch failed:', err);
+                this._orchestrationFailedWakes++;
+                if (this._orchestrationFailedWakes >= ORCHESTRATION_MAX_FAILED_WAKES) {
+                    console.warn(`[Autoban] Orchestration: ${ORCHESTRATION_MAX_FAILED_WAKES} consecutive failed wakes — stopping engine.`);
+                    this._autobanState = normalizeAutobanConfigState({
+                        ...this._autobanState,
+                        enabled: false,
+                        orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
+                    });
+                    await this._persistAutobanState();
+                    this._stopAutobanEngine();
+                    this._postAutobanState();
+                }
+                return;
+            }
+            this._postAutobanState();
+        });
+    }
+
     /** Start the continuous Autoban background polling engine. */
     private _startAutobanEngine(): void {
         this._stopAutobanEngine();
         const { rules, batchSize } = this._autobanState;
+
+        // Orchestration mode: single wake-timer, no per-column rules.
+        if (this._autobanState.automationMode === 'orchestration') {
+            const intervalMinutes = this._autobanState.orchestrationConfig?.intervalMinutes ?? 10;
+            const intervalMs = Math.max(intervalMinutes, 1) * 60 * 1000;
+            // Fire an immediate wake (serialized via the same queue).
+            this._enqueueOrchestrationWake();
+            const timer = setInterval(() => {
+                this._enqueueOrchestrationWake();
+            }, intervalMs);
+            this._autobanTimers.set(ORCHESTRATION_TICK_KEY, timer);
+            this._postAutobanState();
+            console.log(`[Autoban] Orchestration engine started — wake every ${intervalMinutes}m.`);
+            return;
+        }
 
         for (const [column, rule] of Object.entries(rules)) {
             if (!rule.enabled) { continue; }
@@ -8824,6 +9291,8 @@ Each plan file must include:
         this._autobanLastTickAt.clear();
         this._activeDispatchSessions.clear();
         this._autobanTickQueue = Promise.resolve();
+        this._orchestrationSkippedWakes = 0;
+        this._orchestrationFailedWakes = 0;
     }
 
     private _notifyAutobanWatchArrival(column: string, workspaceRoot: string): void {

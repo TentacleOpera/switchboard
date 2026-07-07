@@ -15,6 +15,13 @@ export const DEFAULT_AUTOBAN_BATCH_SIZE = 1;
 export const DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP = 200;
 export const MAX_AUTOBAN_TERMINALS_PER_ROLE = 5;
 
+// Orchestration wake-loop contract (subtask 5). The tick key is deliberately not
+// a real column name so it can never collide with `rules` entries.
+export const ORCHESTRATION_TICK_KEY = '__ORCHESTRATION__';
+export const ORCHESTRATOR_TERMINAL_NAME = 'Orchestrator';
+export const ORCHESTRATION_MAX_SKIPPED_WAKES = 3;
+export const ORCHESTRATION_MAX_FAILED_WAKES = 3;
+
 export type SingleColumnAutobanConfig = {
     enabled: boolean;
     intervalMinutes: number;
@@ -25,6 +32,30 @@ export type SingleColumnAutobanConfig = {
     sourceColumnRole?: string; // NEW: dynamic role of the source column
     triggerMode?: AutobanTriggerMode;
 };
+
+export type OrchestrationConfig = {
+    enabled: boolean;          // orchestrator session armed (Start pressed, not yet stopped)
+    intervalMinutes: number;   // wake cadence for subtask 5's tick; stored now, acted on later
+    maxConcurrentSubtasks?: number; // per-call concurrency budget for fan-out (subtask 4); default 5
+    lastWakeAt?: number;       // epoch ms; written by subtask 5, rendered by the status line
+};
+
+export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
+    enabled: false,
+    intervalMinutes: 10,
+    maxConcurrentSubtasks: 5
+};
+
+export function normalizeOrchestrationConfig(state?: Partial<OrchestrationConfig> | null): OrchestrationConfig {
+    return {
+        enabled: state?.enabled === true,
+        intervalMinutes: Math.max(1, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10)),
+        maxConcurrentSubtasks: Math.max(1, Math.min(20, Number.isFinite(state?.maxConcurrentSubtasks as number) ? Math.floor(state!.maxConcurrentSubtasks!) : 5)),
+        lastWakeAt: (typeof state?.lastWakeAt === 'number' && Number.isFinite(state.lastWakeAt) && state.lastWakeAt > 0)
+            ? state.lastWakeAt
+            : undefined
+    };
+}
 
 export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
     enabled: false,
@@ -73,8 +104,9 @@ export type AutobanConfigState = {
     pausedRemainingMs?: Record<string, number>;
     pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
-    automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch';
+    automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch' | 'orchestration';
     singleColumnConfig?: SingleColumnAutobanConfig;
+    orchestrationConfig?: OrchestrationConfig;
 };
 
 const DEFAULT_AUTOBAN_RULES: Record<string, AutobanRuleState> = {
@@ -272,10 +304,11 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             return 'off';
         })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
-        automationMode: (['single-column', 'multi-column', 'antigravity-batch'] as const).includes(state?.automationMode as any)
+        automationMode: (['single-column', 'multi-column', 'antigravity-batch', 'orchestration'] as const).includes(state?.automationMode as any)
             ? state!.automationMode!
             : 'single-column',
-        singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig)
+        singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),
+        orchestrationConfig: normalizeOrchestrationConfig(state?.orchestrationConfig)
     };
 }
 

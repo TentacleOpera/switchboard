@@ -2931,7 +2931,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <button id="prompts-tab-btn-export-skill" class="secondary-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">EXPORT AS SKILL</button>
           </div>
           <div id="roleDescription" class="agent-description" style="margin-top: 8px; margin-left: 0;"></div>
-          </div>
         </div>
 
         <!-- Planner-specific configuration -->
@@ -5423,17 +5422,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (img) {
                 img.alt = isEnabled ? 'Stop Automation' : 'Start Automation';
             }
-            autobanBtn.style.display = (currentAutomationMode === 'antigravity-batch') ? 'none' : '';
+            autobanBtn.style.display = (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration') ? 'none' : '';
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
-                const showReset = isEnabled && currentAutomationMode !== 'antigravity-batch';
+                const showReset = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration';
                 resetBtn.style.display = showReset ? '' : 'none';
             }
 
             const pauseBtn = document.getElementById('btn-pause-autoban-timer');
             if (pauseBtn) {
-                const showPause = isEnabled && currentAutomationMode !== 'antigravity-batch';
+                const showPause = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration';
                 pauseBtn.style.display = showPause ? '' : 'none';
                 const isPaused = !!(autobanConfig && autobanConfig.paused);
                 pauseBtn.classList.toggle('is-paused', isPaused);
@@ -7301,7 +7300,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
                     const sourceIdx = autobanColumns.indexOf(sourceCol);
                     filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-                } else if (currentAutomationMode === 'antigravity-batch') {
+                } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration') {
                     filteredBadgeData = [];
                 }
                 if (forceRebuild || container.children.length !== filteredBadgeData.length) {
@@ -7342,7 +7341,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
                 const sourceIdx = autobanColumns.indexOf(sourceCol);
                 filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-            } else if (currentAutomationMode === 'antigravity-batch') {
+            } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration') {
                 filteredBadgeData = [];
             }
             // multi-column: show all badges (no filtering)
@@ -8072,7 +8071,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             [
                 { value: 'single-column', label: 'Switchboard Single Column' },
                 { value: 'multi-column', label: 'Switchboard Multi Column' },
-                { value: 'antigravity-batch', label: 'Antigravity Batch' }
+                { value: 'antigravity-batch', label: 'Antigravity Batch' },
+                { value: 'orchestration', label: 'Orchestration' }
             ].forEach(m => {
                 const opt = document.createElement('option');
                 opt.value = m.value;
@@ -8087,7 +8087,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const modeDescriptions = {
                 'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
                 'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
-                'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed.'
+                'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed.',
+                'orchestration': 'A system-woken orchestrator agent batches plans into features, fans work out across per-feature worktrees, and merges results back feature by feature. Selecting this mode enables per-subtask feature worktrees automatically (restored on switching away).'
             };
             const modeHelpText = document.createElement('div');
             modeHelpText.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
@@ -8110,7 +8111,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.setState(wsState);
                 } catch (_) {}
 
-                postKanbanMessage({ type: 'setAutomationMode', mode: currentAutomationMode, enabled: false });
+                postKanbanMessage({ type: 'setAutomationMode', mode: currentAutomationMode, enabled: false, workspaceRoot: getActiveWorkspaceRoot() });
                 updateAutobanButtonState();
                 // Mode change is structural — clear the interaction guard so the panel re-renders immediately
                 isAutobanPanelInteracting = false;
@@ -9178,6 +9179,102 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 batchSizeRow.appendChild(batchSizeLabel);
                 batchSizeRow.appendChild(batchSizeSelect);
                 antigravitySection.appendChild(batchSizeRow);
+            } else if (currentAutomationMode === 'orchestration') {
+                const orchSection = document.createElement('div');
+                orchSection.className = 'db-subsection';
+                container.appendChild(orchSection);
+
+                const orchHeader = document.createElement('div');
+                orchHeader.className = 'subsection-header';
+                const orchSpan = document.createElement('span');
+                orchSpan.textContent = 'ORCHESTRATION';
+                orchHeader.appendChild(orchSpan);
+                orchSection.appendChild(orchHeader);
+
+                const orchDesc = document.createElement('div');
+                orchDesc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                orchDesc.textContent = 'A system-woken orchestrator batches plans into features, fans work out across per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Per-subtask feature worktrees are enabled automatically and restored on switching away.';
+                orchSection.appendChild(orchDesc);
+
+                const orch = state.orchestrationConfig || { enabled: false, intervalMinutes: 10, maxConcurrentSubtasks: 5 };
+
+                // WAKE INTERVAL row
+                const intervalRow = document.createElement('div');
+                intervalRow.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
+                const intervalLabel = document.createElement('span');
+                intervalLabel.textContent = 'WAKE EVERY';
+                const intervalInput = document.createElement('input');
+                intervalInput.type = 'number';
+                intervalInput.min = '1';
+                intervalInput.max = '60';
+                intervalInput.value = String(orch.intervalMinutes ?? 10);
+                intervalInput.style.cssText = autobanNumberInputStyle;
+                guardInteraction(intervalInput);
+                intervalInput.addEventListener('change', () => {
+                    const val = Math.max(1, Math.min(60, parseInt(intervalInput.value, 10) || 10));
+                    state.orchestrationConfig = { ...state.orchestrationConfig, intervalMinutes: val };
+                    intervalInput.value = String(val);
+                    emitAutobanState();
+                });
+                const minLabel = document.createElement('span');
+                minLabel.textContent = 'min';
+                intervalRow.appendChild(intervalLabel);
+                intervalRow.appendChild(intervalInput);
+                intervalRow.appendChild(minLabel);
+                orchSection.appendChild(intervalRow);
+
+                // CONCURRENCY row
+                const concRow = document.createElement('div');
+                concRow.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
+                const concLabel = document.createElement('span');
+                concLabel.textContent = 'MAX CONCURRENT SUBTASKS';
+                const concInput = document.createElement('input');
+                concInput.type = 'number';
+                concInput.min = '1';
+                concInput.max = '20';
+                concInput.value = String(orch.maxConcurrentSubtasks ?? 5);
+                concInput.style.cssText = autobanNumberInputStyle;
+                guardInteraction(concInput);
+                concInput.addEventListener('change', () => {
+                    const val = Math.max(1, Math.min(20, parseInt(concInput.value, 10) || 5));
+                    state.orchestrationConfig = { ...state.orchestrationConfig, maxConcurrentSubtasks: val };
+                    concInput.value = String(val);
+                    emitAutobanState();
+                });
+                concRow.appendChild(concLabel);
+                concRow.appendChild(concInput);
+                orchSection.appendChild(concRow);
+
+                // STATUS line
+                const statusLine = document.createElement('div');
+                statusLine.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
+                const renderOrchStatus = () => {
+                    const o = state.orchestrationConfig || { enabled: false, intervalMinutes: 10 };
+                    if (!o.enabled) {
+                        statusLine.textContent = 'STATUS: idle';
+                    } else {
+                        const last = o.lastWakeAt ? ' · last wake ' + new Date(o.lastWakeAt).toLocaleTimeString() : '';
+                        statusLine.textContent = 'STATUS: running' + last;
+                    }
+                };
+                renderOrchStatus();
+                orchSection.appendChild(statusLine);
+
+                // START/STOP button — NO confirm dialog (project hard rule; window.confirm
+                // is a silent no-op in the sandboxed webview). Acts immediately.
+                const orchBtn = document.createElement('button');
+                orchBtn.className = 'strip-btn';
+                orchBtn.textContent = orch.enabled ? 'STOP ORCHESTRATOR' : 'START ORCHESTRATOR';
+                orchBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px; margin:0 8px;';
+                orchBtn.addEventListener('click', () => {
+                    const isRunning = !!(state.orchestrationConfig && state.orchestrationConfig.enabled);
+                    if (isRunning) {
+                        postKanbanMessage({ type: 'stopOrchestrator' });
+                    } else {
+                        postKanbanMessage({ type: 'startOrchestrator', workspaceRoot: getActiveWorkspaceRoot() });
+                    }
+                });
+                orchSection.appendChild(orchBtn);
             }
 
             return container;

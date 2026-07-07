@@ -101,6 +101,36 @@ interface LocalApiServerOptions {
      * Optional — absent in headless/test harnesses.
      */
     onPhoneAFriend?: (planFile: string, originRole?: string) => Promise<void>;
+    /**
+     * Orchestrator request channel — reached by a fleet coding/review agent's
+     * `curl` when it needs to raise a question, warning, research request, or
+     * blocker to the orchestrator. The host resolves the workspace root and
+     * writes the request to `.switchboard/orchestrator/inbox/`. Optional —
+     * absent in headless/test harnesses (returns 503).
+     */
+    onOrchestratorRequest?: (request: {
+        stage: string; type: string; from?: string;
+        planId?: string; feature?: string; body: string; worktreePath?: string;
+    }, workspaceRoot?: string) => Promise<{ success: boolean; file?: string; error?: string }>;
+    /**
+     * KanbanDatabase accessor for read/management endpoints. LocalApiServer
+     * holds no DB handle today; every kanban op above is an injected callback.
+     * This accessor lets read endpoints reach the DB. Optional — absent in
+     * headless/test harnesses (endpoints return 503).
+     */
+    getKanbanDatabase?: (workspaceRoot?: string) => Promise<any | null | undefined>;
+    /**
+     * Orchestration fan-out dispatch — reached by the orchestrator's `curl` after
+     * grouping completes. The host resolves the feature's PLAN REVIEWED subtasks,
+     * routes each by complexity, resolves its worktree terminal, and dispatches the
+     * coder via the established batch-trigger path. Subtasks beyond the concurrency
+     * cap stay in PLAN REVIEWED for later wake ticks. Optional — absent in
+     * headless/test harnesses (returns 503).
+     */
+    orchestrationDispatch?: (
+        workspaceRoot: string,
+        featurePlanId: string
+    ) => Promise<{ success: boolean; dispatched?: string[]; skipped?: Array<{ planId: string; reason: string }>; error?: string }>;
 }
 
 export class LocalApiServer {
@@ -691,6 +721,235 @@ export class LocalApiServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'phoneAFriend failed' }));
         }
+    }
+
+    private async _handleOrchestratorRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const onOrchestratorRequest = this._options.onOrchestratorRequest;
+        if (!onOrchestratorRequest) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Orchestrator request channel not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const stage = String(body?.stage || '').trim();
+            const type = String(body?.type || '').trim();
+            const from = body?.from ? String(body.from).trim() : undefined;
+            const planId = body?.planId ? String(body.planId).trim() : undefined;
+            const feature = body?.feature ? String(body.feature).trim() : undefined;
+            const worktreePath = body?.worktreePath ? String(body.worktreePath).trim() : undefined;
+            const reqBody = String(body?.body || '').trim();
+
+            const validStages = ['planner', 'coder', 'reviewer'];
+            const validTypes = ['question', 'warning', 'research', 'blocked'];
+            if (!validStages.includes(stage)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Invalid stage '${stage}'. Must be one of: ${validStages.join(', ')}` }));
+                return;
+            }
+            if (!validTypes.includes(type)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Invalid type '${type}'. Must be one of: ${validTypes.join(', ')}` }));
+                return;
+            }
+            if (!reqBody) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: body' }));
+                return;
+            }
+
+            const result = await onOrchestratorRequest(
+                { stage, type, from, planId, feature, body: reqBody, worktreePath },
+                this._options.workspaceRoot
+            );
+            if (result.success) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, file: result.file }));
+            } else {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: result.error || 'orchestrator request failed' }));
+            }
+        } catch (err) {
+            console.error('[LocalApiServer] orchestratorRequest error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestratorRequest failed' }));
+        }
+    }
+
+    private async _handleOrchestrationDispatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const orchestrationDispatch = this._options.orchestrationDispatch;
+        if (!orchestrationDispatch) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Orchestration dispatch not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const featurePlanId = String(body?.featurePlanId || '').trim();
+            if (!featurePlanId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: featurePlanId' }));
+                return;
+            }
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            const result = await orchestrationDispatch(workspaceRoot, featurePlanId);
+            if (result.success) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    dispatched: result.dispatched || [],
+                    skipped: result.skipped || []
+                }));
+            } else {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: result.error || 'orchestration dispatch failed' }));
+            }
+        } catch (err) {
+            console.error('[LocalApiServer] orchestrationDispatch error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestrationDispatch failed' }));
+        }
+    }
+
+    // ─── Read endpoints for external AI coding tools ──────────────────────────
+
+    private async _handleReadEndpoint(
+        req: http.IncomingMessage,
+        res: http.ServerResponse,
+        handler: () => Promise<any>
+    ): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+        try {
+            const data = await handler();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, data }));
+        } catch (err) {
+            console.error('[LocalApiServer] read endpoint error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'read endpoint failed' }));
+        }
+    }
+
+    private async _handleGetBoard(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._resolveDbFromQuery(req);
+            if (!db) throw new Error('Kanban database not available');
+            const board = await db.getBoard();
+            return board;
+        });
+    }
+
+    private async _handleGetPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._resolveDbFromQuery(req);
+            if (!db) throw new Error('Kanban database not available');
+            const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            const column = url.searchParams.get('column') || undefined;
+            const featureId = url.searchParams.get('featureId') || undefined;
+            let plans;
+            if (featureId) {
+                plans = await db.getSubtasksByFeatureId(featureId);
+            } else if (column) {
+                const all = await db.getBoard();
+                plans = (all || []).filter((p: any) => p.kanbanColumn === column);
+            } else {
+                plans = await db.getBoard();
+            }
+            return plans;
+        });
+    }
+
+    private async _handleGetFeatures(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._resolveDbFromQuery(req);
+            if (!db) throw new Error('Kanban database not available');
+            const board = await db.getBoard();
+            const features = (board || []).filter((p: any) => p.isFeature === 1 || p.isFeature === true);
+            return features;
+        });
+    }
+
+    private async _handleGetWorktrees(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._resolveDbFromQuery(req);
+            if (!db) throw new Error('Kanban database not available');
+            const worktrees = await db.getWorktrees();
+            return worktrees;
+        });
+    }
+
+    private async _handleGetOrchestratorInbox(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const root = this._options.workspaceRoot;
+            const inboxDir = path.join(root, '.switchboard', 'orchestrator', 'inbox');
+            const entries: Array<{ file: string; content: string }> = [];
+            try {
+                const files = await fs.readdir(inboxDir);
+                for (const f of files) {
+                    if (f === 'processed') continue;
+                    const filePath = path.join(inboxDir, f);
+                    const stat = await fs.stat(filePath);
+                    if (stat.isFile()) {
+                        const content = await fs.readFile(filePath, 'utf8');
+                        entries.push({ file: f, content });
+                    }
+                }
+            } catch { /* inbox doesn't exist yet — return empty */ }
+            return entries;
+        });
+    }
+
+    private async _handleGetOrchestratorSessionLog(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const root = this._options.workspaceRoot;
+            const logPath = path.join(root, '.switchboard', 'orchestrator', 'session-log.md');
+            try {
+                const content = await fs.readFile(logPath, 'utf8');
+                return content;
+            } catch {
+                return '';
+            }
+        });
+    }
+
+    private async _resolveDbFromQuery(req: http.IncomingMessage): Promise<any | null> {
+        const getKanbanDatabase = this._options.getKanbanDatabase;
+        if (!getKanbanDatabase) return null;
+        const url = new URL(req.url || '', `http://localhost:${this._port}`);
+        const wsRoot = url.searchParams.get('workspaceRoot') || undefined;
+        return await getKanbanDatabase(wsRoot);
     }
 
     private async _handleClickUpApiProxy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1394,12 +1653,16 @@ export class LocalApiServer {
                 await this._handleKanbanDeleteFeature(req, res);
             } else if (pathname === '/kanban/feature/split' && req.method === 'POST') {
                 await this._handleKanbanSplitFeature(req, res);
+            } else if (pathname === '/kanban/orchestration/dispatch' && req.method === 'POST') {
+                await this._handleOrchestrationDispatch(req, res);
             } else if (pathname === '/worktree/cleanup' && req.method === 'POST') {
                 await this._handleWorktreeCleanup(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/phone-a-friend' && req.method === 'POST') {
                 await this._handlePhoneAFriend(req, res);
+            } else if (pathname === '/orchestrator/request' && req.method === 'POST') {
+                await this._handleOrchestratorRequest(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {
                 await this._handleClickUpApiProxy(req, res);
             } else if (pathname === '/api/linear' && req.method === 'POST') {
@@ -1416,6 +1679,18 @@ export class LocalApiServer {
                 const source = parts[2]; // 'clickup' or 'linear'
                 const name = decodeURIComponent(parts[4]);
                 await this._handleResolveName(source, name, res);
+            } else if (pathname === '/kanban/board' && req.method === 'GET') {
+                await this._handleGetBoard(req, res);
+            } else if (pathname === '/kanban/plans' && req.method === 'GET') {
+                await this._handleGetPlans(req, res);
+            } else if (pathname === '/kanban/features' && req.method === 'GET') {
+                await this._handleGetFeatures(req, res);
+            } else if (pathname === '/worktree/list' && req.method === 'GET') {
+                await this._handleGetWorktrees(req, res);
+            } else if (pathname === '/orchestrator/inbox' && req.method === 'GET') {
+                await this._handleGetOrchestratorInbox(req, res);
+            } else if (pathname === '/orchestrator/session-log' && req.method === 'GET') {
+                await this._handleGetOrchestratorSessionLog(req, res);
             } else {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Not found' }));

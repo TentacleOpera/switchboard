@@ -6735,8 +6735,47 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // (_resolveProjectContextEnabled / _resolveProjectPrd) remain here, plus the public
             // getProjectContextEnabled / setProjectContextEnabled accessors the Project panel calls.
             case 'setAutomationMode': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const db = workspaceRoot ? this._getKanbanDb(workspaceRoot) : null;
+                if (db && await db.ensureReady()) {
+                    const PRIOR_KEY = 'orchestration_prior_feature_worktree_mode';
+                    if (msg.mode === 'orchestration') {
+                        const current = (await db.getConfig('feature_worktree_mode')) || 'none';
+                        const savedPrior = await db.getConfig(PRIOR_KEY);
+                        // Double-enter guard: never overwrite the true prior.
+                        if (!savedPrior) {
+                            await db.setConfig(PRIOR_KEY, current);
+                        }
+                        if (current !== 'per-subtask') {
+                            await db.setConfig('feature_worktree_mode', 'per-subtask');
+                        }
+                        await this._sendWorktreeConfig(workspaceRoot!);
+                    } else {
+                        const savedPrior = await db.getConfig(PRIOR_KEY);
+                        // '' (cleared) and null both skip restore.
+                        if (savedPrior) {
+                            const validModes = ['none', 'per-subtask', 'high-low'];
+                            await db.setConfig('feature_worktree_mode', validModes.includes(savedPrior) ? savedPrior : 'none');
+                            await db.setConfig(PRIOR_KEY, '');   // consume the saved prior
+                            await this._sendWorktreeConfig(workspaceRoot!);
+                        }
+                    }
+                }
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.setAutomationModeFromKanban(msg);
+                }
+                break;
+            }
+            case 'startOrchestrator': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (workspaceRoot && this._taskViewerProvider) {
+                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot);
+                }
+                break;
+            }
+            case 'stopOrchestrator': {
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.stopOrchestratorFromKanban();
                 }
                 break;
             }
@@ -9217,6 +9256,10 @@ ${FOCUS_DIRECTIVE}`;
                 if (!db || !await db.ensureReady()) break;
 
                 await db.setConfig('feature_worktree_mode', mode);
+                // A manual worktree-mode change takes ownership: clear any
+                // orchestration-saved prior so the mode-switch-away restore
+                // does not later clobber the user's explicit choice.
+                await db.setConfig('orchestration_prior_feature_worktree_mode', '');
                 await this._sendWorktreeConfig(workspaceRoot);
                 break;
             }

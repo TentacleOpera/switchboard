@@ -75,10 +75,10 @@ The mode foundation lands first (everything keys off the new `automationMode`). 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add an Orchestration Automation Mode (Config, AUTOMATION-Tab UI, Worktree-Mode Coupling)](../plans/orchestration-1-automation-mode-foundation.md) — **PLAN REVIEWED**
-- [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **PLAN REVIEWED**
-- [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **PLAN REVIEWED**
-- [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **PLAN REVIEWED**
-- [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **PLAN REVIEWED**
-- [ ] [External Agent HTTP Surface — Read Endpoints + Orchestration Skill](../plans/external-agent-http-surface.md) — **PLAN REVIEWED**
+- [ ] [Add an Orchestration Automation Mode (Config, AUTOMATION-Tab UI, Worktree-Mode Coupling)](../plans/orchestration-1-automation-mode-foundation.md) — **LEAD CODED**
+- [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **LEAD CODED**
+- [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **LEAD CODED**
+- [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **LEAD CODED**
+- [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **LEAD CODED**
+- [ ] [External Agent HTTP Surface — Read Endpoints + Orchestration Skill](../plans/external-agent-http-surface.md) — **LEAD CODED**
 <!-- END SUBTASKS -->

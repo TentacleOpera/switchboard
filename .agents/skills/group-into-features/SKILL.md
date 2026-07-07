@@ -141,4 +141,18 @@ If the user says no or does not respond, stop.
 
 - Feature creation updates the Switchboard board and writes a `.switchboard/features/` file. It does NOT sync to Linear/ClickUp.
 - The `create-feature.js` / `assign-to-feature.js` verb scripts are documented in `.agents/skills/kanban_operations/SKILL.md`.
-- The confirm gate is load-bearing: never create any feature before the user approves.
+- The confirm gate is load-bearing **in interactive mode**: never create any feature before the user approves. Unattended mode's authorization comes from the user pressing Start orchestrator.
+
+## Unattended mode (orchestration)
+
+This section applies ONLY when the invoking prompt contains the directive `UNATTENDED=true` (which the Orchestration kickoff prompt injects). It is the explicit, documented exception to the confirm gate above.
+
+- Follow steps 1, 1a, 2, 3 as written, but step 3's proposal is written to the reply for the session log, not for approval; **skip step 4 (CONFIRM) entirely** and proceed to step 5 EXECUTE immediately. Never skip step 4 outside unattended mode.
+- After EXECUTE: the **Miscellaneous sweep**. Every in-scope plan that ended up standalone (including the PROPOSE step's "Standalone" section) is assigned to a feature named `Miscellaneous`, so the batch has no ungrouped remainder:
+    - Search the in-scope column snapshots for an existing line `— Miscellaneous <!-- planId:<id> feature ... -->` whose project scope matches the active filter. If found, run:
+      `node .agents/skills/kanban_operations/assign-to-feature.js "<featurePlanId>" '["id1","id2",...]' "{{WORKSPACE_ROOT}}"`
+    - If not found (or assignment fails with the locked-column error), run:
+      `node .agents/skills/kanban_operations/create-feature.js "Miscellaneous" '["id1","id2",...]' "{{WORKSPACE_ROOT}}" "Catch-all feature for standalone plans swept during orchestration kickoff."`
+    - Zero leftovers → skip the sweep entirely (the `/kanban/feature` route rejects empty `planIds` — do not attempt a blank `Miscellaneous`).
+- Repeat the EXECUTE shell-safety rules here: escape `"` in goal text; avoid `$`, backticks, backslashes. No human reviews the generated commands in this mode, so escaping is mandatory, not hygiene.
+- Skip step 6 (BACKLOG) in unattended mode — BACKLOG stays human-curated.

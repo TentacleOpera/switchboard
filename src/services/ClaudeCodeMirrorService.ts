@@ -55,6 +55,9 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // /switchboard-split — split one plan into Complex/Risky + Routine files (remote splitter).
     { source: 'workflows/switchboard-split.md', name: 'switchboard-split', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
+    // /orchestrator — Orchestration-mode persona. Side-effecting (unattended grouping,
+    // dispatch, merges): explicit /orchestrator or system launch ONLY — never model-auto.
+    { source: 'workflows/orchestrator.md', name: 'orchestrator', invocation: 'no-model', allowedTools: 'Bash' },
     // NOTE: `/sw` and `/sw-remote` were retired 2026-07-03 — superseded by the
     // `/switchboard` front door, which detects local vs remote and routes planning
     // (local → switchboard-chat; remote → the sw-remote.md playbook, still shipped
@@ -90,6 +93,10 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // Model-invocable procedure skills — an agent loads these by description and
     // follows the flow directly (no button click required).
     { source: 'skills/group-into-features', name: 'group-into-features', invocation: 'default', allowedTools: 'Bash' },
+    // Orchestration HTTP surface — read endpoints + request channel for fleet agents
+    // working inside orchestration worktrees. Model-invocable (agents discover it by
+    // description when they need to file a request or read board state).
+    { source: 'skills/orchestration_http', name: 'orchestration-http', invocation: 'default', allowedTools: 'Bash' },
 
     // Pure info-retrieval / read-only skills → user-invokable:false + rich description.
     {
