@@ -125,3 +125,9 @@ Search all `.agents/`, `.claude/`, and `src/` files for feature-creation instruc
 4. **Manual (refine prompt):** Click "Refine" on a ticket in the Planning tab. Paste the copied prompt into a new session. Confirm the feature-grouping instruction now says to use `create-feature.js` / the `create-feature` skill, not "See ... for the format."
 
 5. **Manual (memo processing):** Capture 3+ memo entries, run `process memo`, confirm the plans are created. When the agent offers to group them and the user confirms, confirm the agent runs `create-feature.js` (not a hand-written file). Verify the feature appears in the kanban DB with `is_feature = 1` and both plan rows have `feature_id` set.
+
+---
+
+**Recommendation:** Complexity 2 (Low) → **Send to Intern.** Three text edits replacing "see the format" with skill/script references. The only risk is the switchboard-chat coordination with the sibling plan (drop that edit) and the workspace-path quoting in TaskViewerProvider.ts — both flagged in User Review Required and Adversarial Synthesis.
+
+**Stage Complete:** PLAN REVIEWED

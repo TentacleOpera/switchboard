@@ -118,3 +118,9 @@ The SCAN step (`SKILL.md:15-36`) already says "Scope: CREATED and PLAN REVIEWED 
    - Confirm the directive falls into the second branch (ignore tagged plans) — untagged plans only.
 5. **Skill loaded directly:** Open `.agents/skills/group-into-features/SKILL.md` directly (not via the button) so `{{ACTIVE_PROJECT_FILTER}}` stays as the literal token. Confirm the directive still reads sensibly — the literal token is not a project name, so the second branch applies (ignore tagged plans).
 6. **No regression on the rest of the flow:** Confirm SCAN/READ/PROPOSE/CONFIRM/EXECUTE/BACKLOG steps are unchanged and the prompt still produces correct feature groupings.
+
+---
+
+**Recommendation:** Complexity 2 (Low) → **Send to Intern.** Single-file text rewrite (~100 words → ~35 words). No code, no DB, no config. The only subtlety is the `__unassigned__` semantics collapse — verified correct, but a one-line comment in the SKILL.md would make it self-documenting.
+
+**Stage Complete:** PLAN REVIEWED
