@@ -6746,15 +6746,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         if (!savedPrior) {
                             await db.setConfig(PRIOR_KEY, current);
                         }
-                        if (current !== 'per-subtask') {
-                            await db.setConfig('feature_worktree_mode', 'per-subtask');
+                        // Orchestration uses the per-feature worktree topology: ONE shared
+                        // worktree per feature, every subtask running inside it, merging
+                        // feature -> main. (Supersedes the earlier per-subtask coupling; see
+                        // the adjust-feature-worktree-modes feature which removes per-subtask.)
+                        if (current !== 'per-feature') {
+                            await db.setConfig('feature_worktree_mode', 'per-feature');
                         }
                         await this._sendWorktreeConfig(workspaceRoot!);
                     } else {
                         const savedPrior = await db.getConfig(PRIOR_KEY);
                         // '' (cleared) and null both skip restore.
                         if (savedPrior) {
-                            const validModes = ['none', 'per-subtask', 'high-low'];
+                            const validModes = ['none', 'per-feature'];
                             await db.setConfig('feature_worktree_mode', validModes.includes(savedPrior) ? savedPrior : 'none');
                             await db.setConfig(PRIOR_KEY, '');   // consume the saved prior
                             await this._sendWorktreeConfig(workspaceRoot!);

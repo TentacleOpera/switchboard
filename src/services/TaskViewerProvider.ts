@@ -7757,18 +7757,26 @@ Each plan file must include:
     }
 
     /**
-     * Orchestration fan-out: dispatch a feature's PLAN REVIEWED subtasks to their
-     * worktree terminals. Routes by complexity (>=7 → lead, <7 → coder), resolves
-     * each subtask's worktree terminal, and dispatches via the established
-     * handleKanbanBatchTrigger path. Respects the maxConcurrentSubtasks cap —
-     * surplus subtasks are skipped for a later wake tick. Only PLAN REVIEWED
-     * subtasks are dispatched; CREATED subtasks stay for human planning.
+     * Orchestration fan-out (per-feature worktree model): dispatch a feature's
+     * PLAN REVIEWED subtasks into the feature's single shared worktree as one batch,
+     * routed by the highest-complexity subtask via _autobanRoutePlanReviewedCard
+     * (honours routingMode + configured thresholds). All subtasks share the one
+     * feature worktree; within-feature parallelism is the agent's responsibility.
+     * Respects the maxConcurrentSubtasks cap — surplus subtasks are skipped for a
+     * later wake tick. Only PLAN REVIEWED subtasks are dispatched; CREATED
+     * subtasks stay for human planning. If no feature worktree
+     * (or its terminal) exists, all subtasks are skipped — never dispatched into the
+     * main checkout.
      */
     public async _orchestrationDispatchFeature(
         workspaceRoot: string,
         featurePlanId: string
     ): Promise<{ success: boolean; dispatched?: string[]; skipped?: Array<{ planId: string; reason: string }>; error?: string }> {
         try {
+            // Guard: fan-out is only valid in orchestration mode.
+            if (this._autobanState.automationMode !== 'orchestration') {
+                return { success: false, error: 'Not in orchestration mode' };
+            }
             const root = this._resolveWorkspaceRoot(workspaceRoot);
             if (!root) {
                 return { success: false, error: 'No workspace root resolved' };
@@ -7806,45 +7814,54 @@ Each plan file must include:
                 skipped.push({ planId: st.planId, reason: 'concurrency cap' });
             }
 
-            // Build worktree path map for subtask→worktree terminal resolution.
+            // Per-feature worktree model: ONE shared worktree per feature (feature_id-bound,
+            // no subtask/tier child). Every subtask of the feature runs inside it, so we dispatch
+            // them as a SINGLE batch to that one worktree's terminal — never one-agent-per-subtask
+            // into the same working copy, which would collide. Within-feature parallelism is the
+            // agent's responsibility (native `git worktree add`), per the per-feature worktree
+            // design in the adjust-feature-worktree-modes feature.
             const wts = await db.getWorktrees();
-            const subtaskWtMap = new Map<string, string>();
-            for (const wt of wts) {
-                if (wt.subtask_plan_id) { subtaskWtMap.set(String(wt.subtask_plan_id), wt.path); }
+            const featureWt = wts.find((wt: any) =>
+                String(wt.feature_id) === String(featurePlanId) && !wt.subtask_plan_id && !wt.tier
+            );
+            if (!featureWt) {
+                for (const st of toDispatch) {
+                    skipped.push({ planId: st.planId, reason: 'no feature worktree' });
+                }
+                return { success: true, dispatched: [], skipped };
             }
 
-            const dispatched: string[] = [];
-            // Dispatch each subtask individually — each goes to its own worktree terminal.
-            for (const st of toDispatch) {
-                const worktreePath = subtaskWtMap.get(st.planId);
-                // Route by complexity exactly as the autoban tick does — honours
-                // routingMode (all_coder/all_lead) and the configured thresholds
-                // (incl. intern), not a hardcoded cutoff.
-                const role = this._autobanRoutePlanReviewedCard(String(st.complexity ?? ''), this._autobanState.routingMode);
-                // Resolve the subtask's OWN worktree terminal. Never fall back to a
-                // main-checkout pool terminal — parallel agents colliding on the
-                // main tree is worse than a delayed subtask, so skip and let a
-                // later wake retry (this is why we resolve the terminal here rather
-                // than via _resolveAgentTerminalForPlan, which has that fallback).
-                if (!worktreePath) {
-                    skipped.push({ planId: st.planId, reason: 'no worktree for subtask' });
-                    continue;
-                }
-                const targetAgent = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role);
-                if (!targetAgent) {
+            // Route the whole batch by the highest-complexity subtask, so a feature containing
+            // any complex work goes to the lead. One role/terminal per feature worktree.
+            const topComplexity = toDispatch.reduce((max, st) => {
+                const n = parseInt(String(st.complexity ?? ''), 10);
+                return Number.isFinite(n) && n > max ? n : max;
+            }, 0);
+            const role = this._autobanRoutePlanReviewedCard(String(topComplexity || ''), this._autobanState.routingMode);
+
+            // Resolve the feature worktree's terminal for that role. Never fall back to a
+            // main-checkout pool terminal — skip and let a later wake retry.
+            const targetAgent = await this._findTerminalNameByWorktreePathAndRole(featureWt.path, role);
+            if (!targetAgent) {
+                for (const st of toDispatch) {
                     skipped.push({ planId: st.planId, reason: `no worktree terminal for role=${role}` });
-                    continue;
                 }
-                const ok = await this.handleKanbanBatchTrigger(
-                    role,
-                    [st.sessionId],
-                    undefined,
-                    root,
-                    targetAgent
-                );
-                if (ok) {
-                    dispatched.push(st.planId);
-                } else {
+                return { success: true, dispatched: [], skipped };
+            }
+
+            // Dispatch the batch as one prompt into the shared feature worktree terminal.
+            const dispatched: string[] = [];
+            const ok = await this.handleKanbanBatchTrigger(
+                role,
+                toDispatch.map(st => st.sessionId),
+                'orchestration-kickoff',
+                root,
+                targetAgent
+            );
+            if (ok) {
+                dispatched.push(...toDispatch.map(st => st.planId));
+            } else {
+                for (const st of toDispatch) {
                     skipped.push({ planId: st.planId, reason: 'dispatch failed' });
                 }
             }

@@ -225,8 +225,9 @@ done
 curl -s -X POST "$BASE/kanban/move" -H "Content-Type: application/json" \
   -d "{\"planId\":\"$PLAN_ID\",\"targetColumn\":\"CODE REVIEWED\"}"
 
-# 6. When all of a feature's subtasks are CODE REVIEWED, merge subtask→integration→main
-#    (git -C <path> merge ...), then clean up the worktree.
+# 6. When all of a feature's subtasks are CODE REVIEWED, merge the feature's single shared
+#    worktree branch into main (per-feature model: one worktree per feature, so one merge —
+#    git -C <main checkout> merge <feature branch>), then clean up the worktree.
 curl -s -X POST "$BASE/worktree/cleanup" -H "Content-Type: application/json" \
   -d "{\"branch\":\"$BRANCH\"}"
 ```

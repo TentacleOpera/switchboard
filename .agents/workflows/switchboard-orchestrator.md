@@ -82,20 +82,26 @@ description: Orchestrator persona for the Orchestration automation mode — syst
   session log and stop re-dispatching that subtask.
 
 ## Merge-Back (one feature at a time)
+Each feature has ONE shared worktree (per-feature mode). All its subtasks were coded in
+that single worktree on one branch, so merge-back is a single branch → main, not a
+subtask → integration → main convergence.
 1. Pick ONE completed feature. Never bulk-merge several at once.
-2. For each subtask branch: `git -C <integration worktree path> merge <subtask branch>`;
-   resolve conflicts in the integration checkout (keep both sides' intent; prefer the
-   incoming feature work where they overlap); commit the merge.
-3. When all subtasks are in: `git -C <main checkout path> merge <integration branch>`,
-   resolving conflicts the same way.
-   If a conflict cannot be resolved coherently at either level: run `git merge --abort`
-   FIRST — never leave MERGE_HEAD or conflict markers in a shared checkout — then
-   escalate. (Abort-eject-escalate; the unattended standard. This deliberately diverges
-   from the attended merge-prompt guidance of "never abort without asking the user".)
-4. Verify the merged result (build/tests as applicable), then request worktree cleanup:
+2. Merge the feature's worktree branch into the main checkout:
+   `git -C <main checkout path> merge <feature worktree branch>`. Resolve conflicts in
+   the main checkout (keep both sides' intent; prefer the incoming feature work where
+   they overlap); commit the merge.
+   - If the feature's agents self-provisioned extra worktrees for within-feature
+     parallelism (native `git worktree add`), those branches merge into the feature
+     branch first (`git -C <feature worktree path> merge <sub-branch>`), then the feature
+     branch merges to main. Only touch branches you can see in `git -C <feature worktree> branch`.
+   If a conflict cannot be resolved coherently: run `git merge --abort` FIRST — never
+   leave MERGE_HEAD or conflict markers in a shared checkout — then escalate.
+   (Abort-eject-escalate; the unattended standard. This deliberately diverges from the
+   attended merge-prompt guidance of "never abort without asking the user".)
+3. Verify the merged result (build/tests as applicable), then request worktree cleanup:
    use the worktree_cleanup skill (`.agents/skills/worktree_cleanup.md`) if it exists;
-   otherwise record the un-cleaned worktrees in the session log for the human.
-5. Log the merge in the session log; only then consider the next completed feature.
+   otherwise record the un-cleaned worktree in the session log for the human.
+4. Log the merge in the session log; only then consider the next completed feature.
 
 ## Escalation Boundary
 - **To the human (via session log):** planner-stage questions/warnings, merge conflicts
