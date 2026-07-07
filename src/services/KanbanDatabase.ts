@@ -335,6 +335,19 @@ const MIGRATION_V52_SQL = [
     )`,
 ];
 
+// V53: the epic→feature config-key rename (0a63d67) renamed six `epic_*` keys to `feature_*`.
+// The V47 fix-up only carried over three of them (epic_goal_enabled, epic_ultracode_enabled,
+// epic_workflow_mode); epic_worktree_mode, epic_lock_columns, and epic_prompt_template were
+// missed. epic_worktree_mode drives the Worktrees tab's Auto Mode radio — any install that had
+// it set to 'per-subtask' or 'high-low' silently reverted to 'none' once the code switched to
+// reading feature_worktree_mode. INSERT OR IGNORE means a value already set under the new key
+// (fresh installs, or DBs that never had the old key) is a no-op.
+const MIGRATION_V53_SQL = [
+    `INSERT OR IGNORE INTO config (key, value)
+     SELECT REPLACE(key, 'epic_', 'feature_'), value FROM config
+     WHERE key IN ('epic_worktree_mode', 'epic_lock_columns', 'epic_prompt_template')`,
+];
+
 
 
 const MIGRATION_V13_SQL = [
@@ -6188,6 +6201,16 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(52);
             console.log('[KanbanDatabase] V52 migration completed: project_config table present');
+        }
+
+        // V53: finish the config-key carryover V47 started (see MIGRATION_V53_SQL comment).
+        const v53 = await this.getMigrationVersion();
+        if (v53 < 53) {
+            for (const sql of MIGRATION_V53_SQL) {
+                try { this._db.exec(sql); } catch { /* already exists */ }
+            }
+            await this.setMigrationVersion(53);
+            console.log('[KanbanDatabase] V53 migration completed: carried over epic_worktree_mode/epic_lock_columns/epic_prompt_template to feature_* keys');
         }
     }
 

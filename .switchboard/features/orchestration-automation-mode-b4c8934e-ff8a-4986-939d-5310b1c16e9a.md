@@ -74,4 +74,10 @@ The mode foundation lands first (everything keys off the new `automationMode`). 
 - Any new scheduler — the orchestrator is woken by the existing autoban tick, not a new timer.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Add an Orchestration Automation Mode (Config, AUTOMATION-Tab UI, Worktree-Mode Coupling)](../plans/orchestration-1-automation-mode-foundation.md) — **PLAN REVIEWED**
+- [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **PLAN REVIEWED**
+- [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **PLAN REVIEWED**
+- [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **PLAN REVIEWED**
+- [ ] [Add a File-Based Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
