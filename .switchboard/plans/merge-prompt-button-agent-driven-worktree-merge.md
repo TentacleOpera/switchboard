@@ -185,3 +185,5 @@ The worktree Merge button ships in released versions, but this change touches **
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder.** Majority of the work reuses the existing kind-branched cleanup skeleton; the moderate risks (per-row clipboard selector, three-point API wiring, `git -C` prompt correctness, name disambiguation) are well-scoped and documented above.
+
+**Stage Complete:** LEAD CODED

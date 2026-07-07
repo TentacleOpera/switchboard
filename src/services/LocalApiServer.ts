@@ -86,6 +86,10 @@ interface LocalApiServerOptions {
         firstFeatureName: string,
         secondFeatureName: string
     ) => Promise<{ success: boolean; firstFeaturePlanId?: string; secondFeaturePlanId?: string; error?: string }>;
+    cleanupWorktree?: (
+        workspaceRoot: string,
+        worktreeId: string | number
+    ) => Promise<{ success: boolean; error?: string }>;
     /**
      * Phone-a-Friend dispatch — reached by a coding agent's `curl` when it finishes a
      * plan batch. The host resolves the Phone-a-Friend terminal, sends `/clear` + a
@@ -596,6 +600,43 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanSplitFeature error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanSplitFeature failed' }));
+        }
+    }
+
+    private async _handleWorktreeCleanup(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const cleanupWorktree = this._options.cleanupWorktree;
+        if (!cleanupWorktree) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Worktree cleanup not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const worktreeId = body?.worktreeId || body?.branch;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (worktreeId === undefined) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: worktreeId' }));
+                return;
+            }
+
+            const result = await cleanupWorktree(workspaceRoot, worktreeId);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] _handleWorktreeCleanup error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'worktree cleanup failed' }));
         }
     }
 
@@ -1353,6 +1394,8 @@ export class LocalApiServer {
                 await this._handleKanbanDeleteFeature(req, res);
             } else if (pathname === '/kanban/feature/split' && req.method === 'POST') {
                 await this._handleKanbanSplitFeature(req, res);
+            } else if (pathname === '/worktree/cleanup' && req.method === 'POST') {
+                await this._handleWorktreeCleanup(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/phone-a-friend' && req.method === 'POST') {

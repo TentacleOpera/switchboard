@@ -23,6 +23,10 @@ The add-ons are injected into a single container by `renderRoleAddons()` in `kan
 **Tags:** frontend, webview, kanban, prompts-tab, ux, layout, accordion
 **Complexity:** 4
 
+## User Review Required
+
+No — pure UI layout refactor. No behavior change to emitted prompts, no data migration, no default/option changes. Saved-config keys and addon IDs are untouched. Safe to implement directly. (The sibling subtask — git strategy defaults — is the one carrying a stale-value migration; this plan has none.)
+
 ## Complexity Audit
 
 ### Routine
@@ -44,6 +48,14 @@ The add-ons are injected into a single container by `renderRoleAddons()` in `kan
 - **Option descriptive text.** Each radio option already has a `tooltip` string (e.g. `sharedDefaults.js:66` "Do all work on the current branch; do NOT create new branches or worktrees"). Render this as a `<span class="addon-option-desc">` below the option label. Keep the `title` attribute too for hover parity.
 - **`dist/webview/kanban.html`** is a build artifact. Edit `src/` only; the build copies it. Confirm the build step regenerates dist.
 - **No dependency on Issue 2.** This plan is purely layout/grouping. Issue 2 (git defaults + incremental removal) touches the same `sharedDefaults.js` radio definitions but is independent. If both land, coordinate that the `group: 'git'` field and the default/option changes do not conflict — they edit different fields of the same objects.
+
+## Dependencies
+
+- No session dependencies. Sibling subtask `feature_plan_20260707125920_git-strategy-defaults-notspecified-remove-incremental` edits the same `sharedDefaults.js` radio objects and the same `kanban.html` custom-agent fallback block, but different fields (`default` / `options` vs `group`). Recommended landing order: **sibling first** (defaults + `incremental` removal), then this plan (layout) — see the feature's `## Dependencies & sequencing`. Landing in that order (or in a single PR) eliminates the merge-conflict surface on the shared object literals.
+
+## Adversarial Synthesis
+
+Key risks: (1) the `renderAddon()` helper extraction can silently break the `customSubagent` text-input toggle if `textInputsToToggle` is hoisted out of per-addon scope; (2) the `subagentPolicy` radio in the general group shares that same text-input wiring and is not covered by the verification steps; (3) cited CSS anchor line numbers may be stale. Mitigations: keep `textInputsToToggle` per-addon inside the helper (clarified in §2), add a customSubagent verification step, and anchor CSS by selector name not line number.
 
 ## Proposed Changes
 
@@ -134,6 +146,8 @@ function renderRoleAddons(role) {
 
 Extract the existing per-addon rendering (checkbox vs radio vs file) into a `renderAddon(addon, role, container)` helper so both the general group and accordion bodies use the same logic. Preserve all existing event listeners (`saveRoleConfig`, `refreshPreview`, text-input toggle for `customSubagent`).
 
+**Clarification (scoping — critical):** the existing radio branch declares `textInputsToToggle` INSIDE the per-addon scope (`kanban.html:3436`) and wires it through the `change` listener (`3480-3495`) to toggle the custom-subagent text input. The `renderAddon(addon, role, container)` helper renders ONE addon, so `textInputsToToggle` MUST remain declared inside the helper (per-addon closure) — never hoisted to the container or the caller. Hoisting it would share one toggle array across multiple radio groups and silently break the `customSubagent` text-input show/hide/clear logic for every role. The `subagentPolicy` radio (general group, `sharedDefaults.js:121-126`) also uses `textInputOn: 'customSubagent'`, so this wiring is exercised in the general group too — not only in git accordions.
+
 ### 3. `src/webview/kanban.html` — show option descriptive text under each radio option
 
 In the radio-option rendering (currently `kanban.html:3436-3445`), append the `tooltip` as visible helper text:
@@ -155,7 +169,7 @@ label.innerHTML = `
 
 ### 4. `src/webview/kanban.html` — accordion + option-desc CSS
 
-Add styles (near the existing `.prompts-tab` / `.addon-radio-group` rules around `kanban.html:1142-1151` / `2235`):
+Add styles near the existing `.prompts-tab` / `.addon-radio-group` / `.addon-label` rules (anchor by selector name — the cited line numbers `1142-1151` / `2235` are approximate and may drift):
 
 ```css
 .addon-subsection-accordion {
@@ -200,4 +214,15 @@ Add styles (near the existing `.prompts-tab` / `.addon-radio-group` rules around
 3. **Roles with no git radios:** Select Researcher/Analyst — confirm no Git Strategy accordion renders and only the general group shows. No empty accordion header.
 4. **Custom agent:** Configure a custom agent; confirm it gets the Git Strategy accordion (the fallback array at `kanban.html:3396-3418` was updated with `group: 'git'`).
 5. **Page length:** Confirm the Prompts tab is visibly shorter for Lead/Coder/Intern roles with the git accordions collapsed.
-6. **Build:** Run the webview build; confirm `dist/webview/kanban.html` regenerates with the changes.
+6. **CustomSubagent text-input toggle (regression guard):** Select **Lead Coder** → Subagent Policy = **Custom Subagent** (this radio lives in the new general group, `sharedDefaults.js:121-126`). Confirm the custom-subagent name text input appears, accepts input, persists across role switches, and clears when a non-text option is reselected. This guards the `renderAddon()` helper extraction against accidentally hoisting `textInputsToToggle` out of per-addon scope.
+7. **Build (release only):** Per `CLAUDE.md`, `dist/` is NOT used during development or testing — all testing is via an installed VSIX, and `dist/` staleness is never a verification gate. A webview build is only needed when producing a VSIX for release; do not flag `dist/` staleness during review. (Compilation is skipped this session per directive.)
+
+### Automated Tests
+
+None — verification is manual via an installed VSIX, per project convention (`dist/` is not used in dev; automated tests are skipped this session per directive).
+
+## Recommendation
+
+**Complexity 4 → Send to Coder.** Single-file (`kanban.html`) layout refactor plus a data-only `group` field in `sharedDefaults.js`; reuses existing radio/checkbox rendering logic. The one moderate risk — the `renderAddon()` helper extraction preserving `textInputsToToggle` per-addon scope — is now called out explicitly in §2 and guarded by verification step 6. Land after the sibling defaults plan (see `## Dependencies`).
+
+**Stage Complete:** PLAN REVIEWED

@@ -1,0 +1,110 @@
+---
+description: "Standalone npx Switchboard, subtask 4 of 4: npm bin packaging, launcher that boots the service and opens the browser with a one-time-token handoff, engines>=22 floor, and the clean-machine smoke matrix across OS x arch x package manager (Phase 4)"
+---
+
+# Standalone Switchboard 4/4 — `npx` Distribution + Launcher
+
+## Goal
+
+Package the standalone service for `npx switchboard`: the `bin` entry + launcher that boots the service, health-gates on `/health` + `api-server-port.txt`, and opens the browser to the served board with a **one-time-token handoff** — then prove it on clean machines across the full OS × arch × package-manager matrix.
+
+**Context (parent architecture):** Subtask 4 of the feature decomposing `.switchboard/plans/extract-standalone-npx-browser-service.md` (Plan ID `81299C8F-E2FA-4F93-881D-83231E1798A1`). This is the parent's Phase 4 (~1–2 wks, overlaps subtask 2's prebuild verification). `npx` is the chosen distribution — Electron packaging was explicitly rejected for now; extension-as-launcher and Open VSX publish are separate follow-ups outside the feature.
+
+## Metadata
+- **Plan ID:** 5674b039-5c6b-4787-b061-390d3a790093
+- **Tags:** devops, cli, infrastructure, security
+- **Complexity:** 5
+
+## User Review Required
+- None — distribution choice fixed in the parent plan's review.
+
+## Scope
+
+### ✅ IN SCOPE
+- **`package.json` packaging:** `bin: { "switchboard": "dist/standalone/cli.js" }`, `"engines": { "node": ">=22.0.0" }` (Node 20 EOL'd 2026-04-30; Node 24 Active LTS is the dev/CI baseline), new deps finalized (`node-pty@^1.2.0`, `@xterm/xterm@^6` + fit/attach/webgl addons, `ws`, `@napi-rs/keyring`), and a **second webpack target** for the standalone bundle alongside the extension build.
+- **Launcher flow:** boot service → wait for `/health` (`src/services/LocalApiServer.ts:1320`) + `api-server-port.txt` → generate high-entropy one-time token (`crypto.randomBytes(32)`) → open browser to the board URL carrying the token → page exchanges it for a session credential and strips it from the URL (history/log hygiene).
+- **Extension-bundle isolation:** `node-pty` (and other standalone-only natives) marked external to the **extension** webpack target — the VSIX must be byte-equivalent in behavior and must not grow standalone deps (VSIX bundles everything; no runtime node_modules escape hatch exists).
+- **Clean-machine smoke matrix:** `npx switchboard` on macOS (x64 + arm64), Windows x64, Linux x64 + **arm64** (Docker on Apple Silicon suffices), with **npm and pnpm** — full board (all five panels) renders, an agent launches in a fleet pane. The arm64 + pnpm legs guard the two known node-pty v1.2.x packaging regression classes (Issues #860, #850).
+
+### ⚙️ OUT OF SCOPE
+- Electron packaging; extension-as-launcher; Open VSX publish (all explicitly deferred in the parent plan).
+- Auto-update mechanics — `npx` semantics (fetch-latest by default) are the v1 update story.
+
+## Implementation Steps
+
+1. **Standalone webpack target** — bundle `dist/standalone/cli.js`; natives (`node-pty`, `@napi-rs/keyring` platform packages) stay unbundled runtime deps resolved from the npm install tree.
+2. **`bin` + engines + files allowlist** — ship only `dist/`, prebuild-bearing deps resolve transitively; verify `npm pack` tarball contents.
+3. **Launcher** — health-gated boot per Scope; browser-open via platform opener; `--no-open`, `--port` flags.
+4. **Token handoff** — one-time token accepted exactly once by the token-exchange endpoint (server side landed in subtask 3); reuse → 401 and a fresh-login hint.
+5. **Smoke matrix in CI + release checklist** — the five-leg matrix per Scope; failures block release.
+
+## Complexity Audit
+
+### Routine
+- `bin`/engines/webpack-target wiring.
+- Launcher flags and platform browser-open.
+- CI matrix configuration (runners already needed by subtask 2's guards).
+
+### Complex / Risky
+- **Extension VSIX isolation** — accidentally bundling `node-pty` into the extension target (or shifting its externals) regresses the shipped extension; the VSIX-content diff check is the guard.
+- **Token handoff hygiene** — token must not survive in browser history, server logs, or be replayable; exactly-once exchange semantics.
+
+## Edge-Case & Dependency Audit
+
+### Race Conditions
+- Launcher polls `/health` with timeout; service crash during boot → clear stderr diagnostics, nonzero exit, no orphaned port file.
+- Browser opens before token-exchange endpoint ready → launcher gates browser-open on `/health`, which subsumes readiness.
+
+### Security
+- One-time token: 32 bytes entropy, single-use, short TTL; stripped from URL immediately after exchange.
+- `npx` supply-chain posture: `files` allowlist keeps the tarball minimal; no postinstall scripts of our own; lockfile-pinned CI.
+
+### Side Effects
+- Second webpack target must not alter the extension target's output (compare VSIX contents pre/post as a release-checklist item).
+- `npm pack` size guard — prebuild-bearing transitive deps are the expected bulk; our own tarball stays lean.
+
+### Dependencies & Conflicts
+- **Depends on subtasks 1–3** (`eb75281d-d8f3-4e50-b396-f7626abed020`, `341ac949-57bf-4223-847d-0ba8876771dc`, `aaeafbeb-f4f0-40b4-a335-53e69febc8f7`): packages what they built; the smoke matrix can start overlapping subtask 2 (prebuild legs) before subtask 3 completes.
+- npm registry publish access for the `switchboard` package name (verify availability/ownership early — rename fallback if squatted).
+
+## Dependencies
+- **Session dependencies:** subtasks 1–3 of this feature (see plan IDs above); smoke-matrix legs overlap subtask 2.
+- Parent architecture reference: `.switchboard/plans/extract-standalone-npx-browser-service.md`.
+
+## Adversarial Synthesis
+
+Key risks: regressing the shipped extension via bundling/externals drift, and token-handoff leakage making the local board (and its PTY fleet) reachable by other local actors. Mitigations: VSIX-content diff as a release gate; single-use short-TTL token exchanged and stripped immediately; five-leg clean-machine smoke matrix gating release on the known native-packaging regression classes.
+
+## Proposed Changes
+
+### `package.json`
+- **Context:** Extension-only packaging today (80 `switchboard.*` settings, `vscode-test` script).
+- **Logic:** `bin`, `engines >=22`, finalized deps, `files` allowlist, standalone webpack target script.
+- **Implementation:** Extension packaging path untouched; standalone target additive.
+- **Edge Cases:** `node-pty` external to extension target; VSIX diff gate.
+
+### `webpack.config.js` (or split config)
+- **Context:** Single extension target today.
+- **Logic:** Add standalone target (`target: 'node'`, natives external).
+- **Implementation:** Shared loaders; separate entry/output; extension output byte-stable.
+- **Edge Cases:** WASM asset (`sql.js`) resolution identical in both bundles.
+
+### `src/standalone/cli.ts` (launcher portion)
+- **Context:** Created in subtask 1; this subtask adds launcher behavior.
+- **Logic:** Health-gated boot, token generation/handoff, browser open, flags.
+- **Implementation:** Poll `/health` with backoff + timeout; platform opener; darwin `spawn-helper` chmod guard runs before fleet init (subtask 2's fix, invoked here at startup).
+- **Edge Cases:** port collision → ephemeral-port retry; headless env (`--no-open`) prints URL + token pairing instructions.
+
+## Verification Plan
+
+### Automated Tests
+- Tarball content test: `npm pack` contains `dist/standalone/`, excludes sources/tests; extension VSIX contents unchanged (diff gate).
+- Token-exchange tests: single-use enforced; expired/reused token → 401.
+- Launcher unit tests: health-gate timeout paths, flag parsing.
+
+### Manual
+- Five-leg clean-machine matrix per Scope: `npx switchboard` → board loads, plan moves across columns, agent launches in a pane, text routes correctly, output streams back.
+- `.agents/skills/kanban_operations/move-card.js` works against the standalone service unchanged.
+- Token replay attempt from a second browser tab → rejected.
+
+**Stage Complete:** PLAN REVIEWED

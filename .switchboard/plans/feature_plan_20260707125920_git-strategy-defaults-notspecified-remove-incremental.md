@@ -27,6 +27,10 @@ Because of these defaults, every freshly-configured Lead/Coder/Intern/Custom age
 **Tags:** frontend, webview, prompts-tab, git-policy, defaults, cleanup
 **Complexity:** 3
 
+## User Review Required
+
+No — the user explicitly requested this change (the feature is literally "git strategy defaults should be Not Specified; remove Incremental Commits"). The one migration concern (stale persisted `incremental` values) is handled defensively by allow-list narrowing + read-time normalisation + the `GIT_COMMIT_CLAUSES` map no longer containing the key. The behavior change (reversing the prior "work-on-main default") is the user's stated intent, not an emergent side effect. Safe to implement directly.
+
 ## Complexity Audit
 
 ### Routine
@@ -48,6 +52,14 @@ Because of these defaults, every freshly-configured Lead/Coder/Intern/Custom age
 - **No prompt-output regression for explicit choices.** Users who explicitly select `current`/`whenDone`/`newBranch`/`noPush`/`pushWhenDone`/`dontCommit` keep getting the same clauses. Only the *default* (no explicit choice) changes from emitting a clause to emitting nothing.
 - **Custom agents.** The custom-agent fallback (`kanban.html:3396-3418`) must receive the same default + incremental-removal changes so custom agents behave identically to built-in code roles.
 - **No dependency on Issue 1.** Issue 1 (layout/accordions) adds a `group: 'git'` field to the same radio objects. This plan edits `default` and the `options` array. The two edits are to different fields and do not conflict. Coordinate merge order so both land cleanly.
+
+## Dependencies
+
+- No session dependencies. Sibling subtask `feature_plan_20260707125810_prompts-tab-layout-accordions-grouping` edits the same `sharedDefaults.js` radio objects and `kanban.html` custom-agent fallback block, but different fields (`group` vs `default`/`options`). Recommended landing order: **this plan first** (defaults + `incremental` removal + comment rewrites), then the sibling (layout) — see the feature's `## Dependencies & sequencing`. Landing in that order (or in a single PR) eliminates the merge-conflict surface on the shared object literals.
+
+## Adversarial Synthesis
+
+Key risks: (1) reversing "locked decision #2" (work-on-main default) without updating the encoding comments at `KanbanProvider.ts:4201-4205` and `4556-4560` invites a future maintainer to "fix" the `notSpecified` defaults back; (2) the stale-`incremental` normalisation site is underspecified (three read sites exist); (3) `AgentSkillExporter.ts:104,193` passes `gitCommitStrategy` straight through and is not named as a verify-compiles site; (4) the verification step references `dist/` regen, which `CLAUDE.md` forbids as a gate. Mitigations: rewrite the locked-decision comments (new §8), pin the normalisation to the per-role map read (`KanbanProvider.ts:4575-4578`), name `AgentSkillExporter.ts` in the compile guard, and reframe the build check to "TS compiles" (not `dist/` regen).
 
 ## Proposed Changes
 
@@ -157,13 +169,19 @@ gitPushStrategyByRole:   { lead: leadConfig?.addons?.gitPushStrategy ?? 'notSpec
 
 ### 5. `src/services/KanbanProvider.ts` — normalise stale `incremental` on read
 
-Add a normalisation step where role addons are read, mapping any persisted `gitCommitStrategy === 'incremental'` to `'notSpecified'`:
+Add a normalisation step mapping any persisted `gitCommitStrategy === 'incremental'` to `'notSpecified'`. **Pin the insertion point** to the per-role override map at `KanbanProvider.ts:4573-4578` (the `gitCommitStrategyByRole` block) — this is the single read site that feeds `buildGitPolicyBlock` for built-in code roles, and it reads the raw saved `leadConfig?.addons?.gitCommitStrategy` value. Apply the normaliser to each of the four code-role reads (lead / coder / intern / claude_designer):
 
 ```ts
 const NORMALISE_GIT_COMMIT = (v: string | undefined): string | undefined =>
     v === 'incremental' ? 'notSpecified' : v;
-// apply when reading leadConfig?.addons?.gitCommitStrategy, coderConfig?, internConfig?, claudeDesignerConfig?
+// Applied at the per-role map (KanbanProvider.ts:4575-4578):
+//   lead:      NORMALISE_GIT_COMMIT(leadConfig?.addons?.gitCommitStrategy)      ?? 'notSpecified',
+//   coder:     NORMALISE_GIT_COMMIT(coderConfig?.addons?.gitCommitStrategy)     ?? 'notSpecified',
+//   intern:    NORMALISE_GIT_COMMIT(internConfig?.addons?.gitCommitStrategy)    ?? 'notSpecified',
+//   claude_designer: NORMALISE_GIT_COMMIT(claudeDesignerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
 ```
+
+(Note: the `?? 'notSpecified'` fallbacks themselves change from `'whenDone'` per §4, so the final expression is `NORMALISE_GIT_COMMIT(<raw>) ?? 'notSpecified'`. The merge-fallback site at `KanbanProvider.ts:4207` only fires when the field `=== undefined`, so a defined stale `incremental` skips it and is caught here instead. The dispatch read at `4284` already uses `?? 'notSpecified'` and reads from the per-role map — so normalising at the map source covers both paths.)
 
 ### 6. `src/services/agentConfig.ts` — remove `incremental` from allow-list + type
 
@@ -214,6 +232,45 @@ const GIT_COMMIT_CLAUSES: Record<string, string> = {
 };
 ```
 
+### 8. `src/services/KanbanProvider.ts` — rewrite the "locked decision #2" comments
+
+This plan reverses the prior "work-on-main default" (locked decision #2): the code-role git strategies now default to `'notSpecified'` (emit no clause) instead of `current`/`whenDone`/`noPush`. The comments that ENCODE the old decision must be rewritten, or a future maintainer will read "locked decision #2: work-on-main default," see the code emitting nothing, and "fix" it back — reverting the user's explicit intent.
+
+```ts
+/* BEFORE — KanbanProvider.ts:4201-4205 */
+// §Git — work-on-main defaulting for custom agents. The UI radio `default`
+// only governs rendering, not persistence; a custom agent whose Prompts-tab
+// UI was never opened would otherwise get `undefined` strategies and emit no
+// Branch/Commit/Push clauses, violating the work-on-main default (locked
+// decision #2). Apply defaults to absent strategy fields after merging.
+
+/* AFTER — KanbanProvider.ts:4201-4205 */
+// §Git — neutral defaulting for custom agents. The UI radio `default` only
+// governs rendering, not persistence; a custom agent whose Prompts-tab UI was
+// never opened gets `undefined` strategies. Per the user's explicit decision
+// (reversing former locked decision #2), absent strategy fields default to
+// 'notSpecified' so NO git-policy clause is emitted unless the user opts in.
+// Apply the default to absent strategy fields after merging.
+```
+
+```ts
+/* BEFORE — KanbanProvider.ts:4556-4560 */
+// §Git — granular git-policy strategy maps. The `?? '<default>'` here is
+// the SINGLE source of the work-on-main default for built-in code roles
+// (locked decision #2). Non-code roles get 'notSpecified' so they emit no
+// clause. buildGitPolicyBlock treats `undefined` and `'notSpecified'`
+// identically (pure builder).
+
+/* AFTER — KanbanProvider.ts:4556-4560 */
+// §Git — granular git-policy strategy maps. The `?? 'notSpecified'` here is
+// the SINGLE source of the neutral default for built-in code roles: per the
+// user's explicit decision (reversing former locked decision #2), code roles
+// emit NO git-policy clause unless the user explicitly opts in. Non-code roles
+// also get 'notSpecified'. buildGitPolicyBlock treats `undefined` and
+// 'notSpecified' identically (pure builder). Stale persisted 'incremental'
+// values are normalised to 'notSpecified' on read (see §5).
+```
+
 ## Verification Plan
 
 1. **Fresh config defaults (manual):** Reset/clear a Lead Coder role config (or test on a clean workspace). Open Kanban → Prompts → Lead Coder. Confirm all three git radios show **Not Specified** selected. Confirm the prompt preview contains **no `GIT POLICY:` block** (only the Git Safety Guardrail directive if that checkbox is on, but no branch/commit/push clauses).
@@ -221,5 +278,16 @@ const GIT_COMMIT_CLAUSES: Record<string, string> = {
 3. **Incremental removed:** Confirm the Git Commit Strategy radio group has only three options: Commit When Done, Do Not Commit, Not Specified. No "Incremental Commits" option.
 4. **Stale `incremental` migration:** On a workspace with a previously-saved `gitCommitStrategy: 'incremental'`, open the Prompts tab — confirm the radio shows **Not Specified** (normalised) and no clause is emitted. Confirm no crash in the renderer (no orphan checked radio).
 5. **Custom agent parity:** Configure a custom agent; confirm its git radios default to Not Specified and have no Incremental option.
-6. **Server-side build:** Run `npm run build` (or the project's build command). Confirm `dist/` regenerates and TypeScript compiles with the narrowed `gitCommitStrategy` type (no remaining `'incremental'` references).
-7. **Grep guard:** `grep -rn "incremental" src/` should return no git-strategy references (only the unrelated `projectContextSync.ts` comment about "cut incremental design", which is unrelated).
+6. **TypeScript compile (type narrowing):** After removing `'incremental'` from the unions in `agentConfig.ts:10` and `agentPromptBuilder.ts:188`, the project must compile cleanly with no remaining `'incremental'` type references. Per `CLAUDE.md`, `dist/` is NOT used during development or testing (all testing via installed VSIX) and `dist/` staleness is never a verification gate — so the check is "TS compiles," not "`dist/` regenerates." Also confirm `AgentSkillExporter.ts:104,193` (which passes `gitCommitStrategy` straight through to `buildGitPolicyBlock`) still compiles — it contains no `'incremental'` literal, so it should narrow cleanly, but verify explicitly. (Compilation is skipped this session per directive.)
+7. **Grep guard:** `grep -rn "incremental" src/` should return no git-strategy references — only the unrelated `projectContextSync.ts:17` comment ("cut incremental design") and the `TaskViewerProvider.ts` `_incrementallyRegisterPlan` method name, neither of which is a git-strategy reference.
+8. **Comment rewrite check:** Confirm the comment blocks at `KanbanProvider.ts:4201-4205` and `4556-4560` no longer reference "locked decision #2" as the active work-on-main default — they now record the reversed neutral-default decision (see §8). A future reader should not be misled into reverting the `notSpecified` defaults.
+
+### Automated Tests
+
+None — verification is manual via an installed VSIX plus a TypeScript compile check, per project convention (`dist/` is not used in dev; automated tests are skipped this session per directive).
+
+## Recommendation
+
+**Complexity 3 → Send to Intern.** Five-site default change (`'current'`/`'whenDone'`/`'noPush'` → `'notSpecified'`), one option removal (`incremental`) across type unions + clause vocabulary + sanitisation allow-list, a stale-value normalisation pinned to one read site, and a comment rewrite. All sites are identified with line numbers; no new architecture. The only migration concern (stale persisted `incremental`) is handled by allow-list narrowing + read-time normalisation + the `GIT_COMMIT_CLAUSES` map no longer containing the key. Land before the sibling layout plan (see `## Dependencies`).
+
+**Stage Complete:** PLAN REVIEWED

@@ -1122,6 +1122,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
+            cleanupWorktree: async (wsRoot, worktreeId) => {
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider.cleanupWorktree(wsRoot, worktreeId);
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
             onPhoneAFriend: async (planFile: string, originRole?: string) => {
                 // Route the coder's batch-end POST to the Phone-a-Friend terminal dispatch.
                 // The callback handles the silent drop internally and MUST NOT throw on

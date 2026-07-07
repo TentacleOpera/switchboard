@@ -153,3 +153,8 @@ None required. No tests reference the modified button, and the change is purely 
 Complexity 2 → **Send to Intern**.
 
 **Stage Complete:** INTERN CODED
+
+## Review Findings
+Reviewed `src/webview/kanban.html` changes against plan requirements. The CREATED-branch `backlogActionBtn` was converted from a text `card-btn` to a `card-btn icon-btn send-to-backlog-btn` with a down-arrow SVG (line 5709), preserving all `data-*` attributes and the `send-to-backlog-btn` class so the existing class-based handler at line 5627 binds unchanged. The `${backlogActionBtn}` injection was moved from the left action group to the right group (line 5744), ordered backlog → review → complete. The BACKLOG-branch `send-to-new-btn` was left as a text button (out of scope, verified unchanged). Empty-string insertion for non-CREATED/completed cards is harmless. No material findings — implementation matches the plan verbatim. No compilation/tests run per directive. No remaining risks specific to this plan.
+
+**Stage Complete:** CODE REVIEWED

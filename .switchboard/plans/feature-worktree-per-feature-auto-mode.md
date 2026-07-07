@@ -4,8 +4,8 @@
 
 ## Metadata
 
-**Complexity:** 3
-**Tags:** feature, backend, frontend, ui, worktrees
+**Complexity:** 4
+**Tags:** feature, backend, frontend, ui
 
 ---
 
@@ -80,6 +80,24 @@ So the entire change is: **make `per-feature` a selectable value, and branch to
 
 ---
 
+## User Review Required
+
+Before build, confirm the defaults in the **Confirm-on-review decisions** table below. The one
+decision that changes existing user-facing behavior and **must** be acknowledged is:
+
+- **D3 — base-branch alignment.** After this plan, all three manual creation buttons
+  (`createWorktree` / `createWorktreeForFeature` / `createWorktreeForProject`) branch off the
+  resolved **default branch** instead of the currently-checked-out HEAD. Anyone who previously
+  clicked "Create Worktree" *while on a feature branch* expecting it to fork from that branch will
+  now get a worktree off the default branch. This is the intended, more-predictable behavior
+  (matches the work-on-main default [[work-on-main-never-branch-unless-asked]]), but it is a
+  behavior change to call out in the changelog.
+
+The remaining decisions (D1 value name/label, D2 radio order, D4 directive variant) are
+sensible defaults chosen by this plan; flag any to change before build.
+
+---
+
 ## Confirm-on-review decisions
 
 Sensible defaults chosen; flag any to change before build.
@@ -116,7 +134,88 @@ time someone reads this code.
 
 ---
 
-## Changes (by file)
+## Complexity Audit
+
+### Routine
+- Enum widening in `setFeatureWorktreeMode` (1 line).
+- Creation branch in `createFeatureFromPlanIds` (reuses existing `_ensureFeatureIntegrationWorktree`).
+- `AUTO_MODE_OPTIONS` array entry (webview, generic renderer — no new wiring).
+- Known-mode guard update in `agentPromptBuilder` (silences a warning; base directive already the fallback).
+- (D3) Thread `_resolveDefaultBranch` into the three manual creation handlers (mechanical; the
+  `baseBranch` param and its validation already exist on `_createSafetyWorktree`).
+
+### Complex / Risky
+- **None.** No new git logic, no schema, no routing/merge/abandon changes — every downstream path is
+  the already-shipped `none`-mode-feature-worktree / per-subtask-integration-worktree path. The only
+  judgment call is D3 (base branch), which is a one-word choice between two existing helpers.
+
+---
+
+## Edge-Case & Dependency Audit
+
+**Race Conditions**
+- `_ensureFeatureIntegrationWorktree` already has a race fallback
+  (`KanbanProvider.ts:9764-9766`): if a near-simultaneous call creates the worktree first, the catch
+  re-reads `getWorktrees()` and returns the now-existing row. `per-feature` reuses this unchanged.
+- `createFeatureFromPlanIds` snapshots `feature_worktree_mode` **once** (10717) and threads the
+  snapshot through the subtask loop, so a mode toggle mid-creation cannot split one feature between
+  two provisioning behaviors. `per-feature` is added to the same snapshot branch — no new race.
+
+**Security**
+- `baseBranch` is passed to `git` via `execFileAsync` args (no shell) and is already validated in
+  `_createSafetyWorktree` (`KanbanProvider.ts:10016`) — rejects `..` and `\\`; `/` is intentionally
+  allowed (legitimate in refs like `release/1.0`). D3 threads an already-sanitized value; no new
+  injection surface.
+- Enum widening: an invalid mode is still rejected by the existing `showWarningMessage` guard
+  (`setFeatureWorktreeMode`, 9187). `per-feature` is added to the allow-list, so it passes.
+
+**Side Effects**
+- **D3 behavior change:** the three manual creation buttons now branch off the default branch
+  instead of current HEAD. Worktree rows created before this change keep their recorded `base_branch`
+  (or NULL); the merge path reads the branch *name*, not the base, so historical rows are unaffected.
+  Call this out in the changelog (see User Review Required).
+- Mid-lifecycle mode toggle is **inert** for all existing features — `setFeatureWorktreeMode` writes
+  a config value only; zero worktrees created on toggle (matches `per-subtask`/`high-low`).
+- Adding a subtask to a pre-existing feature via `assignPlansToFeature` / `addSubtaskToFeature`
+  creates **zero** per-feature worktrees — `_provisionSubtaskWorktreeIfNeeded` early-returns for any
+  mode other than `per-subtask` (9872). No `per-feature` branch is added to that path.
+- No `confirm()` / `window.confirm` / modal confirmation introduced anywhere (per CLAUDE.md
+  [[no-confirm-dialogs-ever]]). Verified: no confirm gates in the touched webview code.
+
+**Dependencies & Conflicts**
+- Depends on the already-shipped worktree auto-mode infrastructure from
+  `epic-worktree-modes-and-directive-scoping.md` (decision D1) — all merged. No blocking dependency.
+- **Migration safety (~4k installs):** purely additive — a new enum value + one creation branch.
+  Default stays `none`; existing features and worktree rows untouched. **No schema change** — the
+  `worktrees.base_branch` column already exists (`KanbanDatabase.ts:31`, `addWorktree` 6th param at
+  3071) and is already written by the auto path. See [[switchboard-dev-only-no-migrations]].
+- No conflict with `none` / `per-subtask` / `high-low` provisioning — their branches are untouched
+  and remain byte-for-byte unchanged.
+
+---
+
+## Dependencies
+
+- None blocking — builds on the already-shipped worktree auto-mode infrastructure
+  (`.switchboard/plans/epic-worktree-modes-and-directive-scoping.md`, merged; decision D1).
+  No prior session (`sess_…`) dependency; all referenced code is in `main`.
+
+---
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks are (1) the D3 base-branch alignment silently changing the base of the
+three manual creation buttons — a real behavior change for users who forked off a checked-out
+feature branch, and (2) the read-at-creation invariant must stay intact so a mid-lifecycle toggle or
+subtask-add never mass-provisions worktrees for old features. Mitigations: D3 deliberately converges
+all four creation paths on the default branch (matching the work-on-main convention) and is
+changelog-flagged; the `per-feature` branch is added **only** to `createFeatureFromPlanIds`, never to
+`assignPlansToFeature`, and `_provisionSubtaskWorktreeIfNeeded` already no-ops for non-`per-subtask`
+modes — so the invariant is preserved by reuse, not by new guard code.
+
+---
+
+## Proposed Changes
 
 ### 1. `src/services/KanbanProvider.ts`
 
@@ -258,20 +357,7 @@ Abandon: plain abandon [reused]
   the reason the earlier lazy-create-on-subtask-add idea was cut.
 - **No confirm dialogs** introduced anywhere (per CLAUDE.md [[no-confirm-dialogs-ever]]).
 
-## Complexity Audit
-
-### Routine
-- Enum widening in `setFeatureWorktreeMode` (1 line).
-- Creation branch in `createFeatureFromPlanIds` (reuses existing `_ensureFeatureIntegrationWorktree`).
-- `AUTO_MODE_OPTIONS` array entry (webview, generic renderer — no new wiring).
-- Known-mode guard update in `agentPromptBuilder` (silences a warning; base directive already the fallback).
-- (D3) Thread `_resolveDefaultBranch` into the three manual creation handlers (mechanical; the
-  `baseBranch` param and its validation already exist on `_createSafetyWorktree`).
-
-### Complex / Risky
-- **None.** No new git logic, no schema, no routing/merge/abandon changes — every downstream path is
-  the already-shipped `none`-mode-feature-worktree / per-subtask-integration-worktree path. The only
-  judgment call is D3 (base branch), which is a one-word choice between two existing helpers.
+---
 
 ## Verification Plan
 
@@ -301,14 +387,21 @@ Abandon: plain abandon [reused]
    the checked-out one (`git -C <worktree> merge-base --is-ancestor <defaultTip> HEAD`), and
    `worktrees.base_branch` records the default branch.
 
-### Automated tests (authored for the separate test run — SKIP executing here)
+### Automated Tests
+*(Authored for the separate test run — SKIP executing in this session per session directives.)*
 - `resolveFeatureOrchestrationDirective('per-feature', …)` returns the base directive and logs no
   warning.
 - A feature created under `per-feature` yields one `feature_id`-bound worktree with `tier=null`,
   `subtask_plan_id=null`, and zero subtask worktrees.
 
+---
+
 ## Recommendation
 
-Complexity 3 → **Send to Coder.** Additive edits across two files + one webview array entry, plus a
-mechanical three-handler base-branch alignment (D3), every downstream path reusing shipped code. No
-architecture, no schema, no new git logic.
+Complexity 4 → **Send to Coder.** Additive edits across two source files + one webview array entry,
+plus a mechanical three-handler base-branch alignment (D3), every downstream path reusing shipped
+code. No architecture, no schema, no new git logic — but the D3 base-branch change is a real
+user-facing behavior change (manual buttons fork off the default branch instead of current HEAD),
+which warrants a coder's judgment and a changelog note rather than an intern pass.
+
+**Stage Complete:** PLAN REVIEWED

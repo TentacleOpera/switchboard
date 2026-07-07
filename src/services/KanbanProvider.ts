@@ -9218,65 +9218,58 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 break;
             }
-            case 'mergeWorktree': {
-                const { worktreeId, branch, wtPath, workspaceRoot: msgRoot } = msg;
+            case 'copyWorktreeMergePrompt': {
+                const { worktreeId, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (!db || !await db.ensureReady()) break;
 
-                // Per-subtask mode changes the merge TARGET for two of the three worktree
-                // kinds: a subtask worktree merges into its feature's integration worktree
-                // (not main), and merging the integration worktree itself into main also
-                // requires cleaning up its now-converged subtask children. Plain/project
-                // worktrees (no subtask_plan_id, no feature_id, or a feature worktree from
-                // `none` mode with no subtask children) keep the original main-merge path.
                 const allWorktrees = await db.getWorktrees();
                 const wtRow = allWorktrees.find(w => w.id === Number(worktreeId));
-
-                if (wtRow?.subtask_plan_id && wtRow.feature_id) {
-                    await this._mergeSubtaskIntoIntegration(workspaceRoot, db, wtRow);
-                    await this._sendWorktreeConfig(workspaceRoot);
-                    break;
-                }
-                // `high-low` mode: a tier worktree converges into the feature integration
-                // branch first (same path as a per-subtask subtask worktree), NOT straight
-                // into main — otherwise the integration branch is bypassed, the tier branch
-                // lands on main directly, and the tier worktree is never cleaned up by the
-                // feature-level merge.
-                if (wtRow?.tier && wtRow.feature_id) {
-                    await this._mergeSubtaskIntoIntegration(workspaceRoot, db, wtRow);
-                    await this._sendWorktreeConfig(workspaceRoot);
+                if (!wtRow) {
+                    this._panel?.webview.postMessage({ type: 'mergePromptReady', worktreeId, error: 'Worktree not found' });
                     break;
                 }
 
-                // The feature integration worktree itself merges into main, then cleans up
-                // every remaining child (subtask worktrees in per-subtask mode, tier
-                // worktrees in high-low mode). Excludes tier so a tier worktree isn't
-                // mistaken for the integration worktree it branched off of.
-                const isIntegrationWorktree = !!wtRow && !!wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier
-                    && allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.feature_id) === String(wtRow.feature_id));
-                if (isIntegrationWorktree && wtRow) {
-                    await this._mergeFeatureIntegrationIntoMain(workspaceRoot, db, wtRow);
-                    await this._sendWorktreeConfig(workspaceRoot);
-                    break;
+                let targetPath = workspaceRoot;
+                let targetBranch = wtRow.base_branch || await this._resolveDefaultBranch(workspaceRoot);
+                let note = '';
+
+                // subtask/tier worktree
+                if ((wtRow.subtask_plan_id && wtRow.feature_id) || (wtRow.tier && wtRow.feature_id)) {
+                    const integrationWt = allWorktrees.find(w => String(w.feature_id) === String(wtRow.feature_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
+                    if (integrationWt) {
+                        targetPath = integrationWt.path;
+                        targetBranch = integrationWt.branch;
+                    } else {
+                        note = '\n> *Note: No active feature integration worktree found for this branch. Please merge manually into the correct target branch.*';
+                    }
+                } else if (wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier) {
+                    // integration worktree
+                    const hasChildren = allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.feature_id) === String(wtRow.feature_id));
+                    if (hasChildren) {
+                        note = '\n> *Note: This is the feature integration worktree. Ensure all child/subtask branches are merged into this branch first.*';
+                    }
                 }
 
-                if (this._taskViewerProvider && wtPath) {
-                    try { await this._taskViewerProvider.closeWorktreeTerminals(wtPath); }
-                    catch (e) { console.warn('[KanbanProvider] mergeWorktree: terminal cleanup failed (continuing):', e); }
-                }
+                const prompt = `You are working in the git worktree at \`${wtRow.path}\` on branch \`${wtRow.branch}\`. Merge this branch back into its integration target and resolve any conflicts.
+${note}
+1. Ensure \`${wtRow.branch}\` has all intended work committed.
+2. In the integration checkout at \`${targetPath}\` (branch \`${targetBranch}\`), run: \`git -C ${targetPath} merge ${wtRow.branch}\`.
+3. If there are conflicts, resolve them (keep both sides' intent; prefer the incoming feature work where they overlap), then commit the merge. Do not run \`git merge --abort\` unless the user tells you to.
+4. Verify the result builds/tests as appropriate.
 
-                try {
-                    const execFileAsync = promisify(cp.execFile);
-                    await execFileAsync('git', ['-C', workspaceRoot, 'merge', branch], { timeout: 30000 });
-                    await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: workspaceRoot });
-                    await db.updateWorktreeStatus(Number(worktreeId), 'merged');
-                    vscode.window.showInformationMessage(`Merged and removed worktree: ${branch}`);
-                } catch (e: any) {
-                    vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
-                }
-                await this._sendWorktreeConfig(workspaceRoot);
+After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree_cleanup\` skill (\`.agents/skills/worktree_cleanup.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
+
+                this._panel?.webview.postMessage({ type: 'mergePromptReady', worktreeId, prompt });
+                break;
+            }
+            case 'cleanupWorktree': {
+                const { worktreeId, workspaceRoot: msgRoot } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
+                if (!workspaceRoot) break;
+                await this.cleanupWorktree(workspaceRoot, worktreeId);
                 break;
             }
             case 'abandonWorktree': {
@@ -9957,55 +9950,48 @@ ${FOCUS_DIRECTIVE}`;
         await this._pruneWorktrees(workspaceRoot);
     }
 
-    /**
-     * Convergence merge step 1 (per-subtask AND high-low modes): merge a subtask or tier
-     * worktree's branch into the feature integration worktree's OWN checkout
-     * (`git -C <integrationPath> merge <branch>`), not into the main repo checkout. The
-     * integration worktree is the convergence point — main only sees the result once the
-     * feature-level merge (`_mergeFeatureIntegrationIntoMain`) runs. Resolves the integration
-     * worktree from the row's `feature_id`, excluding both subtask and tier rows so a sibling
-     * tier worktree (high-low mode) isn't mistaken for the integration worktree it branched
-     * off of.
-     */
-    private async _mergeSubtaskIntoIntegration(workspaceRoot: string, db: KanbanDatabase, subtaskWt: WorktreeRow): Promise<void> {
-        const allWorktrees = await db.getWorktrees();
-        const integrationWt = allWorktrees.find(w => String(w.feature_id) === String(subtaskWt.feature_id) && !w.subtask_plan_id && !w.tier && w.status === 'active');
-        if (!integrationWt) {
-            vscode.window.showErrorMessage(`Merge failed: no active feature integration worktree found for this branch.`);
-            return;
+    public async cleanupWorktree(workspaceRoot: string, worktreeId: string | number): Promise<{ success: boolean; error?: string }> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) {
+            return { success: false, error: 'Database not available' };
         }
         try {
-            const execFileAsync = promisify(cp.execFile);
-            await execFileAsync('git', ['-C', integrationWt.path, 'merge', subtaskWt.branch], { timeout: 30000 });
-            await this._removeWorktreeRow(workspaceRoot, db, subtaskWt, 'merged');
-            await this._pruneWorktrees(workspaceRoot);
-            vscode.window.showInformationMessage(`Merged ${subtaskWt.branch} into feature integration branch ${integrationWt.branch}`);
+            await this._cleanupWorktree(workspaceRoot, db, Number(worktreeId));
+            await this._sendWorktreeConfig(workspaceRoot);
+            return { success: true };
         } catch (e: any) {
-            vscode.window.showErrorMessage(`Merge failed: ${e.message}`);
+            console.error('[KanbanProvider] cleanupWorktree error:', e);
+            return { success: false, error: e.message || String(e) };
         }
     }
 
-    /**
-     * Per-subtask mode merge step 2: merge the feature integration branch into the main repo
-     * checkout, then walk and clean up every remaining child subtask worktree (their
-     * branches are already folded into the integration branch by step 1; any that were
-     * never individually merged are folded in here via the integration branch itself, so
-     * removing their worktrees at this point does not lose work).
-     */
-    private async _mergeFeatureIntegrationIntoMain(workspaceRoot: string, db: KanbanDatabase, integrationWt: WorktreeRow): Promise<void> {
-        try {
-            const execFileAsync = promisify(cp.execFile);
-            await execFileAsync('git', ['-C', workspaceRoot, 'merge', integrationWt.branch], { timeout: 30000 });
-            await this._removeWorktreeRow(workspaceRoot, db, integrationWt, 'merged');
-            if (integrationWt.feature_id) {
-                await this._cleanupFeatureWorktrees(workspaceRoot, db, integrationWt.feature_id, 'merged');
-            } else {
-                await this._pruneWorktrees(workspaceRoot);
-            }
-            vscode.window.showInformationMessage(`Merged feature integration branch into main: ${integrationWt.branch}`);
-        } catch (e: any) {
-            vscode.window.showErrorMessage(`Feature merge failed: ${e.message}`);
+    private async _cleanupWorktree(workspaceRoot: string, db: KanbanDatabase, worktreeId: number): Promise<void> {
+        const allWorktrees = await db.getWorktrees();
+        const wtRow = allWorktrees.find(w => w.id === worktreeId);
+        if (!wtRow) return;
+
+        // subtask/tier worktree
+        if ((wtRow.subtask_plan_id && wtRow.feature_id) || (wtRow.tier && wtRow.feature_id)) {
+            await this._removeWorktreeRow(workspaceRoot, db, wtRow, 'merged');
+            await this._pruneWorktrees(workspaceRoot);
+            vscode.window.showInformationMessage(`Cleaned up worktree: ${wtRow.branch}`);
+            return;
         }
+
+        // integration worktree
+        const isIntegration = wtRow.feature_id && !wtRow.subtask_plan_id && !wtRow.tier &&
+            allWorktrees.some(w => (w.subtask_plan_id || w.tier) && String(w.feature_id) === String(wtRow.feature_id));
+        if (isIntegration && wtRow.feature_id) {
+            await this._removeWorktreeRow(workspaceRoot, db, wtRow, 'merged');
+            await this._cleanupFeatureWorktrees(workspaceRoot, db, wtRow.feature_id, 'merged');
+            vscode.window.showInformationMessage(`Cleaned up feature integration worktrees.`);
+            return;
+        }
+
+        // plain/project worktree
+        await this._removeWorktreeRow(workspaceRoot, db, wtRow, 'merged');
+        await this._pruneWorktrees(workspaceRoot);
+        vscode.window.showInformationMessage(`Cleaned up worktree: ${wtRow.branch}`);
     }
 
     private async _createSafetyWorktree(workspaceRoot: string, featureTopic?: string, repoName?: string, baseBranch?: string): Promise<{ branch: string; path: string }> {

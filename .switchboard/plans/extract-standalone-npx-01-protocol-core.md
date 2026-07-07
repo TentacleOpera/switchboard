@@ -11,7 +11,7 @@ Deliver the two prerequisites every later subtask builds on: (1) a **machine-rea
 **Context (parent architecture):** This is subtask 1 of the feature decomposing `.switchboard/plans/extract-standalone-npx-browser-service.md` (Plan ID `81299C8F-E2FA-4F93-881D-83231E1798A1`) — an editor-independent Switchboard distributed via `npx`, with a browser board and a `node-pty` terminal fleet. The parent plan holds the full problem analysis (Zed infeasibility, fork rejection, why-standalone) and the hard constraint that applies to ALL subtasks: **do not regress the shipped VS Code extension (~4,000 installs)** — shared code must stay behavior-preserving, and `.switchboard/` + `kanban.db` stay format-compatible between run modes. This subtask covers the parent's Phase 0 + Phase 1.
 
 ## Metadata
-- **Plan ID:** 0DE4623A-2A09-434E-A2B3-0089330544F6
+- **Plan ID:** eb75281d-d8f3-4e50-b396-f7626abed020
 - **Tags:** refactor, backend, cli, infrastructure
 - **Complexity:** 7
 

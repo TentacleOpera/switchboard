@@ -34,6 +34,13 @@ This is not a one-off behavioral bug — it is a **prompt infrastructure defect*
 **Tags:** prompt-infrastructure, workflow, feature-creation, skills, agent-behavior, bugfix
 **Complexity:** 2
 
+## User Review Required
+
+Yes. Before implementation, the user should review:
+- The coordination decision with the sibling plan (add-direct-create-feature-skill) on switchboard-chat.md — that plan's `create-feature-from-plans` wording SUPERSEDES this plan's `create-feature` / `create-feature.js` wording for switchboard-chat. This plan should DROP the switchboard-chat.md edit (step 3) and let the sibling plan handle both file copies (`.claude/skills/` + `.agents/workflows/`).
+- The workspace-path quoting in `TaskViewerProvider.ts` — the `node` command in the prompt template needs quoted paths (`"${workspaceRoot}/..."`) to handle paths with spaces (common on macOS, e.g. `/Users/Patrick Vuleta/...`).
+- Whether to reference `create-feature-from-plans` (the new skill from the sibling plan) as the preferred path in the `memo.md` and `TaskViewerProvider.ts` edits, with `create-feature` / `create-feature.js` as fallbacks.
+
 ## Complexity Audit
 
 ### Routine
@@ -52,6 +59,14 @@ This is not a one-off behavioral bug — it is a **prompt infrastructure defect*
 - **Plan ID source.** `create-feature.js` takes plan IDs (UUIDs from the DB), not filenames. The instruction should remind the agent to use the `planId` from the DB/kanban-board.md, not the filename — the `group-into-features` SKILL.md already documents this (`Use the planId: value from the comment — NOT the filename`). This was a secondary failure in the session: even after invoking the skill, I initially tried to use the fake `Plan ID:` from inside the plan file instead of querying the DB for the real `plan_id`.
 - **`dist/` artifacts.** `TaskViewerProvider.ts` is compiled to `dist/`. The edit is to `src/` only; the build regenerates `dist/`. No `dist/` edit needed.
 - **No dependency on the two git-strategy plans.** This plan is independent of the prompts-tab-layout and git-strategy-defaults plans. It touches different files (workflow `.md` files and `TaskViewerProvider.ts`, not `sharedDefaults.js` or `kanban.html`).
+
+## Dependencies
+
+Coordinates with the create-feature-skill plan (add-direct-create-feature-skill, same feature) on switchboard-chat.md — that plan creates the `create-feature-from-plans` skill and wires it into switchboard-chat; this plan's switchboard-chat edit (step 3) should be DROPPED in favor of that plan's wording (which references the new skill that wraps `create-feature.js`). This plan's `memo.md` and `TaskViewerProvider.ts` edits are independent. No dependency on the board-snapshot-staleness or project-scope-wording plans.
+
+## Adversarial Synthesis
+
+Key risks: (1) switchboard-chat.md collision with the sibling plan (add-direct-create-feature-skill) — both edit the same source line ("Refer to existing files in `.switchboard/features/` for the expected format.") in different file copies (`.claude/skills/switchboard-chat/SKILL.md:85` vs `.agents/workflows/switchboard-chat.md:84`) with conflicting replacement text (this plan says "use `create-feature` or `create-feature.js`"; the sibling says "invoke `create-feature-from-plans`"); the sibling plan's wording supersedes because `create-feature-from-plans` wraps `create-feature.js` — this plan should DROP the switchboard-chat edit (step 3). (2) Unquoted workspace path in the `TaskViewerProvider.ts` template literal breaks the `node` command for paths with spaces (common on macOS) — quote it: `node "${workspaceRoot}/.agents/skills/..."`. (3) This plan's wording doesn't reference `create-feature-from-plans` (the sibling plan's new skill) — add it as the preferred path when the extension is running, with `create-feature` / `create-feature.js` as fallbacks. Mitigations: drop the switchboard-chat edit (let the sibling plan handle both copies); quote workspace paths in the template literal; reference `create-feature-from-plans` as the preferred path.
 
 ## Proposed Changes
 
@@ -90,6 +105,8 @@ Only create the feature if the user confirms. **Do NOT hand-write the feature fi
 Search all `.agents/`, `.claude/`, and `src/` files for feature-creation instructions that say "for the format" / "for format" / "expected format" without referencing the skill or script. Update any found to match the pattern above. (The grep in investigation found only the three locations above + the already-correct `sw-remote.md`, but a final audit grep before merge confirms no new ones were added.)
 
 ## Verification Plan
+
+> **Session directive:** Compilation and automated tests are SKIPPED per session directives (SKIP COMPILATION, SKIP TESTS). Step 3 (`npm run build`) below should be deferred to the user's discretion. All other verification steps are manual.
 
 1. **Grep guard:** After the edits, run:
    ```

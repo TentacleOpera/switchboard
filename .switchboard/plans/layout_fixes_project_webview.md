@@ -140,3 +140,8 @@ None — per session directive, no automated tests and no project compilation ar
 Complexity 3 → **Send to Intern**. All routine UI/CSS/markup work reusing existing patterns. The implementer must follow the **corrected** locations in this plan (the `renderKanbanPlans()` forEach loop, not the nonexistent `renderKanbanPlanItem`) and perform the dead-code cleanup in §3 alongside the button removal.
 
 **Stage Complete:** INTERN CODED
+
+## Review Findings
+Reviewed actual code changes in `src/webview/project.html`, `src/webview/project.js`, and `src/webview/kanban.html` against plan requirements. All plan-scoped changes match the spec: per-item Edit button added to the `renderKanbanPlans()` loop (gated on `plan.planFile`, wired with `_pendingAutoEdit` + `stopPropagation`), top-level `btn-edit-kanban` removed from HTML, all 5 dead `btnEditKanban`/`btn-edit-kanban` references cleaned from `project.js`, CSS selectors extended for `.kanban-plan-edit`, and the Features-tab meta bar restructured (Edit/Save/Cancel/Refine/+Subtask left, Delete Feature isolated right via `margin-left:auto`). **One MAJOR fix applied:** an accidental `</div>` deletion at `kanban.html:2887` (Prompts-tab role-selector area, unrelated to this plan) was restoring the prior shipped DOM nesting — the pre-existing extra `</div>` is a separate latent bug. The 5 `btn-edit-kanban` references in `planning.js` are a separate webview (out of scope). No compilation/tests run per directive. Remaining risk: the pre-existing extra `</div>` in the Prompts tab is a latent nesting bug that should get its own plan.
+
+**Stage Complete:** CODE REVIEWED

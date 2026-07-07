@@ -56,6 +56,14 @@ Two failure modes produce staleness:
 **Tags:** backend, bugfix, board-snapshot, kanban, suggest-features
 **Complexity:** 5
 
+## User Review Required
+
+Yes. Before implementation, the user should review:
+- The proposed un-retirement of `exportStateToFile` — the plan restores a feature that was deliberately killed in commit `ca80a8a`. The user should confirm this is desired (the Suggest Features prompt depends on the file, but the retirement may have been intentional for other reasons).
+- The 500ms debounce window — the user should confirm this staleness is acceptable for non-click-time reads of `kanban-board.md`.
+- The click-time flush in `suggestFeatures` — recommended MANDATORY (the suggest-features action is user-initiated and infrequent), but the user should confirm the latency is acceptable.
+- The dependency on `ca80a8a~1` for the old implementation source — if the commit is unreachable (rebased/squashed), the coder needs the full serialization code inlined in the plan or written as a complete spec.
+
 ## Complexity Audit
 
 ### Routine
@@ -77,6 +85,14 @@ Two failure modes produce staleness:
 - **Rapid mutations.** The debounce + content-hash skip handles this: rapid `_persist` calls coalesce into one export after the debounce window, and the content hash prevents redundant writes if the board state hasn't changed.
 - **Suggest Features click-time freshness.** The debounce window (e.g. 500ms) means the file can be up to 500ms stale at click time. Optional hardening: in `KanbanProvider`'s `suggestFeatures` handler (`KanbanProvider.ts:9440-9460`), flush the export before copying the prompt. This guarantees freshness at click time.
 - **Dependencies** — none. No other plan edits `exportStateToFile` or `_persist`'s call to it. The Issue 5 plan edits `group-into-features/SKILL.md` section 1a wording (different section than the `cat` target in the SCAN step) — no conflict.
+
+## Dependencies
+
+None — standalone bugfix. No other plan edits `exportStateToFile` or `_persist`'s call to it. The project-scope-wording plan (same feature) edits `group-into-features/SKILL.md` section 1a (different section than the `cat` target in the SCAN step) — no conflict. Coordinate so both edits land on the same SKILL.md file.
+
+## Adversarial Synthesis
+
+Key risks: (1) the Proposed Changes skeleton omits the serialization logic (`// ... same as ca80a8a~1:6494-6582 ...`) — the coder cannot execute without the full old source, and the commit `ca80a8a` may be unreachable after a rebase; inline the complete serialization code or write a full spec. (2) `_resolveExportRoot()` is confirmed ABSENT from the current source (grep: zero matches) — its contract (returns workspace `.switchboard/` path by default, or control-plane root if configured) must be documented in the plan, not referenced to a commit. (3) The stuck-flag root cause is not actually fixed — the new single-flight + boolean-pending pattern (`_localMirrorInFlight` / `_localMirrorPending`) has the IDENTICAL failure mode as the old one (`_exportStateInFlight` / `_exportStatePending`); add an activation-time flush call so a stuck flag self-heals on extension reload. (4) The click-time flush in `suggestFeatures` should be MANDATORY, not optional — the suggest-features action is the primary consumer of this file. Mitigations: inline the full old source or write a complete serialization spec; document `_resolveExportRoot` contract; add startup/activation flush; make the `suggestFeatures` flush mandatory.
 
 ## Proposed Changes
 
@@ -172,6 +188,8 @@ Only needed if the 500ms debounce staleness is unacceptable. Default: include it
 The test asserts `kanban-board.md` is written with per-column `kanban-state-{slug}.md` links. With the restored implementation, this is correct again. Remove any assertions that were added for the no-op behavior. Verify the test passes against the restored implementation.
 
 ## Verification Plan
+
+> **Session directive:** Compilation and automated tests are SKIPPED per session directives (SKIP COMPILATION, SKIP TESTS). Steps below referencing `npm test` or `npm run build` should be deferred to the user's discretion. The Verification Plan is retained for manual execution guidance.
 
 1. **Unit:** Run `npm test` (or the relevant mocha suite for `kanban-auto-export.test.ts`). Confirm `kanban-board.md` is written with the per-column table format, and each `kanban-state-{slug}.md` file exists with the correct column heading and plan lines.
 2. **Content-stable:** Trigger a `_persist` with a non-board change (e.g. `activity_log` insert). Confirm `kanban-board.md` is NOT rewritten (content hash unchanged → skip).

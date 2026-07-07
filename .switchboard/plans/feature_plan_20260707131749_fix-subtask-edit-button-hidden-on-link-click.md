@@ -128,3 +128,8 @@ Complexity 3 → **Send to Intern**. Single-file, single-handler fix that mirror
 
 **Stage Complete:** PLAN REVIEWED
 **Stage Complete:** INTERN CODED
+
+## Review Findings
+Reviewed `src/webview/project.js` (in-preview link-click handler, lines 302-314) against plan requirements. The stale `btnEdit.style.display = 'none'` was removed and replaced with `_featureSubtaskPreview` assignment + `renderFeatureSubtaskMetaBar(_featureSubtaskPreview)` call (lines 307-308), faithfully mirroring Path A (lines 2538-2539). End-to-end trace confirmed: `renderFeatureSubtaskMetaBar` renders the Edit button visible (when not editing) and wired to save `_featurePreviewFilePath` (the subtask file, line 2435); `kanbanPlanPreviewReady` (line 622-623) then un-disables it. Grep confirmed line 312 was the sole `display:none` site for `btn-edit-features`. The rename handler (lines 1041-1052) now correctly activates for Path-B subtasks (latent repair, documented in plan). Uncached-subtask fallback behavior matches Path A. No material findings — no fixes needed. No compilation/tests run per directive. Remaining risk: inherited "Edit enabled before preview loads" ordering is a pre-existing Path A characteristic, explicitly out of scope.
+
+**Stage Complete:** CODE REVIEWED

@@ -2884,6 +2884,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           </div>
           <div id="roleDescription" class="agent-description" style="margin-top: 8px; margin-left: 0;"></div>
           </div>
+        </div>
 
         <!-- Planner-specific configuration -->
         <div id="plannerConfig" class="role-config">
@@ -6604,6 +6605,32 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
+                case 'mergePromptReady': {
+                    const btn = document.querySelector(`button[data-wt-id="${msg.worktreeId}"]`);
+                    if (btn && msg.prompt) {
+                        navigator.clipboard.writeText(msg.prompt).then(() => {
+                            const oldText = btn.textContent;
+                            btn.textContent = 'COPIED!';
+                            setTimeout(() => {
+                                btn.textContent = oldText;
+                            }, 2000);
+                        }).catch(err => {
+                            console.error('Failed to copy worktree merge prompt:', err);
+                            const oldText = btn.textContent;
+                            btn.textContent = 'ERROR';
+                            setTimeout(() => {
+                                btn.textContent = oldText;
+                            }, 2000);
+                        });
+                    } else if (btn) {
+                        const oldText = btn.textContent;
+                        btn.textContent = msg.error ? 'ERROR' : 'ERROR';
+                        setTimeout(() => {
+                            btn.textContent = oldText;
+                        }, 2000);
+                    }
+                    break;
+                }
                 case 'antigravityPrompt': {
                     const copyPromptBtn = document.getElementById('antigravity-copy-prompt-btn');
                     if (copyPromptBtn && msg.prompt) {
@@ -9826,12 +9853,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             postKanbanMessage({ type: 'getWorktreeConfig', workspaceRoot: currentWorkspaceRoot });
         }
 
-        function mergeWorktree(worktreeId, branch, wtPath) {
+        function copyWorktreeMergePrompt(worktreeId) {
             postKanbanMessage({
-                type: 'mergeWorktree',
+                type: 'copyWorktreeMergePrompt',
                 worktreeId,
-                branch,
-                wtPath,
+                workspaceRoot: currentWorkspaceRoot
+            });
+        }
+
+        function cleanupWorktree(worktreeId) {
+            postKanbanMessage({
+                type: 'cleanupWorktree',
+                worktreeId,
                 workspaceRoot: currentWorkspaceRoot
             });
         }
@@ -9910,14 +9943,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
             mainLine.appendChild(openBtn);
 
-            const mergeBtn = document.createElement('button');
-            mergeBtn.className = 'btn-secondary';
-            mergeBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
-            mergeBtn.textContent = 'Merge';
-            mergeBtn.addEventListener('click', () => {
-                mergeWorktree(w.id, w.branch, w.path);
+            const mergePromptBtn = document.createElement('button');
+            mergePromptBtn.className = 'btn-secondary';
+            mergePromptBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
+            mergePromptBtn.textContent = 'Merge prompt';
+            mergePromptBtn.setAttribute('data-wt-id', w.id);
+            mergePromptBtn.addEventListener('click', () => {
+                copyWorktreeMergePrompt(w.id);
             });
-            mainLine.appendChild(mergeBtn);
+            mainLine.appendChild(mergePromptBtn);
+
+            const cleanupBtn = document.createElement('button');
+            cleanupBtn.className = 'btn-secondary';
+            cleanupBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:4px;';
+            cleanupBtn.textContent = 'Clean up';
+            cleanupBtn.addEventListener('click', () => {
+                cleanupWorktree(w.id);
+            });
+            mainLine.appendChild(cleanupBtn);
 
             const abandonBtn = document.createElement('button');
             abandonBtn.className = 'btn-danger';

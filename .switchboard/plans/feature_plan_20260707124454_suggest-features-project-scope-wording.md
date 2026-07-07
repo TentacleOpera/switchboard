@@ -43,6 +43,10 @@ This is needlessly verbose. The user's request is unambiguous: if a project is i
 **Tags:** prompt, suggest-features, bugfix, wording
 **Complexity:** 2
 
+## User Review Required
+
+No — this is a pure wording rewrite of a single skill-file section (`group-into-features/SKILL.md` section 1a). No code changes, no architectural decisions, no DB or config impact. The user may optionally review the ~35-word replacement for clarity. The `__unassigned__` semantics collapse is the only subtlety — verified correct (untagged plans ARE unassigned, so the "no project name injected" branch correctly includes them).
+
 ## Complexity Audit
 
 ### Routine
@@ -61,6 +65,14 @@ This is needlessly verbose. The user's request is unambiguous: if a project is i
 - **Skill loaded directly (not via button).** If an agent loads the skill directly (not via the button), `{{ACTIVE_PROJECT_FILTER}}` is NOT substituted — the literal token remains in the text. The current prose handles this ("the literal placeholder token ... include ALL plans"). The terse rewrite must still make sense when the literal token is present. Recommended: phrase the directive so the "no project injected" branch covers the literal-placeholder case too (e.g. "If no project name is injected above, ignore all plans with a project tag." — the literal `{{ACTIVE_PROJECT_FILTER}}` token is not a project name, so it falls into this branch naturally).
 - **Dependencies** — Issue 1's plan edits the same SKILL.md but only the SCAN step's `cat` target (unchanged path). This plan edits section 1a. No conflict — different sections of the same file. Coordinate so both edits land.
 - **No code change to `KanbanProvider.ts`** — the substitution machinery is unchanged; only the skill text changes.
+
+## Dependencies
+
+None — standalone prompt-wording fix. The board-snapshot-staleness plan (same feature) edits the same `group-into-features/SKILL.md` file but a different section (the SCAN step's `cat` target vs section 1a) — no conflict. Coordinate so both edits land on the same file. No dependency on the create-feature-skill or feature-creation-must-use-skill plans.
+
+## Adversarial Synthesis
+
+Key risk: the `__unassigned__` case is handled implicitly — it falls into the "no project name injected" branch because `__unassigned__` is not a project name, so only untagged plans are candidates. This is correct (untagged plans ARE unassigned) but fragile; a one-line comment in the SKILL.md noting that `__unassigned__` is not a project name would make the logic self-documenting. No other risks; the `{{ACTIVE_PROJECT_FILTER}}` substitution machinery at `KanbanProvider.ts:10987-10990` is verified correct, and the embedded fallback prompt (`KanbanProvider.ts:10961-10981`) contains no project-scope section and needs no change. Complexity 2 — routine single-file text edit.
 
 ## Proposed Changes
 
@@ -88,6 +100,8 @@ The SCAN step (`SKILL.md:15-36`) already says "Scope: CREATED and PLAN REVIEWED 
 `KanbanProvider._buildSuggestFeaturesPrompt` (`KanbanProvider.ts:10951-10991`) is unchanged — it already strips YAML frontmatter and substitutes both placeholders. The new section 1a text flows through the same path.
 
 ## Verification Plan
+
+> **Session directive:** Compilation and automated tests are SKIPPED per session directives (SKIP COMPILATION, SKIP TESTS). All verification below is manual — no build or test step is required for this plan (pure skill-text edit).
 
 1. **Word count:** Confirm the new section 1a is ≤40 words (down from ~100).
 2. **Manual — project injected:**

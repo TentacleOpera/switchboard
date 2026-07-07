@@ -1,14 +1,20 @@
-# Feature card activity light derived from subtask working state + 10-minute timeout
+# Activity light: feature-card derivation, optimistic-render guard, 10-minute timeout
 
 ## Goal
 
-Fix the feature-mode activity light: a feature card's `working` flag is currently derived from the
-feature row's own `dispatched_at`, but the `**Stage Complete:**` marker clear is plan-file-scoped
-and only ever hits subtask rows. There is no path — even with perfect agent compliance — for a
-subtask marker to clear the parent feature's `dispatched_at`, so feature cards' lights can only
-ever clear via the timeout. Derive the feature card's `working` flag from its subtasks' states
-instead (a feature is "working" while any active subtask has a live `dispatched_at`), and reduce
-the timeout default from 20 minutes to 10 minutes.
+Fix three activity-light defects:
+1. **Feature-card derivation** — a feature card's `working` flag is derived from the feature
+   row's own `dispatched_at`, but the `**Stage Complete:**` marker clear is plan-file-scoped and
+   only ever hits subtask rows. Derive the feature card's `working` flag from its subtasks'
+   states instead (a feature is "working" while any active subtask has a live `dispatched_at`).
+2. **Optimistic-render guard swallows the working-flag update** — the webview's 2-second
+   optimistic move window (`OPTIMISTIC_MOVE_WINDOW_MS = 2000` at `kanban.html:3906`) absorbs the
+   `updateBoard` that carries `working: true` without re-rendering, then updates
+   `lastBoardSignature` to match the absorbed data — so no future `updateBoard` triggers a
+   re-render either. The light data is in memory but never painted to the DOM. This affects ALL
+   dispatch types (prompt, CLI, forward-move), not just one column. Fix the `updateBoard` handler
+   to re-render when the `working` flag changed, even during the optimistic window.
+3. **Timeout reduction** — reduce the timeout default from 20 minutes to 10 minutes.
 
 ### Core problem & root cause
 
@@ -55,17 +61,38 @@ dispatch (no change to `updateDispatchInfoByPlanFile`) and still cleared by the 
 to `clearStaleWorkingState`) — leaving it set does no harm, and removing the write would be a
 larger, riskier change with no benefit.
 
-**Timeout reduction.** The 20-minute default was a "prefer false-off over stuck-on" trade. With
-the derived-down fix, the marker path actually works for feature cards, so the timeout is purely
-the backstop for ghosted agents — 10 minutes is a tighter backstop and reduces the
-stuck-on-window without being so aggressive that legitimate single-plan runs get false-cleared.
-Update the constant, the `package.json` default, and the watcher's fallback default.
+**Optimistic-render guard swallows the working-flag update.** The webview's `updateBoard`
+handler (`kanban.html:6520-6557`) has a 2-second optimistic move window
+(`OPTIMISTIC_MOVE_WINDOW_MS = 2000` at `kanban.html:3906`). When an `updateBoard` message
+arrives during this window, the handler absorbs the data into `currentCards` but does NOT call
+`renderBoard` — it updates `lastBoardSignature = buildBoardSignature(currentCards)` and returns.
+This is designed to prevent a stale `updateBoard` (carrying pre-move column positions) from
+snapping a dragged card back to its source column.
+
+The problem: the board refresh that carries `working: true` is debounced at only 100ms
+(`_scheduleBoardRefresh` at `KanbanProvider.ts:3436`). So the `updateBoard` with the
+working-flag arrives at ~100ms — well within the 2-second optimistic window. The handler
+absorbs the data (so `currentCards` has `working: true`) but doesn't render it. Then it updates
+`lastBoardSignature` to match the absorbed data. After the 2-second window expires, the next
+`updateBoard` has the same data → `nextBoardSignature === lastBoardSignature` → no re-render.
+The light is stuck: data says `working: true`, DOM never got the update, and the signature
+match prevents any future re-render from picking it up.
+
+This affects ALL dispatch types (prompt, CLI, forward-move) and ALL columns — not just CODE
+REVIEWED. The user noticed it on a prompt-mode drop to CODE REVIEWED, but the root cause is in
+the webview's render guard, not in any specific dispatch path.
+
+The fix: in the `updateBoard` handler, during the optimistic absorb path, detect whether the
+`working` flag changed for any card. If it did, force a `renderBoard(nextCards)` even during
+the optimistic window. The column position is already correct in `nextCards` (the server-side
+move completed before the board refresh), so there's no revert risk — the optimistic guard's
+concern (stale pre-move positions) doesn't apply to the `working` flag.
 
 ## Metadata
 
 - **Project:** Switchboard
-- **Tags:** kanban, backend, activity-light, feature-mode
-- **Complexity:** 4
+- **Tags:** kanban, backend, activity-light, feature-mode, webview, render-guard
+- **Complexity:** 5
 
 ## Implementation
 
@@ -127,11 +154,47 @@ Update the constant, the `package.json` default, and the watcher's fallback defa
    The `minimum` (60000) and `maximum` (3600000) in `package.json:512-513` stay — they bound
    the user's override range, not the default.
 
+4. **Fix the optimistic-render guard in the webview's `updateBoard` handler.** In
+   `kanban.html:6539-6550`, during the optimistic absorb path (`optimisticActive === true`),
+   detect whether the `working` flag changed for any card between `currentCards` and `nextCards`.
+   If it did, force a `renderBoard(nextCards)` even during the optimistic window. The column
+   position is already correct in `nextCards` (the server-side move completed before the board
+   refresh), so there's no revert risk.
+
+   Implementation: before the `if (optimisticActive)` branch, compute a `workingChanged` flag
+   by comparing the `working` field of each card in `nextCards` against the corresponding card
+   in `currentCards` (matched by `planId || sessionId`). If `workingChanged` is true, fall
+   through to the normal `renderBoard(nextCards)` path instead of the absorb path. This is a
+   targeted exception — the optimistic guard still protects column positions, but the
+   `working` flag is always rendered promptly.
+
+   ```javascript
+   const optimisticActive = Date.now() < optimisticMoveUntil;
+   const workingChanged = nextCards.some(nc => {
+       const cur = currentCards.find(cc =>
+           (cc.planId || cc.sessionId) === (nc.planId || nc.sessionId)
+       );
+       return !!cur && !!nc.working !== !!cur.working;
+   });
+   if (nextBoardSignature !== lastBoardSignature) {
+       if (optimisticActive && !workingChanged) {
+           // Absorb but don't render (existing behavior)
+           currentCards = nextCards;
+           lastBoardSignature = buildBoardSignature(currentCards);
+       } else {
+           lastBoardSignature = nextBoardSignature;
+           renderBoard(nextCards);
+       }
+   }
+   ```
+
 ## User Review Required
 
 - Confirm 10 minutes as the new default (vs. keeping 20 and only fixing the derivation).
 - Confirm the feature row's `dispatched_at` should remain set at dispatch (vestigial for the
   light, kept for dispatch-identity) rather than stopping the write entirely.
+- Confirm the optimistic-guard fix should force-render on `working` changes (not shorten the
+  optimistic window or remove the signature update).
 
 ## Complexity Audit
 
@@ -139,6 +202,8 @@ Update the constant, the `package.json` default, and the watcher's fallback defa
 - One new grouped SQL query mirroring the existing `getSubtaskCountsByFeature` shape.
 - Three card-build sites: add one map lookup, swap the `working` expression for feature rows.
 - Three constant/default value changes (20 → 10 min).
+- One `workingChanged` check + conditional in the webview `updateBoard` handler.
+- Three drag-drop CLI paths: add one `_recordDispatchIdentity` call per dispatched sid.
 
 ### Complex / Risky
 - **Site 3 has no existing subtask-count call.** Adding `getFeatureWorkingStates` here is a new
@@ -223,6 +288,24 @@ Update the constant, the `package.json` default, and the watcher's fallback defa
   bounded. Existing users who never touched the setting get the new 10-min default on next
   config read; users who explicitly set a value keep theirs.
 
+### src/webview/kanban.html — updateBoard handler (6539-6557)
+- **Context:** the `updateBoard` message handler. During the 2-second optimistic move window
+  (`optimisticActive`), it absorbs `nextCards` into `currentCards` without calling
+  `renderBoard`, then updates `lastBoardSignature` to match — preventing stale pre-move
+  `updateBoard` data from reverting a drag. The board refresh that carries `working: true` is
+  debounced at 100ms, so it arrives well within the 2-second window and gets swallowed.
+- **Logic:** before the `if (optimisticActive)` branch, compute `workingChanged` by comparing
+  the `working` field of each card in `nextCards` against `currentCards` (matched by
+  `planId || sessionId`). If `workingChanged` is true, fall through to the normal
+  `renderBoard(nextCards)` path instead of the absorb path. Change the condition from
+  `if (optimisticActive)` to `if (optimisticActive && !workingChanged)`.
+- **Edge cases:** the `workingChanged` check is O(n) over the card set but the board is
+  typically <200 cards and the check only runs when `nextBoardSignature !== lastBoardSignature`
+  (already gated above); cards in `nextCards` without a match in `currentCards` (new card)
+  don't trigger `workingChanged` — they'll be handled by the normal signature-mismatch
+  render after the optimistic window expires, which is correct (a new card appearing is not a
+  working-flag transition).
+
 ## Adversarial Synthesis
 
 Key risks: (1) **site 3 is a new DB round-trip on a path that didn't have one** — if the path
@@ -241,7 +324,13 @@ the board's project filter; this matches `getSubtaskCountsByFeature`'s establish
 a future maintainer might "clean up" by removing the write and break the dispatch-identity
 record; mitigation is the comment at `KanbanDatabase.ts:7194-7196` already documents the
 column's purpose — extend it to note the feature-row value is no longer the source of the
-feature card's `working` flag.
+feature card's `working` flag. (5) **the `workingChanged` exception to the optimistic guard
+could cause a full `renderBoard` during a drag if a timeout sweep clears a different card's
+light while the user is mid-drag** — mitigation is that `renderBoard` is a DOM replacement of
+the board body, not the drag handles, and the 100ms debounce means the `updateBoard` arrives
+after the user has already dropped the card (the drag-end → drop → postMessage → backend
+processing chain takes >100ms); if it does fire mid-drag, the card positions in `nextCards`
+match the server-side state which is already post-move, so there's no visual revert.
 
 ## Verification Plan
 
@@ -265,6 +354,16 @@ feature card's `working` flag.
   when the board is filtered to one project.
 - Confirm a freshly-dispatched feature (subtasks just imported) shows the light ON on the
   first refresh after dispatch (no off-then-on flicker).
+- **Optimistic guard fix:** drag-drop a card to CODE REVIEWED in prompt mode → confirm the
+  light appears within ~1 second (not stuck off until the next unrelated refresh).
+- **Optimistic guard fix:** drag-drop a card to any column in CLI mode → confirm the light
+  appears promptly.
+- **Optimistic guard regression:** drag-drop a card → confirm the card does NOT snap back to
+  its source column during the 2-second optimistic window (the guard still protects column
+  position; only the `working` flag bypasses it).
+- **Optimistic guard + timeout interaction:** dispatch a card, wait for the light to appear,
+  then wait 10 min → confirm the light turns off (the timeout sweep nulls `dispatched_at`, the
+  next `updateBoard` carries `working: false`, `workingChanged` is true, re-render fires).
 
 ### Recommendation
-Complexity 4 → **Send to Coder.**
+Complexity 5 → **Send to Coder.**

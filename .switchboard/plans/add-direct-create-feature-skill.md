@@ -97,6 +97,11 @@ None — standalone documentation / skill-authoring plan.
 
 Key risks: (1) the skill's failure-mode documentation is factually wrong — `create-feature.js` returns `ok:true` with zero subtasks on stale plan IDs, so the pre-flight DB check is the only gate and `delete-feature.js` is the undocumented recovery; (2) the improve-plan wiring proposal violates that workflow's own NO-IMPLEMENTATION constraint by instructing mid-review `create-feature.js` invocation; (3) the skill won't appear in the protocol's "Available Skills" table without a manual `AGENTS.md` row (the table is a bundled static file, not auto-scanned). Mitigations: correct the failure-mode text and add recovery guidance, reframe improve-plan's addition as a post-review reference (keep the manifest as the in-workflow mechanism), and add the `AGENTS.md` table row.
 
+**Additional verified findings (improve-plan review pass):**
+- **(4) Stale line numbers.** `createFeatureFromPlanIds` is at line **10564** in `KanbanProvider.ts`, NOT 10296-10308 as cited — the cited lines are worktree-embedding code. The silent-blank-feature behavior IS confirmed (line 10607: `console.warn` + "Creating blank feature anyway"), so the Clarification 1 analysis is correct, but every line reference in this plan is stale by ~270 lines. The coder MUST text-search for `createFeatureFromPlanIds` rather than line-jump. Clarification 2's reference to "line 10417" for the `\r\n` normalization is likewise unverified and likely stale.
+- **(5) switchboard-chat coordination with sibling plan.** This plan edits `.claude/skills/switchboard-chat/SKILL.md:85` (the skill copy). The sibling plan (feature-creation-must-use-skill-not-handwrite) edits `.agents/workflows/switchboard-chat.md:84` (the workflow copy) — the SAME source line ("Refer to existing files in `.switchboard/features/` for the expected format.") in a DIFFERENT file, with CONFLICTING replacement text (this plan says "invoke `create-feature-from-plans`"; the sibling says "use `create-feature` or `create-feature.js`"). This plan's wording SUPERSEDES the sibling's because `create-feature-from-plans` wraps `create-feature.js`. Action: this plan should edit BOTH copies (skill + workflow) with the `create-feature-from-plans` wording; the sibling plan should DROP its switchboard-chat edit. If a `ClaudeCodeMirrorService`-style mirror propagates `.agents/workflows/` → `.claude/skills/`, only one edit is needed — verify whether such a mirror exists before editing both.
+- **(6) `**Project:** switchboard` protocol violation.** The AGENTS.md protocol states "The workspace/repo name is NOT a project. Never pin it." The `**Project:** switchboard` metadata line violates this (switchboard is the workspace name). The importer backstop silently drops it (plan stays unassigned), so it's harmless, but it should be removed for protocol compliance. Not blocking.
+
 ## Implementation
 
 ### 1. New skill file — `.claude/skills/create-feature-from-plans/SKILL.md`
@@ -380,3 +385,5 @@ Skipped per session directive (SKIP TESTS). No automated test or compilation ste
 ---
 
 **Recommendation:** Complexity 5 (Mixed) → **Send to Coder.** Routine multi-file docs work elevated by one moderate, well-scoped risk (the silent-blank-feature footgun the skill must document correctly). Apply Clarifications 1–5 when authoring — they correct factual errors in the original spec without narrowing product scope.
+
+**Stage Complete:** PLAN REVIEWED
