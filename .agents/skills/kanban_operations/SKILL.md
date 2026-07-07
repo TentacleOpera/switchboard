@@ -59,6 +59,11 @@ node .agents/skills/kanban_operations/assign-to-feature.js <featurePlanId-from-c
 - `feature_plan_id` is the `featurePlanId` returned by `create-feature.js`. `plan_ids_json` is a JSON array of `planId` values to add.
 - Output: `{"ok":true,"assigned":["..."],"skipped":["..."]}`. A plan already on another feature (or that is itself a feature / missing) is reported in `skipped` and left untouched — it does not abort the batch.
 - Same constraints as `create-feature.js`: requires the running extension (no direct-DB fallback). Feature assignment syncs the newly assigned subtasks as children of the feature's external issue/task IF real-time sync is enabled.
+- **⚠ Cross-column warning:** If the plan being assigned is in a different kanban column than the feature (e.g. the plan is in CREATED but the feature is in PLAN REVIEWED), the agent MUST warn the user:
+  - The plan will NOT go through PLAN REVIEW if the feature is dragged to a coder column — it will skip straight to coding.
+  - **To fix:** after assignment, select the feature card on the kanban board and press the **Replan** button (the re-plan icon in the PLAN REVIEWED column header). This sends the CREATED subtasks to the planner for `improve-plan` refinement.
+  - Only once all subtasks are in PLAN REVIEWED should the feature be dragged to a coder column.
+  - The agent should also add a **⚠ Cross-Column Review Note** section to the feature file (see `group-into-features/SKILL.md` for the template).
 
 ## Remove a Subtask from a Feature
 
@@ -116,9 +121,9 @@ node .agents/skills/kanban_operations/split-feature.js "a1b2-..." '["c3d4-...","
 Triggered by the **SUGGEST FEATURES** board button, which copies a prompt to the clipboard. The agent must follow this flow:
 
 1. **Scan** — read the board with `get-state.js` and look only at pre-coding columns: CREATED, BACKLOG, CONTEXT GATHERER, PLAN REVIEWED. Ignore cards that are already features or already assigned (they carry an `featureId`).
-2. **Propose** — in a SINGLE chat message, propose every grouping at once, listing each member plan with its `planId`. Leave standalone plans ungrouped. Then stop.
+2. **Propose** — in a SINGLE chat message, propose every grouping at once, listing each member plan with its `planId` and current kanban column. Leave standalone plans ungrouped. **Flag any cross-column groupings** (plans from different columns in the same feature) with a ⚠ CROSS-COLUMN warning — see `group-into-features/SKILL.md` for the warning text and replan-button guidance. Then stop.
 3. **Confirm** — wait for the user's one approval (or edits). Create nothing before approval.
-4. **Execute** — run `create-feature.js` once per approved group, no further confirmation. Use `assign-to-feature.js` to add more plans later.
+4. **Execute** — run `create-feature.js` once per approved group, no further confirmation. Use `assign-to-feature.js` to add more plans later. For any cross-column feature, write the **⚠ Cross-Column Review Note** into the feature file (see `group-into-features/SKILL.md` for the template).
 
 ## Get Kanban State
 

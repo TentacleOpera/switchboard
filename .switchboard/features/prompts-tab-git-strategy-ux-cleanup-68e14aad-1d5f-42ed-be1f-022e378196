@@ -1,0 +1,38 @@
+# Prompts tab git strategy UX cleanup
+
+**Complexity:** 4
+
+## Goal
+
+Two related issues with the Prompts tab's git strategy UI in `kanban.html` / `sharedDefaults.js`:
+
+1. The add-ons render as a single flat dump with no grouping — the git Branch/Commit/Push radios sit inline with unrelated checkboxes, the page is excessively long, and option descriptions are hidden in hover tooltips.
+2. The git strategy defaults are opinionated (`current` / `whenDone` / `noPush`), emitting a full `GIT POLICY:` block even when the user never chose a strategy; and the "Incremental Commits" option is not meaningfully different from "Commit When Done".
+
+### Core problem & root cause
+
+- **Layout:** `renderRoleAddons()` (`kanban.html:3385-3500`) iterates `ROLE_ADDONS[role]` and appends every addon as a sibling into `#roleAddonsGroup`. There is no subsection/accordion concept; option `tooltip` text is only set on the `title` attribute (`kanban.html:3439`), so it is invisible without hovering.
+- **Defaults:** the git strategy defaults are hardcoded in five places — the `GIT_*_STRATEGY_RADIO` definitions (`sharedDefaults.js:65,72,80`), `DEFAULT_ROLE_CONFIG` (`sharedDefaults.js:24,25,28,32`), the custom-agent fallback (`kanban.html:3398,3403,3409`), and the server-side merge + per-role fallbacks (`KanbanProvider.ts:4206-4208` and `4561-4590`). All default to non-`notSpecified` values, so a fresh role emits branch/commit/push clauses the user never asked for.
+- **Incremental option:** `incremental` (`sharedDefaults.js:74`, `agentPromptBuilder.ts:411`) emits "Commit at each logical checkpoint..." — behaviourally indistinguishable from `whenDone` in practice, adding UI clutter without reliable behavioural difference.
+
+## How the Subtasks Achieve This
+
+(land in either order; the two plans edit different fields of the same `GIT_*_STRATEGY_RADIO` objects — `group` vs `default`/`options` — so they do not conflict)
+
+- `prompts-tab-layout-accordions-grouping.md` — add a `group: 'git'` field to the git radios; refactor `renderRoleAddons()` to render general addons first (flat) and named subsections as collapsed `<details>` accordions; surface option `tooltip` as visible helper text; add accordion + option-desc CSS.
+- `git-strategy-defaults-notspecified-remove-incremental.md` — change all five default sites to `'notSpecified'`; remove the `incremental` option from the UI, type unions, clause vocabulary, and sanitisation allow-list; add a stale-value normalisation so persisted `incremental` configs migrate cleanly.
+
+## Dependencies & sequencing
+
+- **Cross-feature dependencies:** none. Both subtasks close over changes internal to the Prompts tab git strategy UI.
+- **Shipping order:** the two plans are independent and can land in either order. Coordinate the merge so both edits to `GIT_*_STRATEGY_RADIO` in `sharedDefaults.js` are reconciled (one adds `group`, the other changes `default` and drops the `incremental` option — different fields, no conflict).
+- **Prerequisites / guards:**
+  - The stale-`incremental` normalisation in the defaults plan must ship with the option removal (so existing saved configs don't render an orphan unchecked radio).
+  - The layout plan's `renderRoleAddons()` refactor must preserve all existing event listeners (`saveRoleConfig`, `refreshPreview`, custom-subagent text-input toggle) — extract the per-addon rendering into a shared `renderAddon()` helper used by both the general group and the accordion bodies.
+  - Both plans must update the custom-agent fallback array in `kanban.html:3396-3418` for parity with built-in code roles.
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Prompts tab layout — accordions & grouping](../plans/feature_plan_20260707125810_prompts-tab-layout-accordions-grouping.md)
+- [ ] [Git strategy defaults → Not Specified + remove Incremental](../plans/feature_plan_20260707125920_git-strategy-defaults-notspecified-remove-incremental.md)
+<!-- END SUBTASKS -->

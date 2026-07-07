@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     workspace_id TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
+    source TEXT NOT NULL DEFAULT 'user',
     UNIQUE(name, workspace_id)
 );
 CREATE TABLE IF NOT EXISTS worktrees (
@@ -6362,6 +6363,22 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(53);
             console.log('[KanbanDatabase] V53 migration completed: carried over epic_worktree_mode/epic_lock_columns/epic_prompt_template to feature_* keys');
+        }
+
+        // V54: projects.source column — user vs auto origin (spam-project fix).
+        // Distinguishes user-created projects from auto-created ones so
+        // cleanupAutoProjects can safely remove unreferenced auto rows without
+        // ever touching user-created projects. Existing rows backfill to 'user'
+        // (SQLite ADD COLUMN with a constant DEFAULT populates existing rows).
+        // Safe/idempotent under the version gate; the try/catch covers a stale
+        // restore where the column already exists but the version wasn't stamped.
+        const v54 = await this.getMigrationVersion();
+        if (v54 < 54) {
+            for (const sql of MIGRATION_V54_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(54);
+            console.log('[KanbanDatabase] V54 migration completed: added source column to projects table');
         }
     }
 

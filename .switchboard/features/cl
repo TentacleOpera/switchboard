@@ -1,0 +1,38 @@
+---
+description: 'Claudify Theme & Suggest Features Polish'
+---
+
+# Claudify Theme & Suggest Features Polish
+
+**Complexity:** 6
+
+## Goal
+
+Fix a cluster of Claudify theme visual defects and two Suggest Features prompt/snapshot issues uncovered during testing. The Claudify theme ships with transparent setup-panel boxes (vs Afterburner's solid black), a too-light webview ground colour, and theme changes that do not reliably propagate to already-open webviews — producing split-theme states (e.g. afterburner sidebar + claudify doc preview on the Design panel). Separately, the Suggest Features board button points the agent at a stale `kanban-board.md` that the extension no longer writes, and its project-scope prompt section is ~100 words where ~10 would do. Together these make the Claudify theme feel unfinished and the Suggest Features workflow unreliable.
+
+## How the Subtasks Achieve This
+
+- **Refresh the board snapshot the Suggest Features prompt references**: The prompt tells the agent to `cat .switchboard/kanban-board.md`, but `KanbanDatabase.exportStateToFile()` is a retired no-op — the file is never refreshed, so the agent groups plans from stale column data. This plan adds a debounced, content-hashed local mirror writer on every `_persist` (reusing `BoardSnapshotPublisher`'s pattern), independent of the opt-in orphan-branch publisher, so the file is always current at click time.
+
+- **Broadcast theme changes to all open webviews (eliminate split-theme)**: `broadcastToWebviews` only reaches sidebar/setup/kanban; Design and Planning rely on the async `onDidChangeConfiguration` event, which can be silently dropped (optional-chained `postMessage` on a null `_panel`), producing the observed split-theme state. This plan extends `broadcastToWebviews` to include `DesignPanelProvider` and `PlanningPanelProvider` directly, adds a public `postMessage` on PlanningPanelProvider, and wires them in `extension.ts` — so every theme switch and checkbox toggle reaches every open panel in the same frame.
+
+- **Make Claudify setup panel boxes opaque solid black**: Claudify `.shared-tab-content` draws the grid directly on the panel with no blur, so it reads as transparent vs Afterburner's solid blurred box. This plan replaces it with an opaque `var(--panel-bg)` solid fill; the grid stays on the body only, restoring the solid-box container identity.
+
+- **Darken the Claudify webview ground colour**: The Claudify ground is `#1C1C1C` everywhere (setup + design), lighter than Afterburner's `#101414`, reading as a washed mid-grey. This plan darkens it to `#0a0a0a` across all Claudify ground occurrences (auditing planning/implementation/project/kanban HTML too) so the webview reads as a dark immersive surface.
+
+- **Tersen the Suggest Features project-scope prompt**: Section 1a of `group-into-features/SKILL.md` is ~100 words enumerating three filter states with examples. This plan rewrites it to ~35 words as two terse directives ("if a project name is injected, filter by it; otherwise ignore all plans with a project tag") that still handle the real-name / empty / `__unassigned__` / literal-placeholder cases correctly.
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Refresh the board snapshot the Suggest Features prompt references](../plans/feature_plan_20260707124454_suggest-features-board-snapshot-staleness.md) — **CREATED**
+- [ ] [Broadcast theme changes to all open webviews (eliminate split-theme)](../plans/feature_plan_20260707124454_theme-not-applied-to-open-webviews.md) — **CREATED**
+- [ ] [Make Claudify setup panel boxes opaque solid black](../plans/feature_plan_20260707124454_claudify-setup-panel-transparent-background.md) — **CREATED**
+- [ ] [Darken the Claudify webview ground colour](../plans/feature_plan_20260707124454_claudify-webview-background-too-light.md) — **CREATED**
+- [ ] [Tersen the Suggest Features project-scope prompt](../plans/feature_plan_20260707124454_suggest-features-project-scope-wording.md) — **CREATED**
+<!-- END SUBTASKS -->
+
+## Notes
+
+- **Two shared edit surfaces** across subtasks: the Claudify CSS (subtasks 3 & 4 edit different selectors in `setup.html`/`design.html` — panel vs body ground, no conflict) and the `group-into-features/SKILL.md` file (subtasks 1 & 5 edit different sections — SCAN `cat` target vs section 1a wording, no conflict). Coordinate merges so paired edits land together.
+- Subtask 2 (theme broadcast) is the highest-complexity item (wiring + lifecycle); subtasks 3, 4, 5 are pure CSS/markdown edits (complexity 2). Subtask 1 is a moderate TS addition (complexity 4).
+- No project pinned — the workspace's `kanban.activeProjectFilter` is empty, so the feature lands unassigned and can be reassigned on the board.

@@ -380,3 +380,9 @@ Skipped this pass per session directive. (Suggested future test, when the test s
 
 
 **Stage Complete:** LEAD CODED
+
+## Review Findings
+
+Reviewer pass assessed the implementation in commit `85b78fc` (plus follow-up `1a45e22`) against this plan. Two material gaps were found and fixed in `src/services/KanbanDatabase.ts`: (1) **CRITICAL** — the V54 version-gate block in `_runMigrations()` (Change 2c) was never added, only the `MIGRATION_V54_SQL` const was defined, so the `source` column was never created on any DB and `addProject` / `cleanupAutoProjects` / `_resolveOrCreateProjectId` all threw "no such column: source" (silently breaking the user's Add-Project button on ~4,000 installs); (2) **MAJOR** — the SCHEMA_SQL fresh-DB `projects` table (Change 2a) was not updated with `source`, leaving fresh DBs dependent on the migration and matching the known stamped-version/recreated-table failure class. Both are now applied (SCHEMA_SQL:168-175, V54 block at :6368-6382). Changes 1, 3, 4, 5 and the deprecation annotations landed correctly and match the plan. One NIT (deferred): `switchboard-chat.md` / its SKILL.md carry an unrelated "manifest location → per-plan frontmatter" rewrite bundled into the implementation commit (scope creep, not in this plan). Verification: compilation and tests skipped per session directive; edits are grep-verified against the V53 pattern and the plan's code blocks. Remaining risk: the `record.projectId ??` trust residual on the `upsertPlans` path is documented in-code and deliberately deferred (per plan); referenced auto-created duplicate projects still require manual `deleteProject` (per plan limitation).
+
+**Stage Complete:** CODE REVIEWED

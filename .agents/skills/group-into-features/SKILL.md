@@ -71,6 +71,20 @@ Group by underlying capability theme, not by surface keyword.
 Cross-provider plans that address the same capability go into one feature.
 Minimum 2 plans per feature. Single-plan "groups" go in the Standalone section.
 Flag POSSIBLE OVERLAP / REDUNDANCY / GAP where detected.
+
+**Cross-column warning:** If a proposed feature contains plans from different
+kanban columns (e.g. one CREATED + one PLAN REVIEWED), you MUST flag this
+prominently in the proposal with a **⚠ CROSS-COLUMN** warning. Explain:
+- The CREATED plan(s) have NOT been plan-reviewed yet.
+- If the feature is dragged to a coder column, the CREATED subtask(s) will
+  skip PLAN REVIEW entirely and go straight to coding without refinement.
+- **To fix this after feature creation:** select the feature card on the
+  kanban board and press the **Replan** button (the re-plan icon in the
+  PLAN REVIEWED column header). This sends the CREATED subtasks to the
+  planner agent for `improve-plan` refinement, moving them to PLAN REVIEWED.
+- Only once all subtasks are in PLAN REVIEWED should the feature be dragged
+  to a coder column.
+
 For each proposed feature, write:
 - Feature name
 - Goal: 2-4 sentences describing what the feature achieves, what problem it
@@ -82,7 +96,7 @@ For each proposed feature, write:
   (e.g. "Subtask A must land before Subtask B can be tested") and any
   cross-subtask dependencies. If there are none, state "No hard ordering
   constraints; subtasks can be executed in parallel."
-- Member plans with planId and one-line summary
+- Member plans with planId, one-line summary, and current kanban column
 
 List genuinely standalone plans separately. Then stop and wait.
 
@@ -110,6 +124,22 @@ section between the Goal and the `<!-- BEGIN SUBTASKS -->` marker, then paste th
 Dependencies & sequencing section immediately after the Subtasks block. Both
 sections are preserved by _regenerateFeatureFile on subsequent subtask changes, so
 they only need to be written once.
+
+**Cross-column note in the feature file:** If the feature has subtasks in
+different kanban columns (e.g. some CREATED, some PLAN REVIEWED), add a
+**⚠ Cross-Column Review Note** section immediately after the Subtasks block
+(before Dependencies & sequencing). Write:
+
+> This feature contains subtasks in different kanban columns. The subtasks
+> in CREATED have NOT been plan-reviewed yet. Before dragging this feature
+> to a coder column, select the feature on the kanban board and press the
+> **Replan** button (re-plan icon in the PLAN REVIEWED column header) to
+> send the CREATED subtasks to the planner for `improve-plan` refinement.
+> Only review/refine the CREATED subtasks — the PLAN REVIEWED subtasks have
+> already been reviewed.
+
+This note is preserved by `_regenerateFeatureFile` along with the other
+manual sections.
 
 To add more plans to a feature later, use assign-to-feature.js with the feature planId from the create-feature.js output.
 

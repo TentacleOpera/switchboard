@@ -71,6 +71,8 @@ Apply the same logic as `/improve-plan`:
 - Add or improve `## Edge Cases & Risks` and `## Out of Scope` sections.
 - Do NOT change the plan's intent or introduce scope the user hasn't approved.
 
+**Project pinning (remote guardrail):** The workspace/repo name is NOT a project — never pin it, never emit a placeholder like `<project>`. This is a remote/DB-less session: you cannot read `kanban.activeProjectFilter`. If the existing plan already carries a `**Project:**` line naming a real, user-created project, preserve it. If it pins the workspace/repo name, a `<...>` placeholder, or a name you cannot confirm is a real user-created project, **drop the `**Project:**` line** (leave the plan unassigned) rather than echoing or guessing it. The importer is resolve-only: an unknown/workspace-name/placeholder pin leaves the plan unassigned instead of minting a project, so a bad pin is inert — but do not propagate one either.
+
 ## Write Phase
 
 Write the improved content AND update the status in a SINGLE `issueUpdate` mutation using GraphQL variables (avoids double-escaping and eliminates the two-call race condition):
