@@ -216,7 +216,6 @@
     const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
     const btnCreateKanbanPlan = document.getElementById('btn-create-kanban-plan');
     const btnChatCopyPrompt = document.getElementById('btn-chat-copy-prompt');
-    const btnEditKanban = document.getElementById('btn-edit-kanban');
     const btnSaveKanban = null;
     const btnCancelKanban = null;
     const kanbanListPane = document.getElementById('kanban-list-pane');
@@ -302,15 +301,17 @@
 
             if (state.editMode.features) exitEditMode('features');
             _featurePreviewFilePath = resolvedPath;
+            // Mirror the subtask-list click path (project.js ~line 2530-2532): set the
+            // subtask preview object and render the subtask meta bar so the Edit button
+            // is visible and wired to save _featurePreviewFilePath (the subtask file).
+            _featureSubtaskPreview = _kanbanPlansCache.find(p => p.planFile === resolvedPath) || { planFile: resolvedPath, planId: '', workspaceRoot: '', complexity: 'Unknown' };
+            renderFeatureSubtaskMetaBar(_featureSubtaskPreview);
             featuresPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
             vscode.postMessage({
                 type: 'fetchKanbanPlanPreview',
                 filePath: resolvedPath,
                 requestId: ++_kanbanPreviewRequestId
             });
-            // Hide the Edit button while a subtask is previewed (not the feature itself).
-            const btnEdit = document.getElementById('btn-edit-features');
-            if (btnEdit) btnEdit.style.display = 'none';
         });
     }
 
@@ -606,8 +607,6 @@
                             kanbanPreviewContent.innerHTML = msg.content || '';
                         }
                         state.editOriginalContent.kanban = msg.rawContent || '';
-                        const dynamicEditBtn = document.getElementById('btn-edit-kanban');
-                        if (dynamicEditBtn) dynamicEditBtn.disabled = false;
                         if (_pendingAutoEdit) {
                             _pendingAutoEdit = false;
                             enterEditMode('kanban');
@@ -699,8 +698,6 @@
                 if (msg.success) {
                     _kanbanSelectedPlan = null;
                     if (kanbanPreviewContent) kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
-                    const dynamicEditBtn = document.getElementById('btn-edit-kanban');
-                    if (dynamicEditBtn) dynamicEditBtn.disabled = true;
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 } else {
                     showToast('Delete failed: ' + (msg.error || 'Unknown error'), 'error');
@@ -1563,6 +1560,7 @@
                         </select>
                         ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
                         ${plan.sessionId ? `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">Copy Prompt</button>` : ''}
+                        ${plan.planFile ? `<button class="kanban-plan-edit">Edit</button>` : ''}
                         <span class="complexity-dot ${complexityClass}" title="Complexity: ${escapeHtml(plan.complexity)}" style="margin-left: auto;"></span>
                     </div>
                 </div>
@@ -1599,6 +1597,23 @@
                         column: copyPromptBtn.dataset.column,
                         workspaceRoot: copyPromptBtn.dataset.workspaceRoot
                     });
+                });
+            }
+
+            const editBtn = itemDiv.querySelector('.kanban-plan-edit');
+            if (editBtn) {
+                editBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const isSelected = _kanbanSelectedPlan && _kanbanSelectedPlan.planId === plan.planId;
+                    if (!isSelected) {
+                        if (state.dirtyFlags.kanban) exitEditMode('kanban');
+                        document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
+                        itemDiv.classList.add('selected');
+                        _pendingAutoEdit = true;
+                        loadKanbanPlanPreview(plan);
+                    } else {
+                        enterEditMode('kanban');
+                    }
                 });
             }
 
@@ -1844,7 +1859,6 @@
             });
         }
 
-        // Edit button listener removed — btn-edit-kanban is now a static element in the controls strip
         if (dynamicCancelBtn) dynamicCancelBtn.addEventListener('click', () => exitEditMode('kanban'));
         if (dynamicSaveBtn) {
             dynamicSaveBtn.addEventListener('click', () => {
@@ -1945,13 +1959,6 @@
                 }
             }, 3000);
         });
-    }
-    if (btnEditKanban) {
-        btnEditKanban.addEventListener('click', () => {
-            if (!_kanbanSelectedPlan) return;
-            enterEditMode('kanban');
-        });
-    }
     if (btnChatCopyPrompt) {
         btnChatCopyPrompt.addEventListener('click', () => {
             vscode.postMessage({
@@ -2300,17 +2307,17 @@
         const isManageable = !!plan;
         const manageGroup = `
             <div class="kanban-meta-group" style="display:flex; gap:6px;">
+                <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
+                <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
+                <button class="strip-btn" id="btn-cancel-features" style="${state.editMode.features ? '' : 'display:none;'}">Cancel</button>
                 <button class="strip-btn" id="btn-feature-refine" title="Refine this feature's description and propose a subtask breakdown — copies a prompt to the clipboard">Refine</button>
                 <button class="strip-btn" id="btn-feature-add-subtask" title="Add an existing plan to this feature as a subtask">+ Subtask</button>
-                <button class="strip-btn" id="btn-feature-delete" style="color:#ff6b6b;" title="Delete this feature (subtasks are detached)">Delete Feature</button>
             </div>
         `;
         metaBar.innerHTML = `
             ${manageGroup}
             <div class="kanban-meta-group" style="margin-left: auto;">
-                <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
-                <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
-                <button class="strip-btn" id="btn-cancel-features" style="${state.editMode.features ? '' : 'display:none;'}">Cancel</button>
+                <button class="strip-btn" id="btn-feature-delete" style="color:#ff6b6b;" title="Delete this feature (subtasks are detached)">Delete Feature</button>
             </div>
         `;
 

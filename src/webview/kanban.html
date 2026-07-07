@@ -2884,7 +2884,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           </div>
           <div id="roleDescription" class="agent-description" style="margin-top: 8px; margin-left: 0;"></div>
           </div>
-        </div>
 
         <!-- Planner-specific configuration -->
         <div id="plannerConfig" class="role-config">
@@ -5707,7 +5706,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
-                ? `<button class="card-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">→ Backlog</button>`
+                ? `<button class="card-btn icon-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">
+                       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v9M4.5 8.5L8 12l3.5-3.5"/></svg>
+                   </button>`
                 : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
                     : '';
@@ -5738,9 +5739,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px; flex-wrap: wrap;">
                             ${primaryActionBtn}
-                            ${backlogActionBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
+                            ${backlogActionBtn}
                             <button class="card-btn icon-btn review" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-plan-file="${escapeAttr(card.planFile || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="${reviewTooltip}">
                                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
                             </button>

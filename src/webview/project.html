@@ -391,7 +391,7 @@
         }.kanban-column-badge.clickable:hover {
             background: #333;
             color: #fff;
-        }.kanban-plan-copy-link, .kanban-plan-copy-prompt, .feature-card-action {
+        }.kanban-plan-copy-link, .kanban-plan-copy-prompt, .kanban-plan-edit, .feature-card-action {
             font-size: 10px;
             background: transparent;
             border: 1px solid var(--border-color);
@@ -399,7 +399,7 @@
             padding: 2px 6px;
             border-radius: 3px;
             cursor: pointer;
-        }.kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .feature-card-action:hover {
+        }.kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .kanban-plan-edit:hover, .feature-card-action:hover {
             border-color: var(--accent-teal);
             color: var(--text-primary);
         }.complexity-dot {
@@ -1150,7 +1150,6 @@
                 </select>
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add">Import</button>
                 <button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>
-                <button id="btn-edit-kanban" class="strip-btn" disabled title="Edit the selected plan">Edit</button>
                 <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">Chat Prompt</button>
                 <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
             </div>
