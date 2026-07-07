@@ -91,8 +91,14 @@ frontmatter-facts` lands with the retirement (it's where the manifest's fields g
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Delete-feature (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **CODER CODED**
-- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **CODER CODED**
-- [ ] [Retire the file-based git control plane; hand board visibility to the read-only snapshot](../plans/retire-file-based-git-control-plane.md) — **CODER CODED**
-- [ ] [Board-state read snapshot (isolated ref, one-directional)](../plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md) — **CODER CODED**
+- [ ] [Delete-feature (and delete-plan) file-resurrect fix](../plans/delete-epic-file-resurrect-fix.md) — **CODE REVIEWED**
+- [ ] [Plan-authoring frontmatter facts (feature + project on import)](../plans/plan-authoring-frontmatter-facts.md) — **CODE REVIEWED**
+- [ ] [Retire the file-based git control plane; hand board visibility to the read-only snapshot](../plans/retire-file-based-git-control-plane.md) — **CODE REVIEWED**
+- [ ] [Board-state read snapshot (isolated ref, one-directional)](../plans/feature_plan_20260704_224822_board_state_read_snapshot_isolated_ref_one_directional.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+All 4 subtasks reviewed in-place against their plan files. The feature's core thesis holds: the file-based git control plane is fully retired (`GitStateProvider` + `PlanManifestService` deleted, no orphaned imports), control stays on Notion/Linear (`RemoteProviderKind` is now linear/notion/clickup only), board read-visibility is the one-directional `BoardSnapshotPublisher` on orphan branch `switchboard/board` (default off), and durable facts ride per-plan `**Feature:**`/`**Project:**` frontmatter with apply-if-empty semantics. Two MAJOR findings fixed across the feature: (1) the `**Feature:**` defer queue was never retried on periodic scans, leaking memory for unresolved ids — fixed in `GlobalPlanWatcherService.ts:189-194`; (2) 14 workflow-doc/skill references still told remote agents to write `manifest.json` — updated across `.agents/workflows/` and `.claude/skills/`. No CRITICAL findings. Files changed: `src/services/GlobalPlanWatcherService.ts`, `.agents/workflows/{improve-feature,switchboard-index,switchboard-chat,improve-plan,switchboard-split}.md`, `.claude/skills/{improve-feature,switchboard,switchboard-chat,improve-plan,switchboard-split}/SKILL.md`. Verification: orphaned-import grep clean, `manifest.json` grep in docs/skills returns 0. Remaining feature-level risk: stale `control-plane` string literals in comments/logs are cosmetic only.
+
+**Stage Complete:** CODE REVIEWED

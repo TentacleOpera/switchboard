@@ -103,7 +103,7 @@ After updating the plan `.md` file(s), the reviewed plan should land in the "PLA
 - **Trigger B (all agents):** if you restructured plans into a feature during review → include `isFeature`/`featureId` links for the feature + subtask set. Trigger B applies regardless of local/remote — feature relationships span multiple files and cannot be expressed via a single card move. **Local agents writing a Trigger B-only manifest:** set `kanbanColumn: "CREATED"` (or omit the field) so the ingestor does not auto-move the card — the user moves it manually.
 - Pure plan creation with no review and no grouping → no manifest.
 
-**Location:** `.switchboard/plans/manifest.json` (one batch file per workspace, covering all plans this run produced/reviewed). Write it **last**, after all `.md` files.
+**Location:** per-plan frontmatter in each `.md` file — `**Feature:** <feature-plan-id>` and `**Project:** <name>` lines written directly in the plan file (applied on import with apply-if-empty semantics). No batch manifest file — each plan carries its own durable facts.
 
 **v1 schema:**
 ```json

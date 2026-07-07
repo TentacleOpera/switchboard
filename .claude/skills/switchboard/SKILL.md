@@ -42,7 +42,7 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 | Create a new feature | **`create-feature`** |
 | Improve a plan stored in **Linear** | **`improve-remote-plan`** |
 | Reply to a Notion/Linear **remote-control** card | **`notion-api`** / **`linear-api`** |
-| Move a kanban card | **`kanban-operations`** locally; remotely via the git control-plane `**Column:**` line, a `manifest.json` change, or Notion/Linear MCP |
+| Move a kanban card | **`kanban-operations`** locally; remotely via Notion/Linear MCP (the file-based git control plane is retired) |
 | Query board state | **`query-switchboard-kanban`** locally; remotely read the git-exported `kanban-board.md` |
 | ClickUp tasks/docs | **`clickup-*`** family |
 | Score a change's complexity | **`complexity-scoring`** |
@@ -53,6 +53,6 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 
 - **You do the routing.** Match the request, then invoke the skill (its slash command, or read `.claude/skills/<name>/SKILL.md`) — don't reimplement it. Name the skill in a line at most; keep the focus on doing the work, not describing the machinery.
 - **Chain when natural**, e.g. planning → `create-feature` → `improve-feature`.
-- **Surface a gap only when a request actually hits one.** A few skills need the running extension (`clickup-*`, `improve-remote-plan`, live `kanban.db`/DuckDB reads). In a remote session, don't preemptively warn about them — only if the user asks for one, say the direct route needs the extension and offer the remote equivalent (plan work → plain plan-file edits; board moves → `manifest.json` or MCP).
+- **Surface a gap only when a request actually hits one.** A few skills need the running extension (`clickup-*`, `improve-remote-plan`, live `kanban.db`/DuckDB reads). In a remote session, don't preemptively warn about them — only if the user asks for one, say the direct route needs the extension and offer the remote equivalent (plan work → plain plan-file edits with `**Feature:**`/`**Project:**` frontmatter; board moves → Notion/Linear MCP).
 - **Only ask a question if genuinely ambiguous**, and then just one; otherwise pick the best fit and proceed.
 - **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded in here — do not tell users to type them.

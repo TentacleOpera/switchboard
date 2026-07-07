@@ -34,7 +34,6 @@ The agent prompt builder (`agentPromptBuilder.ts:794`, `PROJECT_LINE_DIRECTIVE`)
 
 **Tags:** backend, database, bugfix, ui
 **Complexity:** 5
-**Project:** v5 funnel
 
 ## User Review Required
 

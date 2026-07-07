@@ -296,3 +296,9 @@ config/UI → gitignore → workflow docs); build must stay green at each step.
 ## Recommendation
 
 Complexity 6 → **Send to Coder**.
+
+## Review Findings
+
+Verified the full deletion checklist: `GitStateProvider.ts` and `PlanManifestService.ts` are deleted (no orphaned imports remain in `src/`); `RemoteControlService.ts:38` `RemoteProviderKind` is now `'linear'|'notion'|'clickup'` with no git wiring; `KanbanProvider._buildRemoteProvider` (`:1911-1932`) only constructs notion/clickup/linear; `KanbanDatabase.exportStateToFile` (`:6702-6704`) is a no-op; `WorkspaceExcludeService.ts:160-168` removed the mirror carve-outs; `PlanAutoFetchService.ts:208-215` clean-tree guard no longer references `MIRROR_FILE_RE`; `package.json:551-558` enum is `none`/`read-only-snapshot`; `setup.html:729-735` dropdown updated. One MAJOR finding fixed: the workflow docs (`.agents/workflows/` + `.claude/skills/` mirrors) still told remote agents to write `manifest.json` (7 refs each) — now updated to `**Feature:**`/`**Project:**` frontmatter + Notion/Linear MCP. `ControlPlaneMigrationService.ts` was NOT deleted (it still serves the multi-repo parent-folder migration path used by `extension.ts:3424`) — correct call, only the `boardStateExport`-conditioned branches are dead and they no longer match the new enum. No CRITICAL findings. Remaining risk: stale `control-plane` string references in comments/log messages across `extension.ts`, `KanbanProvider.ts`, `PlanAutoFetchService.ts` are cosmetic only (no code branches on them).
+
+**Stage Complete:** CODE REVIEWED

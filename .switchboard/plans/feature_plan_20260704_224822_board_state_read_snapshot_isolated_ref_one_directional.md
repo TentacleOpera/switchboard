@@ -190,3 +190,9 @@ converge: content-hash + debounce + single-flight + force-push.
 ## Recommendation
 
 Complexity 5 → **Send to Coder**.
+
+## Review Findings
+
+Reviewed `BoardSnapshotPublisher.ts` (269 lines), `KanbanDatabase.ts:6675-6771` (publisher wiring + `_persist` hook), and `package.json:551-558` (enum). All plan requirements implemented: orphan branch `switchboard/board` with `board.json`+`board.md`, content-stable via SHA256 hash skip (`:93-95`), debounce 500ms (`:44`, `:58-66`), single-flight (`:75-78`, `:107-110`), isolated git worktree so the user's HEAD is never touched (`:162-199`), force-push with no-origin fallback (`:235-243`), default off (`_isBoardSnapshotEnabled` checks `read-only-snapshot`). The serialization correctly omits `order` (no such column) and uses `updated_at DESC` via `getBoard` (`KanbanDatabase.ts:2753-2762`). No CRITICAL/MAJOR findings. NIT: `require('os').tmpdir()` at `:167` is a CommonJS require inside an ESM-leaning module — works in the VS Code extension host but is slightly inconsistent with the `import` style; not worth fixing. NIT: `_lastPublishedHash` is in-memory only, so after an extension restart the first persist always republishes even if content is unchanged — acceptable (one extra force-push). Remaining risk: two machines publishing simultaneously rely on force-push last-write-wins; the single-flight guard prevents interleaving within one machine but not across machines — documented as correct per plan.
+
+**Stage Complete:** CODE REVIEWED

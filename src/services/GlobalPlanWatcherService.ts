@@ -186,6 +186,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                             );
                             this._onPlanDiscovered.fire({ uri: vscode.Uri.file(folder), workspaceRoot: folder });
                         }
+                        // Retry deferred **Feature:** links — a subtask imported before its
+                        // feature (or referencing a bad id) waits here for the next cycle.
+                        // Without this, the defer queue only drains on feature-file imports,
+                        // so a permanently-unresolved id leaks memory (MAX_FEATURE_LINK_RETRIES
+                        // never triggers because retries only increment on feature-file import).
+                        await this._retryPendingFeatureLinks(db, folder);
                     } catch (sweepErr) {
                         this._outputChannel?.appendLine(
                             `[GlobalPlanWatcher] Activity-light timeout sweep failed for ${folder}: ${sweepErr}`

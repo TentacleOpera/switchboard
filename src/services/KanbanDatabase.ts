@@ -670,7 +670,7 @@ INSERT INTO plans (
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, dispatched_at,
     clickup_task_id, linear_issue_id, notion_page_id, worktree_id, is_feature, feature_id,
     workspace_name, project_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,

@@ -171,3 +171,9 @@ import path.
 ## Recommendation
 
 Complexity 6 → **Send to Coder**.
+
+## Review Findings
+
+Reviewed `_deleteFeature` (`KanbanProvider.ts:10417-10475`), `_reapPlanFile` (`:10483-10501`), `_stripFeatureLineFromPlanFile` (`:10509-10540`), the plan_id tombstone guard (`GlobalPlanWatcherService.ts:601-621`), and `_handlePlanDelete` (`:893-959`). All three plan requirements are implemented: file reap on delete (best-effort unlink + ENOENT-as-success), `**Feature:**` strip on kept subtasks (id-scoped regex, apply-if-empty-safe), and the plan_id-keyed tombstone guard for multi-branch resurrection. The single-plan delete path (`PlanningPanelProvider.ts:3670-3710` `deleteKanbanPlan`) already hard-deletes via `deletePlanByPlanId` and unlinks the file — no change needed there. `_handlePlanDelete` correctly skips completed plans (`:925`), satisfying the completed-plan safety edge case. No CRITICAL/MAJOR findings; the strip regex is correctly scoped to the deleted feature id so it won't strip an unrelated `**Feature:**` line. No code fixes applied. Remaining risk: a locked feature file (editor open) defers cleanup to the next watcher cycle via the pending-delete path — acceptable per plan.
+
+**Stage Complete:** CODE REVIEWED

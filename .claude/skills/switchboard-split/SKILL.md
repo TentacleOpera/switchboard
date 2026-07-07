@@ -25,7 +25,7 @@ A target plan file path (the plan to split). If none is given, ask which plan.
 
 5. **Do not lose anything.** Every implementation step, code block, and edge case in the source must land in exactly one of the two files (shared context in both). This is the split's core guarantee.
 
-6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should carry a specific column/project or be linked to an feature, add a `.switchboard/plans/manifest.json` entry for it (`planId`, `project`, `featureId`/`fromColumn` as needed). Commit both files.
+6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should be linked to a feature or carry a project, add `**Feature:** <feature-plan-id>` and/or `**Project:** <name>` lines to the new plan file's frontmatter (applied on import with apply-if-empty semantics). For a column move, use the Notion/Linear provider or MCP. Commit both files.
 
 ## Guardrails
 

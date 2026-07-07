@@ -181,3 +181,9 @@ positive-payload guard verbatim; add a defer queue mirroring the manifest's defe
 ## Recommendation
 
 Complexity 5 → **Send to Coder**.
+
+## Review Findings
+
+Reviewed `planMetadataUtils.ts:114-123` (`**Feature:**` parsing with empty-value guard), `GlobalPlanWatcherService.ts:474-541` (`_applyFeatureLink` with apply-if-empty guard + bounded defer queue, `MAX_FEATURE_LINK_RETRIES=5`), and `KanbanDatabase.ts:1441-1455` (`_resolveOrCreateProjectId` with `.trim()` + debug log). All three plan requirements are implemented: the `**Feature:**` carrier parses into `PlanMetadata.feature`, the apply-if-empty guard checks `subtaskRow.featureId` before linking (`:511`), and the defer queue is bounded. One MAJOR finding fixed: the defer queue was only retried on feature-file imports (`:703`, `:782`), never on periodic scans — so a `**Feature:** <badId>` that never resolves would never hit `MAX_FEATURE_LINK_RETRIES` and leak memory. Fix applied: added `_retryPendingFeatureLinks` call to the periodic scan loop (`GlobalPlanWatcherService.ts:189-194`). No CRITICAL findings. Remaining risk: the defer retry passes an empty `relativePath` (`:539`), which disables the `.switchboard/features/` self-link guard (`:490`) — harmless because a subtask plan_id can't equal a feature id, but worth noting.
+
+**Stage Complete:** CODE REVIEWED

@@ -4,7 +4,7 @@ description: 'Orchestration Automation Mode — unattended coding + code-review 
 
 # Orchestration Automation Mode
 
-**Complexity:** 8
+**Complexity:** 7
 **Tags:** backend, feature, automation, ui
 
 
