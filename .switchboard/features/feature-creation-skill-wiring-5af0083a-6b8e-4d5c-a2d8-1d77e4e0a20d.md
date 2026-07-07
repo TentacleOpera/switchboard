@@ -15,12 +15,18 @@ Ensure that every agent instructed to create a Switchboard feature uses the auth
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add Direct "Create Feature from Plans" Skill + Wire Into Planner & Improve-Plan](../plans/add-direct-create-feature-skill.md) — **CODER CODED**
-- [ ] [Fix: kanban-board.md snapshot gets stale — refresh more reliably](../plans/feature_plan_20260707124454_suggest-features-board-snapshot-staleness.md) — **CODER CODED**
-- [ ] [Fix: Suggest Features prompt — project-scope section is wildly over-worded](../plans/feature_plan_20260707124454_suggest-features-project-scope-wording.md) — **CODER CODED**
-- [ ] [Fix: Feature-creation prompts must reference the create-feature skill, not "see the format"](../plans/feature_plan_20260707132952_feature-creation-must-use-skill-not-handwrite.md) — **CODER CODED**
+- [ ] [Add Direct "Create Feature from Plans" Skill + Wire Into Planner & Improve-Plan](../plans/add-direct-create-feature-skill.md) — **CODE REVIEWED**
+- [ ] [Fix: kanban-board.md snapshot gets stale — refresh more reliably](../plans/feature_plan_20260707124454_suggest-features-board-snapshot-staleness.md) — **CODE REVIEWED**
+- [ ] [Fix: Suggest Features prompt — project-scope section is wildly over-worded](../plans/feature_plan_20260707124454_suggest-features-project-scope-wording.md) — **CODE REVIEWED**
+- [ ] [Fix: Feature-creation prompts must reference the create-feature skill, not "see the format"](../plans/feature_plan_20260707132952_feature-creation-must-use-skill-not-handwrite.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
 
 No hard ordering constraint — a53b7fa1 creates the skill that b11f4303 references, but b11f4303 also references the pre-existing create-feature skill, so it is meaningful even if a53b7fa1 has not landed yet. If both land together, the full set of feature-creation entry points is covered. Subtasks can be executed in parallel; coordinate the switchboard-chat.md edit since both plans touch it (different sections — a53b7fa1 updates the feature-grouping section to invoke the new skill; b11f4303 updates the same section see-the-format wording).
+
+## Review Findings
+
+All 4 subtasks reviewed against their plan requirements (commit `8949e07` + auto-commit `2f1033f`). The `create-feature-from-plans` skill was created with correct failure-mode documentation; planner persona and improve-plan workflow wired correctly; `kanban-board.md` local mirror un-retired with debounced + content-hash-skipped writes; project-scope wording condensed from ~100 to ~35 words; all "see the format" references replaced with skill/script references. One CRITICAL fix applied (test file `kanban-auto-export.test.ts` not updated for 500ms debounce — all tests would fail), one MAJOR fix applied (`flushLocalBoardMirror` busy-wait loop lacked timeout). The switchboard-chat.md coordination between subtasks was handled correctly (Plan 1's `create-feature-from-plans` wording supersedes Plan 4's). TypeScript typecheck: 0 new errors. Remaining risks: `CLAUDE.md` skill table not yet mirrored (auto-propagates on next setup); `BACKLOG`/`CODED` column ordering in board snapshot is cosmetic.
+
+**Stage Complete:** CODE REVIEWED

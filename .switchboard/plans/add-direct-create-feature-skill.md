@@ -388,3 +388,9 @@ Skipped per session directive (SKIP TESTS). No automated test or compilation ste
 
 **Stage Complete:** PLAN REVIEWED
 **Stage Complete:** CODER CODED
+
+## Review Findings
+
+Reviewed commit `8949e07` against plan requirements. The new `create-feature-from-plans` SKILL.md correctly applies Clarifications 1 (silent-blank-feature + `delete-feature.js` recovery) and 2 (newlines safe). Both `switchboard-chat` copies (`.agents/workflows/` + `.claude/skills/`) received the `create-feature-from-plans` wording, superseding the sibling plan's `create-feature`/`create-feature.js` wording as required. Both `improve-plan` copies received the constraint-safe post-review Trigger B addition. `AGENTS.md` table row added; `CLAUDE.md` will auto-mirror on next setup. Cross-references added to `group-into-features` and `create-feature` skills. No CRITICAL or MAJOR findings — all NITs (relative path in bash command consistent with existing patterns; `TaskViewerProvider.ts` not referencing `create-feature-from-plans` by name but direct command is sufficient). No code fixes needed for this plan. TypeScript typecheck: 0 new errors (5 pre-existing TS2835 errors in unrelated files).
+
+**Stage Complete:** CODE REVIEWED

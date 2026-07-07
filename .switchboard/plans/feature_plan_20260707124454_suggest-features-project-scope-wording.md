@@ -125,3 +125,9 @@ The SCAN step (`SKILL.md:15-36`) already says "Scope: CREATED and PLAN REVIEWED 
 
 **Stage Complete:** PLAN REVIEWED
 **Stage Complete:** CODER CODED
+
+## Review Findings
+
+Reviewed commit `8949e07` against plan requirements. Section 1a of `group-into-features/SKILL.md` was rewritten from ~100 words to ~35 words, collapsing three filter-state descriptions into two terse directives. The new wording correctly handles all substituted values: real project name → first branch; empty/`__unassigned__`/literal `{{ACTIVE_PROJECT_FILTER}}` → second branch (none is a project name). The `create-feature-from-plans` cross-reference was also added to the "When to Use" section (from Plan 1). No CRITICAL or MAJOR findings. One NIT: "injected above as" is slightly misleading since `{{ACTIVE_PROJECT_FILTER}}` appears in the same sentence, not above — but the agent sees the substituted value and understands. No code fixes needed. No code changes (pure skill-text edit).
+
+**Stage Complete:** CODE REVIEWED

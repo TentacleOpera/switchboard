@@ -79,6 +79,10 @@ None. Two decisions are made in-plan rather than deferred:
 
 None. Self-contained within `KanbanProvider._regenerateFeatureFile`. Complements — does not depend on — `feature_plan_20260706_delete-subtask-regenerates-feature-md.md` (that plan wires the delete/detach *callers* to invoke this regenerator; it assumes the regenerator's output is correct, which is exactly the assumption this plan repairs). Landing both gives correct output *and* correct invocation.
 
+## Adversarial Synthesis
+
+Key risks: (1) the proposed `## Review Findings` anchor is absent on most feature files (verified — the reviewed feature file has no Review Findings section; the block sits *before* `## Dependencies & sequencing`), so the fallback appends the block at EOF, silently relocating it — contradicting the plan's own "insertion position must be preserved" requirement; mitigation: capture the pre-strip offset of the first existing block marker and re-insert at the adjusted offset, with append-at-EOF only for first-ever generation. (2) The orphan-block "seed" narrative misidentifies prompt-string literals (`agentPromptBuilder.ts:565`, `PlanningPanelProvider.ts:6237/6259`) as code producers — they are LLM instructions, not block-writing code; the strip-all fix is robust regardless, but the narrative should not point at non-producers. (3) The regex chain (well-formed pairs → orphan → dangling markers) must be validated against the real 5-block accreted file, since non-greedy `[\s\S]*?` matching after pair-removal may over- or under-match when an orphan's END was already consumed by step 1.
+
 ## Proposed Changes
 
 ### `src/services/KanbanProvider.ts` — `_regenerateFeatureFile`: replace the subtask splice
@@ -120,6 +124,10 @@ Implementer notes:
 - Keep the non-greedy `*?` so each `BEGIN…END` matches its own `END`, and keep the `/g` flag so **all** blocks go.
 - Leave the downstream WORKTREES handling operating on `newContent` exactly as today.
 
+**Review refinement (2026-07-07 — anchor strategy corrected):** Code verification confirmed the `## Review Findings` anchor is absent on the reviewed feature file (its layout is `## How the Subtasks Achieve This` → block → `## Dependencies & sequencing`, with no Review Findings). The `else` fallback appends at EOF, relocating the block — violating the plan's "insertion position must be preserved" requirement. **Revised anchor strategy:** capture `firstBeginIdx` (the char offset of the earliest `<!-- BEGIN SUBTASKS` or `## Subtasks` marker) *before* stripping. After stripping, compute the adjusted offset by subtracting the number of characters removed before `firstBeginIdx` (track this during the strip replaces, or re-scan the stripped string for the preceding section header and insert after it). Re-insert the single block at that adjusted offset. Fall back to append-at-EOF **only** when `firstBeginIdx === -1` (first-ever generation, no existing block). This preserves position in all cases. As a secondary anchor when the offset approach is impractical, insert immediately before `## Dependencies & sequencing` if present (matching the observed canonical layout), then before `## Review Findings` if present, then append.
+
+**Review refinement (2026-07-07 — orphan-producer narrative corrected):** Code verification found that `agentPromptBuilder.ts:565` and `PlanningPanelProvider.ts:6237,6259` are **string literals inside prompt text** (instructions to an LLM to "preserve the BEGIN SUBTASKS block"), not code that writes `## Subtasks` blocks. They are not orphan-block producers. The actual orphan producer remains unidentified — likely an older regen format or an LLM that was told to preserve the block but wrote a `## Subtasks … END` region without the BEGIN opener. The strip-all fix is robust regardless: it does not depend on knowing how the orphan arose. The two other `## Subtasks` writers found in the repo (`TaskViewerProvider.ts:19450` Linear import, `:19475` ClickUp import) write to **plan** files (`.switchboard/plans/`), not feature files, and do not use BEGIN/END markers — out of scope for this fix (which lives in `_regenerateFeatureFile`, feature-files only).
+
 ### `src/services/KanbanProvider.ts` — same method: fix the WORKTREES splice
 
 Apply the identical strip-all-then-insert-one shape to the `<!-- BEGIN WORKTREES -->` region (currently independent `indexOf(wtBeginMarker)` / `indexOf(wtEndMarker)`), so worktree blocks cannot accrete via an orphan either.
@@ -143,3 +151,5 @@ Manual (installed VSIX):
 ---
 
 **Recommendation:** Complexity 4 (Mostly routine, one positional-insertion subtlety) → **Send to Coder.**
+
+**Stage Complete:** PLAN REVIEWED

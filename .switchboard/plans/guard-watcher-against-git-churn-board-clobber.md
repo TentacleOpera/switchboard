@@ -71,6 +71,14 @@ None hard. **Complements** `feature_plan_20260706_delete-subtask-regenerates-fea
 
 Top risks: (1) a `missing` row leaking into a code path that assumes active — mitigated by the status-consumer audit and by keeping the board's `status='active'` filter authoritative; (2) the reappearance path inserting a duplicate instead of reactivating — mitigated by a status-agnostic lookup and an explicit reactivate branch that reuses the existing `plan_id`; (3) genuine external deletes never getting purged (cards linger as `missing` forever) — mitigated by a bounded grace-period purge sweep that also carries the external-tracker archive; (4) Guard 2 relying on `.git/HEAD` watching, which can be flaky across platforms — mitigated by treating git-awareness as *defense-in-depth* on top of Guard 1 (which is duration-independent on its own), so a missed HEAD event degrades to "still safe, just no batching." Guard 1 is the correctness fix; 2 and 3 are containment and observability.
 
+**Review refinement (2026-07-07 — code verification findings):** Three corrections from reading the live source:
+
+1. **`getPlanByPlanFile` is already status-agnostic — the proposed `getPlanByPlanFileAnyStatus` helper is redundant.** The existing function (`KanbanDatabase.ts:3408`) does NOT filter `status='active'`; it returns any-status row ordered by `CASE status WHEN 'active' THEN 0 … ELSE 4 END, updated_at DESC LIMIT 1`. A `missing` row is already found by the watcher's existing `_handlePlanFile` lookup (`GlobalPlanWatcherService.ts:574`). The `if (!plan)` fresh-insert branch will NOT fire for a `missing` row — so the duplicate-insert risk the original plan warns about does not exist with the current lookup. **Revised approach:** drop `getPlanByPlanFileAnyStatus`. Instead, add a reactivate-in-place branch in the EXISTING `if (plan)` path of `_handlePlanFile`: `if (plan.status === 'missing') { await db.reactivatePlanByPlanFile(plan.planFile, plan.workspaceId); plan.status = 'active'; }` then continue with the existing file-derived-field update. This is simpler and matches the actual code. Add `WHEN 'missing' THEN 4` to the ORDER BY CASE so the rank is explicit (currently `missing` falls to ELSE=4 — same result, but explicit is clearer and prevents a future re-rank from breaking it).
+
+2. **"All active-plan queries already filter `status='active'`" is FALSE — the audit scope is larger than stated.** Code verification found 8 status-blind readers that do NOT filter by status: `getPlanByPlanFile` (3408), `getPlanByPlanId` (3377), `getPlanBySessionId` (3285), `hasPlan` (1792), `hasPlanByPlanFile` (1780), `getPlanFilePathByPlanFile` (2013), `getAllPlans` (4625), plus diagnostic queries at lines 1837/2018/2350/3633/5371/6406/6459/7049. **`getAllPlans` is the highest-risk** — it returns ALL rows regardless of status and feeds the periodic scan; every consumer of `getAllPlans` must be checked to confirm it re-filters by `status='active'` before treating rows as live. The audit must explicitly cover this 8-name list, not a vague "audit every reader."
+
+3. **Tracker-finder queries would still match `missing` rows.** `findPlanByClickUpTaskId` (3322), `findPlanByLinearIssueId` (3345), `findPlanByNotionPageId` (3368) all use `status != 'deleted'` — a `missing` row passes that filter. Result: a transiently-missing plan (file gone during a git checkout) would still be matched by real-time sync, potentially pushing status updates to ClickUp/Linear for a card that's temporarily off-board. **Decision required:** exclude `missing` from tracker lookups by changing `status != 'deleted'` to `status = 'active'` (or `status NOT IN ('deleted','missing')`) in those three queries. This prevents external-API churn for transient disappearances; the purge sweep re-enables tracker archiving when the row is truly deleted.
+
 ## Proposed Changes
 
 ### Guard 1 — Soft-delete + reconcile (the fix)
@@ -79,21 +87,32 @@ Top risks: (1) a `missing` row leaking into a code path that assumes active — 
 
 **`src/services/KanbanDatabase.ts`:**
 - Add `markPlanMissingByPlanFile(planFile, workspaceId)` → `UPDATE plans SET status='missing', updated_at=? WHERE plan_file=? AND workspace_id=? AND status='active'` (only active rows; leaves `completed`/`archived` alone).
-- Add a status-agnostic lookup (`getPlanByPlanFileAnyStatus`, or a status param on `getPlanByPlanFile`) so the reappearance path can find a `missing` row.
-- Add `reactivatePlanByPlanFile(planFile, workspaceId)` → `UPDATE plans SET status='active', updated_at=? WHERE plan_file=? AND workspace_id='missing'`-guarded; preserves `plan_id`, `feature_id`, `kanban_column`, `complexity`, tags, tracker ids.
+- ~~Add a status-agnostic lookup (`getPlanByPlanFileAnyStatus`, or a status param on `getPlanByPlanFile`) so the reappearance path can find a `missing` row.~~ **Review correction:** `getPlanByPlanFile` (KanbanDatabase.ts:3408) is ALREADY status-agnostic — it returns any-status row via `ORDER BY CASE status ... LIMIT 1` with no `WHERE status=` clause. The helper is redundant; do not add it. Add `WHEN 'missing' THEN 4` to the existing ORDER BY CASE for explicitness.
+- Add `reactivatePlanByPlanFile(planFile, workspaceId)` → `UPDATE plans SET status='active', updated_at=? WHERE plan_file=? AND workspace_id=? AND status='missing'` (status-guarded); preserves `plan_id`, `feature_id`, `kanban_column`, `complexity`, tags, tracker ids.
 - Add `purgeMissingPlansOlderThan(cutoffMs)` for the sweep.
+- **Tracker-finder queries:** change `findPlanByClickUpTaskId` (3322), `findPlanByLinearIssueId` (3345), `findPlanByNotionPageId` (3368) from `status != 'deleted'` to `status = 'active'` (or `status NOT IN ('deleted','missing')`) so transiently-missing plans do not trigger external-sync churn. The purge sweep re-enables tracker archiving on real delete.
 
-**`src/services/GlobalPlanWatcherService.ts` — `_handlePlanFile` (insert path, `~641`):** before the `if (!plan)` fresh-insert branch, look up any-status. If a `missing` row exists for this `plan_file`, **reactivate it in place** (reuse its `plan_id`, restore is complete because nothing was destroyed) and skip the fresh-insert + tombstone-restore dance entirely. Only truly-new files fall through to `insertFileDerivedPlan`. This also fixes the new-`plan_id` orphaning for plain plans.
+**`src/services/GlobalPlanWatcherService.ts` — `_handlePlanFile` (insert path, `~543`):** **Review correction:** the existing lookup `let plan = await db.getPlanByPlanFile(relativePath, workspaceId)` (line 574) is already status-agnostic — it finds a `missing` row. The `if (!plan)` fresh-insert branch will NOT fire for a `missing` row. Therefore: add a reactivate branch in the EXISTING `if (plan)` path — `if (plan.status === 'missing') { await db.reactivatePlanByPlanFile(plan.planFile, plan.workspaceId); plan.status = 'active'; }` — then continue with the existing file-derived-field update (which refreshes file-authoritative fields without touching DB-only state). This reuses the original `plan_id`, preserves `feature_id`/column/complexity, and skips the fresh-insert + tombstone-restore dance entirely. Only truly-new files (no row at all) fall through to `insertFileDerivedPlan`. This also fixes the new-`plan_id` orphaning for plain plans.
 
 **Purge sweep:** on a timer (e.g. hourly) and/or at startup, call `purgeMissingPlansOlderThan(graceMs)` (grace e.g. 24 h). Purge = the real `DELETE` + the external-tracker archive that used to run at delete-time (moved here per User Review #1). Explicit in-app deletes bypass all of this and hard-delete immediately (unchanged).
 
 ### Guard 2 — Git-awareness (defense-in-depth)
 
-**`src/services/GlobalPlanWatcherService.ts`:** add an `fs.watch` on `<workspaceRoot>/.git/HEAD` (and check for `<workspaceRoot>/.git/index.lock`). On HEAD change or lock presence, set `_gitOpActiveUntil = Date.now() + N` (e.g. 15 s, refreshed while the lock persists). While active:
-- Force the soft-delete path (never purge) and **suppress the real-time ClickUp/Linear sync fan-out** for affected plans (avoid pushing transient churn to trackers).
-- Optionally coalesce the burst into a single reconcile pass.
+**`src/services/GlobalPlanWatcherService.ts`:** **Review refinement (2026-07-07 — API corrected per web research):** the original proposal of raw `fs.watch` on `.git/HEAD` is **unreliable** — git updates `HEAD` via atomic rename (`HEAD.lock` → `HEAD`), which breaks raw single-file watchers after the first checkout (they fire one `rename` event then go dead monitoring an unlinked inode). This is confirmed cross-platform (Linux inotify is inode-based and drops the watch; macOS kqueue/FSEvents coalesce and drop; Windows emulates single-file via directory handle but hits `EBUSY`/`EPERM` from AV scanners on `.lock` files). **Revised approach:**
 
-This extends protection to `reset`, `rebase`, and `stash pop`, and it prevents needless external-API traffic during a branch switch. If the `.git/HEAD` watch fails to register (permissions, worktrees, submodules), Guard 1 still holds.
+1. **Resolve the true `.git` directory.** At watcher init, read `<workspaceRoot>/.git`. If it is a **file** (not a directory), parse its `gitdir: <path>` contents (linked worktree / submodule case) and follow the pointer to the real directory containing `HEAD`. Bare repos have `HEAD` at the repo root. Do not assume `.git` is always a directory.
+2. **Use `vscode.workspace.createFileSystemWatcher`** with a flat, non-recursive `RelativePattern` targeting `HEAD` in the resolved dir:
+   ```ts
+   const dotGitDir = resolveDotGitDir(workspaceRoot); // handles worktree/submodule pointer files
+   const pattern = new vscode.RelativePattern(vscode.Uri.file(dotGitDir), 'HEAD');
+   const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
+   ```
+   This is the correct API inside a VS Code extension: it runs out-of-process (no extension-host blocking), survives atomic renames (VS Code core re-watches), bypasses `files.watcherExclude` for flat non-recursive patterns, and works in remote/SSH/WSL/container scenarios where raw `fs.watch` fails. Optionally also watch `index.lock` (creation signals an active git op, though it's not checkout-specific — fires for staging/commit/status too).
+3. **On HEAD change** (watcher `onDidChange`/`onDidCreate`/`onDidDelete`), debounce 200–500ms, then set `_gitOpActiveUntil = Date.now() + N` (e.g. 15 s, refreshed while `index.lock` persists). Read `HEAD` content or run `git rev-parse --abbrev-ref HEAD` to confirm the branch actually changed (the watcher fires on the file event; confirm the branch identity to avoid false positives from lock churn). While active:
+   - Force the soft-delete path (never purge) and **suppress the real-time ClickUp/Linear sync fan-out** for affected plans (avoid pushing transient churn to trackers).
+   - Optionally coalesce the burst into a single reconcile pass.
+
+This extends protection to `reset`, `rebase`, and `stash pop`, and prevents needless external-API traffic during a branch switch. If the resolved-path watch fails to register (permissions, exotic git layouts), Guard 1 still holds — it is duration-independent and does not rely on detecting the git op.
 
 ### Guard 3 — Bulk-change snapshot + real backup
 
@@ -104,9 +123,9 @@ This extends protection to `reset`, `rebase`, and `stash pop`, and it prevents n
 ## Files touched
 
 - `src/services/GlobalPlanWatcherService.ts` — soft-delete in `_handlePlanDelete`; reactivate-in-place in `_handlePlanFile`; `.git/HEAD` watch + git-op flag; bulk-change detector + snapshot call; remove the now-redundant `_recentlyDeletedColumns` tombstone.
-- `src/services/KanbanDatabase.ts` — `markPlanMissingByPlanFile`, `getPlanByPlanFileAnyStatus` (or status param), `reactivatePlanByPlanFile`, `purgeMissingPlansOlderThan`; factor `_writeDbBackup(reason)`; add `feature_id`/`project`/`is_feature` to `_writeKanbanStateBackup`.
+- `src/services/KanbanDatabase.ts` — `markPlanMissingByPlanFile`, `reactivatePlanByPlanFile`, `purgeMissingPlansOlderThan`; add `WHEN 'missing' THEN 4` to `getPlanByPlanFile` ORDER BY CASE; change tracker-finder queries (`findPlanByClickUpTaskId`/`findPlanByLinearIssueId`/`findPlanByNotionPageId`) to exclude `missing`; factor `_writeDbBackup(reason)`; add `feature_id`/`project`/`is_feature` to `_writeKanbanStateBackup`.
 - `src/extension.ts` (or wherever the watcher/timers are wired) — schedule the purge sweep.
-- Audit (read-only, then fix if needed): every `status = 'active'` / status-blind plan reader, to confirm `missing` rows are inert.
+- Audit (read-only, then fix if needed): every status-blind plan reader, to confirm `missing` rows are inert. **Concrete audit list (verified 2026-07-07):** `getPlanByPlanFile` (3408), `getPlanByPlanId` (3377), `getPlanBySessionId` (3285), `hasPlan` (1792), `hasPlanByPlanFile` (1780), `getPlanFilePathByPlanFile` (2013), `getAllPlans` (4625). **`getAllPlans` is highest-risk** — it feeds the periodic scan and returns ALL rows regardless of status; verify every consumer re-filters by `status='active'`. Also audit diagnostic queries at lines 1837/2018/2350/3633/5371/6406/6459/7049.
 
 ## Verification Plan
 
@@ -125,3 +144,9 @@ Manual (installed VSIX) — the incident, reproduced:
 ---
 
 **Recommendation:** Complexity 7 (Complex/Risky — touches the watcher's delete/import core and adds a status lifecycle). **Send to Lead.** If you'd rather tier it, split into a feature: Guard 1 (complex/risky) as one subtask, Guards 2 + 3 (routine containment/observability) as a second — codeable in parallel, but Guard 1 is the one that must land.
+
+## Uncertain Assumptions
+
+- **`fs.watch` on `.git/HEAD` reliability across platforms (Guard 2) — RESOLVED via web research (2026-07-07).** The original plan proposed raw `fs.watch` on `.git/HEAD`. Research confirmed this is **unreliable**: git updates `HEAD` via atomic rename (`HEAD.lock` → `HEAD`), which breaks raw single-file watchers after the first checkout (they fire one `rename` event then go dead monitoring an unlinked inode), cross-platform. The Guard 2 section above has been **revised** to use `vscode.workspace.createFileSystemWatcher` with a flat non-recursive `RelativePattern` (survives atomic renames, runs out-of-process, bypasses `files.watcherExclude`) plus a `.git`-path resolution step for worktrees/submodules (where `.git` is a pointer file, not a directory). The uncertainty is now resolved and the plan reflects the correct API. **Non-blocking regardless:** Guard 1 (soft-delete + reconcile) is duration-independent and correct on its own; Guard 2 remains defense-in-depth.
+
+**Stage Complete:** PLAN REVIEWED

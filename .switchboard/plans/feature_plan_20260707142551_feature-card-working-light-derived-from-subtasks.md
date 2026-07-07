@@ -88,10 +88,93 @@ the optimistic window. The column position is already correct in `nextCards` (th
 move completed before the board refresh), so there's no revert risk — the optimistic guard's
 concern (stale pre-move positions) doesn't apply to the `working` flag.
 
+## Verified Corrections (2026-07-07 review)
+
+> Authoritative — supersedes any stale line-number or liveness citation in the original
+> Implementation / Proposed Changes text below (original prose preserved per the
+> improve-plan content-preservation rule). All line numbers re-verified against current `src/`.
+
+### Card-build site liveness (the single most important correction)
+
+The original plan frames **three live card-build sites** of equal weight. Verified reality:
+
+| Site | Method (file:line) | `working:` line | Liveness | Action |
+|------|--------------------|-----------------|----------|--------|
+| **Site 1** | `refreshWithData` (`KanbanProvider.ts:1499`) | 1596 | **LIVE — sole production path** | **Critical fix.** This is the only site that paints production cards. |
+| **Site 2** | `_refreshBoardImpl` (`KanbanProvider.ts:3015`) | 3139 | **TEST-ONLY** | Apply for test consistency (cheap); no production effect. |
+| **Site 3** | `_refreshBoardWithData` (`KanbanProvider.ts:3263`) | 3319 | **DEAD CODE** | Apply as future-proofing only; no runtime effect. |
+
+**Evidence:**
+- Production refresh chain: `_refreshBoard` (`KanbanProvider.ts:2997`) does **not** build cards — it
+  calls `vscode.commands.executeCommand('switchboard.refreshUI', …)` (3008). That command
+  (`extension.ts:1208`) routes to `taskViewerProvider.refreshUI` → `TaskViewerProvider` reads the DB
+  once and calls `kanbanProvider.refreshWithData(...)` (`TaskViewerProvider.ts:15785`) → **Site 1**.
+  The code's own comment at `KanbanProvider.ts:3004-3007` states this explicitly: "ALL kanban
+  refreshes go through the unified path… This eliminates the dual-path bug where
+  `_refreshBoardImpl` could show different data."
+- `_refreshBoardImpl` (Site 2) has **zero production call sites** — only `__tests__/KanbanProvider.test.ts:624`
+  and `test/kanban-persistence.test.ts:147,189` call it (plus comments/log strings).
+- `_refreshBoardWithData` (Site 3) has **zero call sites anywhere** — only its own definition at
+  3263. Its docstring (`KanbanProvider.ts:3260-3261`) says: "NOTE: This method is currently dead
+  code (zero call sites). The active refresh path is the public `refreshWithData()` method. Kept
+  for potential future use."
+
+**Consequence for the fix:** the `getFeatureWorkingStates` derivation must be applied to **Site 1**
+to fix production. Applying it to Site 2 keeps the test suite from diverging; applying it to Site 3
+is pure future-proofing (a 2-line mirror — recommended so a future revival of the dead path does not
+reintroduce the bug, but understand it has zero runtime effect today). The original "Complex / Risky"
+worry that "Site 3 is a new DB round-trip on a hot path" is **invalid** — the path is not hot, it is
+not even reachable. The "DB unavailable fallback" guard for Site 3 is likewise guarding dead code.
+
+### Stale `KanbanDatabase.ts` line numbers (code shifted ~163 lines)
+
+The root-cause analysis and SQL are correct, but every `KanbanDatabase.ts` citation in the original
+text is stale. Current verified locations:
+
+| Symbol | Plan said | Actual (current) |
+|--------|-----------|------------------|
+| `getSubtaskCountsByFeature` | 4656-4676 | **4655-4675** |
+| `updateDispatchInfoByPlanFile` | 7188-7200 | **7351-7364** |
+| `clearWorkingState` | 7221-7228 | **7384-7390** |
+| `clearStaleWorkingState` | 7236-7252 | **7399-7417** |
+| dispatched_at purpose comment | 7194-7196 | **7357-7359** |
+
+`GlobalPlanWatcherService.ts` (844-863 marker-clear path, 175 timeout fallback), `KanbanProvider.ts`
+(128 constant, 130 `isWorkingState`, 1578/3121 subtask-count calls, 1596/3139/3319 working-flag
+lines, 3432-3440 `_scheduleBoardRefresh` w/ 100ms debounce at 3439), `kanban.html` (3906
+`OPTIMISTIC_MOVE_WINDOW_MS=2000`, 6520-6563 `updateBoard` handler, 6539 `optimisticActive`), and
+`package.json` (509-516, 511 default 1200000, 512 min 60000, 513 max 3600000) all verified correct.
+
+### Optimistic-guard fix depends on a coupling the original plan never verified
+
+The `workingChanged` fix only works because `buildBoardSignature` (`kanban.html:4697`) includes
+`${card.working ? '1' : '0'}` — so a working-flag transition flips `nextBoardSignature` and enters
+the `if (nextBoardSignature !== lastBoardSignature)` branch where `workingChanged` is consulted.
+**Verified:** the coupling holds today. **Risk:** if a future maintainer drops `working` from
+`buildBoardSignature`, the fix silently stops working (a working-only change would no longer alter
+the signature, fall into the signature-equal `else` branch at 6556, and skip `renderBoard`).
+**Mitigation:** add a comment at `buildBoardSignature` tying `working` inclusion to the
+`workingChanged` guard in the `updateBoard` handler. Also: move the `workingChanged` computation
+*inside* the `if (nextBoardSignature !== lastBoardSignature)` block — the original snippet computes
+it unconditionally (an O(n²) `some`+`find` over the card set on every `updateBoard`, even when the
+signature matches and the result is unused).
+
+### Proposed-query prose inaccuracy (cosmetic)
+
+The proposed `getFeatureWorkingStates` query does **not** mirror `getSubtaskCountsByFeature`'s
+`WHERE` clause — it correctly diverges. Mirror uses `status IN ('active','completed')` and no
+`is_feature` filter (counts all subtask-bearing rows). The working-state query uses
+`status = 'active' AND is_feature = 0` — which is **more correct** for working state (excludes
+completed subtasks whose `dispatched_at` is already nulled, and excludes feature rows themselves,
+which carry their own vestigial `dispatched_at`). It mirrors the *workspace-wide grouping shape*,
+not the filter. The `is_feature = 0` filter is mostly redundant (feature rows have
+`feature_id = NULL`/empty and are already excluded by `feature_id IS NOT NULL AND feature_id != ''`)
+but harmless belt-and-suspenders. State the divergence explicitly rather than claiming a mirror.
+
 ## Metadata
 
 - **Project:** Switchboard
-- **Tags:** kanban, backend, activity-light, feature-mode, webview, render-guard
+- **Tags:** backend, frontend, ui, bugfix, reliability
 - **Complexity:** 5
 
 ## Implementation
@@ -258,6 +341,14 @@ concern (stale pre-move positions) doesn't apply to the `working` flag.
   feature. Cutoff is `new Date(Date.now() - timeoutMs).toISOString()`.
 - **Edge cases:** empty result for a workspace with no subtasks → empty map (callers default to
   `false`); ISO-UTC string comparison (same convention as `clearStaleWorkingState`).
+- **Review correction (2026-07-07):** place the new method immediately after
+  `getSubtaskCountsByFeature` at its **current** location `KanbanDatabase.ts:4655-4675` (the
+  original "4656-4676" citation is off by one). Reuse the mirror's `ensureReady()`/`_db` guard and
+  `stmt.step()` / `getAsObject()` / `stmt.free()` pattern. The grouped query's `WHERE` deliberately
+  diverges from the mirror (see "Proposed-query prose inaccuracy" above) — keep
+  `status = 'active' AND is_feature = 0`. SQLite semantics confirmed: `(dispatched_at IS NOT NULL)
+  AND (dispatched_at >= ?)` is always 0/1 per row (left operand is never NULL), so `MAX(...)` per
+  feature is a clean boolean — no NULL-ambiguity edge case.
 
 ### src/services/KanbanProvider.ts
 - **Context:** three card-build sites (1578-1598, 3121-3141, 3307-3321) and the
@@ -273,6 +364,15 @@ concern (stale pre-move positions) doesn't apply to the `working` flag.
     `working` expression. On DB error, fall back to `isWorkingState(row.dispatchedAt)`.
 - **Edge cases:** non-feature rows unchanged; completed-rows builders unchanged; DB-unavailable
   fallback preserves old behavior.
+- **Review correction (2026-07-07) — site liveness (see Verified Corrections):** only **Site 1**
+  (`refreshWithData`, `1578`/`1596`) is the production path — this is the critical fix. **Site 2**
+  (`_refreshBoardImpl`, `3121`/`3139`) is test-only (production routes through `switchboard.refreshUI`
+  → `refreshWithData`); apply the mirror there only to keep tests consistent. **Site 3**
+  (`_refreshBoardWithData`, `3307`/`3319`) is dead code (zero call sites); applying the call there is
+  future-proofing with no runtime effect — there is no live "DB unavailable fallback" to protect and
+  no "hot path" round-trip to worry about. The proposed `working` expression
+  `row.isFeature ? (featureWorkingMap.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)`
+  is correct for all three; just understand only Site 1 moves production cards.
 
 ### src/services/GlobalPlanWatcherService.ts
 - **Context:** the timeout sweep fallback default at line 175.
@@ -305,36 +405,50 @@ concern (stale pre-move positions) doesn't apply to the `working` flag.
   don't trigger `workingChanged` — they'll be handled by the normal signature-mismatch
   render after the optimistic window expires, which is correct (a new card appearing is not a
   working-flag transition).
+- **Review correction (2026-07-07):** the fix is structurally sound **only because**
+  `buildBoardSignature` (`kanban.html:4697`) includes `${card.working ? '1' : '0'}` — without that,
+  a working-only change would not flip `nextBoardSignature` and would bypass this whole branch
+  (falling into the signature-equal `else` at 6556). (1) Add a comment at `buildBoardSignature`
+  tying `working` inclusion to this `workingChanged` guard so a future cleanup cannot silently break
+  it. (2) Move the `workingChanged` computation **inside** the
+  `if (nextBoardSignature !== lastBoardSignature)` block (the original snippet runs it
+  unconditionally on every `updateBoard`, wasting the `some`+`find` when the signature matches and
+  the result is unused). (3) Optional O(n) refinement: build a `Map<planId||sessionId, boolean>` from
+  `currentCards` once instead of `find` per `nextCards` entry — not required at <200 cards.
 
 ## Adversarial Synthesis
 
-Key risks: (1) **site 3 is a new DB round-trip on a path that didn't have one** — if the path
-is hot (e.g. a refresh storm), the extra query adds latency; mitigation is that the query is a
-single grouped `SELECT` with no joins, mirroring the already-present
-`getSubtaskCountsByFeature` cost on the other two sites, and the refresh-storm backstop
-(snapshot-hash skip) at `KanbanProvider.ts:186` gates the push, not the query. (2) **the
-read-time cutoff and the sweep must agree on the timeout** — if `getFeatureWorkingStates` reads
-the setting at query time and the sweep reads it 10 seconds later and the user changed it
-in between, a subtask could flicker; mitigation is that both read the same config key with the
-same fallback constant, and the divergence window is one scan interval (≤10s) — acceptable.
-(3) **a feature with subtasks in a different project than the board filter** — the grouped
-query is workspace-wide, so the feature light correctly reflects subtask state regardless of
-the board's project filter; this matches `getSubtaskCountsByFeature`'s established pattern.
-(4) **the feature row's `dispatched_at` is now vestigial for the light but still written** —
-a future maintainer might "clean up" by removing the write and break the dispatch-identity
-record; mitigation is the comment at `KanbanDatabase.ts:7194-7196` already documents the
-column's purpose — extend it to note the feature-row value is no longer the source of the
-feature card's `working` flag. (5) **the `workingChanged` exception to the optimistic guard
-could cause a full `renderBoard` during a drag if a timeout sweep clears a different card's
-light while the user is mid-drag** — mitigation is that `renderBoard` is a DOM replacement of
-the board body, not the drag handles, and the 100ms debounce means the `updateBoard` arrives
-after the user has already dropped the card (the drag-end → drop → postMessage → backend
-processing chain takes >100ms); if it does fire mid-drag, the card positions in `nextCards`
-match the server-side state which is already post-move, so there's no visual revert.
+Key risks: (1) the original plan over-counts live card-build sites — only **Site 1**
+(`refreshWithData`, `KanbanProvider.ts:1596`) is the production path (Site 2 `_refreshBoardImpl` is
+test-only, Site 3 `_refreshBoardWithData` is dead code with zero call sites), so the fix's real
+blast radius is one site and the cited `KanbanDatabase.ts` line numbers are ~163 lines stale
+(`updateDispatchInfoByPlanFile` 7188→7351, `clearWorkingState` 7221→7384, `clearStaleWorkingState`
+7236→7399); (2) the optimistic-guard fix silently depends on `working` remaining in
+`buildBoardSignature` (`kanban.html:4697`), so a future cleanup that drops it would re-break the
+light with no compile error; (3) the feature row's `dispatched_at` becomes vestigial for the light
+but is still written, inviting a well-meaning "cleanup" that deletes the dispatch-identity record.
+Mitigations: apply the `getFeatureWorkingStates` derivation to Site 1 as the critical fix and mirror
+to Sites 2/3 for consistency/future-proofing only (no production effect); refresh all line numbers
+against current `src/`; add a coupling comment at `buildBoardSignature` tying `working` inclusion to
+the `workingChanged` guard; extend the `dispatched_at` purpose comment
+(`KanbanDatabase.ts:7357-7359`) to note the feature-row value no longer drives the `working` flag.
+Secondary (covered by Manual checks): a `workingChanged`-forced `renderBoard` could fire mid-drag if
+a timeout sweep clears another card's light during a 2s optimistic window — safe because
+`nextCards` carries post-move positions and `renderBoard` replaces the board body, not drag handles.
 
 ## Verification Plan
 
 > Per session directives: no automated tests, no compilation. Verify via the installed VSIX.
+
+### Automated Tests
+
+Skipped per session directive (no automated test run as part of this verification plan). Note for
+the implementer: `_refreshBoardImpl` (Site 2, `KanbanProvider.ts:3139`) is exercised only by
+`src/services/__tests__/KanbanProvider.test.ts` and `src/test/kanban-persistence.test.ts`. If the
+derivation is mirrored into Site 2, those tests continue to call `_refreshBoardImpl` directly and
+should be reviewed (not run here) to confirm they do not assert the old feature-row-read
+`working` behavior — otherwise they will diverge from the live `refreshWithData` (Site 1) path.
+Production correctness is verified solely via the Manual checks below against an installed VSIX.
 
 ### Manual checks
 - Dispatch a feature with 3 subtasks → confirm the feature card's light turns ON.
@@ -367,3 +481,5 @@ match the server-side state which is already post-move, so there's no visual rev
 
 ### Recommendation
 Complexity 5 → **Send to Coder.**
+
+**Stage Complete:** PLAN REVIEWED

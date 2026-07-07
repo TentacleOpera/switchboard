@@ -13,8 +13,8 @@ Make Switchboard feature .md files and kanban DB rows robust against the two way
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix `_regenerateFeatureFile` splice so it collapses to exactly one `## Subtasks` block](../plans/fix-feature-md-subtask-block-accretion.md) — **CREATED**
-- [ ] [Guard the plan-watcher against git-churn board clobber](../plans/guard-watcher-against-git-churn-board-clobber.md) — **CREATED**
+- [ ] [Fix `_regenerateFeatureFile` splice so it collapses to exactly one `## Subtasks` block](../plans/fix-feature-md-subtask-block-accretion.md) — **PLAN REVIEWED**
+- [ ] [Guard the plan-watcher against git-churn board clobber](../plans/guard-watcher-against-git-churn-board-clobber.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

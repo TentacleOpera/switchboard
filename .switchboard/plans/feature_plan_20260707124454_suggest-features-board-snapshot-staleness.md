@@ -205,3 +205,9 @@ The test asserts `kanban-board.md` is written with per-column `kanban-state-{slu
 
 **Stage Complete:** PLAN REVIEWED
 **Stage Complete:** CODER CODED
+
+## Review Findings
+
+Reviewed commit `8949e07` (KanbanDatabase.ts + KanbanProvider.ts). The `exportStateToFile` no-op was replaced with a debounced (500ms) + content-hash-skipped `_writeLocalBoardMirror`, wired into `_persist` via `_scheduleLocalMirror()`. `_resolveExportRoot` was reimplemented (checks `boardStateExport === 'control-plane'`). `suggestFeatures` handler calls `await db.flushLocalBoardMirror()` for click-time freshness. **CRITICAL fix applied:** test file `kanban-auto-export.test.ts` was NOT updated by the coder — all 6 tests would fail because 300ms waits < 500ms debounce and link-text assertions expected `[sess-N]` but implementation writes `[planFile]`. Replaced all `setTimeout(300)` waits with `await db.flushLocalBoardMirror()` and fixed link-text assertions to match `planFile` format. **MAJOR fix applied:** `flushLocalBoardMirror` busy-wait loop had no timeout — could hang `suggestFeatures` indefinitely if `_writeLocalBoardMirror` stalls; added 5s deadline break. **NIT fix:** stale `dispose()` comment updated. Remaining risks: `BACKLOG`/`CODED` columns appear at end of table (cosmetic); content-hash skip means `*Updated:*` timestamp only refreshes on board-data changes (correct behavior). TypeScript typecheck: 0 new errors.
+
+**Stage Complete:** CODE REVIEWED

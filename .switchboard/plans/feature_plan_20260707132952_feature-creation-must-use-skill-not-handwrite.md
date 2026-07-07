@@ -132,3 +132,9 @@ Search all `.agents/`, `.claude/`, and `src/` files for feature-creation instruc
 
 **Stage Complete:** PLAN REVIEWED
 **Stage Complete:** CODER CODED
+
+## Review Findings
+
+Reviewed commit `8949e07` (memo.md, TaskViewerProvider.ts, switchboard-chat.md) and commit `2f1033f` (.claude/skills/memo/SKILL.md mirror). All three "See ... for the format" references were replaced with explicit skill/script references. The `switchboard-chat.md` edit was correctly dropped in favor of Plan 1's `create-feature-from-plans` wording (Plan 1 supersedes). Workspace paths in `TaskViewerProvider.ts` are properly quoted (`"${workspaceRoot}/..."`). Grep guard confirms zero "for the format" references remain in source files. The `.claude/skills/memo/SKILL.md` mirror was also updated. No CRITICAL or MAJOR findings. One NIT: `TaskViewerProvider.ts` refine prompt references `create-feature.js` directly but not `create-feature-from-plans` by name (memo.md does) — the direct command is sufficient but slightly inconsistent. No code fixes needed for this plan.
+
+**Stage Complete:** CODE REVIEWED

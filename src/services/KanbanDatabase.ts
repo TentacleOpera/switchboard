@@ -1306,8 +1306,7 @@ export class KanbanDatabase {
     }
 
     public dispose(): void {
-        // No timer to clear — writes are synchronous fire-and-forget
-        // Optional: final flush on deactivation
+        // Final flush on deactivation — clears any pending debounce timer and writes immediately.
         void this.exportStateToFile();
         void this._writeKanbanStateBackup();
         if (this._onColumnChanged) {
@@ -7021,7 +7020,9 @@ FROM plans
         }
         if (this._localMirrorInFlight) {
             this._localMirrorPending = true;
+            const flushDeadline = Date.now() + 5000;
             while (this._localMirrorInFlight) {
+                if (Date.now() > flushDeadline) break;
                 await new Promise(r => setTimeout(r, 10));
             }
         } else {

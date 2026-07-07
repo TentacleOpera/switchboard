@@ -39,8 +39,8 @@ suite('Kanban Auto-Export (Markdown)', () => {
         // Trigger a mutation to force export via _persist
         await db.setWorkspaceId(workspaceId);
 
-        // Wait for async fire-and-forget write
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Flush the debounced local mirror write deterministically
+        await db.flushLocalBoardMirror();
 
         const exportPath = path.join(tempDir, '.switchboard', 'kanban-board.md');
         assert.strictEqual(fs.existsSync(exportPath), true, 'Markdown export file should exist');
@@ -100,17 +100,18 @@ suite('Kanban Auto-Export (Markdown)', () => {
 
         // Trigger export by triggering a mutation that calls _persist
         await db.setWorkspaceId(workspaceId);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await db.flushLocalBoardMirror();
 
         // Plans now live in per-column files, not in kanban-board.md (which is a table of links).
         const perColumnContent = readPerColumnFiles(tempDir);
 
-        // Plans should appear as markdown links in their per-column files
-        assert.ok(perColumnContent.includes('[sess-1]'), 'Should include plan 1 link');
+        // Plans should appear as markdown links in their per-column files.
+        // Link text is the planFile path (e.g. /tmp/plan-1.md), not the sessionId.
+        assert.ok(perColumnContent.includes('plan-1.md'), 'Should include plan 1 link');
         assert.ok(perColumnContent.includes('Topic 1'), 'Should include plan 1 topic');
-        assert.ok(perColumnContent.includes('[sess-2]'), 'Should include plan 2 link');
+        assert.ok(perColumnContent.includes('plan-2.md'), 'Should include plan 2 link');
         assert.ok(perColumnContent.includes('Topic 2'), 'Should include plan 2 topic');
-        assert.ok(perColumnContent.includes('[sess-3]'), 'Should include plan 3 link');
+        assert.ok(perColumnContent.includes('plan-3.md'), 'Should include plan 3 link');
         assert.ok(perColumnContent.includes('Topic 3'), 'Should include plan 3 topic');
 
         // Empty columns should show "_No plans_" in their per-column files
@@ -128,7 +129,7 @@ suite('Kanban Auto-Export (Markdown)', () => {
         assert.strictEqual(fs.existsSync(oldJsonPath), true, 'Old JSON file should exist before export');
 
         await db.setWorkspaceId(workspaceId);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await db.flushLocalBoardMirror();
 
         assert.strictEqual(fs.existsSync(oldJsonPath), false, 'Old JSON file should be deleted after markdown export');
 
@@ -148,7 +149,7 @@ suite('Kanban Auto-Export (Markdown)', () => {
         try {
             // This should not throw — exportStateToFile catches errors internally
             await db.setWorkspaceId(workspaceId);
-            await new Promise(resolve => setTimeout(resolve, 300));
+            await db.flushLocalBoardMirror();
         } finally {
             // Restore permissions for cleanup
             await fs.promises.chmod(switchboardDir, 0o755);
@@ -192,7 +193,7 @@ suite('Kanban Auto-Export (Markdown)', () => {
         ]);
 
         await db.setWorkspaceId(workspaceId);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await db.flushLocalBoardMirror();
 
         const exportPath = path.join(tempDir, '.switchboard', 'kanban-board.md');
         assert.strictEqual(fs.existsSync(exportPath), true, 'Markdown export file should exist');
@@ -200,8 +201,8 @@ suite('Kanban Auto-Export (Markdown)', () => {
         // Plans now live in per-column files, not in kanban-board.md
         const perColumnContent = readPerColumnFiles(tempDir);
 
-        assert.ok(perColumnContent.includes('sess-active-1'), 'Active plan should be in export');
-        assert.ok(!perColumnContent.includes('sess-completed-1'), 'Completed plan should NOT be in export');
+        assert.ok(perColumnContent.includes('plan-active-1.md'), 'Active plan should be in export');
+        assert.ok(!perColumnContent.includes('plan-completed-1.md'), 'Completed plan should NOT be in export');
     });
 
     test('Dispose triggers a final export flush', async function() {
@@ -209,8 +210,8 @@ suite('Kanban Auto-Export (Markdown)', () => {
         const workspaceId = 'test-ws-dispose';
         await db.setWorkspaceId(workspaceId);
 
-        // Wait for initial export
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for initial export (flush the debounced write deterministically)
+        await db.flushLocalBoardMirror();
 
         // Delete the file to verify dispose recreates it
         const exportPath = path.join(tempDir, '.switchboard', 'kanban-board.md');
@@ -219,8 +220,8 @@ suite('Kanban Auto-Export (Markdown)', () => {
 
         db.dispose();
 
-        // Wait for async dispose flush
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for async dispose flush (exportStateToFile → flushLocalBoardMirror → _writeLocalBoardMirror)
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         assert.strictEqual(fs.existsSync(exportPath), true, 'Export file should be recreated after dispose flush');
     });
