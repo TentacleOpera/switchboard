@@ -833,32 +833,21 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 if (metadata.feature && !relativePath.startsWith('.switchboard/features/')) {
                     await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath);
                 }
-                // Activity-light OFF-switch: a `**Stage Complete:**` marker clears the
-                // card's working state (nulls dispatched_at). The mtime gate self-advances
-                // (updatedAt := fileMtime below), so the marker is observed on exactly this
-                // one handler pass — clear here, before the trailing _onPlanDiscovered.fire
-                // refreshes the board. Stale-marker guard: when the echoed column is
-                // non-empty and does not match the card's current column, skip the clear
-                // (a copied marker from a previous stage must not clear a re-dispatched
-                // light). An empty value (bare `**Stage Complete:**`) clears unguarded.
-                if (metadata.stageComplete !== undefined && metadata.stageComplete.length > 0) {
-                    const currentCol = updatedRecord.kanbanColumn || '';
-                    const hasBare = metadata.stageComplete.some(v => v.trim() === '');
-                    const hasMatch = metadata.stageComplete.some(v => v.trim() === currentCol);
-                    if (hasBare || hasMatch) {
-                        try {
-                            await db.clearWorkingState(relativePath, workspaceId);
-                            this._outputChannel?.appendLine(
-                                `[GlobalPlanWatcher] Stage Complete marker cleared working state for: ${relativePath}`
-                            );
-                        } catch (clearErr) {
-                            this._outputChannel?.appendLine(
-                                `[GlobalPlanWatcher] clearWorkingState failed for ${relativePath}: ${clearErr}`
-                            );
-                        }
-                    } else {
+                // Activity-light OFF-switch: the next plan-file edit after dispatch turns off
+                // the light. The watcher only fires on mtime advance (the gate at line 589
+                // early-returns when fileMtime <= plan.updatedAt), and the dispatch flow does
+                // not write the plan file (updateDispatchInfoByPlanFile only runs SQL), so any
+                // mtime advance reaching here while dispatched_at is set is the agent's
+                // completion edit. No agent-authored text is trusted.
+                if (updatedRecord.dispatchedAt) {
+                    try {
+                        await db.clearWorkingState(relativePath, workspaceId);
                         this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] Stage Complete markers [${metadata.stageComplete.join(', ')}] none match current '${currentCol}' — stale markers, not clearing: ${relativePath}`
+                            `[GlobalPlanWatcher] Plan file edit cleared working state for: ${relativePath}`
+                        );
+                    } catch (clearErr) {
+                        this._outputChannel?.appendLine(
+                            `[GlobalPlanWatcher] clearWorkingState failed for ${relativePath}: ${clearErr}`
                         );
                     }
                 }

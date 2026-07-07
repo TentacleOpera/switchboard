@@ -190,3 +190,6 @@ None — self-contained. **Clarification (re-review):** the related plan `fix-st
 Complexity 3 → **Send to Intern**. Two-file change (watcher + prompt builder); parser untouched; no new SQL or DB surface. Delete the column-echo guard; the file edit is the off-switch. Remove the `STAGE COMPLETE` directive entirely (both call sites: `agentPromptBuilder.ts:934` and `:1644`) — the agent does not write the marker. **Reliability caveat for the human:** this deletes the off-switch for every dispatched card and the directive every agent receives — a single-line regression (e.g. `updatedRecord.dispatchedAt` mistyped, or the block placed above the mtime gate) breaks every light board-wide silently. If that risk profile is preferred at the Coder tier, override to **Send to Coder**; the work itself is Intern-scope.
 
 **Stage Complete:** PLAN REVIEWED
+
+**Stage Complete:** LEAD CODED
+

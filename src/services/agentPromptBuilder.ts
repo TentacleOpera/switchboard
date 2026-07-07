@@ -512,10 +512,7 @@ export const STAGE_COMPLETE_LABEL = 'Stage Complete';
  * directive tells the agent to echo the column it was dispatched for (never emits a
  * literal `undefined`).
  */
-function buildStageCompleteDirective(destinationColumn?: string): string {
-    const column = destinationColumn && destinationColumn.trim() ? destinationColumn.trim() : '<the column you were dispatched for>';
-    return `STAGE COMPLETE (MANDATORY): When you have finished the stage for a plan, append a single line to that plan's .md file:\n**Stage Complete:** ${column}\nThis is the ONLY signal the board uses to turn off your card's activity light — the board cannot tell you have finished otherwise. Append it to EACH plan file you complete (one marker per file, not one for the whole batch).`;
-}
+
 
 /** §8 — Shared PRD reference block builder from raw refs. Used by both buildPrdReferenceBlock and buildCustomAgentPrompt. */
 function buildPrdReferenceBlockFromRefs(refs: Array<{ projectName: string; prdLink: string }> | undefined): string {
@@ -930,9 +927,7 @@ export function buildKanbanBatchPrompt(
     // suffixBlock (planner, lead, coder, reviewer, tester, …) without
     // touching each role branch — same pattern as the §11 remote-mode block.
     const prdBlock = buildPrdReferenceBlock(options, role);
-    // Activity-light OFF-switch directive — reaches every role via the shared prefix.
-    const stageCompleteBlock = buildStageCompleteDirective(options?.destinationColumn);
-    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock, stageCompleteBlock].filter(Boolean).join('\n\n');
+    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
     // §3 — Feature directive is separated from planList so it can be placed
     // before the PLANS TO PROCESS heading rather than under it.
@@ -1639,9 +1634,7 @@ export function buildCustomAgentPrompt(
         prompt += '\n\n' + subagentBlock;
     }
 
-    // Activity-light OFF-switch — custom agents get the same Stage Complete directive as
-    // built-in roles so their cards clear `working` on completion, not just on timeout.
-    prompt += '\n\n' + buildStageCompleteDirective(addons?.destinationColumn);
+
 
     // Apply directives in defined order
     // §Git — composed GIT POLICY block. Reads the UI keys (gitProhibition — the
