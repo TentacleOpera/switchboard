@@ -131,3 +131,4 @@ Search all `.agents/`, `.claude/`, and `src/` files for feature-creation instruc
 **Recommendation:** Complexity 2 (Low) → **Send to Intern.** Three text edits replacing "see the format" with skill/script references. The only risk is the switchboard-chat coordination with the sibling plan (drop that edit) and the workspace-path quoting in TaskViewerProvider.ts — both flagged in User Review Required and Adversarial Synthesis.
 
 **Stage Complete:** PLAN REVIEWED
+**Stage Complete:** CODER CODED

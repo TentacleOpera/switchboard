@@ -18,6 +18,7 @@ direct-DB fallback, so it fails when the extension is unreachable.
 - Do NOT use this skill if the extension IS running — call `create-feature.js` instead
   (it's authoritative: does DB upsert, subtask linking, file write, and board refresh
   atomically).
+- If the extension IS running and the user already knows which plans to group, use `create-feature-from-plans` instead — it routes through `create-feature.js` (the authoritative path) and handles verification + narrative writing.
 
 ## How to Detect Whether the Extension Is Running
 

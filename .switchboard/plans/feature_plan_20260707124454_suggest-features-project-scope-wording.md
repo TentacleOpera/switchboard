@@ -124,3 +124,4 @@ The SCAN step (`SKILL.md:15-36`) already says "Scope: CREATED and PLAN REVIEWED 
 **Recommendation:** Complexity 2 (Low) → **Send to Intern.** Single-file text rewrite (~100 words → ~35 words). No code, no DB, no config. The only subtlety is the `__unassigned__` semantics collapse — verified correct, but a one-line comment in the SKILL.md would make it self-documenting.
 
 **Stage Complete:** PLAN REVIEWED
+**Stage Complete:** CODER CODED

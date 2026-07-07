@@ -105,6 +105,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `refine_feature` | User clicks "Refine" on a selected feature in the Features tab to copy a prompt that fleshes out the feature description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_feature"`) |
 | `group-into-features` | User asks to "group plans into a feature", "organise loose plans into features", or "suggest feature groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates features via create-feature.js (model-invocable; also sourced by the Suggest Features board button) |
 | `create-feature` | Create a Switchboard feature from a remote session by writing the feature file directly to `.switchboard/features/` — use when the VS Code extension is not running and `create-feature.js` is unreachable |
+| `create-feature-from-plans` | Create a Switchboard feature from a known set of plans when the extension is running — runs create-feature.js |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
 | `worktree_cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
 

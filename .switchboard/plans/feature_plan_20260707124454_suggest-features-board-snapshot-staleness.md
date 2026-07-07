@@ -204,3 +204,4 @@ The test asserts `kanban-board.md` is written with per-column `kanban-state-{slu
 **Recommendation:** Complexity 5 (Mixed) → **Send to Coder.** The core change is a copy-back of retired code plus a debounce/content-hash improvement — routine in isolation, but elevated by the unstuck-flag root cause (not actually fixed by the rename), the `_resolveExportRoot()` restoration requirement, and the dependency on an unverifiable git commit for the old source. The coder must inline the full serialization logic or write a complete spec — the skeleton in Proposed Changes is insufficient.
 
 **Stage Complete:** PLAN REVIEWED
+**Stage Complete:** CODER CODED

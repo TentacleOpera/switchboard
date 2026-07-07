@@ -6860,15 +6860,177 @@ FROM plans
         } catch { /* outside extension host */ }
         return false;
     }
-    /**
-     * Retired: the bidirectional board-state mirror (kanban-board.md /
-     * kanban-state-*.md) was the file-based git control plane, which is gone.
-     * Board read-visibility is now the one-directional snapshot publisher
-     * (`BoardSnapshotPublisher`, orphan branch `switchboard/board`). This is
-     * kept as a no-op so `_persist`'s fire-and-forget call site stays stable.
-     */
+    private _localMirrorDebounce: NodeJS.Timeout | null = null;
+    private _localMirrorLastHash: string | null = null;
+    private _localMirrorInFlight = false;
+    private _localMirrorPending = false;
+    private static readonly LOCAL_MIRROR_DEBOUNCE_MS = 500;
+
+    private _resolveExportRoot(): string {
+        try {
+            const vscode = require('vscode');
+            const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+            const exportTarget: string = config.get('boardStateExport', 'none');
+
+            if (exportTarget === 'control-plane') {
+                const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
+                const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(this._workspaceRoot);
+                if (effectiveRoot && effectiveRoot !== this._workspaceRoot) {
+                    return effectiveRoot;
+                }
+            }
+        } catch { /* outside extension host or config unavailable */ }
+        return this._workspaceRoot;
+    }
+
+    private _scheduleLocalMirror(): void {
+        if (this._localMirrorDebounce) clearTimeout(this._localMirrorDebounce);
+        this._localMirrorDebounce = setTimeout(() => {
+            this._localMirrorDebounce = null;
+            void this._writeLocalBoardMirror();
+        }, KanbanDatabase.LOCAL_MIRROR_DEBOUNCE_MS);
+    }
+
+    private async _writeLocalBoardMirror(): Promise<void> {
+        if (!this._workspaceRoot || !this._db) return;
+        if (this._localMirrorInFlight) {
+            this._localMirrorPending = true;
+            return;
+        }
+        this._localMirrorInFlight = true;
+        try {
+            const workspaceId = await this.getWorkspaceId();
+            if (!workspaceId) return;
+            const exportRoot = this._resolveExportRoot();
+
+            const allPlans = await this.getBoard(workspaceId);
+
+            // Content-hash skip: don't rewrite if the serialized representation hasn't changed.
+            const serialized = JSON.stringify({
+                allPlans: allPlans.map(p => ({
+                    planId: p.planId,
+                    kanbanColumn: p.kanbanColumn,
+                    topic: p.topic,
+                    planFile: p.planFile,
+                    isFeature: p.isFeature,
+                    featureId: p.featureId,
+                    project: p.project
+                }))
+            });
+            const hash = crypto.createHash('sha256').update(serialized).digest('hex');
+            if (hash === this._localMirrorLastHash) return;
+            this._localMirrorLastHash = hash;
+
+            // Build feature-id -> topic lookup so subtask lines can name their parent feature.
+            const featureTopicById = new Map<string, string>();
+            for (const plan of allPlans) {
+                if (plan.isFeature) {
+                    featureTopicById.set(plan.planId, plan.topic);
+                }
+            }
+            const orderedColumns = [...DEFAULT_KANBAN_COLUMNS].sort((a, b) => a.order - b.order);
+            const columns = new Map<string, KanbanPlanRecord[]>();
+            for (const col of orderedColumns) {
+                columns.set(col.id, []);
+            }
+            columns.set('BACKLOG', []);
+            columns.set('CODED', []);
+            for (const plan of allPlans) {
+                const list = columns.get(plan.kanbanColumn);
+                if (list) list.push(plan);
+            }
+
+            const customColumns = new Map<string, KanbanPlanRecord[]>();
+            for (const plan of allPlans) {
+                if (!columns.has(plan.kanbanColumn)) {
+                    if (!customColumns.has(plan.kanbanColumn)) {
+                        customColumns.set(plan.kanbanColumn, []);
+                    }
+                    customColumns.get(plan.kanbanColumn)!.push(plan);
+                }
+            }
+
+            const allColumns = [
+                ...columns.entries(),
+                ...customColumns.entries(),
+            ];
+
+            for (const [col, plans] of allColumns) {
+                const perColPath = path.join(exportRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
+                let colMd = `## ${col}\n\n`;
+                if (plans.length === 0) {
+                    colMd += `_No plans_\n\n`;
+                } else {
+                    for (const plan of plans) {
+                        const filePath = path.isAbsolute(plan.planFile)
+                            ? plan.planFile
+                            : path.join(exportRoot, plan.planFile);
+                        const parts = [`planId:${plan.planId}`];
+                        if (plan.isFeature) { parts.push('feature'); }
+                        if (plan.featureId) {
+                            const featureTopic = featureTopicById.get(plan.featureId);
+                            parts.push(featureTopic ? `subtask-of:"${featureTopic}"` : `subtask-of:${plan.featureId}`);
+                        }
+                        if (plan.project) {
+                            const safeProject = plan.project.replace(/"/g, '');
+                            parts.push(`project:"${safeProject}"`);
+                        }
+                        colMd += `**Column:** ${plan.kanbanColumn}\n`;
+                        colMd += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
+                    }
+                    colMd += `\n`;
+                }
+                const tmpPath = `${perColPath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+                await fs.promises.mkdir(path.dirname(perColPath), { recursive: true });
+                await fs.promises.writeFile(tmpPath, colMd, 'utf8');
+                await fs.promises.rename(tmpPath, perColPath);
+            }
+
+            let md = `# Kanban Board\n\n`;
+            md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
+            md += `| Column | File |\n|---|---|\n`;
+            for (const [col, plans] of allColumns) {
+                const slug = _columnSlug(col);
+                md += `| ${col} | [kanban-state-${slug}.md](./kanban-state-${slug}.md) |\n`;
+            }
+
+            const oldJsonPath = path.join(exportRoot, '.switchboard', 'kanban-state.json');
+            if (fs.existsSync(oldJsonPath)) {
+                await fs.promises.unlink(oldJsonPath);
+            }
+
+            const stateFilePath = path.join(exportRoot, '.switchboard', 'kanban-board.md');
+            const tmpPath = `${stateFilePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+            await fs.promises.writeFile(tmpPath, md, 'utf8');
+            await fs.promises.rename(tmpPath, stateFilePath);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to export state to file:', error);
+        } finally {
+            this._localMirrorInFlight = false;
+            if (this._localMirrorPending) {
+                this._localMirrorPending = false;
+                void this._writeLocalBoardMirror();
+            }
+        }
+    }
+
+    public async flushLocalBoardMirror(): Promise<void> {
+        if (this._localMirrorDebounce) {
+            clearTimeout(this._localMirrorDebounce);
+            this._localMirrorDebounce = null;
+        }
+        if (this._localMirrorInFlight) {
+            this._localMirrorPending = true;
+            while (this._localMirrorInFlight) {
+                await new Promise(r => setTimeout(r, 10));
+            }
+        } else {
+            await this._writeLocalBoardMirror();
+        }
+    }
+
     private async exportStateToFile(): Promise<void> {
-        return;
+        await this.flushLocalBoardMirror();
     }
     /**
      * DIAGNOSTIC (is_feature clobber investigation) — TEMPORARY. Snapshot the is_feature state of
@@ -6930,7 +7092,7 @@ FROM plans
         await nextWrite;
 
         if (result) {
-            void this.exportStateToFile(); // fire-and-forget, no debounce
+            this._scheduleLocalMirror();
             void this._writeKanbanStateBackup(); // fire-and-forget backup JSON
             // One-directional read-only board snapshot (orphan branch). Debounce +
             // content-hash live inside the publisher; fire-and-forget here.

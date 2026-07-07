@@ -9447,6 +9447,8 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             case 'suggestFeatures': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db) { await db.flushLocalBoardMirror(); }
                 const projectFilter = (msg.projectFilter === undefined ? null : msg.projectFilter) as string | null;
                 // Pre-coding columns are the only place loose plans worth grouping live.
                 // Exclude existing features and already-assigned subtasks.

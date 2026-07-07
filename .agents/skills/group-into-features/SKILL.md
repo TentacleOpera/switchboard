@@ -10,6 +10,8 @@ You are grouping loose Switchboard plans into features. Follow this flow exactly
 
 Triggered when the user asks to "group plans into a feature", "organise loose plans into features", or "suggest feature groupings", OR by clicking the **Suggest Features** board button (which copies this skill's text with the workspace root injected).
 
+If the user already knows which plans to group (no discovery needed), use `create-feature-from-plans` instead — it skips the scan/propose/confirm flow and goes straight to creation.
+
 ## Flow
 
 ### 1. SCAN
@@ -35,27 +37,12 @@ Use the `planId:` value from the comment — NOT the filename — when calling c
 (A path under .switchboard/features/ also indicates a feature, but subtask detection
 requires the subtask-of tag — do not rely on filenames alone.)
 
-### 1a. DETERMINE PROJECT SCOPE
+### 1a. PROJECT SCOPE
 
-The active project filter is injected as `{{ACTIVE_PROJECT_FILTER}}` when
-invoked from the **Suggest Features** board button. This may be:
-- A specific project name (e.g. `Remote sync`)
-- `__unassigned__` (user is viewing plans with no project)
-- Empty / unset / the literal placeholder token (no filter active, OR the
-  skill was loaded directly without the button — include ALL plans)
+The active project filter is injected above as `{{ACTIVE_PROJECT_FILTER}}`.
 
-If the filter is a specific project, skip plans whose `project:"..."` tag
-does not match. If the filter is `__unassigned__`, skip plans that HAVE a
-`project:"..."` tag (only untagged plans are candidates). If the filter is
-empty/unset/the literal placeholder, include all plans (current behavior).
-
-Plans with NO `project:` tag are unassigned and match the `__unassigned__`
-filter; they are excluded from a specific-project filter.
-
-Example filtering:
-- Filter = `Remote sync` → only plans with `project:"Remote sync"` are candidates
-- Filter = `__unassigned__` → only plans with NO `project:` tag are candidates
-- Filter = empty / `{{ACTIVE_PROJECT_FILTER}}` → all plans are candidates
+- If a project name is injected: only consider plans tagged `project:"<that name>"`.
+- If no project name is injected (empty, `__unassigned__`, or the literal placeholder): ignore all plans that have a `project:"..."` tag — only untagged plans are candidates.
 
 ### 2. READ PLAN BODIES
 

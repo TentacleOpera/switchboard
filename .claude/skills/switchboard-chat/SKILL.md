@@ -82,4 +82,4 @@ When the work described will span 3 or more plan files on a related topic (shari
 - **Early (during Iterate):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under an feature?"* Do not create anything yet.
 - **Closing (at Gate):** When the user signals scoping is complete OR once 3+ related plans have been drafted, offer again: *"You now have [N] plans covering [topic] — want me to create an feature to group them?"*
 
-Only create the feature if the user confirms. Refer to existing files in `.switchboard/features/` for the expected format.
+Only create the feature if the user confirms. When the user says yes, invoke the `create-feature-from-plans` skill — it handles the mechanics (plan ID resolution, `create-feature.js` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the `create-feature` remote path automatically.
