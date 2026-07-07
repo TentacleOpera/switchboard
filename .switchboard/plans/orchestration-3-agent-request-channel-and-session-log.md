@@ -207,3 +207,7 @@ None remaining. The original plan's uncertain assumption (explicit control-plane
 Recommendation: **Send to Coder** (complexity 4 → effectively 2 with the HTTP pattern).
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Reviewed against commit `fcd9846`. No changes required. `POST /orchestrator/request` (`LocalApiServer.ts` `_handleOrchestratorRequest`) mirrors the Phone-a-Friend handler correctly — auth gate, 503-when-unwired, enum validation of `stage`/`type`, non-empty `body`, 400s with clear messages. The host callback (`TaskViewerProvider._handleOrchestratorInboxRequest`) resolves the workspace root host-side (never trusting agent input), bootstraps `inbox/processed/`, flattens frontmatter values to single lines (blocks key-forgery), and writes a unique `req-<UTC>-<stage>-<rand>.md` — matching the section-1 schema and the persona/subtask-5 read side. Validation: static review + cross-check that the paths/fields match `orchestrator.md` and the wake-loop drain contract. Remaining risk: session-log growth is unbounded (acknowledged non-goal in this plan).

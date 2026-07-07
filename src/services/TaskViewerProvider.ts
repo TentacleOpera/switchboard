@@ -357,6 +357,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Orchestration wake counters for auto-stop gating.
     private _orchestrationSkippedWakes = 0;
     private _orchestrationFailedWakes = 0;
+    private _orchestrationWakeSentAt = 0; // epoch ms of the last successfully injected wake (single-flight ref)
 
     /** Get the primary identifier for a dispatch card (planId-first, sessionId-legacy). */
     private _dispatchCardId(card: KanbanDispatchCard): string {
@@ -7681,12 +7682,12 @@ Each plan file must include:
             this._refreshTerminalStatuses();
         }
 
-        // Inject the kickoff prompt. The persona workflow (.agents/workflows/orchestrator.md)
+        // Inject the kickoff prompt. The persona workflow (.agents/workflows/switchboard-orchestrator.md)
         // encodes the full Kickoff Protocol; this prompt points the agent at it and injects
         // the runtime context (UNATTENDED flag, workspace root, active project filter, and
         // the fan-out endpoint). The dispatch path uses sendRobustText (clipboard-paste for
         // long payloads).
-        const personaPath = path.join(root, '.agents', 'workflows', 'orchestrator.md');
+        const personaPath = path.join(root, '.agents', 'workflows', 'switchboard-orchestrator.md');
         let projectFilter = '';
         try {
             const db = await this._getKanbanDb(root);
@@ -7698,7 +7699,7 @@ Each plan file must include:
         try {
             await fs.promises.access(personaPath);
             kickoffPrompt = [
-                `You are the Switchboard orchestrator. Read and follow .agents/workflows/orchestrator.md now — begin with the Kickoff Protocol.`,
+                `You are the Switchboard orchestrator. Read and follow .agents/workflows/switchboard-orchestrator.md now — begin with the Kickoff Protocol.`,
                 ``,
                 `UNATTENDED=true`,
                 `WORKSPACE_ROOT=${root}`,
@@ -7710,11 +7711,20 @@ Each plan file must include:
                 `Then report "kickoff complete, sleeping" and STOP. Do not poll — the system wakes you later.`
             ].join('\n');
         } catch {
-            kickoffPrompt = `You are the Switchboard orchestrator. The orchestrator workflow is not yet installed (.agents/workflows/orchestrator.md). Stand by — do not take autonomous action.`;
+            kickoffPrompt = `You are the Switchboard orchestrator. The orchestrator workflow is not yet installed (.agents/workflows/switchboard-orchestrator.md). Stand by — do not take autonomous action.`;
         }
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
         await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, kickoffPrompt, { orchestrationKickoff: true });
+
+        // Clear stale run markers so a NEW batch starts clean. A leftover
+        // batch-complete from a prior run would otherwise stop the engine on the
+        // first wake; a stale last-wake-complete is harmless but cleared for tidiness.
+        try {
+            const orchDir = path.join(root, '.switchboard', 'orchestrator');
+            await fs.promises.rm(path.join(orchDir, 'batch-complete'), { force: true });
+            await fs.promises.rm(path.join(orchDir, 'last-wake-complete'), { force: true });
+        } catch { /* best-effort */ }
 
         // Arm the session: enable the autoban engine so the wake tick fires.
         // The engine's orchestration branch sets up a single wake-timer.
@@ -7807,11 +7817,22 @@ Each plan file must include:
             // Dispatch each subtask individually — each goes to its own worktree terminal.
             for (const st of toDispatch) {
                 const worktreePath = subtaskWtMap.get(st.planId);
-                const complexityScore = parseInt(st.complexity || '0', 10);
-                const role = complexityScore >= 7 ? 'lead' : 'coder';
-                const targetAgent = await this._resolveAgentTerminalForPlan(role, root, worktreePath);
+                // Route by complexity exactly as the autoban tick does — honours
+                // routingMode (all_coder/all_lead) and the configured thresholds
+                // (incl. intern), not a hardcoded cutoff.
+                const role = this._autobanRoutePlanReviewedCard(String(st.complexity ?? ''), this._autobanState.routingMode);
+                // Resolve the subtask's OWN worktree terminal. Never fall back to a
+                // main-checkout pool terminal — parallel agents colliding on the
+                // main tree is worse than a delayed subtask, so skip and let a
+                // later wake retry (this is why we resolve the terminal here rather
+                // than via _resolveAgentTerminalForPlan, which has that fallback).
+                if (!worktreePath) {
+                    skipped.push({ planId: st.planId, reason: 'no worktree for subtask' });
+                    continue;
+                }
+                const targetAgent = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role);
                 if (!targetAgent) {
-                    skipped.push({ planId: st.planId, reason: `no terminal for role=${role}` });
+                    skipped.push({ planId: st.planId, reason: `no worktree terminal for role=${role}` });
                     continue;
                 }
                 const ok = await this.handleKanbanBatchTrigger(
@@ -9122,11 +9143,17 @@ Each plan file must include:
             const root = this._resolveWorkspaceRoot();
             if (!root) { return; }
 
-            // Batch-complete guard: if the marker exists, stop the engine.
+            // Batch-complete guard: if the marker exists, archive it (so a later
+            // Start begins clean — a lingering marker would otherwise stop every
+            // future batch on its first wake) and stop the engine.
             try {
                 const batchCompletePath = path.join(root, '.switchboard', 'orchestrator', 'batch-complete');
                 await fs.promises.access(batchCompletePath);
                 console.log('[Autoban] Orchestration batch-complete marker found — stopping engine.');
+                try {
+                    const archived = batchCompletePath + '.' + new Date().toISOString().replace(/[:.]/g, '-') + '.done';
+                    await fs.promises.rename(batchCompletePath, archived);
+                } catch { /* best-effort archive */ }
                 this._autobanState = normalizeAutobanConfigState({
                     ...this._autobanState,
                     enabled: false,
@@ -9138,36 +9165,45 @@ Each plan file must include:
                 return;
             } catch { /* no marker — continue */ }
 
-            // Single-flight gate: if last-wake-complete marker is fresher than
-            // the interval, skip this wake (a prior wake is still in progress
-            // or just finished and the system hasn't waited long enough).
-            try {
-                const lastWakePath = path.join(root, '.switchboard', 'orchestrator', 'last-wake-complete');
-                const stat = await fs.promises.stat(lastWakePath);
-                const elapsed = Date.now() - stat.mtimeMs;
-                const intervalMs = Math.max(this._autobanState.orchestrationConfig?.intervalMinutes ?? 10, 1) * 60 * 1000;
-                if (elapsed < intervalMs * 0.9) {
-                    console.log('[Autoban] Orchestration wake skipped — last-wake-complete marker is fresh.');
+            // Single-flight gate: skip while the wake we last sent hasn't reported
+            // completion. The persona touches last-wake-complete as its final act,
+            // so a marker OLDER than our last send (or missing) means the prior
+            // wake is still running. After MAX_SKIPPED consecutive skips, force a
+            // wake so a crashed orchestrator can't wedge the loop.
+            let forceRecover = false;
+            if (this._orchestrationWakeSentAt > 0) {
+                let complete = false;
+                try {
+                    const lastWakePath = path.join(root, '.switchboard', 'orchestrator', 'last-wake-complete');
+                    const stat = await fs.promises.stat(lastWakePath);
+                    complete = stat.mtimeMs >= this._orchestrationWakeSentAt;
+                } catch { complete = false; }
+                if (!complete) {
                     this._orchestrationSkippedWakes++;
-                    if (this._orchestrationSkippedWakes >= ORCHESTRATION_MAX_SKIPPED_WAKES) {
-                        console.warn(`[Autoban] Orchestration: ${ORCHESTRATION_MAX_SKIPPED_WAKES} consecutive skipped wakes — stopping engine.`);
-                        this._autobanState = normalizeAutobanConfigState({
-                            ...this._autobanState,
-                            enabled: false,
-                            orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
-                        });
-                        await this._persistAutobanState();
-                        this._stopAutobanEngine();
-                        this._postAutobanState();
+                    if (this._orchestrationSkippedWakes < ORCHESTRATION_MAX_SKIPPED_WAKES) {
+                        console.log('[Autoban] Orchestration wake skipped — previous wake not yet complete.');
+                        return;
                     }
-                    return;
+                    console.warn(`[Autoban] Orchestration: force-waking after ${this._orchestrationSkippedWakes} skipped wakes.`);
+                    forceRecover = true;
+                    this._orchestrationSkippedWakes = 0;
                 }
-            } catch { /* no marker — first wake or after manual delete */ }
+            }
 
             // Dispatch the Wake Protocol prompt to the orchestrator terminal.
-            const wakePrompt = `You are the Switchboard orchestrator. The system woke you. Read and follow .agents/workflows/orchestrator.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
+            const recoveryPreamble = forceRecover
+                ? `Previous wake did not report completion — recover: check for an interrupted triage or merge before proceeding.\n`
+                : '';
+            const wakePrompt = `${recoveryPreamble}You are the Switchboard orchestrator. The system woke you. Read and follow .agents/workflows/switchboard-orchestrator.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
+            let ok = false;
             try {
-                await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt, { orchestrationWake: true });
+                ok = await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt, { orchestrationWake: true });
+            } catch (err) {
+                console.error('[Autoban] Orchestration wake dispatch failed:', err);
+                ok = false;
+            }
+            if (ok) {
+                this._orchestrationWakeSentAt = Date.now();
                 this._orchestrationSkippedWakes = 0;
                 this._orchestrationFailedWakes = 0;
                 // Update lastWakeAt in config state for UI status display.
@@ -9180,11 +9216,16 @@ Each plan file must include:
                     }
                 });
                 await this._persistAutobanState();
-            } catch (err) {
-                console.error('[Autoban] Orchestration wake dispatch failed:', err);
+            } else {
+                // Delivery failed — the orchestrator terminal is not running.
+                // _dispatchExecuteMessage returns false (it does not throw) in that
+                // case, so this branch is the ONLY dead-terminal signal. Count
+                // failures and stop after MAX_FAILED so a dead terminal can't spin
+                // the loop forever while the UI shows "running".
                 this._orchestrationFailedWakes++;
+                console.warn(`[Autoban] Orchestration wake not delivered (terminal down) — failure ${this._orchestrationFailedWakes}/${ORCHESTRATION_MAX_FAILED_WAKES}.`);
                 if (this._orchestrationFailedWakes >= ORCHESTRATION_MAX_FAILED_WAKES) {
-                    console.warn(`[Autoban] Orchestration: ${ORCHESTRATION_MAX_FAILED_WAKES} consecutive failed wakes — stopping engine.`);
+                    vscode.window.showWarningMessage(`Orchestration stopped: orchestrator terminal unreachable after ${ORCHESTRATION_MAX_FAILED_WAKES} wake attempts.`);
                     this._autobanState = normalizeAutobanConfigState({
                         ...this._autobanState,
                         enabled: false,
@@ -9192,9 +9233,7 @@ Each plan file must include:
                     });
                     await this._persistAutobanState();
                     this._stopAutobanEngine();
-                    this._postAutobanState();
                 }
-                return;
             }
             this._postAutobanState();
         });
@@ -9209,8 +9248,11 @@ Each plan file must include:
         if (this._autobanState.automationMode === 'orchestration') {
             const intervalMinutes = this._autobanState.orchestrationConfig?.intervalMinutes ?? 10;
             const intervalMs = Math.max(intervalMinutes, 1) * 60 * 1000;
-            // Fire an immediate wake (serialized via the same queue).
-            this._enqueueOrchestrationWake();
+            // NO immediate wake: kickoff just dispatched the fleet, so the first
+            // check-in fires after one full interval. An immediate wake here would
+            // land a Wake-Protocol prompt on top of the freshly-injected kickoff
+            // prompt. Seed lastTickAt so the AUTOMATION-tab countdown has a baseline.
+            this._autobanLastTickAt.set(ORCHESTRATION_TICK_KEY, Date.now());
             const timer = setInterval(() => {
                 this._enqueueOrchestrationWake();
             }, intervalMs);
@@ -9293,6 +9335,7 @@ Each plan file must include:
         this._autobanTickQueue = Promise.resolve();
         this._orchestrationSkippedWakes = 0;
         this._orchestrationFailedWakes = 0;
+        this._orchestrationWakeSentAt = 0;
     }
 
     private _notifyAutobanWatchArrival(column: string, workspaceRoot: string): void {

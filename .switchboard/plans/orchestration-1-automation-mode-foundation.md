@@ -316,3 +316,7 @@ Would cover, as pure-function tests against `autobanState.ts`: `normalizeAutoban
 **Recommendation: Send to Coder**
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Reviewed against commit `fcd9846`. Implementation is faithful and clean: the `automationMode` enum + `OrchestrationConfig` + normalizer (`autobanState.ts`), the worktree-mode coupling with prior-key save/restore/consume (`KanbanProvider.ts` `setAutomationMode`/`setFeatureWorktreeMode`), the mode gate + `startOrchestratorFromKanban`/`stopOrchestratorFromKanban` + terminal launch (`TaskViewerProvider.ts`), and the AUTOMATION-tab panel with interval/concurrency/status/START-STOP and no confirm dialog (`kanban.html`) all match this plan. No CRITICAL/MAJOR findings in this subtask. Validation: static/caller-trace only (compile+tests skipped per directive). Remaining risk (NIT): `startOrchestratorFromKanban` self-sets `automationMode:'orchestration'` but the worktree coupling only runs on the dropdown `setAutomationMode` path — benign because the config persists in the DB and the panel is only reachable after the mode is selected.

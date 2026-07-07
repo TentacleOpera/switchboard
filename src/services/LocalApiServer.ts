@@ -5,6 +5,8 @@ import { URL } from 'url';
 import { ClickUpSyncService } from './ClickUpSyncService';
 import { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
+import { importPlanFiles } from './PlanFileImporter';
+import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
 
 interface LocalApiServerOptions {
     workspaceRoot: string;
@@ -855,9 +857,10 @@ export class LocalApiServer {
             const data = await handler();
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, data }));
-        } catch (err) {
-            console.error('[LocalApiServer] read endpoint error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
+        } catch (err: any) {
+            const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
+            if (status >= 500) console.error('[LocalApiServer] read endpoint error:', err);
+            res.writeHead(status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'read endpoint failed' }));
         }
     }
@@ -866,7 +869,7 @@ export class LocalApiServer {
         await this._handleReadEndpoint(req, res, async () => {
             const db = await this._resolveDbFromQuery(req);
             if (!db) throw new Error('Kanban database not available');
-            const board = await db.getBoard();
+            const board = await this._resolveBoard(db);
             return board;
         });
     }
@@ -882,10 +885,10 @@ export class LocalApiServer {
             if (featureId) {
                 plans = await db.getSubtasksByFeatureId(featureId);
             } else if (column) {
-                const all = await db.getBoard();
+                const all = await this._resolveBoard(db);
                 plans = (all || []).filter((p: any) => p.kanbanColumn === column);
             } else {
-                plans = await db.getBoard();
+                plans = await this._resolveBoard(db);
             }
             return plans;
         });
@@ -895,7 +898,7 @@ export class LocalApiServer {
         await this._handleReadEndpoint(req, res, async () => {
             const db = await this._resolveDbFromQuery(req);
             if (!db) throw new Error('Kanban database not available');
-            const board = await db.getBoard();
+            const board = await this._resolveBoard(db);
             const features = (board || []).filter((p: any) => p.isFeature === 1 || p.isFeature === true);
             return features;
         });
@@ -950,6 +953,272 @@ export class LocalApiServer {
         const url = new URL(req.url || '', `http://localhost:${this._port}`);
         const wsRoot = url.searchParams.get('workspaceRoot') || undefined;
         return await getKanbanDatabase(wsRoot);
+    }
+
+    /**
+     * getBoard() filters on the workspace UUID (not the root path). Resolve it
+     * the same way the moveCard callback does, or every board-backed read comes
+     * back as an empty array with no error.
+     */
+    private async _resolveBoard(db: any): Promise<any[]> {
+        const wsId = await this._wsId(db);
+        return await db.getBoard(wsId);
+    }
+
+    /** Resolve the KanbanDatabase for a mutation handler, defaulting to the primary root. */
+    private async _resolveDbForRoot(wsRoot?: string): Promise<any | null> {
+        const getKanbanDatabase = this._options.getKanbanDatabase;
+        if (!getKanbanDatabase) return null;
+        return await getKanbanDatabase(wsRoot || this._options.workspaceRoot);
+    }
+
+    /** Resolve the workspace UUID the DB methods key on (not the root path). */
+    private async _wsId(db: any): Promise<string> {
+        return (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+    }
+
+    /** GET /kanban/plan?planId= — a single plan record plus its full file content. */
+    private async _handleGetPlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._resolveDbFromQuery(req);
+            if (!db) throw new Error('Kanban database not available');
+            const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            const planId = url.searchParams.get('planId');
+            if (!planId) { const e: any = new Error('Missing required query param: planId'); e.statusCode = 400; throw e; }
+            const record = await db.getPlanByPlanId(planId);
+            if (!record) { const e: any = new Error(`Plan not found: ${planId}`); e.statusCode = 404; throw e; }
+            let content = '';
+            try {
+                const root = url.searchParams.get('workspaceRoot') || this._options.workspaceRoot;
+                const abs = path.isAbsolute(record.planFile) ? record.planFile : path.join(root, record.planFile);
+                content = await fs.readFile(abs, 'utf8');
+            } catch { /* file may be missing — return the record without content */ }
+            return { ...record, content };
+        });
+    }
+
+    /** GET /kanban/columns — built-in column definitions + custom columns present on the board. */
+    private async _handleGetColumns(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const builtIn = DEFAULT_KANBAN_COLUMNS;
+            let custom: string[] = [];
+            const db = await this._resolveDbFromQuery(req);
+            if (db) {
+                try {
+                    const board = await this._resolveBoard(db);
+                    const builtInIds = new Set(builtIn.map(c => c.id));
+                    custom = Array.from(new Set(
+                        (board || [])
+                            .map((p: any) => p.kanbanColumn)
+                            .filter((c: string) => c && !builtInIds.has(c))
+                    ));
+                } catch { /* best-effort custom-column derivation */ }
+            }
+            return { builtIn, custom };
+        });
+    }
+
+    /** POST /kanban/plans — create a plan file and import it (the canonical importer assigns the planId). */
+    private async _handleCreatePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const root = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!root) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            const title = String(body?.title || body?.topic || '').trim();
+            if (!title) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: title' }));
+                return;
+            }
+            const rawSlug = String(body?.slug || title);
+            const slug = rawSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'plan';
+            const plansDir = path.join(root, '.switchboard', 'plans');
+            const resolvedDir = path.resolve(plansDir);
+            const resolved = path.resolve(path.join(plansDir, `${slug}.md`));
+            // Path-traversal guard: the resolved file MUST live directly under .switchboard/plans/.
+            if (resolved !== path.join(resolvedDir, `${slug}.md`) || !resolved.startsWith(resolvedDir + path.sep)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Invalid slug (path traversal rejected)' }));
+                return;
+            }
+            // Don't clobber an existing plan.
+            try {
+                await fs.access(resolved);
+                res.writeHead(409, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Plan file already exists: ${slug}.md` }));
+                return;
+            } catch { /* good — does not exist */ }
+
+            const complexity = (body?.complexity !== undefined && body?.complexity !== null) ? String(body.complexity) : 'Unknown';
+            const tags = body?.tags ? (Array.isArray(body.tags) ? body.tags.join(', ') : String(body.tags)) : '';
+            const project = body?.project ? String(body.project).replace(/[\r\n]+/g, ' ').trim() : '';
+            const description = body?.description ? String(body.description).replace(/[\r\n]+/g, ' ').trim() : '';
+            const goal = body?.body ? String(body.body) : '(Describe the goal of this plan.)';
+
+            const md: string[] = [];
+            if (description) { md.push('---', `description: ${description}`, '---', ''); }
+            md.push(`# ${title}`, '');
+            md.push(`**Complexity:** ${complexity}`);
+            if (tags) md.push(`**Tags:** ${tags}`);
+            if (project) md.push(`**Project:** ${project}`);
+            md.push('', '## Goal', '', goal, '');
+
+            await fs.mkdir(plansDir, { recursive: true });
+            await fs.writeFile(resolved, md.join('\n'), 'utf8');
+
+            // Canonical importer: assigns a DB planId keyed on plan_file + workspace_id.
+            await importPlanFiles(root);
+
+            // Return the assigned planId, matched by file basename (format-agnostic).
+            let planId: string | undefined;
+            const db = await this._resolveDbForRoot(root);
+            if (db) {
+                try {
+                    const board = await this._resolveBoard(db);
+                    const rec = (board || []).find((p: any) =>
+                        String(p.planFile || '').replace(/\\/g, '/').endsWith(`${slug}.md`));
+                    planId = rec?.planId;
+                } catch { /* best-effort planId resolution */ }
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, planId, planFile: resolved, slug }));
+        } catch (err) {
+            console.error('[LocalApiServer] createPlan error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'createPlan failed' }));
+        }
+    }
+
+    /** DELETE /kanban/plans?planId=[&deleteFile=true] — remove the DB row (optionally unlink the file). */
+    private async _handleDeletePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+        }
+        try {
+            const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            const planId = url.searchParams.get('planId');
+            if (!planId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required query param: planId' }));
+                return;
+            }
+            const root = url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '';
+            const db = await this._resolveDbForRoot(root);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Kanban database not available' }));
+                return;
+            }
+            const record = await db.getPlanByPlanId(planId);
+            if (!record) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Plan not found: ${planId}` }));
+                return;
+            }
+            const ok = await db.deletePlanByPlanId(planId);
+            // deletePlanByPlanId removes the DB row only; the .md file re-imports on the
+            // next import_plans unless the caller opts into unlinking it too.
+            let fileDeleted = false;
+            if (url.searchParams.get('deleteFile') === 'true' && record.planFile && root) {
+                const plansDir = path.resolve(path.join(root, '.switchboard', 'plans'));
+                const abs = path.resolve(path.isAbsolute(record.planFile) ? record.planFile : path.join(root, record.planFile));
+                if (abs.startsWith(plansDir + path.sep)) {
+                    try { await fs.unlink(abs); fileDeleted = true; } catch { /* already gone */ }
+                }
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: ok, fileDeleted }));
+        } catch (err) {
+            console.error('[LocalApiServer] deletePlan error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'deletePlan failed' }));
+        }
+    }
+
+    /** PUT /kanban/plans/project — set a plan's project ({ planId, project }). */
+    private async _handleSetPlanProject(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handlePlanFieldUpdate(req, res, 'project');
+    }
+
+    /** PUT /kanban/plans/complexity — set a plan's complexity ({ planId, complexity }). */
+    private async _handleSetPlanComplexity(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handlePlanFieldUpdate(req, res, 'complexity');
+    }
+
+    private async _handlePlanFieldUpdate(req: http.IncomingMessage, res: http.ServerResponse, field: 'project' | 'complexity'): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const planId = String(body?.planId || '').trim();
+            if (!planId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: planId' }));
+                return;
+            }
+            const value = field === 'project' ? String(body?.project ?? '') : String(body?.complexity ?? '');
+            const db = await this._resolveDbForRoot(String(body?.workspaceRoot || '').trim() || undefined);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Kanban database not available' }));
+                return;
+            }
+            const record = await db.getPlanByPlanId(planId);
+            if (!record) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Plan not found: ${planId}` }));
+                return;
+            }
+            const wsId = await this._wsId(db);
+            const ok = field === 'project'
+                ? await db.updatePlanProjectByPlanFile(record.planFile, wsId, value)
+                : await db.updateComplexityByPlanFile(record.planFile, wsId, value);
+            res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: ok }));
+        } catch (err) {
+            console.error(`[LocalApiServer] setPlan-${field} error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'update failed' }));
+        }
+    }
+
+    /** POST /kanban/plans/import — rescan .switchboard/plans/*.md and upsert into the DB. */
+    private async _handleImportPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const root = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!root) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            const result = await importPlanFiles(root);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, ...result }));
+        } catch (err) {
+            console.error('[LocalApiServer] importPlans error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'importPlans failed' }));
+        }
     }
 
     private async _handleClickUpApiProxy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1598,7 +1867,7 @@ export class LocalApiServer {
 
         // Add CORS headers - allow any localhost origin
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
         if (req.method === 'OPTIONS') {
@@ -1607,7 +1876,7 @@ export class LocalApiServer {
             return;
         }
 
-        if (req.method !== 'GET' && req.method !== 'POST' && req.method !== 'PUT') {
+        if (req.method !== 'GET' && req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'DELETE') {
             res.writeHead(405, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Method not allowed' }));
             return;
@@ -1655,6 +1924,16 @@ export class LocalApiServer {
                 await this._handleKanbanSplitFeature(req, res);
             } else if (pathname === '/kanban/orchestration/dispatch' && req.method === 'POST') {
                 await this._handleOrchestrationDispatch(req, res);
+            } else if (pathname === '/kanban/plans/import' && req.method === 'POST') {
+                await this._handleImportPlans(req, res);
+            } else if (pathname === '/kanban/plans/project' && req.method === 'PUT') {
+                await this._handleSetPlanProject(req, res);
+            } else if (pathname === '/kanban/plans/complexity' && req.method === 'PUT') {
+                await this._handleSetPlanComplexity(req, res);
+            } else if (pathname === '/kanban/plans' && req.method === 'POST') {
+                await this._handleCreatePlan(req, res);
+            } else if (pathname === '/kanban/plans' && req.method === 'DELETE') {
+                await this._handleDeletePlan(req, res);
             } else if (pathname === '/worktree/cleanup' && req.method === 'POST') {
                 await this._handleWorktreeCleanup(req, res);
             } else if (pathname === '/comment' && req.method === 'POST') {
@@ -1685,6 +1964,10 @@ export class LocalApiServer {
                 await this._handleGetPlans(req, res);
             } else if (pathname === '/kanban/features' && req.method === 'GET') {
                 await this._handleGetFeatures(req, res);
+            } else if (pathname === '/kanban/plan' && req.method === 'GET') {
+                await this._handleGetPlan(req, res);
+            } else if (pathname === '/kanban/columns' && req.method === 'GET') {
+                await this._handleGetColumns(req, res);
             } else if (pathname === '/worktree/list' && req.method === 'GET') {
                 await this._handleGetWorktrees(req, res);
             } else if (pathname === '/orchestrator/inbox' && req.method === 'GET') {

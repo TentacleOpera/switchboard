@@ -190,3 +190,7 @@ The user was advised to run a verification/research pass on these before impleme
 Recommendation: Send to Lead Coder
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Reviewed against commit `fcd9846`. Files changed by this review: `src/services/TaskViewerProvider.ts` (`_orchestrationDispatchFeature`). **CRITICAL (fixed):** fan-out resolved terminals via `_resolveAgentTerminalForPlan`, which falls back to `_getAgentNameForRole` (a main-checkout pool terminal) when no worktree terminal exists — directly violating §3's "never fall back to the main checkout" rule and risking parallel agents colliding on the main tree; replaced with a direct `_findTerminalNameByWorktreePathAndRole` + skip-on-null (also skips when the subtask has no worktree row). **MAJOR (fixed):** role routing was a hardcoded `complexity>=7?lead:coder`, ignoring `routingMode` and the configured intern/coder/lead thresholds; now uses `_autobanRoutePlanReviewedCard(...)` exactly as the tick does. The grouping SKILL.md unattended section, `Miscellaneous` sweep, PLAN-REVIEWED-only filter, concurrency cap, and worktree provisioning reuse all match the plan. Validation: static/caller-trace only (compile+tests skipped). Remaining risks (deferred, MINOR): the fan-out does not check the global session cap (`_getAutobanRemainingSessionCapacity`), does not use the `_activeDispatchSessions` lock (duplicate-call idempotency leans on `handleKanbanBatchTrigger` moving the card out of PLAN REVIEWED first), and has no `automationMode==='orchestration'` guard.

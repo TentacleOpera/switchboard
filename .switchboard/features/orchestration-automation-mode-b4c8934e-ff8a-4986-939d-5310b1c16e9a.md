@@ -75,10 +75,16 @@ The mode foundation lands first (everything keys off the new `automationMode`). 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add an Orchestration Automation Mode (Config, AUTOMATION-Tab UI, Worktree-Mode Coupling)](../plans/orchestration-1-automation-mode-foundation.md) — **LEAD CODED**
-- [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **LEAD CODED**
-- [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **LEAD CODED**
-- [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **LEAD CODED**
-- [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **LEAD CODED**
-- [ ] [External Agent HTTP Surface — Read Endpoints + Orchestration Skill](../plans/external-agent-http-surface.md) — **LEAD CODED**
+- [ ] [Add an Orchestration Automation Mode (Config, AUTOMATION-Tab UI, Worktree-Mode Coupling)](../plans/orchestration-1-automation-mode-foundation.md) — **CODE REVIEWED**
+- [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **CODE REVIEWED**
+- [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **CODE REVIEWED**
+- [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **CODE REVIEWED**
+- [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **CODE REVIEWED**
+- [ ] [External Agent HTTP Surface — Read Endpoints + Orchestration Skill](../plans/external-agent-http-surface.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Direct in-place reviewer pass over all 6 subtasks against commit `fcd9846` (compile+tests skipped per directive; findings verified by caller/consumer tracing). Subtasks 1–3 (foundation, persona, request-channel) landed faithfully — no code changes. Four defects fixed in `TaskViewerProvider.ts` and one in `LocalApiServer.ts`: **(CRITICAL)** fan-out fell back to a main-checkout terminal instead of skipping (main-tree collision risk); **(CRITICAL)** the wake tick ignored `_dispatchExecuteMessage`'s false-on-dead-terminal return so lost terminals never stopped the loop; **(CRITICAL)** external read endpoints called `getBoard()` with no workspaceId → always-empty results; plus MAJOR fixes to the single-flight gate (wrong mtime reference halved cadence), an unwanted immediate wake colliding with kickoff, a stale `batch-complete` marker wedging future batches, and hardcoded complexity routing. Remaining risks (deferred): no fan-out session-cap/lock; no wake-failure terminal relaunch; pause/reset plumbing for the orchestration key absent but UI-unreachable.
+
+**Update (2026-07-08):** subtask 6's deferred CRUD/read superset was subsequently built out — `get_plan` (single + content), `list_columns`, `create_plan`/`delete_plan`/`set_project`/`set_complexity`/`import_plans`, the `DELETE` method-guard/CORS fix, and a full comprehensive rewrite of the `switchboard-orchestration` skill (complete HTTP surface + fleet-agent and external-orchestrator workflows). Typechecks clean under the pretest `tsc` config. See `external-agent-http-surface.md` → "Follow-up".

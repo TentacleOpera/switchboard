@@ -278,3 +278,7 @@ The user was advised to run web research (or a targeted code-read of the snapsho
 **Recommendation:** Complexity 4 → **Send to Coder.** The code delta is trivial (one manifest entry, two table rows), but the persona document is load-bearing protocol consumed by three sibling engines and must be authored with command-level precision.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Reviewed against commit `fcd9846`. No changes required. `.agents/workflows/orchestrator.md` is faithful to the content contract and — critically — its marker protocol matches the engine exactly: Wake Protocol step 5 touches `last-wake-complete` (ISO content) and Batch Completion creates `batch-complete`, which are precisely the files subtask 5's tick reads/gates on. The `MIRROR_MANIFEST` entry uses `invocation:'no-model'` (not the dangerous `no-user`) with `allowedTools:'Bash'`, and the `AGENTS.md` registry rows + the kanban-prose "sanctioned exception" sentence landed as specified (CLAUDE.md regenerates from AGENTS.md — correctly left untouched). Validation: static review + cross-check against the engine's marker reads. Remaining risk: the merge-back cleanup step references the `worktree_cleanup` skill conditionally, which is fine since that skill is now shipped.
