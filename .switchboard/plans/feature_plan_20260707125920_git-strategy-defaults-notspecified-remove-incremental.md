@@ -290,4 +290,4 @@ None — verification is manual via an installed VSIX plus a TypeScript compile 
 
 **Complexity 3 → Send to Intern.** Five-site default change (`'current'`/`'whenDone'`/`'noPush'` → `'notSpecified'`), one option removal (`incremental`) across type unions + clause vocabulary + sanitisation allow-list, a stale-value normalisation pinned to one read site, and a comment rewrite. All sites are identified with line numbers; no new architecture. The only migration concern (stale persisted `incremental`) is handled by allow-list narrowing + read-time normalisation + the `GIT_COMMIT_CLAUSES` map no longer containing the key. Land before the sibling layout plan (see `## Dependencies`).
 
-**Stage Complete:** PLAN REVIEWED
+**Stage Complete:** LEAD CODED

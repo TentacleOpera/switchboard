@@ -7,7 +7,7 @@ export interface CustomAgentAddons {
     // is independent; these three compile into the composed `GIT POLICY:` block by
     // buildGitPolicyBlock. `'notSpecified'` and `undefined` both mean "emit no clause".
     gitBranchStrategy?: 'current' | 'newBranch' | 'notSpecified';
-    gitCommitStrategy?: 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
+    gitCommitStrategy?: 'whenDone' | 'dontCommit' | 'notSpecified';
     gitPushStrategy?: 'noPush' | 'pushWhenDone' | 'notSpecified';
     workspaceTypeDetection?: boolean;
     switchboardSafeguards?: boolean;
@@ -217,8 +217,8 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.gitBranchStrategy && ['current', 'newBranch', 'notSpecified'].includes(s.gitBranchStrategy as string)) {
         a.gitBranchStrategy = s.gitBranchStrategy as 'current' | 'newBranch' | 'notSpecified';
     }
-    if (s.gitCommitStrategy && ['whenDone', 'incremental', 'dontCommit', 'notSpecified'].includes(s.gitCommitStrategy as string)) {
-        a.gitCommitStrategy = s.gitCommitStrategy as 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
+    if (s.gitCommitStrategy && ['whenDone', 'dontCommit', 'notSpecified'].includes(s.gitCommitStrategy as string)) {
+        a.gitCommitStrategy = s.gitCommitStrategy as 'whenDone' | 'dontCommit' | 'notSpecified';
     }
     if (s.gitPushStrategy && ['noPush', 'pushWhenDone', 'notSpecified'].includes(s.gitPushStrategy as string)) {
         a.gitPushStrategy = s.gitPushStrategy as 'noPush' | 'pushWhenDone' | 'notSpecified';

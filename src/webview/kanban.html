@@ -2398,6 +2398,39 @@
             margin-left: auto;
         }
 
+        .addon-subsection-accordion {
+            border: 1px solid var(--border-color, #333);
+            border-radius: 6px;
+            margin: 8px 0;
+            background: var(--panel-bg2, transparent);
+        }
+        .addon-subsection-accordion > summary.addon-subsection-header {
+            cursor: pointer;
+            padding: 8px 12px;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            list-style: none;
+            user-select: none;
+        }
+        .addon-subsection-accordion > summary.addon-subsection-header::-webkit-details-marker { display: none; }
+        .addon-subsection-accordion > summary.addon-subsection-header::before {
+            content: '▸'; margin-right: 8px; transition: transform 0.15s ease; display: inline-block;
+        }
+        .addon-subsection-accordion[open] > summary.addon-subsection-header::before { transform: rotate(90deg); }
+        .addon-subsection-body { padding: 8px 12px 12px; }
+        .addon-option-desc {
+            display: block;
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            margin: 2px 0 6px 22px;
+            line-height: 1.4;
+        }
+        .addon-option-label {
+            font-weight: 500;
+        }
+
         #promptPreview {
             width: 100%;
             min-height: 200px;
@@ -3396,18 +3429,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // custom-agent-specific add-ons. Parity with built-in code roles.
                 addons = [
                     { id: 'gitProhibition', label: 'Git Safety Guardrail', tooltip: 'Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions', default: true },
-                    { id: 'gitBranchStrategy', label: 'Git Branch Strategy', tooltip: 'Prescriptive branch directive emitted in the GIT POLICY block', type: 'radio', default: 'current', options: [
+                    { id: 'gitBranchStrategy', label: 'Git Branch Strategy', tooltip: 'Prescriptive branch directive emitted in the GIT POLICY block', type: 'radio', default: 'notSpecified', group: 'git', options: [
                         { value: 'current', label: 'Current Branch', tooltip: 'Do all work on the current branch; do NOT create new branches or worktrees' },
                         { value: 'newBranch', label: 'New Branch', tooltip: 'Create ONE descriptively-named branch for this task and do all work on it' },
                         { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no branch clause' }
                     ] },
-                    { id: 'gitCommitStrategy', label: 'Git Commit Strategy', tooltip: 'Prescriptive commit directive emitted in the GIT POLICY block', type: 'radio', default: 'whenDone', options: [
+                    { id: 'gitCommitStrategy', label: 'Git Commit Strategy', tooltip: 'Prescriptive commit directive emitted in the GIT POLICY block', type: 'radio', default: 'notSpecified', group: 'git', options: [
                         { value: 'whenDone', label: 'Commit When Done', tooltip: 'Stage all changes and create a single descriptive commit when the task is finished' },
-                        { value: 'incremental', label: 'Incremental Commits', tooltip: 'Commit at each logical checkpoint with a clear message' },
                         { value: 'dontCommit', label: 'Do Not Commit', tooltip: 'Leave all changes in the working tree for the user to review' },
                         { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no commit clause' }
                     ] },
-                    { id: 'gitPushStrategy', label: 'Git Push Strategy', tooltip: 'Prescriptive push directive emitted in the GIT POLICY block', type: 'radio', default: 'noPush', options: [
+                    { id: 'gitPushStrategy', label: 'Git Push Strategy', tooltip: 'Prescriptive push directive emitted in the GIT POLICY block', type: 'radio', default: 'notSpecified', group: 'git', options: [
                         { value: 'noPush', label: 'Do Not Push', tooltip: 'Do NOT push to any remote' },
                         { value: 'pushWhenDone', label: 'Push When Done', tooltip: 'After committing, push the working branch to its remote. Do not force-push.' },
                         { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no push clause' }
@@ -3426,7 +3458,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             desc.textContent = `Build the ${role.charAt(0).toUpperCase() + role.slice(1)} prompt with add-on instructions:`;
 
-            addons.forEach(addon => {
+            // Helper to render a single addon inside a container
+            function renderAddon(addon, role, container) {
                 if (addon.type === 'radio' && addon.options) {
                     // Render radio button group
                     const currentValue = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
@@ -3437,10 +3470,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     addon.options.forEach(opt => {
                         const label = document.createElement('label');
                         label.className = 'checkbox-item';
+                        label.style.display = 'block';
+                        label.style.padding = '8px 12px';
+                        label.style.marginBottom = '4px';
                         label.title = opt.tooltip || '';
                         label.innerHTML = `
                             <input type="radio" name="addon_${role}_${addon.id}" value="${opt.value}" ${currentValue === opt.value ? 'checked' : ''}>
-                            <span>${opt.label}</span>
+                            <span class="addon-option-label">${opt.label}</span>
+                            ${opt.tooltip ? `<span class="addon-option-desc">${opt.tooltip}</span>` : ''}
                         `;
                         const radioInput = label.querySelector('input');
                         wrapper.appendChild(label);
@@ -3449,7 +3486,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const textInput = document.createElement('input');
                             textInput.type = 'text';
                             textInput.placeholder = 'Custom subagent name...';
-                            textInput.style.marginLeft = '8px';
+                            textInput.style.marginLeft = '22px';
+                            textInput.style.marginBottom = '6px';
                             textInput.style.padding = '2px 6px';
                             textInput.style.borderRadius = '4px';
                             textInput.style.border = '1px solid var(--vscode-input-border, #ccc)';
@@ -3498,7 +3536,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             refreshPreview();
                         });
                     });
-                    group.appendChild(wrapper);
+                    container.appendChild(wrapper);
                 } else if (addon.type === 'file') {
                     // Checkbox toggles text input visibility
                     const isEnabled = roleConfigs[role]?.addons?.[addon.id + 'Enabled'] ?? addon.default;
@@ -3551,7 +3589,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                     wrapper.appendChild(label);
                     wrapper.appendChild(textInput);
-                    group.appendChild(wrapper);
+                    container.appendChild(wrapper);
                 } else {
                     // Existing checkbox rendering
                     let isChecked = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
@@ -3579,8 +3617,61 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         saveRoleConfig(role);
                         refreshPreview();
                     });
-                    group.appendChild(label);
+                    container.appendChild(label);
                 }
+            }
+
+            // Partition: general (no group) first, then named subsections
+            const general = addons.filter(a => !a.group);
+            const subsections = [];
+            const seen = new Set();
+            addons.forEach(a => {
+                if (a.group && !seen.has(a.group)) {
+                    seen.add(a.group);
+                    subsections.push(a.group);
+                }
+            });
+
+            // 1) Render general addons as first set (flat, no header)
+            if (general.length > 0) {
+                const generalWrap = document.createElement('div');
+                generalWrap.className = 'addon-general-group';
+                generalWrap.style.display = 'flex';
+                generalWrap.style.flexDirection = 'column';
+                generalWrap.style.gap = '8px';
+                general.forEach(addon => renderAddon(addon, role, generalWrap));
+                group.appendChild(generalWrap);
+            }
+
+            // Helper to pretty-print group headers
+            function prettyGroupLabel(g) {
+                if (g === 'git') return 'Git Strategy';
+                return g.charAt(0).toUpperCase() + g.slice(1);
+            }
+
+            // 2) Render each named subsection as a collapsed accordion
+            subsections.forEach(groupName => {
+                const items = addons.filter(a => a.group === groupName);
+                if (items.length === 0) return;
+
+                const details = document.createElement('details');
+                details.className = 'addon-subsection-accordion';
+                
+                const summary = document.createElement('summary');
+                summary.className = 'addon-subsection-header';
+                summary.textContent = prettyGroupLabel(groupName);
+                
+                const body = document.createElement('div');
+                body.className = 'addon-subsection-body';
+                body.style.display = 'flex';
+                body.style.flexDirection = 'column';
+                body.style.gap = '8px';
+                
+                items.forEach(addon => renderAddon(addon, role, body));
+                
+                details.appendChild(summary);
+                details.appendChild(body);
+                group.appendChild(details);
             });
         }
 

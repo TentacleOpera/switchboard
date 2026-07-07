@@ -4221,14 +4221,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 destinationColumn: overrides?.destinationColumn,
             };
 
-            // §Git — work-on-main defaulting for custom agents. The UI radio `default`
-            // only governs rendering, not persistence; a custom agent whose Prompts-tab
-            // UI was never opened would otherwise get `undefined` strategies and emit no
-            // Branch/Commit/Push clauses, violating the work-on-main default (locked
-            // decision #2). Apply defaults to absent strategy fields after merging.
-            if (mergedAddons.gitBranchStrategy === undefined) mergedAddons.gitBranchStrategy = 'current';
-            if (mergedAddons.gitCommitStrategy === undefined) mergedAddons.gitCommitStrategy = 'whenDone';
-            if (mergedAddons.gitPushStrategy === undefined) mergedAddons.gitPushStrategy = 'noPush';
+            // §Git — neutral defaulting for custom agents. The UI radio `default` only
+            // governs rendering, not persistence; a custom agent whose Prompts-tab UI was
+            // never opened gets `undefined` strategies. Per the user's explicit decision
+            // (reversing former locked decision #2), absent strategy fields default to
+            // 'notSpecified' so NO git-policy clause is emitted unless the user opts in.
+            // Apply the default to absent strategy fields after merging.
+            if (mergedAddons.gitBranchStrategy === undefined) mergedAddons.gitBranchStrategy = 'notSpecified';
+            if (mergedAddons.gitCommitStrategy === undefined) mergedAddons.gitCommitStrategy = 'notSpecified';
+            if (mergedAddons.gitPushStrategy === undefined) mergedAddons.gitPushStrategy = 'notSpecified';
             // Guardrail (Safety clause) is part of the same work-on-main default (locked
             // decision #2: `Guardrail: on`) and the custom-agent UI renders its checkbox
             // checked by default. buildCustomAgentPrompt reads `gitProhibition` (UI key)
@@ -4576,17 +4577,19 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
                 claude_designer: claudeDesignerConfig?.addons?.gitProhibition ?? true,
             },
-            // §Git — granular git-policy strategy maps. The `?? '<default>'` here is
-            // the SINGLE source of the work-on-main default for built-in code roles
-            // (locked decision #2). Non-code roles get 'notSpecified' so they emit no
-            // clause. buildGitPolicyBlock treats `undefined` and `'notSpecified'`
-            // identically (pure builder).
+            // §Git — granular git-policy strategy maps. The `?? 'notSpecified'` here is
+            // the SINGLE source of the neutral default for built-in code roles: per the
+            // user's explicit decision (reversing former locked decision #2), code roles
+            // emit NO git-policy clause unless the user explicitly opts in. Non-code roles
+            // also get 'notSpecified'. buildGitPolicyBlock treats `undefined` and
+            // 'notSpecified' identically (pure builder). Stale persisted 'incremental'
+            // values are normalised to 'notSpecified' on read (see §5).
             gitBranchStrategyByRole: {
                 planner: 'notSpecified',
-                lead: leadConfig?.addons?.gitBranchStrategy ?? 'current',
-                coder: coderConfig?.addons?.gitBranchStrategy ?? 'current',
-                intern: internConfig?.addons?.gitBranchStrategy ?? 'current',
-                claude_designer: claudeDesignerConfig?.addons?.gitBranchStrategy ?? 'current',
+                lead: leadConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
+                coder: coderConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
+                intern: internConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
+                claude_designer: claudeDesignerConfig?.addons?.gitBranchStrategy ?? 'notSpecified',
                 reviewer: 'notSpecified',
                 tester: 'notSpecified',
                 analyst: 'notSpecified',
@@ -4595,10 +4598,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             },
             gitCommitStrategyByRole: {
                 planner: 'notSpecified',
-                lead: leadConfig?.addons?.gitCommitStrategy ?? 'whenDone',
-                coder: coderConfig?.addons?.gitCommitStrategy ?? 'whenDone',
-                intern: internConfig?.addons?.gitCommitStrategy ?? 'whenDone',
-                claude_designer: claudeDesignerConfig?.addons?.gitCommitStrategy ?? 'whenDone',
+                lead: (leadConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : leadConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
+                coder: (coderConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : coderConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
+                intern: (internConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : internConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
+                claude_designer: (claudeDesignerConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : claudeDesignerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 reviewer: 'notSpecified',
                 tester: 'notSpecified',
                 analyst: 'notSpecified',
@@ -4607,10 +4610,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             },
             gitPushStrategyByRole: {
                 planner: 'notSpecified',
-                lead: leadConfig?.addons?.gitPushStrategy ?? 'noPush',
-                coder: coderConfig?.addons?.gitPushStrategy ?? 'noPush',
-                intern: internConfig?.addons?.gitPushStrategy ?? 'noPush',
-                claude_designer: claudeDesignerConfig?.addons?.gitPushStrategy ?? 'noPush',
+                lead: leadConfig?.addons?.gitPushStrategy ?? 'notSpecified',
+                coder: coderConfig?.addons?.gitPushStrategy ?? 'notSpecified',
+                intern: internConfig?.addons?.gitPushStrategy ?? 'notSpecified',
+                claude_designer: claudeDesignerConfig?.addons?.gitPushStrategy ?? 'notSpecified',
                 reviewer: 'notSpecified',
                 tester: 'notSpecified',
                 analyst: 'notSpecified',

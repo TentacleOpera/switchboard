@@ -185,7 +185,7 @@ export interface PromptBuilderOptions {
     /** Granular git policy — Branch strategy. `'notSpecified'`/`undefined` = emit no branch clause. */
     gitBranchStrategy?: 'current' | 'newBranch' | 'notSpecified';
     /** Granular git policy — Commit strategy. `'notSpecified'`/`undefined` = emit no commit clause. */
-    gitCommitStrategy?: 'whenDone' | 'incremental' | 'dontCommit' | 'notSpecified';
+    gitCommitStrategy?: 'whenDone' | 'dontCommit' | 'notSpecified';
     /** Granular git policy — Push strategy. `'notSpecified'`/`undefined` = emit no push clause. */
     gitPushStrategy?: 'noPush' | 'pushWhenDone' | 'notSpecified';
     /** When true, the coder/lead/intern prompt includes a Phone-a-Friend directive telling the agent to POST a notification to the LocalApiServer when the batch is done. */
@@ -408,7 +408,6 @@ const GIT_BRANCH_CLAUSES: Record<string, string> = {
 /** Commit clause vocabulary. */
 const GIT_COMMIT_CLAUSES: Record<string, string> = {
     whenDone: 'When you have finished the task, stage all your changes and create a single descriptive commit.',
-    incremental: 'Commit at each logical checkpoint with a clear message so progress is captured incrementally.',
     dontCommit: 'Do NOT commit. Leave all changes in the working tree for the user to review.'
 };
 

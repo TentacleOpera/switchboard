@@ -225,4 +225,4 @@ None — verification is manual via an installed VSIX, per project convention (`
 
 **Complexity 4 → Send to Coder.** Single-file (`kanban.html`) layout refactor plus a data-only `group` field in `sharedDefaults.js`; reuses existing radio/checkbox rendering logic. The one moderate risk — the `renderAddon()` helper extraction preserving `textInputsToToggle` per-addon scope — is now called out explicitly in §2 and guarded by verification step 6. Land after the sibling defaults plan (see `## Dependencies`).
 
-**Stage Complete:** PLAN REVIEWED
+**Stage Complete:** LEAD CODED
