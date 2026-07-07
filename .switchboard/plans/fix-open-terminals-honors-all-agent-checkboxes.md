@@ -209,3 +209,9 @@ No automated test covers `createAgentGrid` terminal creation or the Phone-a-Frie
 **Stage Complete:** PLAN REVIEWED
 
 **Stage Complete:** Coded
+
+## Review Findings
+
+Both plan edits verified in place and committed: the four roles added to `allBuiltInAgents` (`src/extension.ts:2635-2647`, Jules correctly excluded) and `phone_a_friend: false` added to the `getVisibleAgents` defaults (`src/services/TaskViewerProvider.ts:4053`). Full-path regression audit confirmed checkbox → autosave → `getVisibleAgents` → grid launch → shared-registry registration (`suffixedName('Phone-a-Friend')`) → `_dispatchPhoneAFriend` suffixed-key lookup all align, and no other consumer reads `phone_a_friend` visibility, so the new default cannot break dispatch or any generic `enabled === true` filter. No CRITICAL or MAJOR findings; no code fixes were required. NITs deferred: a stale webview comment (kanban.html ~line 7125 claims startupCommands sends raw state — both live senders send defaults-merged data) and duplicated column-scoped defaults objects (KanbanProvider `_getVisibleAgents` fallback, PlanningPanelProvider `_getKanbanColumnDefinitions`) that intentionally omit non-column roles. Residual risk: existing users who ever opened the Agents tab pre-fix may have `phone_a_friend: true` incidentally persisted (the undefined default rendered its checkbox checked, and any autosave captured it), so Open Terminals will now open a Phone-a-Friend terminal for them — this matches their visibly-checked box and is one-click reversible; compilation and automated tests were skipped per session directives.
+
+**Stage Complete:** CODE REVIEWED
