@@ -71,4 +71,10 @@ Key wording changes:
 - **Failure Mode 2 (Line 483-484):** Coding agents get confused by `<PLAN_FILE_PATH>` placeholder in the instruction. *Analysis:* The instruction explicitly explains: "Replace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed", which is standard and unmodified.
 - **Failure Mode 3 (Line 483-484):** The curl command might block execution if curl hangs or fails. *Analysis:* The curl command has `-s` (silent) parameter to suppress progress meter and error messages.
 
+## Review Findings
+
+Reviewed the single-line directive rewrite in `src/services/agentPromptBuilder.ts:483-484` — matches the plan's "After" spec verbatim (drops `(OPTIONAL)`, adds `you MUST`, swaps "best-effort signal" → "required step" while preserving the silent-success caveat). Both consumers (`agentPromptBuilder.ts:907`, `KanbanProvider.ts:4255`) call the unchanged `(port) => string` signature identically; no caller parses directive text, so no regression risk. Grep guard passes: zero `OPTIONAL` matches remain in the file. Applied one NIT fix: updated the stale "Best-effort signal" label in the doc comment (line 480-481) to "mandatory for the agent... silently dropped by the host (non-fatal)" so the comment no longer contradicts the mandatory directive text. No CRITICAL/MAJOR findings; no remaining risks.
+
 **Stage Complete:** INTERN CODED
+
+**Stage Complete:** CODE REVIEWED

@@ -477,8 +477,8 @@ export function buildGitPolicyBlock(opts: {
  * LocalApiServer ONCE per batch (with the last completed plan file) when it has
  * finished coding. The port is interpolated at build time (Option A) so worktree
  * CWDs don't need to read the port file (which lives only in the main workspace
- * root's .switchboard/). Best-effort signal — a missing Phone-a-Friend terminal
- * is silently dropped by the host.
+ * root's .switchboard/). The directive is mandatory for the agent, but a missing
+ * Phone-a-Friend terminal is silently dropped by the host (non-fatal).
  */
 export const PHONE_A_FRIEND_DIRECTIVE = (port: number) =>
   `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{"planFile":"<PLAN_FILE_PATH>","originRole":"coder"}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
@@ -788,7 +788,7 @@ Process:
 4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
 
 Feature Grouping:
-When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under a feature once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the feature if the user confirms. See existing files in \`.switchboard/features/\` for format.`;
+When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under a feature once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the feature if the user confirms. When the user says yes, invoke the \`create-feature-from-plans\` skill — it handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the \`create-feature\` remote path automatically.`;
 
 export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project regardless of what project is active when the file is imported. Omit the line only if no project name is given above.`;

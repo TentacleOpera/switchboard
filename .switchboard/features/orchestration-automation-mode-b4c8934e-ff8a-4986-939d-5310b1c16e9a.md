@@ -32,7 +32,7 @@ Orchestration is a new `automationMode: 'orchestration'` on the existing autoban
 5. **Merge back (feature by feature)** — the orchestrator merges each feature's branches and resolves conflicts as it goes, following the agent-driven merge pattern (subtask → feature integration branch → main). One feature at a time keeps conflicts contained; the orchestrator is the agent that resolves them.
 6. **Done** — when all features are merged (or escalated), the batch is complete and the orchestrator reports out.
 
-**Reused, not built:** autoban interval tick + `lastTickAt` (`autobanState.ts`); `group-into-features` skill; worktree auto-creation + kind-aware merge targets; the `merge-prompt`/`worktree_cleanup` agent-driven merge pattern *(correction from plan review: design-reuse only — this exists as a reviewed plan, `merge-prompt-button-agent-driven-worktree-merge.md`, not shipped code; subtasks 2 and 5 carry the dependency explicitly)*; LocalApiServer board ops (`/kanban/move`, `/kanban/feature/*`); terminal dispatch.
+**Reused, not built:** autoban interval tick + `lastTickAt` (`autobanState.ts`); `group-into-features` skill; worktree auto-creation + kind-aware merge targets; the `merge-prompt`/`worktree_cleanup` agent-driven merge pattern *(now shipped: `copyWorktreeMergePrompt` handler `KanbanProvider.ts:9221`, `worktree_cleanup` skill `.agents/skills/worktree_cleanup.md`, `POST /worktree/cleanup` `LocalApiServer.ts:1397`, `KanbanProvider.cleanupWorktree` `:9969`)*; LocalApiServer board ops (`/kanban/move`, `/kanban/feature/*`); terminal dispatch.
 
 **Newly built:** the `'orchestration'` mode + its config/UI + worktree-mode coupling; the file-based agent→orchestrator request inbox + session log; the orchestrator persona workflow; the batch-level fan-out/verify/merge orchestration logic.
 
@@ -62,8 +62,8 @@ The mode foundation lands first (everything keys off the new `automationMode`). 
 - Automation mode enum + normalization: `src/services/autobanState.ts:275` (`automationMode`), `SingleColumnAutobanConfig` as the config-shape template (`:18`).
 - AUTOMATION tab UI: `src/webview/kanban.html` `createAutobanPanel` (mode selector, per-mode config panels).
 - Grouping skill to invoke: `.agents/skills/group-into-features/SKILL.md` (SCAN → cluster → `create-feature.js`); confirm gate at step 4 is the thing this mode disables.
-- Feature/worktree ops via API: `src/services/LocalApiServer.ts` routes `/kanban/feature*` and `/kanban/move` (verified at `:1344-1355`). *(Correction from plan review: `/worktree/cleanup` does NOT exist yet — it is specified by the merge-prompt-button plan; until it lands, cleanup goes through the shipped `KanbanProvider` worktree paths.)*
-- Merge pattern to follow: the `merge-prompt-button` design (agent resolves conflicts in the worktree; kind-aware target subtask → integration → main).
+- Feature/worktree ops via API: `src/services/LocalApiServer.ts` routes `/kanban/feature*`, `/kanban/move` (verified at `:1344-1355`), and `/worktree/cleanup` (`:1397`).
+- Merge pattern to follow: the shipped `copyWorktreeMergePrompt` handler (`KanbanProvider.ts:9221`) — kind-aware target resolution (subtask → integration → main) from DB worktree rows, agent runs the merge and resolves conflicts in the worktree.
 - Interval/wake substrate: autoban `intervalMinutes` + `lastTickAt` (`autobanState.ts` rules), and `PipelineOrchestrator`'s tick skeleton as reference.
 
 ## Out of scope

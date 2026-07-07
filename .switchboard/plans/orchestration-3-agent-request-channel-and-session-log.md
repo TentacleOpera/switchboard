@@ -1,14 +1,16 @@
-# Add a File-Based Agent→Orchestrator Request Channel and Session Log
+# Add an Agent→Orchestrator Request Channel and Session Log
 
 ## Goal
 
-Add the one genuinely new mechanic in this feature: an asynchronous, file-based channel for coding/review agents to raise questions, warnings, and research requests to the orchestrator, plus an append-only **session log** the orchestrator writes its triage summaries to. This is what lets the orchestrator sleep between wakes and still coordinate a fleet — agents drop requests to files; the orchestrator drains them on wake.
+Add the one genuinely new mechanic in this feature: an asynchronous channel for coding/review agents to raise questions, warnings, and research requests to the orchestrator, plus an append-only **session log** the orchestrator writes its triage summaries to. This is what lets the orchestrator sleep between wakes and still coordinate a fleet — agents POST requests to the LocalApiServer; the extension writes them to an inbox; the orchestrator drains them on wake.
 
 ### Problem / background / root cause
 
-The orchestrator is system-woken and does not hold the fleet in-context, so it cannot receive synchronous messages from the agents it dispatched. Coding and (especially) review agents legitimately need to surface things mid-run — a warning, an ambiguous requirement, "I need to run research first." There is no inter-terminal messaging primitive in the local extension (the Antigravity `send_message` is not reachable here), and synchronous REPL scraping is fragile. A **file inbox** sidesteps all of that: writing a file is trivial for any agent, survives the orchestrator being asleep, and is inspectable by the human. A **session log** gives the run an auditable narrative and a place for the orchestrator to record what it did and what it escalated.
+The orchestrator is system-woken and does not hold the fleet in-context, so it cannot receive synchronous messages from the agents it dispatched. Coding and (especially) review agents legitimately need to surface things mid-run — a warning, an ambiguous requirement, "I need to run research first." There is no inter-terminal messaging primitive in the local extension (the Antigravity `send_message` is not reachable here), and synchronous REPL scraping is fragile.
 
-**The worktree trap (root-cause detail found during plan review).** Fleet agents run inside per-feature/per-subtask worktrees, which are **siblings of the repo, never inside it**: auto mode creates them at `path.dirname(workspaceRoot)/worktrees/<repoBasename>/<branch>`, explicit control-plane mode at `<controlPlaneRoot>/worktrees/<branch>` (`src/services/KanbanProvider.ts:10045-10047`, `git worktree add` at `:10058-10064`). Each worktree checkout contains its **own committed `.switchboard/` skeleton** (`plans/`, `features/` are git-whitelisted), so a naïve relative write to `.switchboard/orchestrator/inbox/` from a worktree cwd lands in the worktree's copy — invisible to the orchestrator, and (because `.switchboard/*` is gitignored) it would never reach main through a merge either. Worse, the standard skill discovery walk-up (`sb_api_call.sh:59-71` walks `$PWD` upward for `.switchboard/api-server-port.txt`) **fails from an auto-mode worktree**, because the walk from `~/…/worktrees/<repo>/<branch>` never passes through the main checkout. The codebase already acknowledges exactly this: the Phone-a-Friend directive interpolates the port at prompt-build time "so worktree CWDs don't need to read the port file (which lives only in the main workspace root's .switchboard/)" (`src/services/agentPromptBuilder.ts:478-484`). The request skill must therefore resolve the **primary workspace root** itself — via git, which every worktree can answer authoritatively — rather than trusting `$PWD`.
+**The channel reuses the proven Phone-a-Friend HTTP pattern.** Phone-a-Friend already solves the hard part — agent-to-extension communication from inside a worktree. The mechanism: the LocalApiServer port is interpolated into the agent's dispatch prompt at build time (`agentPromptBuilder.ts:907`: `PHONE_A_FRIEND_DIRECTIVE(options.apiPort)`), so the agent runs a simple `curl -s -X POST http://127.0.0.1:${port}/phone-a-friend …` with no port-file discovery, no filesystem walk-up, and no worktree-root resolution. This is tested and working from worktrees. The orchestrator request channel uses the same pattern: a `POST /orchestrator/request` endpoint on LocalApiServer, with the port interpolated into fleet dispatch prompts at build time (subtask 4's job). The extension handler writes each request to `.switchboard/orchestrator/inbox/` — the extension is always running in orchestration mode (it's what wakes the orchestrator), so the LocalApiServer is up by definition.
+
+A **session log** gives the run an auditable narrative and a place for the orchestrator to record what it did and what it escalated.
 
 ## Metadata
 **Complexity:** 4
@@ -18,28 +20,25 @@ The orchestrator is system-woken and does not hold the fleet in-context, so it c
 ## User Review Required
 
 None. Two calls that could have been escalated were decided instead:
-- **Request-file format:** Markdown with YAML frontmatter (not JSON) — decided, rationale in Proposed Changes.
+- **Request-file format:** Markdown with YAML frontmatter (not JSON) — decided, rationale in Proposed Changes. The extension writes the file (not the agent), so the format is an internal convention, not an agent-facing API contract.
 - **Gitignore posture:** both inbox and session log stay **local-only** (already covered by the existing `.switchboard/*` ignore rule; zero gitignore changes) — decided, rationale in Proposed Changes.
 
 ## Complexity Audit
 
 ### Routine
-- Authoring `SKILL.md` for `.agents/skills/orchestrator_request/` — follows the existing directory-skill pattern (`kanban_operations/SKILL.md`, `group-into-features/SKILL.md`: YAML `description` frontmatter + usage doc).
-- One-line `MIRROR_MANIFEST` entry in `src/services/ClaudeCodeMirrorService.ts` (array at `:46`; directory-source precedent `skills/kanban_operations` at `:86`, model-invocable precedent `skills/group-into-features` at `:92`).
-- Skills-table rows in `AGENTS.md` (table at `:92` area) and the root `CLAUDE.md` copy of that table.
+- `POST /orchestrator/request` endpoint on LocalApiServer — mirrors the shipped `_handlePhoneAFriend` handler (`LocalApiServer.ts:650-694`): auth check, JSON body parse, field validation, callback to the host. ~30 lines following a proven pattern.
+- Inbox file writes from the endpoint handler — `mkdir -p` + write frontmatter+body markdown + done. The extension is the writer, so there is no worktree-root resolution, no atomic-rename protocol, no concurrent-writer collision risk.
 - Session-log format spec (documentation only — the writers are subtasks 2 and 5).
-- Directory bootstrap (`mkdir -p`) and unique-filename generation in the script.
+- The dispatch-prompt directive that tells agents to use the channel — mirrors `PHONE_A_FRIEND_DIRECTIVE` (`agentPromptBuilder.ts:483`); subtask 4 interpolates the port at build time.
 
 ### Complex / Risky
-- **Primary-workspace-root resolution from inside a worktree.** The `$PWD` walk-up used by every existing skill (`sb_api_call.sh:59-71`, `move-card.js findApiPort`) does not work from auto-mode worktrees. The script needs the git-based resolution chain specified below, and getting the fallback order wrong silently drops requests into the wrong `.switchboard`.
-- **Atomic visibility of request files.** The orchestrator's drain (subtask 5) must never read a half-written file; the write must be tmp-file + `mv` (rename) into the inbox.
-- **Cross-subtask contract stability.** Subtasks 2, 4, and 5 all reference the paths, field names, and processed/ rule fixed here; renaming anything later ripples across three plans.
+- **Cross-subtask contract stability.** Subtasks 2, 4, and 5 all reference the paths, field names, and `processed/` rule fixed here; renaming anything later ripples across three plans.
+- **Dispatch-prompt directive must reach every fleet agent.** Subtask 4's dispatch prompts must interpolate the port and include the request directive — mirroring how `PHONE_A_FRIEND_DIRECTIVE` is appended to coder/lead/intern prompts (`agentPromptBuilder.ts:1253, 1299, 1341, 1379`). A fleet agent that doesn't receive the directive can't file requests; this is a build-time contract, not a runtime discovery.
 
 ## Edge-Case & Dependency Audit
 
 **Race Conditions**
-- **Concurrent writers:** multiple agents filing requests in the same second. Mitigated by filename scheme `req-<UTC>-<stage>-<pid>-<random>.md` — timestamp + `$$` + `$RANDOM` makes collision effectively impossible; never a single shared file the agents append to.
-- **Writer vs. drainer:** the orchestrator wakes mid-write. Mitigated by writing to `inbox/.req-….tmp` (dotfile) then `mv` to the final name — rename is atomic on the same filesystem, and the drain ignores dotfiles/`*.tmp`.
+- **Concurrent requests:** multiple agents POSTing requests simultaneously. The LocalApiServer handles HTTP requests serially per connection; the endpoint handler writes each to a uniquely-named file (`req-<UTC>-<stage>-<random>.md`). No shared append file, no collision risk.
 - **Interrupted drain:** a wake killed mid-drain must be re-runnable. The processed move is per-file `mv` into `inbox/processed/`; re-running skips already-moved files. (The drain itself is subtask 5; this plan fixes the convention that makes it idempotent.)
 - **Session-log interleaving:** only the orchestrator writes the session log (single writer by convention — fleet agents use the inbox, never the log), so no append lock is needed.
 
