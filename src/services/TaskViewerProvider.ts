@@ -4049,7 +4049,8 @@ Each plan file must include:
             ticket_updater: false,
             researcher: false,
             mcp_monitor: false,
-            claude_artifacts: false
+            claude_artifacts: false,
+            phone_a_friend: false
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
