@@ -841,10 +841,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 // non-empty and does not match the card's current column, skip the clear
                 // (a copied marker from a previous stage must not clear a re-dispatched
                 // light). An empty value (bare `**Stage Complete:**`) clears unguarded.
-                if (metadata.stageComplete !== undefined) {
-                    const echoed = metadata.stageComplete.trim();
+                if (metadata.stageComplete !== undefined && metadata.stageComplete.length > 0) {
                     const currentCol = updatedRecord.kanbanColumn || '';
-                    if (echoed === '' || echoed === currentCol) {
+                    const hasBare = metadata.stageComplete.some(v => v.trim() === '');
+                    const hasMatch = metadata.stageComplete.some(v => v.trim() === currentCol);
+                    if (hasBare || hasMatch) {
                         try {
                             await db.clearWorkingState(relativePath, workspaceId);
                             this._outputChannel?.appendLine(
@@ -857,7 +858,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                         }
                     } else {
                         this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] Stage Complete marker column '${echoed}' != current '${currentCol}' — stale marker, not clearing: ${relativePath}`
+                            `[GlobalPlanWatcher] Stage Complete markers [${metadata.stageComplete.join(', ')}] none match current '${currentCol}' — stale markers, not clearing: ${relativePath}`
                         );
                     }
                 }

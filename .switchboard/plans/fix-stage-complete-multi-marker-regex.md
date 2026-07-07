@@ -156,3 +156,4 @@ if (metadata.stageComplete !== undefined && metadata.stageComplete.length > 0) {
 **Send to Intern** — complexity 2/10: two-file change, no new pattern, no migration, no DB schema touch. The type widening is contained (zero test-literal consumers confirmed). The only thing the intern must not do is propagate the `matchAll` pattern to `extractEmbeddedMetadata` — that boundary is documented above.
 
 **Stage Complete:** PLAN REVIEWED
+**Stage Complete:** PLAN CODED

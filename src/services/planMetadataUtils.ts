@@ -60,7 +60,7 @@ export interface PlanMetadata {
      * state (nulls dispatched_at) when this is set. Empty string = marker present but
      * no column echoed (clear without the stale-marker column guard).
      */
-    stageComplete?: string;
+    stageComplete?: string[];
 }
 
 /**
@@ -125,14 +125,14 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
     // Activity-light OFF-switch: `**Stage Complete: <COLUMN>**` (or `> **…**`).
     // Tolerant of a bare `**Stage Complete:**` (no column) — yields '' so the watcher
     // clears without the stale-marker column guard. undefined when the marker is absent.
-    let stageComplete: string | undefined;
+    let stageComplete: string[] | undefined;
     const stageRegex = new RegExp(
         `^(?:>\\s+)?\\*\\*${STAGE_COMPLETE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\*\\*\\s*(.*)$`,
-        'im'
+        'gim'
     );
-    const stageMatch = content.match(stageRegex);
-    if (stageMatch) {
-        stageComplete = stageMatch[1].trim();
+    const stageMatches = [...content.matchAll(stageRegex)];
+    if (stageMatches.length > 0) {
+        stageComplete = stageMatches.map(m => m[1].trim());
     }
 
     return {
