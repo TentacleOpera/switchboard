@@ -84,9 +84,25 @@ Ordering — B-1 first; B-2 / B-4(sweep) / the UI depend on B-1; B-3 defines the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **CODER CODED**
-- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **CODER CODED**
-- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **CODER CODED**
-- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **CODER CODED**
-- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **CODER CODED**
+- [ ] [`**Stage Complete:**` marker parsing clears working state](../plans/stage-complete-marker-clears-working-state.md) — **CODE REVIEWED**
+- [ ] [Mandatory `**Stage Complete:**` directive in dispatch prompts](../plans/stage-complete-prompt-directive.md) — **CODE REVIEWED**
+- [ ] [Working-state data model + activity light ON at dispatch](../plans/working-state-model-and-dispatch-on.md) — **CODE REVIEWED**
+- [ ] [20-minute working-state timeout sweep](../plans/working-state-timeout-sweep.md) — **CODE REVIEWED**
+- [ ] [Card working-light UI](../plans/card-working-light-ui.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+All 5 subtasks reviewed in-place against their plan requirements. One MAJOR finding
+identified and fixed: `isWorkingState` in `KanbanProvider.ts` used a hardcoded 20-min constant
+instead of reading the configurable `switchboard.activityLight.timeoutMs` setting — a user who
+set the timeout above 20 min would see the light turn off prematurely at 20 min on the read-time
+check, even though the sweep honored the setting. Fixed by reading the live setting inside
+`isWorkingState`. All other subtask implementations are plan-compliant: the V51 migration is
+idempotent, the `dispatched_at` column is preserved on UPSERT conflict, the marker parser
+correctly distinguishes present-empty from absent, the stale-marker guard works, the sweep is
+gated on `cleared > 0`, and the UI renders an amber pulsing dot with `prefers-reduced-motion`
+support. Remaining risk: dispatches to untracked columns (BACKLOG, custom) don't light up
+(documented open decision in B-1).
+
+**Stage Complete:** CODE REVIEWED

@@ -186,3 +186,34 @@ signature in the same commit as the backend flag.
 
 ### Recommendation
 Complexity 5 → **Send to Coder.**
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome to the principal's office — I've seen
+"foundation" subtasks that cracked the house, and I came ready.
+
+- **MAJOR** — `KanbanProvider.ts:127`: `WORKING_STATE_TIMEOUT_MS` hardcoded to 20 min while `package.json` exposes a configurable `switchboard.activityLight.timeoutMs` (max 1h). A user who sets 30 min gets a light that dies at 20 — the read-time check ignores the setting entirely. The sweep honors it; the read-time check doesn't. They diverge. — *Fixed.*
+- **NIT** — `KanbanProvider.ts:120`: comment says "20-min window" but the window is now configurable; comment is stale post-fix.
+- **PASS** — Migration V51 is idempotent (column-existence guard), no backfill, NULL default correct for ~4,000 legacy installs.
+- **PASS** — `dispatched_at` added to `PLAN_COLUMNS`, `KanbanPlanRecord`, UPSERT insert values, and `_readRows`. ON CONFLICT clause correctly omits `dispatched_at` (preserved on re-upsert, not clobbered by watcher re-reads).
+- **PASS** — `updateDispatchInfoByPlanFile` sets `dispatched_at = new Date().toISOString()` (UTC ISO). Re-dispatch overwrites (resets clock). Deprecated `updateDispatchInfo` wrapper funnels through it.
+- **PASS** — `working` computed at all 3 active card-build sites (1594, 3141, 3310); completed cards omit `working` (defaults falsy). `isWorkingState` guards null/invalid timestamps.
+- **PASS** — `buildBoardSignature` (kanban.html:4697) appends `|${card.working ? '1' : '0'}` — light will re-render on state change.
+- **RISK** — `_recordDispatchIdentity` early-returns for untracked columns (BACKLOG, custom) — those dispatches won't light. This is the plan's documented open decision, not a bug.
+
+**Stage 2 (Balanced):** The MAJOR is real and fixed — `isWorkingState` now reads the live
+setting. The NIT (stale comment) is cosmetic. Everything else is plan-compliant. The
+untracked-column early-return is a design decision the user should confirm separately.
+
+**Fix applied:** `src/services/KanbanProvider.ts:123-136` — replaced hardcoded
+`WORKING_STATE_TIMEOUT_MS` with `DEFAULT_WORKING_STATE_TIMEOUT_MS` fallback; `isWorkingState`
+now reads `switchboard.activityLight.timeoutMs` via `vscode.workspace.getConfiguration`.
+
+**Validation:** No compilation/tests per session directives. Manual verification via VSIX
+recommended: set `timeoutMs` to 30 min, dispatch a card, confirm the light stays on past 20 min.
+
+**Remaining risks:** (1) Untracked-column dispatches don't light (open decision). (2)
+`isWorkingState` reads the setting on every card-build call — cheap (VS Code caches config)
+but not free on boards with hundreds of cards; acceptable for typical use.
+
+**Stage Complete:** CODE REVIEWED

@@ -146,3 +146,34 @@ every 10s — the `> 0` gate is mandatory.
 
 ### Recommendation
 Complexity 3 → **Send to Intern.**
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** The backstop — the safety net that catches
+every agent that ghosted its marker. Let's see if the net has holes.
+
+- **MAJOR** — `KanbanProvider.ts:127` (cross-plan): `isWorkingState` used a hardcoded 20-min constant while this plan exposes a configurable `timeoutMs` (max 1h). A user who sets 30 min got a light that died at 20 min on read-time check, even though the sweep wouldn't clear `dispatched_at` until 30 min. Read-time check and sweep diverged. — *Fixed in B-1's review.*
+- **PASS** — `clearStaleWorkingState` (KanbanDatabase.ts:7068-7086) runs `UPDATE plans SET dispatched_at = NULL WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND dispatched_at < ?` with cutoff = `new Date(Date.now() - maxAgeMs).toISOString()`. Both sides UTC ISO — chronological `<` comparison is correct.
+- **PASS** — Returns `getRowsModified()` count for the refresh gate. Manual BEGIN/COMMIT/ROLLBACK with `_persist()` — correct for needing the row count (unlike `_persistedUpdate` which returns boolean).
+- **PASS** — Sweep loop (GlobalPlanWatcherService.ts:169-194) runs after the existing per-folder loops, inside the `_scanInProgress` guard — never overlaps itself. Gets its own DB handle per folder (`KanbanDatabase.forWorkspace` + `ensureReady` + `getWorkspaceId`).
+- **PASS** — Refresh gated on `cleared > 0` (183) — no 10-second needless re-renders when nothing is stale.
+- **PASS** — Reads `switchboard.activityLight.timeoutMs` from config (175) with default `20 * 60 * 1000` — honors the setting.
+- **PASS** — `package.json:509-516` declares the setting: type integer, default 1200000, minimum 60000, maximum 3600000, scope resource.
+- **NIT** — A genuine 25-min agent run has its light cleared at 20 min (default). The plan documents this as a deliberate "prefer false-off over stuck-on" trade. Acceptable, but users with long-running agents should raise the setting.
+
+**Stage 2 (Balanced):** The MAJOR was in B-1's `isWorkingState` (hardcoded constant) and is
+fixed there. The sweep itself is correct — UTC ISO comparison, refresh gating, overlap guard,
+per-workspace scoping, configurable timeout. No additional fixes needed in this plan's code.
+
+**Fix applied:** None in this plan's files — the MAJOR fix was applied in B-1
+(`KanbanProvider.ts:isWorkingState` now reads the same setting the sweep reads).
+
+**Validation:** No compilation/tests per session directives. Manual checks recommended: (1)
+dispatch + no marker → light OFF at ~timeout+10s; (2) set `timeoutMs` to 30s → clears at ~40s;
+(3) no board flicker when nothing is stale.
+
+**Remaining risks:** (1) False-off for genuine long-running agents (> 20 min default) —
+documented trade, user can raise the setting. (2) The sweep and a fresh dispatch could
+interleave, but a just-set `dispatched_at` (< timeout) is never in scope for the sweep.
+
+**Stage Complete:** CODE REVIEWED

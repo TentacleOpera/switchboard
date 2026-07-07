@@ -126,3 +126,33 @@ in both themes; (3) a pulse animation on many simultaneously-working cards could
 
 ### Recommendation
 Complexity 4 → **Send to Coder.**
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** The pretty dot — the only thing the user ever
+sees. If it's wrong, the whole feature is wrong. Show me.
+
+- **PASS** — `workingLight` (kanban.html:5720-5722) renders `<span class="card-status-light is-on" title="Agent working…">●</span>` only when `!isCompleted && card.working`. Completed cards and non-working cards render nothing (no empty gap).
+- **PASS** — Light placed in `card-topic` slot (5736): `${workingLight}${featureBadge}${escapeHtml(shortTopic)}` — leading dot before the topic, reusing the empty `featureBadge` position.
+- **PASS** — `buildBoardSignature` (4697) includes `|${card.working ? '1' : '0'}` — the light re-renders on state change (B-1's signature change is present).
+- **PASS** — CSS (965-983): `.card-status-light` base is `color: transparent` (invisible when off); `.is-on` is `#e0a800` (amber) with `card-status-light-pulse` animation (1.8s ease-in-out, opacity 1→0.45→1). `@media (prefers-reduced-motion: reduce)` disables the animation. Amber is distinct from green worktree/done dots.
+- **PASS** — No `window.confirm()` or confirmation dialogs — display-only, per repo rule.
+- **NIT** — The `title="Agent working…"` tooltip uses an ellipsis character (…) — consistent with the codebase's existing usage. No issue.
+- **NIT** — The pulse animation on multiple simultaneously-working cards could be visually distracting on a busy board. The plan's adversarial synthesis flagged this; the 1.8s interval and 0.45 opacity floor keep it subtle. Acceptable.
+
+**Stage 2 (Balanced):** No CRITICAL or MAJOR findings. The UI is a clean consumer of B-1's
+`working` flag and signature change. The `!isCompleted` guard is a belt-and-suspenders defense
+(the backend already suppresses `working` for completed cards). CSS is theme-safe (amber works
+on both CRT and afterburner backgrounds). The `prefers-reduced-motion` support is a nice touch.
+
+**Fix applied:** None — no valid CRITICAL/MAJOR findings.
+
+**Validation:** No compilation/tests per session directives. Manual checks recommended: (1)
+dispatch → dot appears on that card only; (2) marker/timeout clear → dot disappears, no gap;
+(3) completed/epic cards never show the dot; (4) dot color distinct from green in both themes.
+
+**Remaining risks:** (1) If B-1's `buildBoardSignature` change were missing, the light would
+render once and never update — verified present, so no risk. (2) Pulse on many cards could
+distract — mitigated by subtle animation parameters.
+
+**Stage Complete:** CODE REVIEWED

@@ -142,3 +142,33 @@ lights only ever clear on timeout.
 
 ### Recommendation
 Complexity 4 → **Send to Coder.**
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Step into my office — the directive that nobody
+reads but everyone needs. Let's see if you actually wrote it right.
+
+- **PASS** — `STAGE_COMPLETE_LABEL = 'Stage Complete'` exported from `agentPromptBuilder.ts:505`; imported in `planMetadataUtils.ts:5`. Emitter and parser share one constant — no drift possible.
+- **PASS** — `buildStageCompleteDirective` (516-519) handles empty `destinationColumn` gracefully: falls back to `'<the column you were dispatched for>'` — never emits literal `undefined`.
+- **PASS** — Directive folded into `dispatchPrefixCore` array (936) — reaches every built-in role via the shared prefix seam. No per-role branch touched.
+- **PASS** — `buildCustomAgentPrompt` (1645) mirrors the directive — custom agents get it too, not just built-in roles.
+- **PASS** — `destinationColumn` threaded: `_generatePromptForColumn` (5114) → `_generatePromptForDestinationRole` (5185) → `generateUnifiedPrompt` (5202) → `mergedOptions = { ...resolvedOptions, ...overrides }` (4417-4420) → `buildKanbanBatchPrompt` (4422) → `options?.destinationColumn` (935). Custom path: `mergedAddons.destinationColumn` (4189) → `buildCustomAgentPrompt` (4233) → `addons?.destinationColumn` (1645).
+- **PASS** — `destinationColumn` added to `PromptBuilderOptions` (287) and `CustomAgentAddons` (agentConfig.ts:68) — type-safe, no `any` casts.
+- **NIT** — The directive text says "append a single line" but doesn't specify WHERE in the file (top/bottom/after Goal). Agents will append at the end — fine in practice, but the plan could have been explicit.
+- **NIT** — Batch instruction ("Append it to EACH plan file you complete") is present but could be clearer about what "complete" means for a multi-plan batch where some plans fail.
+
+**Stage 2 (Balanced):** No CRITICAL or MAJOR findings. The implementation is clean — shared
+constant, graceful fallback, both prompt paths covered, type-safe threading. The two NITs
+are prompt-clarity improvements that can defer; the marker parser is tolerant of any
+position in the file.
+
+**Fix applied:** None — no valid CRITICAL/MAJOR findings.
+
+**Validation:** No compilation/tests per session directives. Manual check recommended: dispatch
+to a tracked role, inspect the prompt text for the directive with the exact column name.
+
+**Remaining risks:** (1) Call sites that pass no `destinationColumn` (e.g. chat dispatch at
+1027/7910) produce a generic placeholder — agents must interpret it correctly. (2) The
+directive adds ~3 lines to every dispatch prompt — acceptable bloat.
+
+**Stage Complete:** CODE REVIEWED

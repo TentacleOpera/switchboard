@@ -120,17 +120,19 @@ export interface KanbanCard {
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
 }
 
-// Activity-light window. A card is `working` while dispatched_at is set and younger than
-// this. The timeout sweep (GlobalPlanWatcherService) is the authoritative backstop that
-// nulls dispatched_at past this age; this read-time check keeps the light accurate between
-// sweeps. Kept in sync with the `switchboard.activityLight.timeoutMs` setting default.
-const WORKING_STATE_TIMEOUT_MS = 20 * 60 * 1000;
+// Activity-light window default. A card is `working` while dispatched_at is set and
+// younger than the configured timeout. The timeout sweep (GlobalPlanWatcherService) is the
+// authoritative backstop that nulls dispatched_at past this age; this read-time check keeps
+// the light accurate between sweeps. Reads the live `switchboard.activityLight.timeoutMs`
+// setting so the read-time check and the sweep stay in sync when the user changes it.
+const DEFAULT_WORKING_STATE_TIMEOUT_MS = 20 * 60 * 1000;
 
 function isWorkingState(dispatchedAt: string | null | undefined): boolean {
     if (!dispatchedAt) return false;
     const ts = Date.parse(dispatchedAt);
     if (!Number.isFinite(ts)) return false;
-    return (Date.now() - ts) < WORKING_STATE_TIMEOUT_MS;
+    const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+    return (Date.now() - ts) < timeoutMs;
 }
 
 /**

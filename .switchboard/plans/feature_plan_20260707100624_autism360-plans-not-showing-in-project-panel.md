@@ -1,231 +1,188 @@
-# Fix: Plans for specific workspaces (e.g. autism360) not showing in project.html
+# Fix: Project panel not refreshing — stale/empty plans until close-and-reopen
 
 ## Goal
 
-Make the Project panel (`project.html` / `project.js`) reliably show plans from ALL workspace folders, including workspaces like "autism360" that the user has open. Currently, switching to or selecting certain workspaces shows zero plans in the Project panel's Kanban tab, even though the plans exist in that workspace's `kanban.db`.
+Make the Project panel (`project.html` / `project.js`) reliably show current plans without requiring the user to close and reopen it. Currently, the panel's Kanban tab shows stale or empty plan data after the panel has been hidden and re-shown, or after the extension re-activates. Closing and reopening the panel fixes it because a fresh webview triggers a new `fetchKanbanPlans`, but the persisted webview never re-fetches on its own.
 
 ### Problem / background / root cause
 
-The Project panel's Kanban tab displays plans from `_kanbanPlansCache`, populated by the `fetchKanbanPlans` → `kanbanPlansReady` round-trip. Plans are filtered by `kanbanFilters.workspaceRoot` via `getFilteredKanbanPlans` (`project.js:1463-1491`). The user reports that plans for the "autism360" workspace are not showing — this means either (a) the plans are not in the cache, or (b) the filter is hiding them.
+The Project panel is created with `retainContextWhenHidden: true` (`PlanningPanelProvider.ts:352`), which preserves the webview's JS state when the panel is hidden. This is intentional — it prevents the webview from rebooting on every tab switch. But it creates a stale-data problem:
 
-**Investigation traced the root cause to a workspace-root mismatch between three independent systems that must agree:**
+**Root cause: No re-fetch trigger when the panel becomes visible again.**
 
-1. **`_getAllowedRoots()`** (`PlanningPanelProvider.ts:2008-2034`) — determines which roots' plans are fetched. Returns VS Code workspace folders + mapped parent/folder roots.
+1. **No `onDidChangeViewState` handler.** Neither `PlanningPanelProvider` (Project panel) nor `KanbanProvider` (Kanban board) registers an `onDidChangeViewState` listener. When the panel is hidden and then shown again, the webview's JS state is preserved — the initial `fetchKanbanPlans` (project.js:390) only runs once during webview boot. No re-fetch is triggered on visibility change. If plans changed while the panel was hidden, the user sees stale data.
 
-2. **`_getKanbanPlans(root)`** (`PlanningPanelProvider.ts:9285-9337`) — fetches plans from `KanbanDatabase.forWorkspace(root)` and tags each plan with `workspaceRoot: effectiveRoot` (line 9311, via `_resolveEffectiveWorkspaceRoot`).
+2. **`openProject()` short-circuits on existing panel.** When the panel already exists (`this._projectPanel` is truthy), `openProject()` (`PlanningPanelProvider.ts:341-343`) calls `reveal()` and returns immediately — it does NOT trigger a re-fetch. So if the panel was restored by VS Code (via `deserializeProjectPanel`) and the initial fetch returned empty or stale data, the user has no way to refresh it except by closing and reopening.
 
-3. **`buildWorkspaceItems()`** (`workspaceUtils.ts:6-86`) — builds the workspace dropdown options. When workspace mappings are enabled and any open folder is mapped, it returns ONLY the mapped parent roots (line 51-70). When mappings are disabled or no open folder is mapped, it returns the raw VS Code folder roots (line 71-83).
+3. **Initial fetch can race with proactive pushes.** The `fetchKanbanPlans` handler has a request-ID guard (`PlanningPanelProvider.ts:3444` and `3493`). If a proactive `kanbanPlansReady` push (sent after a kanban board refresh, complexity edit, etc.) arrives while the initial fetch is still processing async DB queries, the guard at line 3493 (`if (requestId !== this._latestRequestIds.get(guardKey)) { break; }`) can discard the initial fetch's response. The webview then only has partial data from the proactive push (which covers one workspace, not all).
 
-**The mismatch:** When workspace mappings are enabled, `buildWorkspaceItems` returns parent roots (e.g. `/Users/patrickvuleta/Documents/GitHub` if autism360 is mapped under it). But `_getAllowedRoots` returns BOTH the child roots (autism360's path) AND the parent roots. `_getKanbanPlans(childRoot)` opens the child's DB and tags plans with `effectiveRoot = parentRoot`. `_getKanbanPlans(parentRoot)` opens the parent's DB (which may be a different DB or may not exist).
+4. **Partial cache update can fragment the cache.** Proactive pushes set `msg.workspaceRoot` (e.g. `PlanningPanelProvider.ts:3663`), triggering the partial cache update path in project.js (lines 464-468):
+   ```js
+   _kanbanPlansCache = [
+       ..._kanbanPlansCache.filter(p => p.workspaceRoot !== msg.workspaceRoot),
+       ...(msg.plans || [])
+   ];
+   ```
+   This replaces plans for ONE workspace only. If the initial full fetch (which sets the entire cache via the `else` branch at line 470) was discarded by the guard, the cache only has plans from whichever workspaces happened to send proactive pushes — not all workspaces.
 
-**The specific failure mode for autism360:**
+**Why it only started recently:** The proactive push mechanism was added/enhanced in recent commits (the `kanbanPlansReady` push after complexity edits, column changes, etc.). Before these pushes existed, the initial fetch was the only source of data, and it usually completed without contention. Now, proactive pushes can arrive during the initial fetch's async window, causing the guard to discard the full response.
 
-If autism360 is a VS Code workspace folder that is NOT mapped (no workspace identity mapping configured), then:
-- `buildWorkspaceItems` returns autism360's raw root (correct)
-- `_getAllowedRoots` returns autism360's raw root (correct)
-- `_getKanbanPlans(autism360Root)` opens `autism360Root/.switchboard/kanban.db` and tags plans with `effectiveRoot = path.resolve(autism360Root)` (since no mapping, effective = raw)
-- The workspace dropdown shows autism360's root
-- The filter should match
-
-**But if autism360's kanban.db doesn't exist or is empty at the expected path**, `_getKanbanPlans` returns `[]` (the `catch` at line 3491 silently skips). This happens when:
-- The kanban DB was created at a different path (e.g. the parent workspace's `.switchboard/kanban.db` if the user previously had mappings enabled, then disabled them)
-- The DB exists but `getWorkspaceId()` returns a different ID than what the plans were stored under (e.g. the DB was reset or the workspace ID hash changed)
-
-**The most likely root cause:** The `kanbanPlansReady` handler at `project.js:484-491` auto-sets `kanbanFilters.workspaceRoot` to `msg.kanbanWorkspaceRoot` (the KanbanProvider's current workspace). If the KanbanProvider's current workspace is NOT autism360 (e.g. it defaults to the first workspace folder), the filter narrows to a different workspace, and autism360's plans are hidden. The user would need to manually change the workspace dropdown to "All Workspaces" or to autism360 to see them — but if autism360 doesn't appear in the dropdown (because `buildWorkspaceItems` returns mapped parent roots instead), the user can't filter to it at all.
-
-**Compounding issue:** The `kanbanPlansReady` handler merges the cache by `msg.workspaceRoot` (lines 464-471):
-```js
-if (msg.workspaceRoot) {
-    _kanbanPlansCache = [...filter(p => p.workspaceRoot !== msg.workspaceRoot), ...msg.plans];
-} else {
-    _kanbanPlansCache = msg.plans || [];
-}
-```
-The `fetchKanbanPlans` response (`PlanningPanelProvider.ts:3496-3504`) does NOT send a `workspaceRoot` field — it sends `kanbanWorkspaceRoot` instead. So `msg.workspaceRoot` is always undefined, and the else branch replaces the entire cache with `allPlans` (plans from all roots). This is correct. But if a proactive `kanbanPlansReady` push (from `PlanningPanelProvider.ts:3958-4066`) sends a partial update with a `workspaceRoot` field, the merge logic could drop plans from other workspaces. Investigation shows the proactive pushes also use `_postToBothPanels` without a `workspaceRoot` field, so this is not the active bug — but it's a latent risk.
+**Why closing and reopening fixes it:** Closing fires `onDidDispose`, clearing `_projectPanel`. Reopening calls `openProject()`, which creates a fresh webview. The fresh webview boots, sends `fetchKanbanPlans`, and — if no proactive push races with it — gets the full response. The cache is populated correctly.
 
 ## Metadata
 
-**Tags:** frontend, backend, ui, bugfix, workspace, kanban
-**Complexity:** 6
+**Tags:** backend, ui, bugfix, webview, refresh, reliability
+**Complexity:** 3
 **Project:** v5 funnel
-
-## Complexity Audit
-
-### Routine
-- Adding autism360's workspace root to the dropdown when it's a VS Code folder but not in `buildWorkspaceItems` (due to mappings) — add a fallback in `populateWorkspaceDropdowns` that includes any workspace root from `_kanbanPlansCache` that isn't in `_kanbanWorkspaceItems`.
-- Ensuring the workspace filter defaults to "All Workspaces" instead of `kanbanWorkspaceRoot` when the KanbanProvider's current workspace doesn't match any dropdown option.
-
-### Complex / Risky
-- **Workspace mapping interactions.** When mappings are enabled, `buildWorkspaceItems` returns parent roots, but `_getAllowedRoots` returns both parent and child roots. Plans from child workspaces are tagged with the parent (effective) root. This is correct for the mapped case. But if the user has a MIX of mapped and unmapped workspaces, `buildWorkspaceItems` returns ONLY mapped parent roots (because the `anyOpenFolderIsMapped` check at line 21-49 switches the entire dropdown to mapped mode). Unmapped workspaces like autism360 are invisible in the dropdown.
-- **DB path resolution.** `KanbanDatabase.forWorkspace(root)` uses the root path to locate `.switchboard/kanban.db`. If the user previously had mappings enabled and plans were stored in the parent's DB, then disabled mappings, the plans are now in the parent's DB but `_getKanbanPlans(autism360Root)` looks in autism360's own DB (which may be empty). This is a data migration issue, not a display issue.
-- **The `kanbanWorkspaceRoot` auto-set** at `project.js:484-491` is shared with Issue 1's fix. The fix there (suppress during pending selection) doesn't address the normal-browsing case where the filter is auto-set to the wrong workspace.
-
-## Edge-Case & Dependency Audit
-
-**Data Loss:**
-- No data loss risk — plans are stored in `kanban.db` and are not deleted by display bugs. The fix only changes which plans are displayed.
-
-**Race Conditions:**
-- *Stale `kanbanWorkspaceRoot`:* The `kanbanPlansReady` payload includes `kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot()`. If the KanbanProvider's current workspace changes between the `fetchKanbanPlans` request and response, the auto-set at lines 484-491 uses the stale value. Mitigated by the request guard (line 3444) which drops stale responses.
-
-**Dependencies & Conflicts:**
-- Related to Issue 1 (Review Plan button after workspace switch) — both share the `kanbanWorkspaceRoot` auto-set mechanism. The fix here (include unmapped workspaces in the dropdown + don't auto-set to a workspace not in the dropdown) is complementary.
-- The workspace mapping system (`WorkspaceIdentityService`) is the deeper root cause — `buildWorkspaceItems` switches to "mapped mode" for the entire dropdown when ANY folder is mapped, hiding unmapped folders. This is a design issue in `workspaceUtils.ts:51` that should be addressed but is a larger change.
 
 ## Proposed Changes
 
-### src/webview/project.js
-
-**Change 1: Include workspace roots from the plan cache in the dropdown (fallback for unmapped workspaces)**
-
-In `populateWorkspaceDropdowns` (`project.js:1146-1175`), after populating from `_kanbanWorkspaceItems`, add any workspace roots from `_kanbanPlansCache` that aren't already in the dropdown:
-
-```js
-function populateWorkspaceDropdowns() {
-    if (!kanbanWorkspaceFilter || !featuresWorkspaceFilter) return;
-
-    const currentWS = kanbanFilters.workspaceRoot;
-    kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
-    featuresWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
-    if (tuningWorkspaceFilter) tuningWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
-    if (projectsWorkspaceFilter) projectsWorkspaceFilter.innerHTML = '';
-
-    const knownRoots = new Set(_kanbanWorkspaceItems.map(ws => ws.workspaceRoot));
-
-    _kanbanWorkspaceItems.forEach(ws => {
-        const opt = document.createElement('option');
-        opt.value = ws.workspaceRoot;
-        opt.textContent = ws.label;
-        kanbanWorkspaceFilter.appendChild(opt.cloneNode(true));
-        featuresWorkspaceFilter.appendChild(opt.cloneNode(true));
-        if (tuningWorkspaceFilter) tuningWorkspaceFilter.appendChild(opt.cloneNode(true));
-        if (projectsWorkspaceFilter) projectsWorkspaceFilter.appendChild(opt.cloneNode(true));
-    });
-
-    // Fallback: add workspace roots from the plan cache that aren't in
-    // _kanbanWorkspaceItems. This happens when workspace mappings are enabled
-    // (buildWorkspaceItems returns only mapped parent roots) but the user also
-    // has unmapped workspace folders with plans. Without this, those workspaces
-    // are invisible in the dropdown and their plans can't be filtered to.
-    const extraRoots = new Set();
-    _kanbanPlansCache.forEach(p => {
-        if (p.workspaceRoot && !knownRoots.has(p.workspaceRoot)) {
-            extraRoots.add(p.workspaceRoot);
-        }
-    });
-    extraRoots.forEach(root => {
-        const opt = document.createElement('option');
-        opt.value = root;
-        opt.textContent = path.basename(root);  // Use folder name as label
-        kanbanWorkspaceFilter.appendChild(opt.cloneNode(true));
-        featuresWorkspaceFilter.appendChild(opt.cloneNode(true));
-        if (tuningWorkspaceFilter) tuningWorkspaceFilter.appendChild(opt.cloneNode(true));
-        if (projectsWorkspaceFilter) projectsWorkspaceFilter.appendChild(opt.cloneNode(true));
-        knownRoots.add(root);
-    });
-
-    kanbanWorkspaceFilter.value = currentWS;
-    // ... rest unchanged ...
-}
-```
-
-**Change 2: Don't auto-set the workspace filter to `kanbanWorkspaceRoot` if it's not in the dropdown**
-
-In the `kanbanPlansReady` handler (`project.js:484-491`), add a guard:
-
-```js
-// BEFORE (line 484-491):
-if (msg.kanbanWorkspaceRoot && _kanbanWorkspaceItems.some(ws => ws.workspaceRoot === msg.kanbanWorkspaceRoot)) {
-    if (!kanbanFilters.workspaceRoot) {
-        kanbanFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
-    }
-    if (!featuresFilters.workspaceRoot) {
-        featuresFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
-    }
-}
-
-// AFTER:
-// Only auto-set if the kanbanWorkspaceRoot is actually in the dropdown.
-// If it's not (e.g. mappings changed, or the KanbanProvider's current workspace
-// is a child that maps to a parent not shown in the dropdown), leave the filter
-// at "All Workspaces" so all plans remain visible.
-const dropdownOpts = kanbanWorkspaceFilter ? Array.from(kanbanWorkspaceFilter.options).map(o => o.value) : [];
-const kanbanRootInDropdown = msg.kanbanWorkspaceRoot && dropdownOpts.includes(msg.kanbanWorkspaceRoot);
-if (kanbanRootInDropdown) {
-    if (!kanbanFilters.workspaceRoot) {
-        kanbanFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
-    }
-    if (!featuresFilters.workspaceRoot) {
-        featuresFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
-    }
-}
-```
-
-### src/services/workspaceUtils.ts
-
-**Change 3: Include unmapped workspace folders in the dropdown even when mappings are enabled**
-
-In `buildWorkspaceItems` (`workspaceUtils.ts:51-83`), when in mapped mode, also include any open workspace folders that are NOT part of any mapping:
-
-```js
-// AFTER line 70 (end of mapped-mode block), before the else:
-if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
-    // ... existing mapped parent root logic (lines 53-70) ...
-
-    // Also include unmapped open workspace folders — they have their own
-    // kanban.db and plans, and should be selectable in the dropdown even
-    // when mappings are enabled for other folders.
-    const mappedRoots = new Set(items.map(item => item.workspaceRoot));
-    for (const root of openRoots) {
-        const resolvedRoot = path.resolve(root);
-        if (!mappedRoots.has(resolvedRoot)) {
-            // Check if this root is a child of any mapping (already covered
-            // by the parent root) or an independent unmapped folder.
-            const isChildOfMapping = mappings.some(m =>
-                (m.workspaceFolders || []).some(wf => {
-                    const expanded = wf.startsWith('~')
-                        ? path.join(os.homedir(), wf.slice(1))
-                        : wf;
-                    return path.resolve(expanded) === resolvedRoot;
-                })
-            );
-            if (!isChildOfMapping) {
-                const folder = (vscode.workspace.workspaceFolders || []).find(
-                    f => path.resolve(f.uri.fsPath) === resolvedRoot
-                );
-                items.push({
-                    label: folder ? folder.name : path.basename(resolvedRoot),
-                    workspaceRoot: resolvedRoot
-                });
-            }
-        }
-    }
-}
-```
-
 ### src/services/PlanningPanelProvider.ts
 
-**Change 4: Ensure `_getKanbanPlans` handles the case where the DB doesn't exist gracefully**
+**Change 1: Re-fetch when the Project panel becomes visible**
 
-The current `catch` at line 3491 silently skips roots with no DB. Add a debug log so the issue is diagnosable:
+Register an `onDidChangeViewState` handler in `openProject()` (after the panel is created) and in `_hydratePanel()` (for restored panels). When the panel becomes visible, trigger a re-fetch by sending a `fetchKanbanPlans` message to the webview:
 
 ```js
-// BEFORE (line 3491):
-} catch (err) { /* root has no kanban DB, skip */ }
+// In openProject(), after creating the panel (after line 401):
+this._projectPanel.onDidChangeViewState(
+    (e) => {
+        if (e.webviewPanel.visible) {
+            // Panel became visible — re-fetch plans in case data changed while hidden.
+            // The webview's JS state is preserved (retainContextWhenHidden), so this
+            // does NOT re-boot. We must explicitly trigger a refresh.
+            this._projectPanel?.webview.postMessage({ type: 'refreshKanbanPlans' });
+        }
+    },
+    null,
+    this._disposables
+);
+```
+
+In `_hydratePanel()` (for restored panels), add the same handler after the dispose handler registration (after line 708 for the `isProject` branch):
+
+```js
+if (isProject) {
+    panel.onDidChangeViewState(
+        (e) => {
+            if (e.webviewPanel.visible) {
+                this._projectPanel?.webview.postMessage({ type: 'refreshKanbanPlans' });
+            }
+        },
+        null,
+        this._disposables
+    );
+}
+```
+
+**Change 2: Re-fetch when `openProject()` is called on an existing panel**
+
+In `openProject()`, when the panel already exists, send a refresh trigger instead of just revealing:
+
+```js
+// BEFORE (line 341-343):
+if (this._projectPanel) {
+    this._projectPanel.reveal(vscode.ViewColumn.One);
+    return;
+}
 
 // AFTER:
-} catch (err) {
-    console.debug(`[PlanningPanelProvider] fetchKanbanPlans: skipping root ${root}: ${err instanceof Error ? err.message : String(err)}`);
+if (this._projectPanel) {
+    this._projectPanel.reveal(vscode.ViewColumn.One);
+    // The panel already exists (either restored or previously opened). Its webview
+    // state is preserved (retainContextWhenHidden), so the initial fetchKanbanPlans
+    // (project.js:390) did NOT re-fire. Trigger a refresh so the user sees current
+    // data instead of stale cache from when the panel was last visible.
+    if (this._projectPanelReady) {
+        this._projectPanel.webview.postMessage({ type: 'refreshKanbanPlans' });
+    }
+    return;
 }
+```
+
+**Change 3: Fix the request-ID guard race**
+
+The guard at line 3493 discards the initial full fetch's response if any other `fetchKanbanPlans` request was processed while it was running. This is correct for deduplication (a newer request supersedes an older one), but it means the initial full fetch can be silently discarded, leaving the webview with only partial data from a proactive push.
+
+Fix: When the initial full fetch (the one without `msg.workspaceRoot`) is about to be discarded by the guard, send it anyway if no full-fetch response has been sent yet. Track this with a boolean:
+
+```js
+// Add a field:
+private _fullKanbanPlansSent = false;
+
+// In the fetchKanbanPlans handler, reset it when the request starts:
+case 'fetchKanbanPlans': {
+    // ... existing guard check ...
+    this._fullKanbanPlansSent = false;
+    try {
+        // ... existing fetch logic ...
+        
+        // BEFORE the guard check at line 3493:
+        if (requestId !== this._latestRequestIds.get(guardKey)) {
+            // A newer request was processed while we were running. If we haven't
+            // sent a full response yet, send it anyway — partial proactive pushes
+            // may have arrived but they don't cover all workspaces. The full
+            // response is the only way to populate the complete cache.
+            if (!this._fullKanbanPlansSent) {
+                this._postToBothPanels({
+                    type: 'kanbanPlansReady',
+                    plans: allPlans,
+                    workspaceItems,
+                    allWorkspaceProjects,
+                    columns: mergedColumns,
+                    kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
+                    requestId
+                });
+                this._fullKanbanPlansSent = true;
+            }
+            break;
+        }
+        // ... existing response sending ...
+        this._fullKanbanPlansSent = true;
+    }
+}
+```
+
+### src/webview/project.js
+
+**Change 4: Handle the `refreshKanbanPlans` message**
+
+Add a handler for the new `refreshKanbanPlans` message type that triggers a `fetchKanbanPlans`:
+
+```js
+case 'refreshKanbanPlans':
+    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+    break;
+```
+
+This goes in the message handler switch statement (around line 397).
+
+### src/services/KanbanProvider.ts
+
+**Change 5: Re-fetch when the Kanban board becomes visible**
+
+Register an `onDidChangeViewState` handler for the kanban panel. The kanban board already has a `_refreshBoard` mechanism — just call it when the panel becomes visible:
+
+```js
+// In the panel creation code (wherever the kanban panel is created):
+this._panel.onDidChangeViewState(
+    (e) => {
+        if (e.webviewPanel.visible && this._currentWorkspaceRoot) {
+            this._refreshBoard(this._currentWorkspaceRoot);
+        }
+    },
+    null,
+    this._disposables
+);
 ```
 
 ## Verification Plan
 
-1. **Repro the bug (pre-fix):** Open VS Code with multiple workspace folders including autism360. Open the Project panel. Switch to the Kanban tab. Observe: autism360 plans are not visible, and autism360 may not appear in the workspace dropdown.
+1. **Repro the bug:** Open the Project panel. Switch to another editor tab. Wait a moment (or trigger a kanban board refresh from the kanban panel). Switch back to the Project panel. Observe: the Kanban tab shows stale data (or no plans if the initial fetch was discarded).
 2. **Apply fixes.** Run `npm run compile`.
-3. **Test unmapped workspace:** With no workspace mappings configured, open the Project panel. Verify: all workspace folders appear in the workspace dropdown, including autism360. Select autism360 in the dropdown. Verify: autism360's plans are listed.
-4. **Test mapped + unmapped mix:** Enable workspace mappings for some folders but not autism360. Open the Project panel. Verify: autism360 still appears in the dropdown (Change 3). Select it. Verify: plans show.
-5. **Test "All Workspaces":** Set the workspace dropdown to "All Workspaces". Verify: plans from ALL workspaces (including autism360) are listed.
-6. **Test auto-set guard:** With the KanbanProvider's current workspace set to a mapped parent, open the Project panel. Verify: the workspace filter is NOT auto-set to the parent if the parent isn't in the dropdown; instead it stays at "All Workspaces" and all plans are visible.
-7. **Test DB-missing case:** Create a workspace folder with no `.switchboard/kanban.db`. Open the Project panel. Verify: no crash, no error toast — the workspace simply shows no plans (with a debug log).
+3. **Test visibility re-fetch:** Open the Project panel. Switch to another tab. Switch back. Verify: the Kanban tab re-fetches and shows current plans (check the browser console for a `fetchKanbanPlans` message on visibility change).
+4. **Test `openProject()` on existing panel:** With the Project panel already open, run the "Switchboard: Open Project" command. Verify: the panel is revealed AND a re-fetch is triggered (plans update).
+5. **Test race condition fix:** Open the Project panel. Immediately trigger a kanban board refresh (e.g. from the kanban panel). Verify: the Project panel still shows all plans from all workspaces (not just one workspace's partial data).
+6. **Test kanban board visibility:** Open the Kanban board. Switch to another tab. Trigger a plan change (e.g. create a plan from the CLI). Switch back to the Kanban board. Verify: the board refreshes and shows the new plan.
+7. **Test restored panel:** Enable `persistPanels`. Open the Project panel. Reload the VS Code window. Verify: the restored Project panel shows current plans (the `onDidChangeViewState` handler fires on first visibility, triggering a re-fetch).
 8. **Run existing tests:** `npm test` — verify no regressions.

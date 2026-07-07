@@ -166,3 +166,35 @@ just-inserted row's column — verify the guard reads post-insert state).
 
 ### Recommendation
 Complexity 5 → **Send to Coder.**
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome back — the OFF-switch. The one thing
+between you and a board full of permanently-lit cards. Don't disappoint me.
+
+- **PASS** — `stageComplete?: string` added to `PlanMetadata` (planMetadataUtils.ts:63). Parser uses a custom regex (129-131) with `(.*)` instead of `extractEmbeddedMetadata`'s `(.+)` — correctly distinguishes present-empty (`''` = bare marker, clear unguarded) from absent (`undefined` = no marker, skip). This is a deliberate, correct deviation from the plan's "use `extractEmbeddedMetadata`" instruction.
+- **PASS** — `clearWorkingState` (KanbanDatabase.ts:7053-7059) is a scoped `UPDATE plans SET dispatched_at = NULL WHERE plan_file = ? AND workspace_id = ?` via `_persistedUpdate`. No-op when already NULL. Workspace-scoped.
+- **PASS** — Marker clear is in the existing-plan update branch (`else` at GlobalPlanWatcherService.ts:747), NOT the new-plan branch (`if (!plan)` at 641). A copied marker on a freshly-imported plan cannot null a non-existent `dispatched_at`.
+- **PASS** — Stale-marker guard (838-856): `echoed === ''` clears unguarded; `echoed === currentCol` clears; mismatch logs and skips. Compares against `updatedRecord.kanbanColumn` (the DB's current column), not the marker's echo.
+- **PASS** — Clear happens before `_onPlanDiscovered.fire` (887) — the board refresh sees the nulled `dispatched_at`.
+- **PASS** — mtime gate self-advances (`updatedAt = fileMtime` at 766, written via `insertFileDerivedPlan` at 771) — marker observed on exactly one handler pass. Clear is inside that pass.
+- **PASS** — `insertFileDerivedPlan` upsert at 771 runs BEFORE the clear at 843. ON CONFLICT clause omits `dispatched_at` (preserved), so the upsert doesn't clobber the timestamp before the clear nulls it.
+- **NIT** — The `stageComplete` regex (130) duplicates `extractEmbeddedMetadata`'s regex pattern but with `(.*)` — maintainability concern, but the behavioral difference (empty-match support) justifies the duplication.
+- **RISK** — The upsert at 771 and the clear at 843 are two separate DB operations. A concurrent dispatch between them could set `dispatched_at`, which the clear would then null. Extremely unlikely (watcher handler is a single async flow; dispatches are UI-driven), but theoretically possible.
+
+**Stage 2 (Balanced):** No CRITICAL or MAJOR findings. The single-shot mtime gate, stale-marker
+guard, and branch gating are all correct. The regex duplication NIT is justified by the
+empty-match requirement. The race risk is theoretical and not worth adding a transaction for.
+
+**Fix applied:** None — no valid CRITICAL/MAJOR findings.
+
+**Validation:** No compilation/tests per session directives. Manual checks recommended: (1)
+append marker → light OFF within one watcher pass; (2) mismatched column → light stays ON;
+(3) re-dispatch with stale marker → fresh light not cleared.
+
+**Remaining risks:** (1) Theoretical upsert-clear race (concurrent dispatch mid-handler). (2)
+Regex duplication from `extractEmbeddedMetadata` — if the label-escaping logic changes in one
+but not the other, they could drift. Both use the same `STAGE_COMPLETE_LABEL` constant, so the
+label itself can't drift.
+
+**Stage Complete:** CODE REVIEWED
