@@ -72,6 +72,7 @@ export class PlanningPanelProvider {
     private _panel: vscode.WebviewPanel | undefined;
     private _projectPanel: vscode.WebviewPanel | undefined;
     private _projectPanelReady = false;
+    private _projectPanelConfigDisposable: vscode.Disposable | undefined;
     private _pendingProjectMessages: any[] = [];
     private _projectPanelReadyTimer: NodeJS.Timeout | undefined;
     private _disposables: vscode.Disposable[] = [];
@@ -395,6 +396,8 @@ export class PlanningPanelProvider {
                     clearTimeout(this._projectPanelReadyTimer);
                     this._projectPanelReadyTimer = undefined;
                 }
+                this._projectPanelConfigDisposable?.dispose();
+                this._projectPanelConfigDisposable = undefined;
             },
             null,
             this._disposables
@@ -402,40 +405,7 @@ export class PlanningPanelProvider {
 
         // Hot-swap the theme on the Project panel when the setting changes (it previously
         // only learned the theme on init, so it needed a reload to update).
-        this._disposables.push(
-            vscode.workspace.onDidChangeConfiguration(e => {
-                if (e.affectsConfiguration('switchboard.theme.name')) {
-                    const t = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                    this._projectPanel?.webview.postMessage({ type: 'switchboardThemeChanged', theme: t });
-                }
-                if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
-                    const d = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-                    this._projectPanel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: d });
-                }
-                if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
-                    const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-                    this._projectPanel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
-                }
-                if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
-                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                    this._projectPanel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
-                }
-                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
-                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                    this._projectPanel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
-                }
-                if (e.affectsConfiguration('switchboard.planAutoFetch') && this._planAutoFetchService && this._projectPanel) {
-                    const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
-                    if (wsRoot) {
-                        const status = this._planAutoFetchService.getStatus(wsRoot);
-                        this._projectPanel.webview.postMessage({
-                            type: 'planAutoFetchState',
-                            ...status
-                        });
-                    }
-                }
-            })
-        );
+        this._registerProjectPanelConfigListener();
 
         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
         this._projectPanel.webview.postMessage({ type: 'switchboardThemeChanged', theme });
@@ -456,6 +426,42 @@ export class PlanningPanelProvider {
         }
 
 
+    }
+
+    private _registerProjectPanelConfigListener(): void {
+        // Dispose any previous listener to avoid duplicates on re-registration
+        // (openProject() and _hydratePanel(...,true) can both run in one session).
+        this._projectPanelConfigDisposable?.dispose();
+        this._projectPanelConfigDisposable = vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('switchboard.theme.name')) {
+                const t = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                this._projectPanel?.webview.postMessage({ type: 'switchboardThemeChanged', theme: t });
+            }
+            if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
+                const d = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                this._projectPanel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: d });
+            }
+            if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
+                const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+                this._projectPanel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+            }
+            if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
+                const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
+                this._projectPanel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+            }
+            if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                this._projectPanel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+            }
+            if (e.affectsConfiguration('switchboard.planAutoFetch') && this._planAutoFetchService && this._projectPanel) {
+                const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+                if (wsRoot) {
+                    const status = this._planAutoFetchService.getStatus(wsRoot);
+                    this._projectPanel.webview.postMessage({ type: 'planAutoFetchState', ...status });
+                }
+            }
+        });
+        this._disposables.push(this._projectPanelConfigDisposable);
     }
 
     private _getProjectHtml(webview: vscode.Webview): string {
@@ -705,6 +711,8 @@ export class PlanningPanelProvider {
                     clearTimeout(this._projectPanelReadyTimer);
                     this._projectPanelReadyTimer = undefined;
                 }
+                this._projectPanelConfigDisposable?.dispose();
+                this._projectPanelConfigDisposable = undefined;
             }, null, this._disposables);
         } else {
             panel.onDidDispose(() => {
@@ -755,6 +763,9 @@ export class PlanningPanelProvider {
                     }
                 })
             );
+        } else {
+            this._registerProjectPanelConfigListener();
+        }
 
             this._disposables.push(
                 vscode.workspace.onDidChangeWorkspaceFolders(() => {
