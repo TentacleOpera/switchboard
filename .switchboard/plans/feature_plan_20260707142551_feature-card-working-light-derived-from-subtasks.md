@@ -485,3 +485,8 @@ Complexity 5 → **Send to Coder.**
 **Stage Complete:** PLAN REVIEWED
 
 **Stage Complete:** CODED
+
+
+## Review Findings
+
+Implemented in `6770e9f`. `getFeatureWorkingStates` (`KanbanDatabase.ts:4681`) is keyed by `feature_id` and looked up by the feature row's `planId` at all three sites (1600/3147/3342) — correct keying (a feature's subtasks carry `feature_id = parent planId`, matching the established `subtaskCountMap`); the SQLite `MAX(dispatched_at IS NOT NULL AND dispatched_at >= ?)` yields a clean 0/1 (left operand never NULL). Site 1 (`refreshWithData`, production) is correct; Sites 2/3 mirror it (test-only / dead-code per the plan's Verified Corrections). The optimistic-guard `workingChanged` check is computed inside the signature-changed block (6697–6702), and `buildBoardSignature` includes `card.working` with the protective coupling comment (4830). Timeout cut to 10 min at all three sites (`KanbanProvider.ts:128`, `GlobalPlanWatcherService.ts:175`, `package.json:511`=600000). NIT: Site 3's DB-error path falls back to an empty map (feature lights off) rather than the plan's stated `isWorkingState` fallback — no runtime effect since Site 3 is unreachable dead code. No code fixes applied; static review only.

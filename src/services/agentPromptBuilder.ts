@@ -283,7 +283,7 @@ export interface PromptBuilderOptions {
     subtaskPlansForConsolidation?: Array<{ planId: string; topic: string; complexity?: string }>;
     /** The active project name to pin into generated plan files. When set, emits a PROJECT PIN directive instructing the agent to write `**Project:** <name>` into each plan's metadata. */
     manifestProject?: string;
-    /** The destination kanban column the card is being dispatched to. Drives the `**Stage Complete: <COLUMN>**` directive so the agent writes a matchable marker. */
+    /** The destination kanban column the card is being dispatched to. Vestigial: it formerly drove the `**Stage Complete: <COLUMN>**` directive, but the activity-light OFF-switch is now mtime-based (see GlobalPlanWatcherService), so no directive consumes this field. Retained for caller compatibility. */
     destinationColumn?: string;
 }
 
@@ -503,15 +503,6 @@ export const BATCH_EXECUTION_RULES = `CRITICAL INSTRUCTIONS:
  */
 export const STAGE_COMPLETE_LABEL = 'Stage Complete';
 
-/**
- * Builds the mandatory "append `**Stage Complete:** <COLUMN>` when done" directive.
- * Folded into the shared dispatch prefix so every role (and custom agents) receive it.
- * The marker shape (`**Label:** value`, value outside the bold) matches the
- * extractEmbeddedMetadata convention used for ClickUp/Linear IDs so the watcher's
- * parser (planMetadataUtils) reads it cleanly. When `destinationColumn` is empty, the
- * directive tells the agent to echo the column it was dispatched for (never emits a
- * literal `undefined`).
- */
 
 
 /** §8 — Shared PRD reference block builder from raw refs. Used by both buildPrdReferenceBlock and buildCustomAgentPrompt. */

@@ -79,5 +79,5 @@ The mode foundation lands first (everything keys off the new `automationMode`). 
 - [ ] [Orchestration Kickoff — Auto-Group into Features (+ Miscellaneous) and Fan Out to Worktrees](../plans/orchestration-4-kickoff-group-and-fan-out.md) — **PLAN REVIEWED**
 - [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **PLAN REVIEWED**
 - [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **PLAN REVIEWED**
-- [ ] [Add a File-Based Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **PLAN REVIEWED**
+- [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

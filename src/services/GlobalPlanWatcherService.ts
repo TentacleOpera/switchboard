@@ -842,6 +842,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 if (updatedRecord.dispatchedAt) {
                     try {
                         await db.clearWorkingState(relativePath, workspaceId);
+                        updatedRecord.dispatchedAt = null;
                         this._outputChannel?.appendLine(
                             `[GlobalPlanWatcher] Plan file edit cleared working state for: ${relativePath}`
                         );

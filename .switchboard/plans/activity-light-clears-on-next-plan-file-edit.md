@@ -193,3 +193,8 @@ Complexity 3 → **Send to Intern**. Two-file change (watcher + prompt builder);
 
 **Stage Complete:** LEAD CODED
 
+
+
+## Review Findings
+
+Implemented in `c5185aa` plus one uncommitted refinement. The marker/`hasBare`/`hasMatch` guard block is fully replaced by `if (updatedRecord.dispatchedAt) { clearWorkingState(...) }` at `GlobalPlanWatcherService.ts:842`; `updatedRecord.dispatchedAt` is populated via the `{...plan}` spread (766) from `getPlanByPlanFile` (mapper `KanbanDatabase.ts:7573`), and the mtime gate (589) guarantees the block only runs on a post-dispatch file edit — sound by construction. `buildStageCompleteDirective` and both call sites (934, 1644) are removed with zero orphaned references; the uncommitted `updatedRecord.dispatchedAt = null` after clear is correct belt-and-suspenders (field typed `string | null`). Fix applied: rewrote the now-stale JSDoc on `destinationColumn` (`agentPromptBuilder.ts:286`) that still described the removed directive. Remaining NIT: `destinationColumn` is now a dead-but-passed option (retained for caller compat). Static review only.

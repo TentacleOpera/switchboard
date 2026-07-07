@@ -157,3 +157,10 @@ if (metadata.stageComplete !== undefined && metadata.stageComplete.length > 0) {
 
 **Stage Complete:** PLAN REVIEWED
 **Stage Complete:** PLAN CODED
+
+
+## Review Findings
+
+SUPERSEDED by activity-light-clears-on-next-plan-file-edit (Plan 2, `c5185aa`), per user direction. This plan's parser change (`planMetadataUtils.ts`: `matchAll` + `stageComplete: string[]`, 63/128–135) shipped in `4cabd8e` and is correct, but its only runtime consumer — the watcher `hasBare`/`hasMatch` block this plan added — was deleted by Plan 2, so `metadata.stageComplete` is now populated-but-unread (confirmed via grep: no consumer remains). No bug: the `extractEmbeddedMetadata` boundary was respected and the `string`→`string[]` widening broke nothing (zero literal consumers). No code fixes needed; nothing to verify beyond confirming the field has no reader (done). Suggest a future cleanup plan to drop the now-vestigial parser field/constant if desired.
+
+**Stage Complete:** CODE REVIEWED
