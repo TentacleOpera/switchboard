@@ -481,7 +481,7 @@ export function buildGitPolicyBlock(opts: {
  * is silently dropped by the host.
  */
 export const PHONE_A_FRIEND_DIRECTIVE = (port: number) =>
-  `PHONE-A-FRIEND (OPTIONAL): When you have finished coding ALL plans in this batch, notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{"planFile":"<PLAN_FILE_PATH>","originRole":"coder"}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a best-effort signal — if the Phone-a-Friend agent is not running, the request will succeed silently. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
+  `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{"planFile":"<PLAN_FILE_PATH>","originRole":"coder"}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
 
 export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
 
