@@ -39,6 +39,10 @@ The user's perception that "project.html gets a full refresh but design doesn't"
 **Tags:** frontend, theme, bugfix, webview, design, setup
 **Complexity:** 6
 
+## User Review Required
+
+Confirm visual theme-switch parity across all panels (Design, Project, Planning, Kanban, Setup, Sidebar) post-fix; no schema/data decisions. Specifically: verify that rapid theme switching (5+ switches) never produces a split-theme state on the Design panel's sidebar vs. doc-preview area, and that checkbox toggles (animation, scanlines, pixel-font, ultracode, colour-icons) apply uniformly to all open panels within the same frame.
+
 ## Complexity Audit
 
 ### Routine
@@ -62,6 +66,14 @@ The user's perception that "project.html gets a full refresh but design doesn't"
 - **Kanban panel.** Already covered. No change.
 - **Implementation panel.** Owned by `PlanningPanelProvider` (`_panel` — the implementation/planning webview). Ensure the `postMessage` wrapper hits both `_panel` and `_projectPanel`.
 - **Dependencies** — none. No other plan edits `broadcastToWebviews` or the provider wiring. The claudify background plans (Issues 3 & 4) edit CSS only; this plan edits TS broadcast wiring. No conflict.
+
+## Dependencies
+
+None — no cross-session dependencies. Sibling plans B (setup panel opacity) and C (webview ground) are CSS-only and independent of this TS plan.
+
+## Adversarial Synthesis
+
+Key risks: duplicate-message delivery to design/planning panels (direct broadcast + onDidChangeConfiguration listener both firing), and potential init-order hazard if DesignPanelProvider/PlanningPanelProvider references are set before providers are fully constructed. Mitigations: handlers are already idempotent (classList operations are no-ops when repeated), and the late-binding setter pattern matches the existing `_setupPanelProvider`/`_kanbanProvider` wiring which has no init-order issues in production.
 
 ## Proposed Changes
 
@@ -137,3 +149,35 @@ The existing handlers (`design.js:3628-3654`, `project.js:141-164`, `planning.js
 4. **Restored panel:** Close VS Code with Design open, reopen (panel restored via `deserializeWebviewPanel`). Switch theme. Confirm the restored Design panel updates.
 5. **No duplicate-render regression:** Confirm kanban/setup/sidebar still update exactly once per switch (idempotent handlers do not double-apply).
 6. **Direct settings.json edit:** Edit `switchboard.theme.name` in `settings.json` directly (bypassing the setup UI). Confirm the `onDidChangeConfiguration` listeners still fire for design/planning (the listeners are kept) — this is the path that does NOT go through `broadcastToWebviews` and must still work.
+
+---
+
+## Code-Claim Verification Notes
+
+The following line-number references in the original plan were verified against source and found to be stale; the code logic described is correct, only the line numbers drifted:
+
+| Plan Reference | Actual Location | Notes |
+|---|---|---|
+| `broadcastToWebviews` at `TaskViewerProvider.ts:4585-4588` | `:4596-4599` | Off by ~11 lines; method body matches plan snippet exactly |
+| `refreshUI` at `TaskViewerProvider.ts:2892-2922` | `:2902+` | Off by ~10 lines; method starts at 2902 |
+| `handleSetThemeSetting` Global/Workspace update at `:4576-4577` | `:4587-4588` | Off by ~11 lines; `config.update('theme.name', theme, Global)` then `config.update('theme.name', undefined, Workspace)` |
+| `PlanningPanelProvider.ts:405-426` for `onDidChangeConfiguration` | `:431-460` (project panel via `_registerProjectPanelConfigListener`), `:594-616` (planning panel in `open()`), `:742-764` (planning panel in `_hydratePanel()`) | PlanningPanelProvider has THREE separate config listener registrations, not one; the plan's line range pointed at the project panel init code, not the listener itself |
+
+**Correction on listener-disposal claim:** The original plan states "if the listener's disposable was disposed with a prior panel instance, the event never arrives." This is inaccurate — `DesignPanelProvider.dispose()` is only called on extension deactivation (it's in `context.subscriptions`), not on panel close. The `onDidDispose` handler (line 231) only nulls `_panel` and stops watchers/poll; `_disposables` (containing the config listeners) persist for the provider singleton's lifetime. The real risk is simpler: if `_panel` is null when the config event fires (panel closed or between restore steps), `postMessage` is silently dropped via optional chaining. The proposed direct broadcast fix correctly addresses this by routing through the provider's `postMessage` method which also uses optional chaining on `_panel` — but the broadcast arrives synchronously from the setup UI action, making the null-panel window much narrower than the async config-event path.
+
+**Verified correct claims:**
+- `SetupPanelProvider.ts:125-142` for `setThemeSetting` handler — ✓
+- `SetupPanelProvider.ts:743-849` for checkbox handlers — ✓ (theme-related ones at 743-795)
+- `DesignPanelProvider.ts:169-198` for `onDidChangeConfiguration` — ✓
+- `DesignPanelProvider.ts:162` for `_themeListenersRegistered` guard — ✓
+- `DesignPanelProvider.ts:202-229` for `deserializeWebviewPanel` — ✓
+- `TaskViewerProvider.ts:501-529` for `onDidChangeConfiguration` — ✓
+- `DesignPanelProvider` has public `postMessage` at line 309 — ✓
+- `PlanningPanelProvider` does NOT have a public `postMessage` method — ✓ (needs to be added)
+- `setKanbanProvider` / `setSetupPanelProvider` exist in `TaskViewerProvider` at lines 2202 / 2223 — ✓
+- `extension.ts` wires providers at lines 790-791 — ✓
+- No `setDesignPanelProvider` or `setPlanningPanelProvider` exists yet — ✓
+
+**Recommendation:** Send to Coder
+
+**Stage Complete:** PLAN REVIEWED

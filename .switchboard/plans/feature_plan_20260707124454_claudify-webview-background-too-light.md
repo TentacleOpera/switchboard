@@ -10,7 +10,7 @@ In the Claudify theme, the background colour behind the grid in the webviews (th
 
 The claudify ground colour is `#1C1C1C` — applied consistently as the `background-color` of the gridded surface in every webview:
 
-- `setup.html:473-478` — `body.theme-claudify { background-color: #1C1C1C; ... grid ... }`
+- `setup.html:473-478` — `body.theme-claudify { background-color: #1C1C1C; ... grid ... }` *(correction: rule spans :473-479; closing brace is on line 479)*
 - `setup.html:480-486` — `body.theme-claudify .shared-tab-content { background-color: #1C1C1C; ... grid ... }` (the panel surface — being made opaque/solid by the sibling Issue 3 plan)
 - `design.html:2326-2337` — `body.theme-claudify #briefs-content, #design-content, #stitch-content, #preview-pane-design, #stitch-preview-pane { background-color: #1C1C1C; ... grid ... }`
 
@@ -24,6 +24,12 @@ The `#1C1C1C` value was chosen for a "flat neutral surface" look, but in practic
 
 **Tags:** frontend, theme, claudify, css, bugfix, design
 **Complexity:** 2
+
+## User Review Required
+
+- **Confirm `#0a0a0a` reads as "dark immersive" vs too-black.** The proposed ground colour is RGB(10,10,10) — very near black. Verify visually that it still reads as a dark grey surface (not indistinguishable from the solid `#000000` panels from Issue 3). If it feels too close to pure black, consider `#111111` or `#0d0d0d` as alternatives.
+- **Confirm grid-line contrast is acceptable, not harsh.** Darkening the ground from `#1C1C1C` to `#0a0a0a` increases the contrast of the `rgba(255,255,255,0.05)` grid lines. Verify the grid does not become visually prominent or harsh — it should remain a subtle texture.
+- **Confirm cross-panel consistency.** After updating all 6 occurrences across 4 files, verify the claudify ground reads identically in Setup, Design, Planning, and Project webviews.
 
 ## Complexity Audit
 
@@ -43,6 +49,14 @@ The `#1C1C1C` value was chosen for a "flat neutral surface" look, but in practic
 - **`--panel-bg` / `--panel-bg2` variables.** `design.html` defines `--panel-bg: #000000` and `--panel-bg2: #0a0a0a` (`:41-42`). The claudify ground could reference `var(--panel-bg2)` instead of a hardcoded hex, keeping it DRY and theme-variable-driven. `setup.html` defines `--panel-bg: #000000`, `--panel-bg2: #050505` (`:17-18`) — slightly darker than design's. Decide whether to hardcode `#0a0a0a` everywhere or use the per-file variable (they differ slightly). Recommended: hardcode a single `#0a0a0a` for claudify ground across all webviews so the claudify ground is identical everywhere regardless of each file's `--panel-bg2`.
 - **Afterburner untouched.** Do not change `#101414` (afterburner ground). Only the claudify ground changes.
 - **Dependencies** — Issue 3's plan edits the claudify `.shared-tab-content` panel rule (makes it solid). This plan edits the claudify body/content ground rules. Coordinate so the panel rule (Issue 3) and body rule (Issue 4) do not both set `background` on the same selector with conflicting values. Issue 3 sets `.shared-tab-content` to solid `#000000`; Issue 4 sets `body.theme-claudify` (the body ground) to dark grey `#0a0a0a`. Different selectors — no conflict.
+
+## Dependencies
+
+None — no cross-session dependencies. Note: sibling Plan B (setup panel opacity) sets `.shared-tab-content` to solid `#000000` — coordinate so the panel solid fill and body ground (this plan, `#0a0a0a`) stay distinct; sibling Plan A (theme broadcast) is TS-only and independent.
+
+## Adversarial Synthesis
+
+Hardcoding `#0a0a0a` across all webviews risks insufficient visual separation from Plan B's solid `#000000` panels (10 RGB units apart), and the per-file `--panel-bg2` divergence (setup `#050505` vs design `#0a0a0a`) means a variable-driven approach would produce inconsistent grounds. The audit is exhaustive — all 6 occurrences across 4 files are enumerated from grep; no JS/inline/style-attribute occurrences exist.
 
 ## Proposed Changes
 
@@ -104,9 +118,24 @@ body.theme-claudify #stitch-preview-pane {
 }
 ```
 
-### 3. Audit other webviews for `#1C1C1C` claudify grounds
+### 3. Audit other webviews for `#1C1C1C` claudify grounds — ACTUAL GREP RESULTS
 
-Search `src/webview/*.html` for `#1C1C1C` (case-insensitive) and update any claudify-themed ground occurrence to `#0a0a0a`. Files to check: `planning.html`, `implementation.html`, `project.html`, `kanban.html`, `shared-tabs.css`. Update only claudify-context grounds (afterburner `#101414` stays).
+Grep of `src/webview/*.html` and `src/webview/*.css` for `#1C1C1C` (case-insensitive) found **6 occurrences in 4 files**, all claudify-context grounds. No matches in `.css` files, `implementation.html`, `kanban.html`, or any JS/TS/inline-style source.
+
+| # | File | Line | Selector | Context |
+|---|------|------|----------|---------|
+| 1 | `setup.html` | 474 | `body.theme-claudify` | Body ground |
+| 2 | `setup.html` | 481 | `body.theme-claudify .shared-tab-content` | Panel ground (being made solid by Issue 3) |
+| 3 | `design.html` | 2332 | `body.theme-claudify #briefs-content, #design-content, #stitch-content, #preview-pane-design, #stitch-preview-pane` | Content/preview ground |
+| 4 | `planning.html` | 2365 | `body.theme-claudify #docs-content, #research-content, #tickets-content, #preview-pane, #preview-pane-tickets` | Content/preview ground |
+| 5 | `planning.html` | 3449 | `body.theme-claudify #notebook-content` | Notebook ground |
+| 6 | `project.html` | 663 | `body.theme-claudify #kanban-content, #features-content, #constitution-content, #system-content, #tuning-content, #projects-content, #kanban-preview-pane, #features-preview-pane, #constitution-preview-pane, #system-preview-pane, #tuning-preview-pane, #projects-preview-pane` | Content/preview ground |
+
+**Files confirmed clean (no `#1C1C1C`):** `implementation.html`, `kanban.html`, `shared-tabs.css`, all other `.css` files, all `.js`/`.ts` files, no inline `style=` attributes.
+
+**Action:** Change every `background-color: #1C1C1C` in the table above to `background-color: #0a0a0a`. Afterburner `#101414` stays untouched. Occurrence #2 (setup `.shared-tab-content`) is being replaced by Issue 3's solid `#000000` panel — coordinate so both plans don't conflict on that selector.
+
+**Recommendation:** Complexity 2 → **Send to Intern**
 
 ## Verification Plan
 
@@ -118,3 +147,5 @@ Search `src/webview/*.html` for `#1C1C1C` (case-insensitive) and update any clau
 3. **Cross-panel consistency:** Confirm the claudify ground is the same dark grey in every webview — no single panel lighter than the rest.
 4. **Afterburner regression:** Switch to Afterburner; confirm the `#101414` ground is unchanged.
 5. **Contrast with solid panels (post-Issue 3):** With the setup panels made solid black (Issue 3), confirm the body ground (dark grey, this plan) is distinguishable from the panel (solid black) — the layout retains depth.
+
+**Stage Complete:** PLAN REVIEWED

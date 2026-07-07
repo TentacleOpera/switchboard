@@ -53,6 +53,12 @@ The design intent (comment at `:472`: "Claudify: flat neutral surface + grey gri
 **Tags:** frontend, theme, claudify, css, bugfix, setup
 **Complexity:** 2
 
+## User Review Required
+
+- **Confirm opaque fill reads as a distinct solid box vs the gridded body.** The proposed change replaces the claudify panel's grid-on-panel with a solid `#000000` fill. The visual separator between panel and body shifts from "nothing" (current bug) to "solid vs gridded" + `#333` border. Verify this produces the intended "panel reads as a box" appearance.
+- **Confirm flat-not-glass intent is preserved.** The fix deliberately omits `backdrop-filter` / blur — claudify stays flat. If a future desire for subtle translucency arises, that would be a separate design decision, not this bugfix.
+- **Confirm the body grid in gaps is acceptable.** With panels now solid, the grid is visible only in the padding/margin gaps around panels. This matches Afterburner's "grid shows between panels, panels are solid" layout. If the user expects grid everywhere (including on panels), that conflicts with the bug report and would need a different approach.
+
 ## Complexity Audit
 
 ### Routine
@@ -70,6 +76,14 @@ The design intent (comment at `:472`: "Claudify: flat neutral surface + grey gri
 - **`.shared-tab-content.active`** (`:533-536`) only toggles `display`/`overflow`; it does not set a background, so the claudify background rule applies to the active panel correctly.
 - **Inner cards** (e.g. `.control-plane-status-card` at `:104-108` use `var(--panel-bg2)`) — these sit inside the panel and already have their own solid background; they are not affected.
 - **Dependencies** — none. No other plan edits the claudify `.shared-tab-content` rule. Issue 4's plan edits the claudify body/ground `background-color`; this plan edits the panel rule. They are independent.
+
+## Dependencies
+
+None — no cross-session dependencies. Note: sibling Plan C (webview ground colour) edits the claudify body ground (`body.theme-claudify` background-color/background-image at `:473-478`); coordinate so panel solid fill (`#000000`) and body ground (dark grey `#1C1C1C` + grid) stay visually distinct. Sibling Plan A (theme broadcast) is TS-only and independent.
+
+## Adversarial Synthesis
+
+**Risk Summary:** The `background:` shorthand reliably resets both `background-color` and `background-image`, eliminating grid leak. `var(--panel-bg)` resolves to `#000000` in the claudify scope (not overridden). The primary residual risk is tonal: `#000000` panel on `#1C1C1C` body relies on the grid-vs-solid contrast and `#333` border for panel delineation — subtle but functional, matching Afterburner's proven pattern.
 
 ## Proposed Changes
 
@@ -111,3 +125,7 @@ The body claudify rule (`:473-478`) keeps the grid on the body. With the panel n
 2. **Afterburner parity:** Switch to Afterburner; confirm the setup panels still look the same as before (no regression — the afterburner rule at `:465-470` is untouched).
 3. **Text contrast:** Confirm body text (`--text-primary` = `#e0e0e0`) and secondary text (`--text-secondary` = `#8C8C8C`) remain legible on the now-solid `#000000` panel (they were already tuned for dark backgrounds — no change expected).
 4. **Inner cards:** Confirm inner cards (`.control-plane-status-card`, db cards, etc.) still render with their own `--panel-bg2` fill on top of the now-solid panel — no visual clash.
+
+**Recommendation:** Send to Intern
+
+**Stage Complete:** PLAN REVIEWED

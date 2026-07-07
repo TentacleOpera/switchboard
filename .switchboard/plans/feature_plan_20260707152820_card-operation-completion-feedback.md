@@ -6,7 +6,7 @@ When a kanban card completes an operation — most visibly when its amber "agent
 
 ### Problem analysis & root cause
 
-The activity light is rendered in `createCardHtml` (`src/webview/kanban.html:5722`):
+The activity light is rendered in `createCardHtml` (`src/webview/kanban.html:5816`):
 
 ```js
 const workingLight = (!isCompleted && card.working)
@@ -14,57 +14,106 @@ const workingLight = (!isCompleted && card.working)
     : '';
 ```
 
-The `working` flag is derived in the backend (`src/services/KanbanProvider.ts:130`) from `dispatchedAt` via `isWorkingState()`, which returns `true` only while `Date.now() - dispatchedAt < timeoutMs` (default 20 min). When the timeout elapses (or the backend sweeps/clears `dispatched_at`), the next `updateBoard` payload marks `working: false`, and `renderBoard` rebuilds the card DOM **without** the light. There is no transition detection — the webview never compares the previous `working` state to the new one, so nothing fires.
+The `working` flag is derived in the backend (`src/services/KanbanProvider.ts:130`) from `dispatchedAt` via `isWorkingState()`, which returns `true` only while `Date.now() - dispatchedAt < timeoutMs` (default **10 min** — `DEFAULT_WORKING_STATE_TIMEOUT_MS = 10 * 60 * 1000`, reduced from 20 min by the "10-minute timeout reduction" commit; the read-time check reads the live `switchboard.activityLight.timeoutMs` setting). When the timeout elapses (or the backend sweep nulls `dispatched_at`), the next `updateBoard` payload marks `working: false`, and `renderBoard` rebuilds the card DOM **without** the light. There is no transition detection — the webview never compares the previous `working` state to the new one, so nothing fires.
 
 The board already has the infrastructure to show transient feedback:
 
-- A status bar message area: `<div id="status-message" ...>` (`kanban.html:2611`) driven by the `showStatusMessage` message handler (`kanban.html:6391`) and reused inline in `moveCardsFailed` (`kanban.html:6503`). It supports a `flashing` CSS animation (`@keyframes statusFlash`, `kanban.html:2450`) and auto-clears after 5s.
-- A `flashIconBtn` helper (`kanban.html:4488`) that adds/removes a `flash` class with `animationend` cleanup — a reusable pattern for one-shot CSS animations.
+- A status bar message area: `<div id="status-message" ...>` (`kanban.html:2644`) driven by the `showStatusMessage` message handler (`kanban.html:6485`) and reused inline in `moveCardsFailed` (`kanban.html:6582`; the inline status block is at `6597`–`6611`). It supports a `flashing` CSS animation (`@keyframes statusFlash`, `kanban.html:2483`) and auto-clears after 5s.
+- A `flashIconBtn` helper (`kanban.html:4580`) that adds/removes a `flash` class with `animationend` cleanup — a reusable pattern for one-shot CSS animations.
 
 Neither is wired to the working→idle transition. The fix is to **detect the transition in the webview** and (a) post a status bar message, and (b) play a short one-shot animation on the affected card.
 
 ## Metadata
 
-- **Tags:** kanban, webview, ux, animation, status-light, feedback
-- **Complexity:** 3 (Routine — pure webview JS/CSS, no backend contract change, no DB writes)
+- **Tags:** frontend, ui, ux
+- **Complexity:** 4 (upper-Routine — single-file webview JS/CSS, but a non-trivial optimistic-render state interaction and a `renderBoard` signature change touching four call sites)
+- *No `**Repo:**` line — this is a single-repo workspace.*
+
+## User Review Required
+
+No product-scope decision is required from the user before coding (the feature is purely additive UI feedback, no backend/DB/IPC contract change, no migration). The plan is ready to send to a Coder as-is. The user should spot-check the chosen visual treatment (green glow + status-bar wording) during manual verification and adjust copy/CSS if they prefer a different hue or message.
 
 ## Complexity Audit
 
-**Routine.** The change is confined to `src/webview/kanban.html` (webview JS + CSS). No new backend messages are required: the working state already arrives in every `updateBoard` payload via `card.working`. The work is:
+### Routine
+- Pure webview JS + CSS confined to `src/webview/kanban.html`. No backend messages required: the `working` state already arrives in every `updateBoard` payload via `card.working`.
+- A transition-detection diff in the existing `updateBoard` / `renderBoard` path.
+- A status bar message call reusing the existing `#status-message` element + `statusFlash` animation.
+- One new CSS keyframe + a class toggle on the card element, with a `prefers-reduced-motion` guard mirroring the existing pulse guard (`kanban.html:982`).
+- All APIs/behaviors used (`color-mix`, `CSS.escape`, `animationend`+`{once:true}`, `--vscode-testing-iconPassed`, `data-plan-id` queries) are already in use elsewhere in this file — no new dependencies.
 
-1. A transition-detection diff in the existing `updateBoard` / `renderBoard` path.
-2. A status bar message call (reusing the existing `#status-message` element + `statusFlash` animation).
-3. One new CSS keyframe + a class toggle on the card element.
-
-No schema changes, no new IPC messages, no DB migrations. Risk is limited to visual jitter if the diff fires too aggressively (mitigated by only triggering on a true `true→false` edge).
+### Complex / Risky
+- **Optimistic-render interaction:** the `updateBoard` handler suppresses `renderBoard` while an optimistic drag window is active and no `working` flag changed (`kanban.html:6633`–`6651`). A finish detected during a suppressed tick must be **carried forward** to the next real render, not silently dropped — see the `pendingFinished` carry-forward in Proposed Changes §2. (The `working→idle` case is safe because it flips `workingChanged=true`, which busts the suppression; only a `COMPLETED`-column move with unchanged `working` can land in the suppressed branch.)
+- **`renderBoard` signature change:** `renderBoard(cards)` (`kanban.html:5479`) becomes `renderBoard(cards, justFinishedIds = new Set())`. The default param keeps the four existing call sites (`moveCards` `6578`, `moveCardsFailed` `6595`, `updateBoard` `6655` + `6661`) working unchanged, but the change must be verified against all callers.
 
 ## Edge-Case & Dependency Audit
 
+### Race Conditions
 - **Batch updates:** A single `updateBoard` can flip several cards from working→idle at once (e.g. a timeout sweep). The status bar message must summarize ("2 plans finished") rather than fire once per card and overwrite itself. Throttle/coalesce within one `updateBoard` call.
-- **Optimistic move window:** While `optimisticMoveUntil` is active, `renderBoard` is suppressed (`kanban.html:6541`). Transition detection must run on the data update regardless, but the card animation should only attach when a real render happens — otherwise the animation targets a DOM node that won't be (re)created. Simplest: detect transitions in `updateBoard`, but defer the animation/message to `renderBoard` (pass a "just-finished" set).
-- **Completed column:** `working` is already suppressed for `COMPLETED` cards (`kanban.html:5722`). A card that moves into `COMPLETED` while still "working" should still count as finished for the message (the column move is itself the completion signal). Treat column-into-`COMPLETED` as a finish event too.
-- **Initial load:** On the very first `updateBoard` there is no previous state. Do not fire finish events for cards that arrive already idle — only fire on a `true→false` edge, so seed `previousWorking` from the first payload without emitting.
-- **Workspace/project filter switches:** When the board re-renders due to a filter change (not a state change), cards may appear/disappear. Do not treat a card vanishing from the visible set as a "finish". Track finish events by card id and only animate cards still present after render.
-- **`prefers-reduced-motion`:** The existing `card-status-light-pulse` is disabled under reduced motion (`kanban.html:981`). The new completion animation must likewise be suppressed / shortened under `@media (prefers-reduced-motion: reduce)`.
-- **Build artifact:** `dist/webview/kanban.html` is generated from `src/webview/kanban.html` by `copy-webpack-plugin` (`webpack.config.js:73-78`). Edit `src/` only; run `npm run compile` to regenerate `dist/`. Do not hand-edit `dist/`.
+- **Optimistic move window:** While `optimisticMoveUntil` is active, `renderBoard` is suppressed when no `working` flag changed (`kanban.html:6642`). Transition detection must run on the data update regardless, but the card animation should only attach when a real render happens — otherwise the animation targets a DOM node that won't be (re)created. Resolution: detect transitions in `updateBoard`, push any finish that occurs during a **suppressed** render onto a `pendingFinished` set, and drain that set on the next real `renderBoard` (see Proposed Changes §2). This makes the "fires on the next real render" guarantee actually true.
+- **Shared `#status-message` timeout:** The new `showStatusBarMessage` helper and the host-driven `showStatusMessage` handler both stamp `statusEl._statusTimeoutId` on the same element. A finish message and a host error/close-timing message racing will clobber each other's 5s timeout. This is **acceptable** (last-write-wins is correct coalescing for a transient sub-bar) but is an intentional shared-channel decision, not an exclusive channel.
+
+### Security
+- **None.** Pure UI. The status-bar message is set via `statusEl.textContent = text` (no HTML injection surface), and card topics are already escaped by `escapeHtml`/`escapeAttr` in `createCardHtml`. No new untrusted-input handling, no eval, no innerHTML of dynamic content.
+
+### Side Effects
+- **DOM-only.** The change adds a transient class (`card-op-completed`) on card elements with `animationend` cleanup (`{ once: true }`), mirroring the existing column-highlight pattern at `kanban.html:5699`. No backend writes, no DB, no IPC messages emitted, no `postKanbanMessage` calls added.
+- **Build artifact:** `dist/webview/kanban.html` is generated from `src/webview/kanban.html` by `copy-webpack-plugin` (`webpack.config.js:73`–`78`, pattern `src/webview/*.html` → `webview/[name][ext]`). Per project convention, `dist/` is **not** used during development/testing (testing is via an installed VSIX); `npm run compile` is only needed when producing a VSIX for release. Edit `src/` only; do not hand-edit `dist/`.
+
+### Dependencies & Conflicts
+- **`buildBoardSignature` includes `card.working`** (`kanban.html:4791`, with an explicit comment at `4785`–`4786` tying it to the `workingChanged` check). This is load-bearing for this plan: it guarantees a `working→idle` transition **changes the board signature**, so `updateBoard` takes the render path (`6655`) instead of the suppressed/unchanged paths. Do **not** remove `working` from the signature, or working finishes will stop rendering at all.
+- **`renderBoard` call sites:** signature gains a defaulted second param. All four current callers pass one arg → safe. Audit for any other `renderBoard(...)` callers introduced later.
+- **No new runtime dependencies:** `color-mix`, `CSS.escape`, `animationend`, `@media (prefers-reduced-motion: reduce)`, and `--vscode-testing-iconPassed` are all already used in this file.
+
+## Dependencies
+
+None — single-file webview change, no cross-plan (`sess_…`) dependencies.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) every line number in the original draft was stale against the live 10,601-line file — re-verified and corrected below; (2) the proposed unconditional `previousWorking` advance silently drops a `COMPLETED`-during-optimistic finish (the draft's verification step 7 "fires on next render" claim was false) — fixed via a `pendingFinished` carry-forward drained on the next real render; (3) the new `showStatusBarMessage` helper duplicated two existing status-flash blocks — refactor of the `showStatusMessage` handler and `moveCardsFailed` block through the helper made mandatory. Mitigations: line numbers verified against current source, carry-forward makes the optimistic-window guarantee real, and one helper serves all three status-flash call sites.
 
 ## Proposed Changes
 
+> **Line-number verification (load-bearing):** the original draft's line numbers were measured against an older copy of the file. All numbers below are verified against the current `src/webview/kanban.html` (10,601 lines). Mapping of the draft's stale references → corrected:
+>
+> | Draft claimed | Actual (current file) | What lives there |
+> |---|---|---|
+> | `kanban.html:5722` (working light) | **5816** | `workingLight` in `createCardHtml` (fn starts 5755) |
+> | `kanban.html:6520` (`case 'updateBoard'`) | **6614** | `case 'updateBoard':` |
+> | `kanban.html:6391` (`showStatusMessage` handler) | **6485** | `case 'showStatusMessage':` |
+> | `kanban.html:6503` (`moveCardsFailed`) | **6582** | `case 'moveCardsFailed':` (inline status block 6597–6611) |
+> | `kanban.html:6469` (`moveCards` case) | **6563** | `case 'moveCards':` |
+> | `kanban.html:2450` (`@keyframes statusFlash`) | **2483** | `@keyframes statusFlash` |
+> | `kanban.html:4488` (`flashIconBtn`) | **4580** | `function flashIconBtn(btn)` |
+> | `~kanban.html:5385` (board state vars) | **3957** (`currentCards`) / **3991** (`lastBoardSignature`) / **3996** (`optimisticMoveUntil`) | module-scope state |
+> | `kanban.html:6554` / `6560` (renderBoard calls in updateBoard) | **6655** / **6661** | the two `renderBoard(...)` calls in `case 'updateBoard'` |
+> | `kanban.html:6541` (optimistic suppression) | **6633`–`6651** | `optimisticActive` guard + suppressed-absorb branch |
+> | `kanban.html:981` (reduced-motion pulse) | **982** | `.card-status-light.is-on { animation: none }` |
+> | `kanban.html:965` (`.card-status-light` block) | **965** | ✓ correct |
+> | `KanbanProvider.ts:130` (`isWorkingState`) | **130** | ✓ correct (but default timeout is **10 min**, not 20) |
+
 ### File: `src/webview/kanban.html`
 
-#### 1. Track the previous working state (module-scope)
+#### 1. Track the previous working state + a carry-forward set (module-scope)
 
-Near the other board state variables (around `currentCards` / `lastBoardSignature`, ~`kanban.html:5385` region), add:
+Near the other board state variables (`currentCards` at `kanban.html:3957`, `lastBoardSignature` at `3991`, `optimisticMoveUntil` at `3996`), add:
 
 ```js
 // Map of cardId -> true while the card was last seen with its activity light on.
 // Used to detect the working -> idle edge and fire completion feedback.
 let previousWorking = new Map(); // id -> boolean
+
+// Finishes detected during a suppressed render (optimistic window, no working
+// change) are stashed here and drained by the next real renderBoard. Without
+// this, a COMPLETED-column move during an optimistic tick would be silently
+// dropped (previousWorking advances every tick, so the edge is never re-seen).
+let pendingFinished = []; // [{ id, topic, completed }]
 ```
 
-#### 2. Detect the finish edge in `updateBoard` and pass it to `renderBoard`
+#### 2. Detect the finish edge in `updateBoard` and carry suppressed finishes forward
 
-In the `case 'updateBoard':` block (`kanban.html:6520`), before the signature check decides whether to render, compute the set of cards that just transitioned `working: true → false` (or moved into `COMPLETED`):
+In the `case 'updateBoard':` block (`kanban.html:6614`), before the signature check decides whether to render, compute the set of cards that just transitioned `working: true → false` (or moved into `COMPLETED`):
 
 ```js
 case 'updateBoard': {
@@ -88,19 +137,36 @@ case 'updateBoard': {
             justFinished.push({ id, topic: card.topic || '', completed: true });
         }
     }
-    previousWorking = nextWorking;
+    previousWorking = nextWorking; // advance every tick so the edge stays accurate
 
-    // ...existing signature/optimistic logic, but when renderBoard is actually
-    // called, hand it justFinished so the animation can attach to real DOM nodes.
+    // ...existing signature/optimistic logic...
 ```
 
-Then thread `justFinished` into every `renderBoard(...)` call inside this case (there are two: the signature-changed branch at `kanban.html:6554` and the featureWorktrees-changed branch at `kanban.html:6560`). Change the signature to `renderBoard(cards, justFinishedIds = new Set())`.
+> **Clarification — carry-forward (makes verification step 7 true):** `previousWorking` advances unconditionally (keeps the `working→idle` edge accurate across ticks). But a finish detected in a tick where `renderBoard` is **suppressed** (optimistic window + no `working` change — only reachable for a `COMPLETED`-column move with unchanged `working`) must not be lost. Push those onto `pendingFinished` and drain them on the next real render. Concretely, where the suppressed-absorb branch sits (`kanban.html:6642`–`6651`):
+>
+> ```js
+> if (optimisticActive && !workingChanged) {
+>     // ...existing absorb-without-render comment...
+>     currentCards = nextCards;
+>     lastBoardSignature = buildBoardSignature(currentCards);
+>     if (justFinished.length) pendingFinished.push(...justFinished); // carry forward
+> } else {
+>     lastBoardSignature = nextBoardSignature;
+>     console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
+>     const activeFinished = justFinished.length
+>         ? justFinished.concat(pendingFinished.splice(0)) // drain carry + new
+>         : (pendingFinished.length ? pendingFinished.splice(0) : []);
+>     renderBoard(nextCards, new Set(activeFinished.map(f => f.id)));
+> }
+> ```
 
-> Note: the `moveCards` case (`kanban.html:6469`) and `moveCardsFailed` also call `renderBoard`; they pass no finish set, which is correct (a manual move is not a "finished operation"). Default param keeps them working unchanged.
+Then thread the active finish set into the `renderBoard(...)` call inside this case. **Only the signature-changed call (`kanban.html:6655`) ever carries a non-empty set** — because `working` and `column` are both in `buildBoardSignature`, any real finish changes the signature and takes this path; the featureWorktrees-changed call (`6661`, in the signature-unchanged branch) always receives an empty set in practice. Change the signature to `renderBoard(cards, justFinishedIds = new Set())`.
 
-#### 3. Show a status bar message for finish events
+> Note: the `moveCards` case (`kanban.html:6563`) and `moveCardsFailed` (`6582`) also call `renderBoard` (`6578`, `6595`); they pass no finish set, which is correct (a manual move is not a "finished operation"). The default param keeps them working unchanged.
 
-Add a small helper near `flashIconBtn` (`kanban.html:4488`):
+#### 3. One `showStatusBarMessage` helper — route all three status-flash sites through it (MANDATORY refactor)
+
+Add a single helper near `flashIconBtn` (`kanban.html:4580`):
 
 ```js
 /** Show a transient message in the kanban sub-bar status area (#status-message). */
@@ -124,7 +190,7 @@ function showStatusBarMessage(text, { isError = false } = {}) {
 }
 ```
 
-(Optionally refactor the existing `showStatusMessage` handler and `moveCardsFailed` block to call this helper to remove duplication — keep behavior identical.)
+**Mandatory (not optional) refactor:** replace the inline body of the `showStatusMessage` message handler (`kanban.html:6485`–`6507`) with `showStatusBarMessage(msg.message || '', { isError: !!msg.isError });`, and replace the inline status block in `moveCardsFailed` (`kanban.html:6597`–`6611`) with `showStatusBarMessage(\`${failed.length} plan(s) not advanced: ${failed[0]?.reason || 'database update failed'}\`, { isError: true });`. Behavior is identical; one routine instead of three drifting copies (the codebase already has a comment at `1052` admitting `flashIconBtn` "was a no-op" — that's the rot pattern to avoid here).
 
 In `renderBoard`, after the DOM is built, fire the message and the card animation:
 
@@ -134,7 +200,8 @@ function renderBoard(cards, justFinishedIds = new Set()) {
 
     // After DOM is in place: completion feedback.
     if (justFinishedIds.size > 0) {
-        // Coalesce the status bar message.
+        // Coalesce the status bar message. Counts OPERATIONS completing (full
+        // cards array), not just visible cards; animation is best-effort below.
         const finishedCards = cards.filter(c => justFinishedIds.has(c.planId || c.sessionId || ''));
         if (finishedCards.length === 1) {
             const c = finishedCards[0];
@@ -148,7 +215,8 @@ function renderBoard(cards, justFinishedIds = new Set()) {
                 ? `${finishedCards.length} plans finished (${doneCount} completed)`
                 : `${finishedCards.length} plans finished`);
         }
-        // Animate each still-present finished card.
+        // Animate each still-present finished card (best-effort; cards filtered
+        // out by project/backlog view are counted in the message but not animated).
         finishedCards.forEach(c => {
             const id = c.planId || c.sessionId || '';
             const el = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`);
@@ -184,19 +252,29 @@ Add near the existing `.card-status-light` block (`kanban.html:965`):
 }
 ```
 
+> **Note on reduced-motion completeness:** the new card glow is guarded. The status-bar `statusFlash` keyframe (`kanban.html:2483`) has **no** reduced-motion guard today and is inherited unchanged by this plan. A fading opacity text bar is motion-tolerant in practice, so this plan does not touch `statusFlash`; adding a guard there is a separate follow-up if full reduced-motion coverage is desired.
+
 ### File: `dist/webview/kanban.html`
 
-Do **not** edit by hand. After editing `src/webview/kanban.html`, run `npm run compile` (webpack) so `copy-webpack-plugin` regenerates `dist/webview/kanban.html` from `src/`.
+Do **not** edit by hand. `dist/` is regenerated by `copy-webpack-plugin` via `npm run compile` — but per project convention `dist/` is **not used during development or testing** (testing is via an installed VSIX). Regeneration is only needed when cutting a release VSIX.
 
 ## Verification Plan
 
-1. **Build:** `cd /Users/patrickvuleta/Documents/GitHub/switchboard && npm run compile` — confirm webpack succeeds and `dist/webview/kanban.html` now contains the new `card-op-completed-flash` keyframe and `showStatusBarMessage` helper.
-2. **Manual — single finish:** Open the Kanban board. Dispatch an agent to a plan so its amber status light is on. Wait for the working timeout to elapse (or temporarily lower `switchboard.activityLight.timeoutMs` to a few seconds for fast testing). Confirm:
-   - The status bar (`#status-message`) shows `"<topic>" finished` and flashes for ~3s.
+> Per session directives: **skip compilation** (no `npm run compile` step) and **skip automated tests**. Verification is manual, via an installed VSIX, treating `src/` as the source of truth.
+
+1. **Manual — single finish:** Open the Kanban board. Dispatch an agent to a plan so its amber status light is on. Wait for the working timeout to elapse (or temporarily lower `switchboard.activityLight.timeoutMs` to a few seconds for fast testing — note the production default is now **10 min**, not 20). Confirm:
+   - The status bar (`#status-message`) shows `"<topic>" finished` and flashes for ~5s.
    - The card plays a brief green glow (`card-op-completed-flash`) that fades within 1.4s.
-3. **Manual — completion:** Drag/click a working card into `COMPLETED`. Confirm the message reads `"<topic>" completed` and the same animation plays.
-4. **Manual — batch:** With two working cards, let both time out in the same `updateBoard` tick. Confirm a single coalesced message (`2 plans finished`) rather than two overwriting messages, and both cards animate.
-5. **Initial load:** Reload the webview while a card is already idle. Confirm **no** finish message fires (no false positive from seeding `previousWorking`).
-6. **Reduced motion:** Enable OS "reduce motion". Repeat step 2. Confirm the card animation is suppressed but the status bar message still appears (text feedback remains).
-7. **Optimistic window:** Drag a card during an optimistic move window so `renderBoard` is suppressed. Confirm no finish animation/message fires for that tick (it will fire on the next real render if the transition is still pending — acceptable).
-8. **No regressions:** Confirm `moveCards`, `moveCardsFailed`, manual drags, and the existing `showStatusMessage` handler still behave as before (the new `renderBoard` second param defaults to an empty set).
+2. **Manual — completion:** Drag/click a working card into `COMPLETED`. Confirm the message reads `"<topic>" completed` and the same animation plays.
+3. **Manual — batch:** With two working cards, let both time out in the same `updateBoard` tick. Confirm a single coalesced message (`2 plans finished`) rather than two overwriting messages, and both cards animate.
+4. **Initial load:** Reload the webview while a card is already idle. Confirm **no** finish message fires (no false positive from seeding `previousWorking`).
+5. **Reduced motion:** Enable OS "reduce motion". Repeat step 1. Confirm the card animation is suppressed but the status bar message still appears (text feedback remains).
+6. **Optimistic window (carry-forward):** Drag a card during an optimistic move window so `renderBoard` is suppressed **and** a `COMPLETED`-column move lands in that suppressed tick. Confirm the finish message + animation fire on the **next real render** (the `pendingFinished` carry-forward), rather than being silently dropped. (Working→idle finishes need not be tested here — they bust the suppression via `workingChanged` and render immediately.)
+7. **Filter / backlog view:** With a finished card that is filtered out of the visible set (project or backlog filter), confirm the message still counts it ("N plans finished") but no animation plays for the absent card (best-effort animation is correct).
+8. **No regressions:** Confirm `moveCards`, `moveCardsFailed`, manual drags, and the existing `showStatusMessage` host handler still behave as before — the refactored handler routes through `showStatusBarMessage` with identical behavior, and the new `renderBoard` second param defaults to an empty set for all pre-existing callers.
+
+## Recommendation
+
+**Send to Coder.** Complexity 4 (upper-Routine: single-file mechanics, but a non-trivial optimistic-render state interaction requiring the `pendingFinished` carry-forward, plus a `renderBoard` signature change spanning four call sites). Not intern-safe; the carry-forward edge and the mandatory three-site refactor warrant a coder's attention.
+
+**Stage Complete:** PLAN REVIEWED
