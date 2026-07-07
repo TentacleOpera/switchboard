@@ -982,6 +982,21 @@
             .card-status-light.is-on { animation: none; }
         }
 
+        /* One-shot feedback when a card's operation completes (status light goes out
+           or card enters the COMPLETED column). Distinct from the static green
+           .completed bar — this is a brief highlight that fades. */
+        @keyframes card-op-completed-flash {
+            0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 60%, transparent); }
+            30%  { box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 45%, transparent); }
+            100% { box-shadow: 0 0 0 0 transparent; }
+        }
+        .kanban-card.card-op-completed {
+            animation: card-op-completed-flash 1.4s ease-out forwards;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .kanban-card.card-op-completed { animation: none; }
+        }
+
         .card-actions {
             display: flex;
             gap: 6px;
@@ -3989,6 +4004,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let autobanCountdownTimer = null;
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
         let lastBoardSignature = '';
+        // Map of cardId -> true while the card was last seen with its activity light on.
+        // Used to detect the working -> idle edge and fire completion feedback.
+        let previousWorking = new Map(); // id -> boolean
+
+        // Finishes detected during a suppressed render (optimistic window, no working
+        // change) are stashed here and drained by the next real renderBoard. Without
+        // this, a COMPLETED-column move during an optimistic tick would be silently
+        // dropped (previousWorking advances every tick, so the edge is never re-seen).
+        let pendingFinished = []; // [{ id, topic, completed }]
+
         // Render-guard deadline (epoch ms). While Date.now() < this value an in-flight
         // optimistic drag is suppressing full renderBoard calls from updateBoard. 0 = inactive.
         // Re-armed on every drop so overlapping drags EXTEND the window rather than
@@ -4582,6 +4607,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             void btn.offsetWidth;
             btn.classList.add('flash');
             btn.addEventListener('animationend', () => btn.classList.remove('flash'), { once: true });
+        }
+
+        /** Show a transient message in the kanban sub-bar status area (#status-message). */
+        function showStatusBarMessage(text, { isError = false } = {}) {
+            const statusEl = document.getElementById('status-message');
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.style.color = isError
+                ? 'var(--vscode-errorForeground, #ff6b6b)'
+                : 'var(--accent-teal)';
+            statusEl.style.display = 'inline-block';
+            statusEl.classList.remove('flashing');
+            void statusEl.offsetWidth; // restart animation
+            statusEl.classList.add('flashing');
+            if (statusEl._statusTimeoutId) clearTimeout(statusEl._statusTimeoutId);
+            statusEl._statusTimeoutId = setTimeout(() => {
+                statusEl.textContent = '';
+                statusEl.classList.remove('flashing');
+                statusEl._statusTimeoutId = null;
+            }, 5000);
         }
 
         /**
@@ -5476,7 +5521,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
 
 
-        function renderBoard(cards) {
+        function renderBoard(cards, justFinishedIds = new Set()) {
             hideTooltip();
             const viewState = captureBoardViewState();
             currentCards = cards;
@@ -5734,6 +5779,37 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
             updateFeatureActionButton();
+
+            // After DOM is in place: completion feedback.
+            if (justFinishedIds.size > 0) {
+                // Coalesce the status bar message. Counts OPERATIONS completing (full
+                // cards array), not just visible cards; animation is best-effort below.
+                const finishedCards = cards.filter(c => justFinishedIds.has(c.planId || c.sessionId || ''));
+                if (finishedCards.length === 1) {
+                    const c = finishedCards[0];
+                    const label = c.topic ? `"${c.topic.length > 40 ? c.topic.slice(0,37)+'…' : c.topic}"` : 'Plan';
+                    showStatusBarMessage(c.column === 'COMPLETED'
+                        ? `${label} completed`
+                        : `${label} finished`);
+                } else if (finishedCards.length > 1) {
+                    const doneCount = finishedCards.filter(c => c.column === 'COMPLETED').length;
+                    showStatusBarMessage(doneCount
+                        ? `${finishedCards.length} plans finished (${doneCount} completed)`
+                        : `${finishedCards.length} plans finished`);
+                }
+                // Animate each still-present finished card (best-effort; cards filtered
+                // out by project/backlog view are counted in the message but not animated).
+                finishedCards.forEach(c => {
+                    const id = c.planId || c.sessionId || '';
+                    const el = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`);
+                    if (el) {
+                        el.classList.remove('card-op-completed');
+                        void el.offsetWidth;
+                        el.classList.add('card-op-completed');
+                        el.addEventListener('animationend', () => el.classList.remove('card-op-completed'), { once: true });
+                    }
+                });
+            }
         }
         function scoreToCategory(scoreStr) {
             if (scoreStr === 'High') return 'High';
@@ -6483,27 +6559,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'showStatusMessage': {
-                    const statusEl = document.getElementById('status-message');
-                    if (statusEl) {
-                        statusEl.textContent = msg.message || '';
-                        statusEl.style.color = msg.isError
-                            ? 'var(--vscode-errorForeground, #ff6b6b)'
-                            : 'var(--accent-teal)';
-                        statusEl.style.display = 'inline-block';
-                        // Reset animation by removing class, forcing reflow, re-adding class
-                        statusEl.classList.remove('flashing');
-                        void statusEl.offsetWidth; // Trigger reflow to restart animation
-                        statusEl.classList.add('flashing');
-
-                        if (statusEl._statusTimeoutId) {
-                            clearTimeout(statusEl._statusTimeoutId);
-                        }
-                        statusEl._statusTimeoutId = setTimeout(() => {
-                            statusEl.textContent = '';
-                            statusEl.classList.remove('flashing');
-                            statusEl._statusTimeoutId = null;
-                        }, 5000);
-                    }
+                    showStatusBarMessage(msg.message || '', { isError: !!msg.isError });
                     break;
                 }
                 case 'reloadRoleConfigs': {
@@ -6594,30 +6650,36 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         lastBoardSignature = buildBoardSignature(currentCards);
                         renderBoard(currentCards);
                     }
-                    const statusEl = document.getElementById('status-message');
-                    if (statusEl) {
-                        statusEl.textContent = `${failed.length} plan(s) not advanced: ${failed[0]?.reason || 'database update failed'}`;
-                        statusEl.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
-                        statusEl.style.display = 'inline-block';
-                        statusEl.classList.remove('flashing');
-                        void statusEl.offsetWidth;
-                        statusEl.classList.add('flashing');
-                        if (statusEl._statusTimeoutId) { clearTimeout(statusEl._statusTimeoutId); }
-                        statusEl._statusTimeoutId = setTimeout(() => {
-                            statusEl.textContent = '';
-                            statusEl.classList.remove('flashing');
-                            statusEl._statusTimeoutId = null;
-                        }, 5000);
-                    }
+                    showStatusBarMessage(`${failed.length} plan(s) not advanced: ${failed[0]?.reason || 'database update failed'}`, { isError: true });
                     break;
                 }
-                case 'updateBoard':
+                case 'updateBoard': {
                     const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
                     const nextFeatureWorktrees = msg.featureWorktrees || {};
                     const featureWorktreesChanged = JSON.stringify(currentFeatureWorktrees) !== JSON.stringify(nextFeatureWorktrees);
                     currentFeatureWorktrees = nextFeatureWorktrees;
                     recomputeWorktreeIndicator();
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
+
+                    // Detect working -> idle transitions (and completions) for finish feedback.
+                    const justFinished = []; // [{ id, topic, completed }]
+                    const nextWorking = new Map();
+                    for (const card of nextCards) {
+                        const id = card.planId || card.sessionId || '';
+                        if (!id) continue;
+                        const wasWorking = previousWorking.get(id) === true;
+                        const isCompleted = card.column === 'COMPLETED';
+                        const nowWorking = !isCompleted && !!card.working;
+                        nextWorking.set(id, nowWorking);
+                        // Fire only on a true edge: was working, now not — OR just entered COMPLETED.
+                        if (wasWorking && !nowWorking) {
+                            justFinished.push({ id, topic: card.topic || '', completed: isCompleted });
+                        } else if (isCompleted && wasWorking) {
+                            justFinished.push({ id, topic: card.topic || '', completed: true });
+                        }
+                    }
+                    previousWorking = nextWorking; // advance every tick so the edge stays accurate
+
                     const nextBoardSignature = buildBoardSignature(nextCards);
                     const dbWarningBanner = document.getElementById('db-warning-banner');
                     if (dbWarningBanner) {
@@ -6649,19 +6711,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             // when the window expires.
                             currentCards = nextCards;
                             lastBoardSignature = buildBoardSignature(currentCards);
+                            if (justFinished.length) pendingFinished.push(...justFinished); // carry forward
                         } else {
                             lastBoardSignature = nextBoardSignature;
                             console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
-                            renderBoard(nextCards);
+                            const activeFinished = justFinished.length
+                                ? justFinished.concat(pendingFinished.splice(0)) // drain carry + new
+                                : (pendingFinished.length ? pendingFinished.splice(0) : []);
+                            renderBoard(nextCards, new Set(activeFinished.map(f => f.id)));
                         }
                     } else {
                         currentCards = nextCards;
                         if (featureWorktreesChanged && !optimisticActive) {
                             console.log('[Kanban WV] featureWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
-                            renderBoard(currentCards);
+                            const activeFinished = pendingFinished.length ? pendingFinished.splice(0) : [];
+                            renderBoard(currentCards, new Set(activeFinished.map(f => f.id)));
                         }
                     }
                     break;
+                }
                 case 'settingResult': {
                     const { key, value } = msg;
                     if (key === 'selectedRole') {
