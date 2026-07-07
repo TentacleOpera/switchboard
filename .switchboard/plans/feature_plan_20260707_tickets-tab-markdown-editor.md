@@ -143,3 +143,9 @@ detailContent.classList.remove('edit-mode');
 **Stage Complete:** PLAN REVIEWED
 **Stage Complete:** PLAN CODED
 
+## Review Findings
+
+Implementation matches the plan's Implementation block exactly; the invisible-editor trap, save-path element identity, `.edit-mode` CSS collision audit, and `ticketsEditMode` guards were all re-verified against current code and hold. Review fixed three findings: a per-edit-session `document` click-listener leak in `markdownEditor.js`'s `attach()` (now self-removing once the shell is discarded), the textarea `focus()` being dropped because `attach()`'s DOM move ran after it (focus now applied post-attach in `planning.js`), and a stray `.edit-mode` class surviving `resetTicketsInMemoryState()`. Additionally, the adjacent ticket-delete confirm modal (`planning.js` + `planning.html`) was removed per the repo's hard no-confirm-gate rule — `btn-delete-ticket` now posts `deleteTicketConfirmed` immediately, with all modal HTML/handlers/CSS/`_pendingDeleteTicket` state stripped (orphan grep clean). Files changed: `src/webview/planning.js`, `src/webview/markdownEditor.js`, `src/webview/planning.html`; validation: `node --check` passes on both JS files (compilation and automated tests skipped per session directives). Remaining risks: the per-render `window` message-listener pattern leaks only if the provider never replies (identical to the shipped Docs pattern — deferred to the shared-helper follow-up), and manual VSIX verification steps 1–9 remain to be executed by the user.
+
+**Stage Complete:** CODE REVIEWED
+

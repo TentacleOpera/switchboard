@@ -442,12 +442,19 @@
                 }
             }
 
-            // Close popover when clicking outside
-            document.addEventListener('click', (e) => {
+            // Close popover when clicking outside. Self-removes once the shell is
+            // gone — dynamic call sites (Tickets tab) create a fresh editor per edit
+            // session, and a plain listener would accumulate one per session forever.
+            const onDocClick = (e) => {
+                if (!document.contains(shell)) {
+                    document.removeEventListener('click', onDocClick);
+                    return;
+                }
                 if (!pickerContainer.contains(e.target)) {
                     popover.classList.remove('show');
                 }
-            });
+            };
+            document.addEventListener('click', onDocClick);
 
             popover.appendChild(grid);
             popover.appendChild(title);

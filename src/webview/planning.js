@@ -268,7 +268,6 @@
     let _subtaskParent = null;
     let _convertSelectedParentId = null;
     let _convertCurrentTicketId = null;
-    let _pendingDeleteTicket = null;
 
     // ── Comment Manager state ──
     let _cmThreads = [];
@@ -4854,9 +4853,6 @@
                 setTicketsLoadingState(false);
                 if (msg.success) {
                     showTicketsStatus('Archived/Deleted ✓', false);
-                    const modal = document.getElementById('tickets-delete-modal');
-                    if (modal) modal.style.display = 'none';
-                    _pendingDeleteTicket = null;
                     selectedLinearIssue = null;
                     selectedClickUpIssue = null;
                     if (lastIntegrationProvider === 'linear') {
@@ -4870,8 +4866,6 @@
                     }
                 } else {
                     showTicketsStatus(msg.error || 'Failed to delete ticket', true);
-                    const confirmBtn = document.getElementById('btn-confirm-tickets-delete');
-                    if (confirmBtn) confirmBtn.disabled = false;
                 }
                 break;
             case 'changeTicketStatusResult':
@@ -8106,51 +8100,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'pushTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
-        // Action bar: Delete — modal confirm gate
+        // Action bar: Delete — immediate, no confirm gate (repo rule: delete buttons delete)
         document.getElementById('btn-delete-ticket')?.addEventListener('click', () => {
             const provider = lastIntegrationProvider;
             const id = provider === 'linear'
                 ? selectedLinearIssue?.issue.id
                 : selectedClickUpIssue?.task.id;
             if (!id) return;
-            const title = provider === 'linear'
-                ? selectedLinearIssue?.issue.title
-                : selectedClickUpIssue?.task.title || selectedClickUpIssue?.task.name || '';
-            _pendingDeleteTicket = { provider, id, title };
-            const info = document.getElementById('tickets-delete-modal-info');
-            if (info) info.innerHTML = 'Delete <strong>' + escapeHtml(title || id) + '</strong>? This cannot be undone.';
-            const confirmBtn = document.getElementById('btn-confirm-tickets-delete');
-            if (confirmBtn) confirmBtn.disabled = false;
-            const modal = document.getElementById('tickets-delete-modal');
-            if (modal) modal.style.display = 'block';
-        });
-
-        document.getElementById('btn-confirm-tickets-delete')?.addEventListener('click', () => {
-            if (!_pendingDeleteTicket) return;
-            const { provider, id } = _pendingDeleteTicket;
-            const confirmBtn = document.getElementById('btn-confirm-tickets-delete');
-            if (confirmBtn) confirmBtn.disabled = true; // double-click guard
             setTicketsLoadingState(true);
             vscode.postMessage({ type: 'deleteTicketConfirmed', provider, id, workspaceRoot: ticketsWorkspaceRoot });
-        });
-
-        document.getElementById('btn-close-tickets-delete-modal')?.addEventListener('click', () => {
-            const modal = document.getElementById('tickets-delete-modal');
-            if (modal) modal.style.display = 'none';
-            _pendingDeleteTicket = null;
-        });
-
-        document.getElementById('btn-cancel-tickets-delete')?.addEventListener('click', () => {
-            const modal = document.getElementById('tickets-delete-modal');
-            if (modal) modal.style.display = 'none';
-            _pendingDeleteTicket = null;
-        });
-
-        document.getElementById('tickets-delete-modal')?.addEventListener('click', (e) => {
-            if (e.target === e.currentTarget) {
-                e.currentTarget.style.display = 'none';
-                _pendingDeleteTicket = null;
-            }
         });
 
         // Action bar: Change Status
@@ -8879,7 +8837,6 @@ Instructions:
         _lastTicketsDetailContentHtml = '';
         detailContent.innerHTML = html;
         detailContent.classList.add('edit-mode');
-        document.getElementById('ticket-edit-description')?.focus();
 
         const descTextarea = document.getElementById('ticket-edit-description');
         if (descTextarea && window.SwitchboardMarkdownEditor) {
@@ -8899,6 +8856,9 @@ Instructions:
                 })
             });
         }
+        // Focus AFTER attach() — the shell insertion moves the textarea in the DOM,
+        // which drops any focus applied before the move.
+        descTextarea?.focus();
     }
 
     function exitTicketsEditMode() {
@@ -9476,9 +9436,6 @@ Instructions:
                 _lastTicketsLinearStatusSelectHtml = '';
             }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
-            const _delModal = document.getElementById('tickets-delete-modal');
-            if (_delModal) _delModal.style.display = 'none';
-            _pendingDeleteTicket = null;
             if (commentInputArea) commentInputArea.style.display = 'none';
             const tagsButton = document.getElementById('tickets-tags');
             if (tagsButton) tagsButton.disabled = true;
@@ -10020,9 +9977,6 @@ Instructions:
                 _lastTicketsClickUpStatusSelectHtml = '';
             }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
-            const _delModal = document.getElementById('tickets-delete-modal');
-            if (_delModal) _delModal.style.display = 'none';
-            _pendingDeleteTicket = null;
             if (commentInputArea) commentInputArea.style.display = 'none';
             const tagsButton = document.getElementById('tickets-tags');
             if (tagsButton) tagsButton.disabled = true;
@@ -10421,12 +10375,9 @@ Instructions:
 
         const elements = getTicketsTabElements();
         if (elements.issuesContainer) elements.issuesContainer.innerHTML = '';
-        if (elements.detailContent) elements.detailContent.innerHTML = '';
+        if (elements.detailContent) { elements.detailContent.innerHTML = ''; elements.detailContent.classList.remove('edit-mode'); }
         if (elements.subtasksNav) { elements.subtasksNav.innerHTML = ''; elements.subtasksNav.style.display = 'none'; }
         if (elements.previewMetaBar) elements.previewMetaBar.style.display = 'none';
-        const _delModal = document.getElementById('tickets-delete-modal');
-        if (_delModal) _delModal.style.display = 'none';
-        _pendingDeleteTicket = null;
         if (elements.commentInputArea) elements.commentInputArea.style.display = 'none';
         
     }
