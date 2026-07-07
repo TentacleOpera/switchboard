@@ -22,7 +22,7 @@ Verified current references:
 
 ## Metadata
 
-- **Tags:** refactor, backend, cleanup
+- **Tags:** refactor, backend
 - **Complexity:** 2 (routine dead-code deletion, two files, one cross-file import to sever; no new behavior, no schema/DB/settings touch)
 - **Pinning:** none — the workspace's `kanban.activeProjectFilter` is empty and no project was named, so this plan lands unassigned (reassign on the board if desired). "Switchboard" is the *workspace*, not a project — do not pin it.
 - *No `**Repo:**` line — single-repo workspace.*
@@ -30,6 +30,19 @@ Verified current references:
 ## User Review Required
 
 None. This is a pure dead-code deletion with no behavioral change and no product decision. The one judgment call — leave historical `**Stage Complete:**` text in existing plan `.md` files untouched — is stated as a boundary below and is the safe default.
+
+## Complexity Audit
+
+### Routine
+- Mechanical two-file deletion: one import line, one interface field + JSDoc, one parser block, one return-literal entry, one exported constant. All line numbers verified against source (`planMetadataUtils.ts:5, 57-63, 125-136, 145`; `agentPromptBuilder.ts:504`).
+- One cross-file import to sever (`planMetadataUtils.ts:5` imports `STAGE_COMPLETE_LABEL` from `agentPromptBuilder.ts`). Remove the consumer import first, then the constant — clean intermediate compile.
+- No new behavior, no schema/DB/settings touch. `stageComplete` is an in-memory parse-time field with no persisted column, no settings key, no on-disk contract.
+- Zero consumers of `.stageComplete` (grep-verified: no `metadata.stageComplete` reads anywhere in `src/`; the watcher reads only `metadata.feature` and mtime, not `stageComplete`). Removing an unread optional field from `PlanMetadata` is non-breaking.
+- No test references `stageComplete` (grep-verified across `src/__tests__/` and `src/test/`; `GlobalPlanWatcherService.test.ts` and `planMetadataUtils.test.ts` stub `parsePlanMetadata` but never assert on `.stageComplete`).
+- Boundaries explicitly fenced: `destinationColumn` is load-bearing (15 grep matches across `KanbanProvider.ts`, `agentConfig.ts`, `src/test/kanban-prompt-generation-unit.test.js`) and is NOT touched; `extractEmbeddedMetadata` shares no code with the Stage Complete path; existing plan `.md` files are not rewritten.
+
+### Complex / Risky
+- None. No backend, state, persistence, migration, or terminal-creation changes. The only compiler-visible edit is the return-literal field removal, which typechecks cleanly because nothing reads the field.
 
 ## Migration
 
@@ -61,6 +74,14 @@ None. This is a pure dead-code deletion with no behavioral change and no product
 - **Tests:** no test references `stageComplete` (grep confirmed zero literal consumers, including under `src/test/`). The multi-marker plan's earlier grep guard already established this; re-run it before merge.
 - **Type surface:** removing a field from `PlanMetadata` is only a breaking change to code that *reads* `.stageComplete` — there is none. The return-literal edit is the only spot the compiler will care about.
 
+## Dependencies
+
+None. No other plans or sessions need to complete first. The deletion is self-contained: `STAGE_COMPLETE_LABEL` has exactly one importer (`planMetadataUtils.ts`), `stageComplete` has zero readers, and the activity-light mechanism (`GlobalPlanWatcherService` mtime gate) is independent of the parsed field. The mtime-based clear path was landed in commit `c5185aa` (verified: touched `GlobalPlanWatcherService.ts` + `agentPromptBuilder.ts`, removed the directive) and is already in production — this plan only reaps the leftover parser surface.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) severing the cross-file import in the wrong order leaves a transient dangling reference — mitigated by deleting the consumer import (step 1) before the constant (step 2); (2) accidentally touching `destinationColumn`, which looks sibling-adjacent but is load-bearing for role/column routing (15 grep matches) — mitigated by the explicit Boundaries fence; (3) a stray `stageComplete` reference surviving in a test or comment — mitigated by the grep-empty verification gate (`grep -rn "stageComplete\|STAGE_COMPLETE_LABEL" src/` must return zero). No behavioral risk: the watcher clears the activity light on mtime advance regardless of parsed text (verified `GlobalPlanWatcherService.ts:836-844`, "No agent-authored text is trusted"), so removing the parser cannot change light-clearing behavior. Mitigations: ordered deletion, boundary fence, grep-empty gate. No blockers.
+
 ## Verification Plan
 
 1. **Consumer grep (must be empty after the change):** `grep -rn "stageComplete\|STAGE_COMPLETE_LABEL" src/` → expect **zero** matches. If anything remains, it was missed.
@@ -71,3 +92,5 @@ None. This is a pure dead-code deletion with no behavioral change and no product
 ## Recommendation
 
 **Send to Intern.** Complexity 2 — mechanical two-file dead-code deletion, one cross-file import to sever, no new behavior, no migration. The only ways to get it wrong are (a) touching `destinationColumn`, or (b) leaving a dangling import/comment — both covered by the Boundaries section and the grep-empty verification gate.
+
+**Stage Complete:** PLAN REVIEWED

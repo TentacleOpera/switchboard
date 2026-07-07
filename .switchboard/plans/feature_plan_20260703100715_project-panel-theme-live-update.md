@@ -226,3 +226,9 @@ Construction order is safe — both objects exist by line 930. No deadlock risk.
 Complexity 4 → **Send to Coder**. Apply Change #1 only. Defer Change #2. Drop Change #3.
 
 **Stage Complete:** Coded
+
+## Review Findings
+
+Change #1 implemented faithfully in `src/services/PlanningPanelProvider.ts`: `_projectPanelConfigDisposable` field (L75), extracted `_registerProjectPanelConfigListener()` (L431-465) with the `?.dispose()` dedup guard, calls in `openProject()` (L408) and the `_hydratePanel` project else-branch (L767), plus disposal in both `onDidDispose` handlers (L399-400, L714-715); consumer side in `src/webview/project.js` handles all five message types. Change #2 deferred and Change #3 dropped as the plan directed — verified `broadcastToWebviews` still does not reach the project panel, so no double-delivery. Regression trace confirmed exactly one live config listener per panel (grep: 3 `onDidChangeConfiguration` sites — project→`_projectPanel`, two planning→`_panel`), `openProject()` early-returns before re-registering on a restored panel, and stale-listener posts to an undefined webview are safe no-ops. No CRITICAL/MAJOR findings; two accepted NITs (bounded `_disposables` array growth on re-registration; restored-panel initial push covers 3 of 5 settings, backstopped by HTML-gen body classes). Verification by code inspection only per session directives (compile/tests skipped); no code changes applied.
+
+**Stage Complete:** CODE REVIEWED

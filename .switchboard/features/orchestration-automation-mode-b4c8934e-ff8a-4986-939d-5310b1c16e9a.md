@@ -80,4 +80,5 @@ The mode foundation lands first (everything keys off the new `automationMode`). 
 - [ ] [Author the Orchestrator Persona Workflow (`.agents/workflows/orchestrator.md`)](../plans/orchestration-2-persona-workflow.md) — **PLAN REVIEWED**
 - [ ] [Orchestration Wake + Triage Loop with Feature-by-Feature Merge-Back](../plans/orchestration-5-wake-triage-and-merge-back.md) — **PLAN REVIEWED**
 - [ ] [Add an Agent→Orchestrator Request Channel and Session Log](../plans/orchestration-3-agent-request-channel-and-session-log.md) — **PLAN REVIEWED**
+- [ ] [External Agent HTTP Surface — Read Endpoints + Orchestration Skill](../plans/external-agent-http-surface.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

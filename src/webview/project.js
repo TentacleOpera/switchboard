@@ -1959,6 +1959,7 @@
                 }
             }, 3000);
         });
+    }
     if (btnChatCopyPrompt) {
         btnChatCopyPrompt.addEventListener('click', () => {
             vscode.postMessage({
