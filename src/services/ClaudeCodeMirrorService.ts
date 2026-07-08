@@ -55,11 +55,14 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // /switchboard-split — split one plan into Complex/Risky + Routine files (remote splitter).
     { source: 'workflows/switchboard-split.md', name: 'switchboard-split', invocation: 'default' },
     { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
-    // /switchboard-orchestrator — Orchestration-mode persona. Side-effecting (unattended
-    // grouping, dispatch, merges): explicit /switchboard-orchestrator or system launch
-    // ONLY — never model-auto. Name is switchboard-prefixed to avoid collision with the
-    // many competing orchestration frameworks' skills.
-    { source: 'workflows/switchboard-orchestrator.md', name: 'switchboard-orchestrator', invocation: 'no-model', allowedTools: 'Bash' },
+    // /switchboard-manage — Host-agnostic management console. Consultative persona:
+    // report board state on entry, then wait for user direction. Automation is opt-in
+    // only. Replaces the old /switchboard-orchestrator human command (which loaded the
+    // unattended automation persona — a footgun for a human opening a management view).
+    // The engine still launches the automation persona by file path
+    // (TaskViewerProvider.startOrchestratorFromKanban), so repointing the human command
+    // does not break the machine launch.
+    { source: 'skills/switchboard-manage', name: 'switchboard-manage', invocation: 'no-model', allowedTools: 'Bash' },
     // NOTE: `/sw` and `/sw-remote` were retired 2026-07-03 — superseded by the
     // `/switchboard` front door, which detects local vs remote and routes planning
     // (local → switchboard-chat; remote → the sw-remote.md playbook, still shipped
