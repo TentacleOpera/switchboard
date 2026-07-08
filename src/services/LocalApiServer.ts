@@ -303,8 +303,8 @@ export class LocalApiServer {
      * wsHub fan-out target for the broadcast abstraction (A2a) that A2b's
      * push-site audit routes through. No-op when no WS clients are connected.
      */
-    public broadcastWs(verb: string, payload?: any): void {
-        this._wsHub?.broadcast(verb, payload);
+    public broadcastWs(verb: string, payload?: any, surface?: string): void {
+        this._wsHub?.broadcast(verb, payload, surface);
     }
 
     public getPort(): number {

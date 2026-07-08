@@ -196,3 +196,40 @@ Expected: **no results** in either file. (If a match is found in any OTHER workf
 ## Recommendation
 
 **Complexity: 3 → Send to Intern.** The plan now spells out every edit with exact before/after text, including the prior-plan interaction and the No-Artifact Rule reconciliation, so the subtlety is fully captured for a straightforward markdown execution.
+
+---
+
+## Post-Implementation Review (2026-07-09)
+
+### Reviewer Pass: Direct In-Place Review
+
+#### Files Changed (confirmed)
+- `.agents/workflows/accuracy.md` — Step 3 rewritten to "Internal Planning" (lines 28–34); No-Artifact Rule reconciled (line 12).
+- `.claude/skills/accuracy/SKILL.md` — Mirror of both changes (Step 3 lines 30–36; No-Artifact Rule line 14). Byte-identical to workflow past frontmatter.
+
+#### Findings
+
+| # | Severity | File(s) | Finding | Disposition |
+|---|----------|---------|---------|-------------|
+| 1 | NIT | accuracy.md:32, SKILL.md:34 | RULE bullet wording drifted from plan's exact AFTER: plan says "saves an entire prompt", implementation says "is worth far more than the tokens it costs". Same semantic meaning; implementation's phrasing is more natural. | Kept as-is — improvement over plan text. |
+| 2 | NIT | Plan file (self) | Plan's line-count math for AFTER is inconsistent — says Step 3 "spans lines 28–33" but the AFTER block has 7 bullets (not 6). Implementation correctly has all 7 bullets. | Plan bookkeeping error; code is correct. |
+
+#### Code Fixes Applied
+None — zero CRITICAL or MAJOR findings.
+
+#### Verification Results (all passed)
+
+| Check | Expected | Actual | Status |
+|-------|----------|--------|--------|
+| `grep "produce a detailed plan in your reply"` in both source files | No results | No results | ✅ PASS |
+| `grep "All planning, progress tracking, and review output belongs in your reply"` in both source files | No results | No results | ✅ PASS |
+| `grep "Do NOT write a plan file to disk"` in both source files | 1 match per file | accuracy.md:34, SKILL.md:36 | ✅ PASS |
+| `grep "No-Artifact Rule"` in both source files | 1+ match per file | accuracy.md:11,34 / SKILL.md:13,36 | ✅ PASS |
+| Mirror sync diff (workflow vs SKILL bodies) | No differences | No differences | ✅ PASS |
+| Old step name "Thorough Plan" purged | No results | No results | ✅ PASS |
+| Step 2 & Step 4 unchanged | Untouched | Untouched | ✅ PASS |
+| Step 5 "in your reply" consistent with reconciled No-Artifact Rule | Present | accuracy.md:54, SKILL.md:56 | ✅ PASS |
+
+#### Remaining Risks
+- **Behavioral verification not yet done**: The plan's manual verification item "Dispatch an agent with `/accuracy` on a small task — verify it proceeds directly to coding" has not been executed. This is the only way to confirm the wording change actually changes agent behavior. Low risk given the directive is unambiguous, but worth confirming on next organic `/accuracy` use.
+- No regression risks identified — the anti-disk-write guard and No-Artifact Rule backstop are both intact and non-contradictory.

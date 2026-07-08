@@ -60,18 +60,42 @@ export class BroadcastHub {
      * `setWebview`). The wsHub broadcast is always attempted (no-op if no
      * WS clients are connected).
      */
-    push(msg: any): void {
-        // Fan-out 1: webview (with pending queue for initial-load ordering).
+    push(msg: any, surface?: string): void {
+        // Fan-out 1: the BOUND webview (with pending queue for initial-load ordering).
         if (this._target.webview) {
             this._target.webview.postMessage(msg).then(undefined, () => { /* panel closed */ });
         } else {
             this._pendingWebviewMessages.push(msg);
         }
-        // Fan-out 2: wsHub (per-connection ordered push to external clients).
+        // Fan-out 2: wsHub, tagged with `surface`.
+        this.mirrorToWs(surface, msg);
+    }
+
+    /**
+     * WS-only mirror, tagged with `surface`. NO webview delivery — use this when a
+     * message was already sent to a specific panel's webview by the caller (so it is
+     * NOT re-delivered to the BOUND webview, which would misdeliver to the wrong panel
+     * in a multi-panel provider). No-op when no LocalApiServer/wsHub is wired.
+     */
+    mirrorToWs(surface: string | undefined, msg: any): void {
         if (this._target.apiServer) {
             const verb = msg?.type ?? '__unknown';
-            this._target.apiServer.broadcastWs(verb, msg);
+            this._target.apiServer.broadcastWs(verb, msg, surface);
         }
+    }
+
+    /**
+     * Deliver to a SPECIFIC webview (the panel the caller names) AND mirror to WS
+     * tagged with `surface`. This is the correct primitive for a provider that owns
+     * more than one webview panel: the bound-webview `push()` cannot serve secondary
+     * panels without cross-delivering to the main panel. No pending-queue for
+     * secondary panels — a closed panel simply drops its webview copy; WS still gets it.
+     */
+    pushTo(webview: { postMessage(msg: any): Thenable<boolean> } | null | undefined, surface: string, msg: any): void {
+        if (webview) {
+            webview.postMessage(msg).then(undefined, () => { /* panel closed */ });
+        }
+        this.mirrorToWs(surface, msg);
     }
 
     /**

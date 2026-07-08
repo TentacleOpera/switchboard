@@ -166,12 +166,16 @@ export class WsHub {
      * Broadcast a push message to all connected clients. Each connection
      * gets its own monotonic sequence number so clients can detect gaps.
      */
-    broadcast(verb: string, payload?: any): void {
+    broadcast(verb: string, payload?: any, surface?: string): void {
         for (const meta of this._connections) {
             meta.seq += 1;
             this._safeSend(meta.ws, {
                 type: verb,
                 seq: meta.seq,
+                // `surface` names the UI surface this push belongs to (e.g. 'kanban',
+                // 'planning', 'devDocs') so a remote client can route/filter a single
+                // WS stream that carries pushes from every panel. Omitted → undefined.
+                surface,
                 payload,
             });
         }
