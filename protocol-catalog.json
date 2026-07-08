@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-08T08:54:32.458Z",
+  "generatedAt": "2026-07-08T11:23:25.790Z",
   "summary": {
     "totalArms": 606,
     "totalVerbs": 518,
@@ -170,722 +170,722 @@
       "arms": [
         {
           "verb": "ready",
-          "line": 6472,
+          "line": 6477,
           "dynamic": false
         },
         {
           "verb": "selectPlan",
-          "line": 6498,
+          "line": 6503,
           "dynamic": false
         },
         {
           "verb": "openPlanByPath",
-          "line": 6509,
+          "line": 6514,
           "dynamic": false
         },
         {
           "verb": "refresh",
-          "line": 6537,
-          "dynamic": false
-        },
-        {
-          "verb": "scanFoldersNow",
           "line": 6542,
           "dynamic": false
         },
         {
-          "verb": "reassignPlansWorkspace",
+          "verb": "scanFoldersNow",
           "line": 6547,
           "dynamic": false
         },
         {
+          "verb": "reassignPlansWorkspace",
+          "line": 6552,
+          "dynamic": false
+        },
+        {
           "verb": "selectWorkspace",
-          "line": 6690,
+          "line": 6695,
           "dynamic": false
         },
         {
           "verb": "addProject",
-          "line": 6728,
+          "line": 6733,
           "dynamic": false
         },
         {
           "verb": "copyPrdPrompt",
-          "line": 6771,
+          "line": 6776,
           "dynamic": false
         },
         {
           "verb": "deleteProject",
-          "line": 6812,
+          "line": 6817,
           "dynamic": false
         },
         {
           "verb": "setProjectFilter",
-          "line": 6834,
+          "line": 6839,
           "dynamic": false
         },
         {
           "verb": "assignSelectedToProject",
-          "line": 6842,
+          "line": 6847,
           "dynamic": false
         },
         {
           "verb": "setAutomationMode",
-          "line": 6860,
+          "line": 6865,
           "dynamic": false
         },
         {
           "verb": "startOrchestrator",
-          "line": 6896,
+          "line": 6901,
           "dynamic": false
         },
         {
           "verb": "stopOrchestrator",
-          "line": 6903,
+          "line": 6908,
           "dynamic": false
         },
         {
           "verb": "setMcpMonitorConfig",
-          "line": 6909,
+          "line": 6914,
           "dynamic": false
         },
         {
           "verb": "launchMcpMonitorTerminal",
-          "line": 6915,
+          "line": 6920,
           "dynamic": false
         },
         {
           "verb": "stopMcpMonitorTerminal",
-          "line": 6919,
+          "line": 6924,
           "dynamic": false
         },
         {
           "verb": "checkMcpMonitorAuth",
-          "line": 6923,
+          "line": 6928,
           "dynamic": false
         },
         {
           "verb": "startMcpMonitorPolling",
-          "line": 6927,
+          "line": 6932,
           "dynamic": false
         },
         {
           "verb": "stopMcpMonitorPolling",
-          "line": 6931,
+          "line": 6936,
           "dynamic": false
         },
         {
           "verb": "renderMcpMonitorPreview",
-          "line": 6935,
+          "line": 6940,
           "dynamic": false
         },
         {
           "verb": "updateAutobanConfig",
-          "line": 6942,
+          "line": 6947,
           "dynamic": false
         },
         {
           "verb": "toggleAutoban",
-          "line": 6948,
+          "line": 6953,
           "dynamic": false
         },
         {
           "verb": "resetAutobanTimers",
-          "line": 6965,
+          "line": 6970,
           "dynamic": false
         },
         {
           "verb": "toggleAutobanPause",
-          "line": 6969,
+          "line": 6974,
           "dynamic": false
         },
         {
           "verb": "setPairProgrammingMode",
-          "line": 6973,
+          "line": 6978,
           "dynamic": false
         },
         {
           "verb": "getRemoteConfig",
-          "line": 6984,
+          "line": 6989,
           "dynamic": false
         },
         {
           "verb": "setRemoteConfig",
-          "line": 6991,
-          "dynamic": false
-        },
-        {
-          "verb": "runNotionRemoteSetup",
           "line": 6996,
           "dynamic": false
         },
         {
+          "verb": "runNotionRemoteSetup",
+          "line": 7001,
+          "dynamic": false
+        },
+        {
           "verb": "startRemoteControl",
-          "line": 7004,
+          "line": 7009,
           "dynamic": false
         },
         {
           "verb": "stopRemoteControl",
-          "line": 7008,
+          "line": 7013,
           "dynamic": false
         },
         {
           "verb": "triggerAction",
-          "line": 7012,
+          "line": 7017,
           "dynamic": false
         },
         {
           "verb": "triggerBatchAction",
-          "line": 7212,
+          "line": 7217,
           "dynamic": false
         },
         {
           "verb": "moveCardBackwards",
-          "line": 7237,
+          "line": 7242,
           "dynamic": false
         },
         {
           "verb": "moveCardForward",
-          "line": 7254,
+          "line": 7259,
           "dynamic": false
         },
         {
           "verb": "openSetupPanel",
-          "line": 7271,
+          "line": 7276,
           "dynamic": false
         },
         {
           "verb": "saveIntegrationAutoPullSettings",
-          "line": 7277,
+          "line": 7282,
           "dynamic": false
         },
         {
           "verb": "setWorkspaceOverride",
-          "line": 7327,
+          "line": 7332,
           "dynamic": false
         },
         {
           "verb": "setProjectOverride",
-          "line": 7348,
+          "line": 7353,
           "dynamic": false
         },
         {
           "verb": "toggleCliTriggers",
-          "line": 7383,
-          "dynamic": false
-        },
-        {
-          "verb": "setFeatureWorkflowMode",
           "line": 7388,
           "dynamic": false
         },
         {
+          "verb": "setFeatureWorkflowMode",
+          "line": 7393,
+          "dynamic": false
+        },
+        {
           "verb": "toggleDynamicComplexityRouting",
-          "line": 7410,
+          "line": 7415,
           "dynamic": false
         },
         {
           "verb": "toggleAllowUnknownComplexityAutoMove",
-          "line": 7422,
+          "line": 7427,
           "dynamic": false
         },
         {
           "verb": "toggleClearTerminalBeforePrompt",
-          "line": 7434,
+          "line": 7439,
           "dynamic": false
         },
         {
           "verb": "updateClearTerminalBeforePromptDelay",
-          "line": 7453,
+          "line": 7458,
           "dynamic": false
         },
         {
           "verb": "updateRoutingConfig",
-          "line": 7471,
-          "dynamic": false
-        },
-        {
-          "verb": "setColumnDragDropMode",
           "line": 7476,
           "dynamic": false
         },
         {
+          "verb": "setColumnDragDropMode",
+          "line": 7481,
+          "dynamic": false
+        },
+        {
           "verb": "recoverSelected",
-          "line": 7485,
+          "line": 7490,
           "dynamic": false
         },
         {
           "verb": "archiveSelected",
-          "line": 7502,
+          "line": 7507,
           "dynamic": false
         },
         {
           "verb": "recoverAll",
-          "line": 7612,
+          "line": 7617,
           "dynamic": false
         },
         {
           "verb": "showInfo",
-          "line": 7635,
-          "dynamic": false
-        },
-        {
-          "verb": "showWarning",
           "line": 7640,
           "dynamic": false
         },
         {
+          "verb": "showWarning",
+          "line": 7645,
+          "dynamic": false
+        },
+        {
           "verb": "promptOnDrop",
-          "line": 7646,
+          "line": 7651,
           "dynamic": false
         },
         {
           "verb": "batchPlannerPrompt",
-          "line": 7748,
+          "line": 7753,
           "dynamic": false
         },
         {
           "verb": "batchDispatchLow",
-          "line": 7768,
+          "line": 7773,
           "dynamic": false
         },
         {
           "verb": "batchLowComplexity",
-          "line": 7776,
+          "line": 7781,
           "dynamic": false
         },
         {
           "verb": "julesLowComplexity",
-          "line": 7797,
+          "line": 7802,
           "dynamic": false
         },
         {
           "verb": "moveSelected",
-          "line": 7826,
+          "line": 7831,
           "dynamic": false
         },
         {
           "verb": "moveAll",
-          "line": 7953,
+          "line": 7958,
           "dynamic": false
         },
         {
           "verb": "chatCopyPrompt",
-          "line": 8089,
+          "line": 8094,
           "dynamic": false
         },
         {
           "verb": "copyChatWorkflow",
-          "line": 8118,
+          "line": 8123,
           "dynamic": false
         },
         {
           "verb": "promptSelected",
-          "line": 8125,
+          "line": 8130,
           "dynamic": false
         },
         {
           "verb": "promptAll",
-          "line": 8218,
+          "line": 8223,
           "dynamic": false
         },
         {
           "verb": "julesSelected",
-          "line": 8325,
+          "line": 8330,
           "dynamic": false
         },
         {
           "verb": "completePlan",
-          "line": 8345,
+          "line": 8350,
           "dynamic": false
         },
         {
           "verb": "completeSelected",
-          "line": 8374,
+          "line": 8379,
           "dynamic": false
         },
         {
           "verb": "completeAll",
-          "line": 8406,
+          "line": 8411,
           "dynamic": false
         },
         {
           "verb": "uncompleteCard",
-          "line": 8449,
+          "line": 8454,
           "dynamic": false
         },
         {
           "verb": "reviewPlan",
-          "line": 8512,
+          "line": 8517,
           "dynamic": false
         },
         {
           "verb": "pauseLiveSync",
-          "line": 8546,
-          "dynamic": false
-        },
-        {
-          "verb": "resumeLiveSync",
           "line": 8551,
           "dynamic": false
         },
         {
+          "verb": "resumeLiveSync",
+          "line": 8556,
+          "dynamic": false
+        },
+        {
           "verb": "copyPlanLink",
-          "line": 8560,
+          "line": 8565,
           "dynamic": false
         },
         {
           "verb": "createPlan",
-          "line": 8568,
+          "line": 8573,
           "dynamic": false
         },
         {
           "verb": "toggleBacklogView",
-          "line": 8589,
-          "dynamic": false
-        },
-        {
-          "verb": "sendToBacklog",
           "line": 8594,
           "dynamic": false
         },
         {
+          "verb": "sendToBacklog",
+          "line": 8599,
+          "dynamic": false
+        },
+        {
           "verb": "sendToNew",
-          "line": 8603,
+          "line": 8608,
           "dynamic": false
         },
         {
           "verb": "importFromClipboard",
-          "line": 8612,
+          "line": 8617,
           "dynamic": false
         },
         {
           "verb": "rePlanSelected",
-          "line": 8615,
+          "line": 8620,
           "dynamic": false
         },
         {
           "verb": "codeMapConfirm",
-          "line": 8637,
+          "line": 8642,
           "dynamic": false
         },
         {
           "verb": "codeMapSelected",
-          "line": 8648,
+          "line": 8653,
           "dynamic": false
         },
         {
           "verb": "getDbPath",
-          "line": 8671,
+          "line": 8676,
           "dynamic": false
         },
         {
           "verb": "testingFailed",
-          "line": 8677,
+          "line": 8682,
           "dynamic": false
         },
         {
           "verb": "addAutobanTerminal",
-          "line": 8761,
+          "line": 8766,
           "dynamic": false
         },
         {
           "verb": "removeAutobanTerminal",
-          "line": 8768,
+          "line": 8773,
           "dynamic": false
         },
         {
           "verb": "resetAutobanPools",
-          "line": 8776,
-          "dynamic": false
-        },
-        {
-          "verb": "focusTerminal",
           "line": 8781,
           "dynamic": false
         },
         {
+          "verb": "focusTerminal",
+          "line": 8786,
+          "dynamic": false
+        },
+        {
           "verb": "getStartupCommands",
-          "line": 8792,
+          "line": 8797,
           "dynamic": false
         },
         {
           "verb": "saveStartupCommands",
-          "line": 8799,
+          "line": 8804,
           "dynamic": false
         },
         {
           "verb": "getPromptsConfig",
-          "line": 8812,
+          "line": 8817,
           "dynamic": false
         },
         {
           "verb": "savePromptsConfig",
-          "line": 8819,
+          "line": 8824,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptOverrides",
-          "line": 8825,
+          "line": 8830,
           "dynamic": false
         },
         {
           "verb": "saveDefaultPromptOverrides",
-          "line": 8832,
+          "line": 8837,
           "dynamic": false
         },
         {
           "verb": "fileExists",
-          "line": 8838,
+          "line": 8843,
           "dynamic": false
         },
         {
           "verb": "saveSetting",
-          "line": 8860,
+          "line": 8865,
           "dynamic": false
         },
         {
           "verb": "getSetting",
-          "line": 8879,
+          "line": 8884,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptPreviews",
-          "line": 8898,
+          "line": 8903,
           "dynamic": false
         },
         {
           "verb": "getPromptPreview",
-          "line": 8905,
+          "line": 8910,
           "dynamic": false
         },
         {
           "verb": "planner",
-          "line": 8929,
+          "line": 8934,
           "dynamic": false
         },
         {
           "verb": "lead",
-          "line": 8931,
+          "line": 8936,
           "dynamic": false
         },
         {
           "verb": "coder",
-          "line": 8932,
+          "line": 8937,
           "dynamic": false
         },
         {
           "verb": "intern",
-          "line": 8933,
+          "line": 8938,
           "dynamic": false
         },
         {
           "verb": "reviewer",
-          "line": 8942,
+          "line": 8947,
           "dynamic": false
         },
         {
           "verb": "tester",
-          "line": 8944,
+          "line": 8949,
           "dynamic": false
         },
         {
           "verb": "generateAntigravityPrompt",
-          "line": 8969,
+          "line": 8974,
           "dynamic": false
         },
         {
           "verb": "getPersonaForRole",
-          "line": 8977,
+          "line": 8982,
           "dynamic": false
         },
         {
           "verb": "copyGatherPrompt",
-          "line": 8991,
+          "line": 8996,
           "dynamic": false
         },
         {
           "verb": "copyExecutePrompt",
-          "line": 9008,
+          "line": 9013,
           "dynamic": false
         },
         {
           "verb": "getKanbanStructure",
-          "line": 9024,
+          "line": 9029,
           "dynamic": false
         },
         {
           "verb": "getAutoArchiveConfig",
-          "line": 9032,
-          "dynamic": false
-        },
-        {
-          "verb": "saveAutoArchiveConfig",
           "line": 9037,
           "dynamic": false
         },
         {
-          "verb": "updateKanbanStructure",
+          "verb": "saveAutoArchiveConfig",
           "line": 9042,
           "dynamic": false
         },
         {
+          "verb": "updateKanbanStructure",
+          "line": 9047,
+          "dynamic": false
+        },
+        {
           "verb": "saveKanbanColumn",
-          "line": 9051,
+          "line": 9056,
           "dynamic": false
         },
         {
           "verb": "deleteKanbanColumn",
-          "line": 9061,
+          "line": 9066,
           "dynamic": false
         },
         {
           "verb": "restoreKanbanDefaults",
-          "line": 9071,
+          "line": 9076,
           "dynamic": false
         },
         {
           "verb": "toggleKanbanColumnVisibility",
-          "line": 9081,
+          "line": 9086,
           "dynamic": false
         },
         {
           "verb": "exportAgentAsSkill",
-          "line": 9091,
+          "line": 9096,
           "dynamic": false
         },
         {
           "verb": "saveCustomAgent",
-          "line": 9122,
+          "line": 9127,
           "dynamic": false
         },
         {
           "verb": "deleteCustomAgent",
-          "line": 9137,
+          "line": 9142,
           "dynamic": false
         },
         {
           "verb": "getCustomAgents",
-          "line": 9152,
+          "line": 9157,
           "dynamic": false
         },
         {
           "verb": "getUATData",
-          "line": 9166,
+          "line": 9171,
           "dynamic": false
         },
         {
           "verb": "setUATCheckState",
-          "line": 9230,
+          "line": 9235,
           "dynamic": false
         },
         {
           "verb": "getWorktreeConfig",
-          "line": 9247,
+          "line": 9252,
           "dynamic": false
         },
         {
           "verb": "getSafetySession",
-          "line": 9248,
+          "line": 9253,
           "dynamic": false
         },
         {
           "verb": "createWorktree",
-          "line": 9254,
+          "line": 9259,
           "dynamic": false
         },
         {
           "verb": "createWorktreeForFeature",
-          "line": 9287,
+          "line": 9292,
           "dynamic": false
         },
         {
           "verb": "createWorktreeForProject",
-          "line": 9323,
+          "line": 9328,
           "dynamic": false
         },
         {
           "verb": "toggleWorktreeAgentsOpenWithGrid",
-          "line": 9360,
+          "line": 9365,
           "dynamic": false
         },
         {
           "verb": "setSuppressMainTerminals",
-          "line": 9371,
+          "line": 9376,
           "dynamic": false
         },
         {
           "verb": "getFeatureWorktreeMode",
-          "line": 9382,
+          "line": 9387,
           "dynamic": false
         },
         {
           "verb": "setFeatureWorktreeMode",
-          "line": 9388,
+          "line": 9393,
           "dynamic": false
         },
         {
           "verb": "openWorktreeTerminals",
-          "line": 9408,
+          "line": 9413,
           "dynamic": false
         },
         {
           "verb": "copyWorktreeMergePrompt",
-          "line": 9432,
+          "line": 9437,
           "dynamic": false
         },
         {
           "verb": "cleanupWorktree",
-          "line": 9493,
+          "line": 9498,
           "dynamic": false
         },
         {
           "verb": "abandonWorktree",
-          "line": 9500,
+          "line": 9505,
           "dynamic": false
         },
         {
           "verb": "getWorktreeStatuses",
-          "line": 9524,
+          "line": 9529,
           "dynamic": false
         },
         {
           "verb": "addSubtaskToFeature",
-          "line": 9539,
+          "line": 9544,
           "dynamic": false
         },
         {
           "verb": "promoteToFeature",
-          "line": 9570,
+          "line": 9575,
           "dynamic": false
         },
         {
           "verb": "createFeature",
-          "line": 9639,
+          "line": 9644,
           "dynamic": false
         },
         {
           "verb": "suggestFeatures",
-          "line": 9657,
+          "line": 9662,
           "dynamic": false
         },
         {
           "verb": "removeSubtaskFromFeature",
-          "line": 9681,
+          "line": 9686,
           "dynamic": false
         },
         {
           "verb": "deleteFeature",
-          "line": 9687,
+          "line": 9692,
           "dynamic": false
         },
         {
           "verb": "getFeatureDetails",
-          "line": 9693,
+          "line": 9698,
           "dynamic": false
         },
         {
           "verb": "updateFeatureConfig",
-          "line": 9711,
+          "line": 9716,
           "dynamic": false
         }
       ]
@@ -1071,867 +1071,867 @@
       "arms": [
         {
           "verb": "renderMarkdownLive",
-          "line": 2366,
+          "line": 2373,
           "dynamic": false
         },
         {
           "verb": "fetchRoots",
-          "line": 2388,
+          "line": 2395,
           "dynamic": false
         },
         {
           "verb": "persistTabState",
-          "line": 2451,
+          "line": 2458,
           "dynamic": false
         },
         {
           "verb": "notebookDefaultRoot",
-          "line": 2462,
+          "line": 2469,
           "dynamic": false
         },
         {
           "verb": "loadDevDocs",
-          "line": 2483,
+          "line": 2490,
           "dynamic": false
         },
         {
           "verb": "readDevDoc",
-          "line": 2489,
+          "line": 2496,
           "dynamic": false
         },
         {
           "verb": "saveDevDoc",
-          "line": 2507,
+          "line": 2514,
           "dynamic": false
         },
         {
           "verb": "createDevDoc",
-          "line": 2528,
+          "line": 2535,
           "dynamic": false
         },
         {
           "verb": "importDevDocFromClipboard",
-          "line": 2567,
+          "line": 2574,
           "dynamic": false
         },
         {
           "verb": "draftImproveDevDoc",
-          "line": 2577,
+          "line": 2584,
           "dynamic": false
         },
         {
           "verb": "deleteDevDoc",
-          "line": 2604,
+          "line": 2611,
           "dynamic": false
         },
         {
           "verb": "setupTicketsWatcher",
-          "line": 2621,
+          "line": 2628,
           "dynamic": false
         },
         {
           "verb": "ticketsDefaultRoot",
-          "line": 2626,
+          "line": 2633,
           "dynamic": false
         },
         {
           "verb": "ticketsRootChanged",
-          "line": 2664,
+          "line": 2671,
           "dynamic": false
         },
         {
           "verb": "switchTicketsProvider",
-          "line": 2704,
+          "line": 2711,
           "dynamic": false
         },
         {
           "verb": "submitComment",
-          "line": 2730,
+          "line": 2737,
           "dynamic": false
         },
         {
           "verb": "savePlanningContainerSelection",
-          "line": 2780,
+          "line": 2787,
           "dynamic": false
         },
         {
           "verb": "fetchChildren",
-          "line": 2827,
+          "line": 2834,
           "dynamic": false
         },
         {
           "verb": "fetchPreview",
-          "line": 2831,
+          "line": 2838,
           "dynamic": false
         },
         {
           "verb": "appendToPlannerPrompt",
-          "line": 2835,
+          "line": 2842,
           "dynamic": false
         },
         {
           "verb": "importFullDoc",
-          "line": 2839,
+          "line": 2846,
           "dynamic": false
         },
         {
           "verb": "fetchPageContent",
-          "line": 2843,
+          "line": 2850,
           "dynamic": false
         },
         {
           "verb": "fetchAntigravityArtifact",
-          "line": 2847,
+          "line": 2854,
           "dynamic": false
         },
         {
           "verb": "addLocalFolder",
-          "line": 2871,
+          "line": 2878,
           "dynamic": false
         },
         {
           "verb": "removeLocalFolder",
-          "line": 2888,
+          "line": 2895,
           "dynamic": false
         },
         {
           "verb": "listLocalFolders",
-          "line": 2897,
-          "dynamic": false
-        },
-        {
-          "verb": "addTicketsFolder",
           "line": 2904,
           "dynamic": false
         },
         {
+          "verb": "addTicketsFolder",
+          "line": 2911,
+          "dynamic": false
+        },
+        {
           "verb": "removeTicketsFolder",
-          "line": 2920,
+          "line": 2927,
           "dynamic": false
         },
         {
           "verb": "listTicketsFolders",
-          "line": 2928,
-          "dynamic": false
-        },
-        {
-          "verb": "saveTicketsFolderPaths",
           "line": 2935,
           "dynamic": false
         },
         {
+          "verb": "saveTicketsFolderPaths",
+          "line": 2942,
+          "dynamic": false
+        },
+        {
           "verb": "browseTicketsFolder",
-          "line": 2945,
+          "line": 2952,
           "dynamic": false
         },
         {
           "verb": "saveTicketsFolder",
-          "line": 2958,
+          "line": 2965,
           "dynamic": false
         },
         {
           "verb": "listPlanningHtmlFolders",
-          "line": 2974,
-          "dynamic": false
-        },
-        {
-          "verb": "addPlanningHtmlFolder",
           "line": 2981,
           "dynamic": false
         },
         {
+          "verb": "addPlanningHtmlFolder",
+          "line": 2988,
+          "dynamic": false
+        },
+        {
           "verb": "removePlanningHtmlFolder",
-          "line": 2998,
+          "line": 3005,
           "dynamic": false
         },
         {
           "verb": "serveAndOpenHtml",
-          "line": 3007,
+          "line": 3014,
           "dynamic": false
         },
         {
           "verb": "refreshSource",
-          "line": 3025,
+          "line": 3032,
           "dynamic": false
         },
         {
           "verb": "fetchContainers",
-          "line": 3039,
+          "line": 3046,
           "dynamic": false
         },
         {
           "verb": "fetchImportedDocs",
-          "line": 3054,
+          "line": 3061,
           "dynamic": false
         },
         {
           "verb": "fetchDocsFile",
-          "line": 3058,
+          "line": 3065,
           "dynamic": false
         },
         {
           "verb": "syncToSource",
-          "line": 3062,
+          "line": 3069,
           "dynamic": false
         },
         {
           "verb": "fetchFilteredDocs",
-          "line": 3066,
+          "line": 3073,
           "dynamic": false
         },
         {
           "verb": "fetchDocPages",
-          "line": 3105,
+          "line": 3112,
           "dynamic": false
         },
         {
           "verb": "fetchPageContent",
-          "line": 3133,
+          "line": 3140,
           "dynamic": false
         },
         {
           "verb": "importPlansFromClipboard",
-          "line": 3163,
+          "line": 3170,
           "dynamic": false
         },
         {
           "verb": "importNotebookLMPlans",
-          "line": 3167,
-          "dynamic": false
-        },
-        {
-          "verb": "importResearchDoc",
           "line": 3174,
           "dynamic": false
         },
         {
-          "verb": "airlock_export",
-          "line": 3179,
+          "verb": "importResearchDoc",
+          "line": 3181,
           "dynamic": false
         },
         {
-          "verb": "airlock_openNotebookLM",
+          "verb": "airlock_export",
           "line": 3186,
           "dynamic": false
         },
         {
+          "verb": "airlock_openNotebookLM",
+          "line": 3193,
+          "dynamic": false
+        },
+        {
           "verb": "airlock_openAIStudio",
-          "line": 3190,
+          "line": 3197,
           "dynamic": false
         },
         {
           "verb": "airlock_openFolder",
-          "line": 3194,
-          "dynamic": false
-        },
-        {
-          "verb": "linkToDocument",
           "line": 3201,
           "dynamic": false
         },
         {
+          "verb": "linkToDocument",
+          "line": 3208,
+          "dynamic": false
+        },
+        {
           "verb": "linkToFolder",
-          "line": 3205,
+          "line": 3212,
           "dynamic": false
         },
         {
           "verb": "createLocalDoc",
-          "line": 3209,
+          "line": 3216,
           "dynamic": false
         },
         {
           "verb": "resolveDuplicate",
-          "line": 3214,
+          "line": 3221,
           "dynamic": false
         },
         {
           "verb": "deleteLocalDoc",
-          "line": 3219,
+          "line": 3226,
           "dynamic": false
         },
         {
           "verb": "saveOnlineDocFile",
-          "line": 3254,
+          "line": 3261,
           "dynamic": false
         },
         {
           "verb": "deleteImportedDoc",
-          "line": 3301,
+          "line": 3308,
           "dynamic": false
         },
         {
           "verb": "importPlans",
-          "line": 3345,
+          "line": 3352,
           "dynamic": false
         },
         {
           "verb": "copyArtifactPrompt",
-          "line": 3350,
+          "line": 3357,
           "dynamic": false
         },
         {
           "verb": "sendArtifactPromptToTerminal",
-          "line": 3356,
+          "line": 3363,
           "dynamic": false
         },
         {
           "verb": "copyChatPrompt",
-          "line": 3364,
+          "line": 3371,
           "dynamic": false
         },
         {
           "verb": "uploadPlanAttachment",
-          "line": 3373,
+          "line": 3380,
           "dynamic": false
         },
         {
           "verb": "setPlanAutoFetchEnabled",
-          "line": 3459,
+          "line": 3466,
           "dynamic": false
         },
         {
           "verb": "planAutoFetchRunNow",
-          "line": 3471,
+          "line": 3478,
           "dynamic": false
         },
         {
           "verb": "createPlan",
-          "line": 3492,
+          "line": 3499,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlans",
-          "line": 3496,
+          "line": 3503,
           "dynamic": false
         },
         {
           "verb": "openKanbanPlan",
-          "line": 3585,
+          "line": 3592,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanPreview",
-          "line": 3602,
-          "dynamic": false
-        },
-        {
-          "verb": "copyKanbanPlanPrompt",
           "line": 3609,
           "dynamic": false
         },
         {
+          "verb": "copyKanbanPlanPrompt",
+          "line": 3616,
+          "dynamic": false
+        },
+        {
           "verb": "copyFeaturePlannerPrompt",
-          "line": 3627,
+          "line": 3634,
           "dynamic": false
         },
         {
           "verb": "moveKanbanPlanColumn",
-          "line": 3670,
+          "line": 3677,
           "dynamic": false
         },
         {
           "verb": "planShown",
-          "line": 3688,
-          "dynamic": false
-        },
-        {
-          "verb": "setKanbanPlanComplexity",
           "line": 3695,
           "dynamic": false
         },
         {
+          "verb": "setKanbanPlanComplexity",
+          "line": 3702,
+          "dynamic": false
+        },
+        {
           "verb": "deleteKanbanPlan",
-          "line": 3743,
+          "line": 3750,
           "dynamic": false
         },
         {
           "verb": "fetchKanbanPlanLog",
-          "line": 3799,
+          "line": 3806,
           "dynamic": false
         },
         {
           "verb": "getFeatureDetails",
-          "line": 3818,
+          "line": 3825,
           "dynamic": false
         },
         {
           "verb": "addSubtaskToFeature",
-          "line": 3835,
+          "line": 3842,
           "dynamic": false
         },
         {
           "verb": "removeSubtaskFromFeature",
-          "line": 3870,
+          "line": 3877,
           "dynamic": false
         },
         {
           "verb": "deleteFeature",
-          "line": 3895,
+          "line": 3902,
           "dynamic": false
         },
         {
           "verb": "createFeature",
-          "line": 3928,
+          "line": 3935,
           "dynamic": false
         },
         {
           "verb": "updateFeatureConfig",
-          "line": 3979,
-          "dynamic": false
-        },
-        {
-          "verb": "loadConstitutionFiles",
           "line": 3986,
           "dynamic": false
         },
         {
+          "verb": "loadConstitutionFiles",
+          "line": 3993,
+          "dynamic": false
+        },
+        {
           "verb": "getConstitutionStatus",
-          "line": 4007,
+          "line": 4014,
           "dynamic": false
         },
         {
           "verb": "readConstitutionFile",
-          "line": 4027,
+          "line": 4034,
           "dynamic": false
         },
         {
           "verb": "saveConstitutionFile",
-          "line": 4073,
+          "line": 4080,
           "dynamic": false
         },
         {
           "verb": "getProjectContextEnabled",
-          "line": 4133,
+          "line": 4140,
           "dynamic": false
         },
         {
           "verb": "setProjectContextEnabled",
-          "line": 4142,
+          "line": 4149,
           "dynamic": false
         },
         {
           "verb": "getProjectPrd",
-          "line": 4153,
+          "line": 4160,
           "dynamic": false
         },
         {
           "verb": "saveProjectPrd",
-          "line": 4183,
+          "line": 4190,
           "dynamic": false
         },
         {
           "verb": "invokePrdBuilder",
-          "line": 4224,
+          "line": 4231,
           "dynamic": false
         },
         {
           "verb": "copyPrdBuildPrompt",
-          "line": 4258,
+          "line": 4265,
           "dynamic": false
         },
         {
           "verb": "toggleConstitutionAddon",
-          "line": 4284,
+          "line": 4291,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionPrompt",
-          "line": 4293,
+          "line": 4300,
           "dynamic": false
         },
         {
           "verb": "copyConstitutionUpdatePrompt",
-          "line": 4330,
+          "line": 4337,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionBuilder",
-          "line": 4376,
+          "line": 4383,
           "dynamic": false
         },
         {
           "verb": "invokeConstitutionUpdater",
-          "line": 4395,
+          "line": 4402,
           "dynamic": false
         },
         {
           "verb": "invokeSystemBuilder",
-          "line": 4412,
+          "line": 4419,
           "dynamic": false
         },
         {
           "verb": "copySystemBuildPrompt",
-          "line": 4436,
+          "line": 4443,
           "dynamic": false
         },
         {
           "verb": "openArchitectTerminal",
-          "line": 4456,
+          "line": 4463,
           "dynamic": false
         },
         {
           "verb": "copyArchitectPrompt",
-          "line": 4480,
+          "line": 4487,
           "dynamic": false
         },
         {
           "verb": "deleteConstitutionFile",
-          "line": 4491,
+          "line": 4498,
           "dynamic": false
         },
         {
           "verb": "getConstitutionPaths",
-          "line": 4505,
+          "line": 4512,
           "dynamic": false
         },
         {
           "verb": "addConstitutionPath",
-          "line": 4516,
+          "line": 4523,
           "dynamic": false
         },
         {
           "verb": "removeConstitutionPath",
-          "line": 4543,
+          "line": 4550,
           "dynamic": false
         },
         {
           "verb": "setConstitutionPath",
-          "line": 4560,
+          "line": 4567,
           "dynamic": false
         },
         {
           "verb": "saveFileContent",
-          "line": 4596,
+          "line": 4603,
           "dynamic": false
         },
         {
           "verb": "linearLoadProject",
-          "line": 4746,
+          "line": 4753,
           "dynamic": false
         },
         {
           "verb": "linearLoadProjects",
-          "line": 4802,
+          "line": 4809,
           "dynamic": false
         },
         {
           "verb": "linearLoadTaskDetails",
-          "line": 4846,
+          "line": 4853,
           "dynamic": false
         },
         {
           "verb": "linearSaveProjectSelection",
-          "line": 4925,
+          "line": 4932,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaces",
-          "line": 4943,
+          "line": 4950,
           "dynamic": false
         },
         {
           "verb": "clickupLoadFolders",
-          "line": 4973,
+          "line": 4980,
           "dynamic": false
         },
         {
           "verb": "clickupLoadLists",
-          "line": 5005,
+          "line": 5012,
           "dynamic": false
         },
         {
           "verb": "invalidateClickUpCache",
-          "line": 5037,
+          "line": 5044,
           "dynamic": false
         },
         {
           "verb": "clickupLoadProject",
-          "line": 5046,
+          "line": 5053,
           "dynamic": false
         },
         {
           "verb": "clickupLoadTaskDetails",
-          "line": 5114,
+          "line": 5121,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssueLabels",
-          "line": 5165,
+          "line": 5172,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskTags",
-          "line": 5201,
+          "line": 5208,
           "dynamic": false
         },
         {
           "verb": "loadTicketAssignees",
-          "line": 5238,
+          "line": 5245,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssueAssignee",
-          "line": 5290,
+          "line": 5297,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskAssignees",
-          "line": 5326,
+          "line": 5333,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssuePriority",
-          "line": 5377,
+          "line": 5384,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskPriority",
-          "line": 5413,
+          "line": 5420,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 5449,
+          "line": 5456,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaceTags",
-          "line": 5471,
+          "line": 5478,
           "dynamic": false
         },
         {
           "verb": "clickupLoadListStatuses",
-          "line": 5493,
+          "line": 5500,
           "dynamic": false
         },
         {
           "verb": "clickupSaveSpaceSelection",
-          "line": 5516,
+          "line": 5523,
           "dynamic": false
         },
         {
           "verb": "clickupSaveFolderSelection",
-          "line": 5539,
+          "line": 5546,
           "dynamic": false
         },
         {
           "verb": "clickupSaveListSelection",
-          "line": 5560,
+          "line": 5567,
           "dynamic": false
         },
         {
           "verb": "linearImportTask",
-          "line": 5584,
+          "line": 5591,
           "dynamic": false
         },
         {
           "verb": "clickupImportTask",
-          "line": 5628,
+          "line": 5635,
           "dynamic": false
         },
         {
           "verb": "importAllTickets",
-          "line": 5672,
+          "line": 5679,
           "dynamic": false
         },
         {
           "verb": "refreshTicketsDelta",
-          "line": 5744,
+          "line": 5751,
           "dynamic": false
         },
         {
           "verb": "openExternalUrl",
-          "line": 5853,
-          "dynamic": false
-        },
-        {
-          "verb": "saveLocalTicketFile",
           "line": 5860,
           "dynamic": false
         },
         {
+          "verb": "saveLocalTicketFile",
+          "line": 5867,
+          "dynamic": false
+        },
+        {
           "verb": "editTicket",
-          "line": 5905,
+          "line": 5912,
           "dynamic": false
         },
         {
           "verb": "pushTicket",
-          "line": 5932,
+          "line": 5939,
           "dynamic": false
         },
         {
           "verb": "deleteTicketConfirmed",
-          "line": 5965,
+          "line": 5972,
           "dynamic": false
         },
         {
           "verb": "listLocalTicketFiles",
-          "line": 5991,
+          "line": 5998,
           "dynamic": false
         },
         {
           "verb": "getTicketSyncStatuses",
-          "line": 6151,
+          "line": 6158,
           "dynamic": false
         },
         {
           "verb": "readLocalTicketFile",
-          "line": 6176,
+          "line": 6183,
           "dynamic": false
         },
         {
           "verb": "importTicketSubtasks",
-          "line": 6203,
+          "line": 6210,
           "dynamic": false
         },
         {
           "verb": "syncAllTickets",
-          "line": 6237,
+          "line": 6244,
           "dynamic": false
         },
         {
           "verb": "copyToClipboard",
-          "line": 6299,
+          "line": 6306,
           "dynamic": false
         },
         {
           "verb": "copyDiagramPrompt",
-          "line": 6353,
+          "line": 6360,
           "dynamic": false
         },
         {
           "verb": "fetchMoveTargets",
-          "line": 6367,
+          "line": 6374,
           "dynamic": false
         },
         {
           "verb": "moveTicket",
-          "line": 6411,
+          "line": 6418,
           "dynamic": false
         },
         {
           "verb": "copyRefinePrompt",
-          "line": 6440,
+          "line": 6447,
           "dynamic": false
         },
         {
           "verb": "refineFeature",
-          "line": 6497,
+          "line": 6504,
           "dynamic": false
         },
         {
           "verb": "changeTicketStatus",
-          "line": 6552,
+          "line": 6559,
           "dynamic": false
         },
         {
           "verb": "postTicketComment",
-          "line": 6580,
+          "line": 6587,
           "dynamic": false
         },
         {
           "verb": "loadTicketComments",
-          "line": 6608,
+          "line": 6615,
           "dynamic": false
         },
         {
           "verb": "postTicketReply",
-          "line": 6641,
+          "line": 6648,
           "dynamic": false
         },
         {
           "verb": "downloadAttachment",
-          "line": 6669,
+          "line": 6676,
           "dynamic": false
         },
         {
           "verb": "viewAttachments",
-          "line": 6696,
+          "line": 6703,
           "dynamic": false
         },
         {
           "verb": "openAttachment",
-          "line": 6738,
+          "line": 6745,
           "dynamic": false
         },
         {
           "verb": "revealAttachment",
-          "line": 6764,
+          "line": 6771,
           "dynamic": false
         },
         {
           "verb": "clickupCreateTask",
-          "line": 6790,
+          "line": 6797,
           "dynamic": false
         },
         {
           "verb": "linearCreateIssue",
-          "line": 6861,
+          "line": 6868,
           "dynamic": false
         },
         {
           "verb": "convertToSubtask",
-          "line": 6943,
+          "line": 6950,
           "dynamic": false
         },
         {
           "verb": "ticketsAskAgent",
-          "line": 6986,
+          "line": 6993,
           "dynamic": false
         },
         {
           "verb": "createOnlineDocument",
-          "line": 7024,
+          "line": 7031,
           "dynamic": false
         },
         {
           "verb": "setUploadLocation",
-          "line": 7121,
+          "line": 7128,
           "dynamic": false
         },
         {
           "verb": "syncDocToOnline",
-          "line": 7145,
+          "line": 7152,
           "dynamic": false
         },
         {
           "verb": "getSyncConfig",
-          "line": 7202,
+          "line": 7209,
           "dynamic": false
         },
         {
           "verb": "loadInsights",
-          "line": 7215,
+          "line": 7222,
           "dynamic": false
         },
         {
           "verb": "readInsight",
-          "line": 7235,
+          "line": 7242,
           "dynamic": false
         },
         {
           "verb": "runTuningExtract",
-          "line": 7256,
+          "line": 7263,
           "dynamic": false
         },
         {
           "verb": "runTuningGovernance",
-          "line": 7293,
+          "line": 7300,
           "dynamic": false
         },
         {
           "verb": "updateInsightStatus",
-          "line": 7302,
+          "line": 7309,
           "dynamic": false
         },
         {
           "verb": "deleteInsight",
-          "line": 7316,
+          "line": 7323,
           "dynamic": false
         },
         {
           "verb": "copyInsightLink",
-          "line": 7330,
+          "line": 7337,
           "dynamic": false
         }
       ]
@@ -6813,7 +6813,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 420,
+      "line": 421,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -6821,7 +6821,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 424,
+      "line": 425,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -6829,7 +6829,7 @@
       "verb": "switchToTab",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1239,
+      "line": 1240,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6837,7 +6837,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1677,
+      "line": 1682,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6845,7 +6845,7 @@
       "verb": "updateBoard",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1725,
+      "line": 1730,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6853,7 +6853,7 @@
       "verb": "cliTriggersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1734,
+      "line": 1739,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6861,7 +6861,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1757,
+      "line": 1762,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6869,7 +6869,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1758,
+      "line": 1763,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6877,7 +6877,7 @@
       "verb": "updateColumnDragDropModes",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1770,
+      "line": 1775,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6885,7 +6885,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1773,
+      "line": 1778,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6893,7 +6893,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1774,
+      "line": 1779,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6901,7 +6901,7 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 2203,
+      "line": 2208,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -6909,7 +6909,7 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 2237,
+      "line": 2242,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -6917,7 +6917,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3237,
+      "line": 3242,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6925,7 +6925,7 @@
       "verb": "cliTriggersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3287,
+      "line": 3292,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6933,7 +6933,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3300,
+      "line": 3305,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6941,7 +6941,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3301,
+      "line": 3306,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6949,7 +6949,7 @@
       "verb": "updateColumnDragDropModes",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3311,
+      "line": 3316,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6957,7 +6957,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3314,
+      "line": 3319,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6965,7 +6965,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3315,
+      "line": 3320,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6973,7 +6973,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3422,
+      "line": 3427,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6981,7 +6981,7 @@
       "verb": "updateBoard",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3451,
+      "line": 3456,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6989,7 +6989,7 @@
       "verb": "cliTriggersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3452,
+      "line": 3457,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6997,7 +6997,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3459,
+      "line": 3464,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7005,7 +7005,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3460,
+      "line": 3465,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7013,7 +7013,7 @@
       "verb": "updateColumnDragDropModes",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3470,
+      "line": 3475,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7021,7 +7021,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3473,
+      "line": 3478,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7029,7 +7029,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3474,
+      "line": 3479,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7037,7 +7037,7 @@
       "verb": "featureWorkflowModeState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3918,
+      "line": 3923,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7045,7 +7045,7 @@
       "verb": "saveDefaultPromptOverridesResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3974,
+      "line": 3979,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7053,7 +7053,7 @@
       "verb": "saveDefaultPromptOverridesResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3977,
+      "line": 3982,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7061,7 +7061,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5020,
+      "line": 5025,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7069,7 +7069,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5023,
+      "line": 5028,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7077,7 +7077,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5039,
+      "line": 5044,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7085,7 +7085,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5062,
+      "line": 5067,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7093,7 +7093,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5065,
+      "line": 5070,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7101,7 +7101,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5399,
+      "line": 5404,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7109,7 +7109,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5668,
+      "line": 5673,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7117,7 +7117,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5676,
+      "line": 5681,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7125,7 +7125,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5677,
+      "line": 5682,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7133,7 +7133,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6479,
+      "line": 6484,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7141,7 +7141,7 @@
       "verb": "switchToTab",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6482,
+      "line": 6487,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7149,7 +7149,7 @@
       "verb": "mcpMonitorPreview",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6938,
+      "line": 6943,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7157,7 +7157,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6962,
+      "line": 6967,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7165,7 +7165,7 @@
       "verb": "notionRemoteSetupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7000,
+      "line": 7005,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7173,7 +7173,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7250,
+      "line": 7255,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7181,7 +7181,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7267,
+      "line": 7272,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7189,7 +7189,7 @@
       "verb": "featureWorkflowModeState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7407,
+      "line": 7412,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7197,7 +7197,7 @@
       "verb": "promptOnDropResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7663,
+      "line": 7668,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7205,7 +7205,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7691,
+      "line": 7696,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7213,7 +7213,7 @@
       "verb": "promptOnDropResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7692,
+      "line": 7697,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7221,7 +7221,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7694,
+      "line": 7699,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7229,7 +7229,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7721,
+      "line": 7726,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7237,7 +7237,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7733,
+      "line": 7738,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7245,7 +7245,7 @@
       "verb": "promptOnDropResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7744,
+      "line": 7749,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7253,7 +7253,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7745,
+      "line": 7750,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7261,7 +7261,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7765,
+      "line": 7770,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7269,7 +7269,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7794,
+      "line": 7799,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7277,7 +7277,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7823,
+      "line": 7828,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7285,7 +7285,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7858,
+      "line": 7863,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7293,7 +7293,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7861,
+      "line": 7866,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7301,7 +7301,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7874,
+      "line": 7879,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7309,7 +7309,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7886,
+      "line": 7891,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7317,7 +7317,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7930,
+      "line": 7935,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7325,7 +7325,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7933,
+      "line": 7938,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7333,7 +7333,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7996,
+      "line": 8001,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7341,7 +7341,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7999,
+      "line": 8004,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7349,7 +7349,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8013,
+      "line": 8018,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7357,7 +7357,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8024,
+      "line": 8029,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7365,7 +7365,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8070,
+      "line": 8075,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7373,7 +7373,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8073,
+      "line": 8078,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7381,7 +7381,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8085,
+      "line": 8090,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7389,7 +7389,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8115,
+      "line": 8120,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7397,7 +7397,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8121,
+      "line": 8126,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7405,7 +7405,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8177,
+      "line": 8182,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7413,28 +7413,12 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8178,
+      "line": 8183,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
     {
       "verb": "moveCards",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8198,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8201,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
       "line": 8203,
@@ -7442,10 +7426,10 @@
       "provider": "Kanban"
     },
     {
-      "verb": "moveCards",
+      "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8213,
+      "line": 8206,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7453,23 +7437,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8214,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "moveCards",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8265,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8266,
+      "line": 8208,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7477,7 +7445,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8290,
+      "line": 8218,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7485,15 +7453,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8299,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8301,
+      "line": 8219,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7501,7 +7461,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8314,
+      "line": 8270,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7509,7 +7469,15 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8321,
+      "line": 8271,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "moveCards",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8295,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7517,7 +7485,39 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8342,
+      "line": 8304,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8306,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "moveCards",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8319,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8326,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8347,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7525,7 +7525,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8403,
+      "line": 8408,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7533,7 +7533,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8446,
+      "line": 8451,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7541,7 +7541,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8564,
+      "line": 8569,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7549,7 +7549,7 @@
       "verb": "backlogViewState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8571,
+      "line": 8576,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7557,7 +7557,7 @@
       "verb": "backlogViewState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8591,
+      "line": 8596,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7565,7 +7565,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8668,
+      "line": 8673,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7573,7 +7573,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8674,
+      "line": 8679,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7581,7 +7581,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8753,
+      "line": 8758,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7589,7 +7589,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8796,
+      "line": 8801,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7597,7 +7597,7 @@
       "verb": "promptsConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8816,
+      "line": 8821,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7605,15 +7605,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8829,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "fileExistsResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8847,
+      "line": 8834,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7629,7 +7621,15 @@
       "verb": "fileExistsResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8856,
+      "line": 8857,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "fileExistsResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8861,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7637,7 +7637,7 @@
       "verb": "settingResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8895,
+      "line": 8900,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7645,7 +7645,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8902,
+      "line": 8907,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7653,7 +7653,7 @@
       "verb": "promptPreviewResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8963,
+      "line": 8968,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7661,15 +7661,7 @@
       "verb": "promptPreviewResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8965,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "personaContent",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8980,
+      "line": 8970,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7685,7 +7677,15 @@
       "verb": "personaContent",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8987,
+      "line": 8990,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "personaContent",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8992,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7693,7 +7693,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9029,
+      "line": 9034,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7701,7 +7701,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9048,
+      "line": 9053,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7709,7 +7709,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9057,
+      "line": 9062,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7717,7 +7717,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9067,
+      "line": 9072,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7725,7 +7725,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9077,
+      "line": 9082,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7733,7 +7733,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9087,
+      "line": 9092,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7741,7 +7741,7 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9097,
+      "line": 9102,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7749,15 +7749,7 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9104,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "exportAgentAsSkillResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9108,
+      "line": 9109,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7773,7 +7765,7 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9115,
+      "line": 9118,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7781,15 +7773,15 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9118,
+      "line": 9120,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
     {
-      "verb": "saveCustomAgentResult",
+      "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9125,
+      "line": 9123,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7805,15 +7797,15 @@
       "verb": "saveCustomAgentResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9133,
+      "line": 9135,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
     {
-      "verb": "deleteCustomAgentResult",
+      "verb": "saveCustomAgentResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9140,
+      "line": 9138,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7829,15 +7821,15 @@
       "verb": "deleteCustomAgentResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9148,
+      "line": 9150,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
     {
-      "verb": "customAgents",
+      "verb": "deleteCustomAgentResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9155,
+      "line": 9153,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7853,7 +7845,15 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9162,
+      "line": 9165,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "customAgents",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9167,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7861,7 +7861,7 @@
       "verb": "uatData",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9225,
+      "line": 9230,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7869,7 +7869,7 @@
       "verb": "mergePromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9442,
+      "line": 9447,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7877,15 +7877,7 @@
       "verb": "mergePromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9490,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9673,
+      "line": 9495,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7898,10 +7890,10 @@
       "provider": "Kanban"
     },
     {
-      "verb": "featureDetails",
+      "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9700,
+      "line": 9683,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7909,7 +7901,15 @@
       "verb": "featureDetails",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9704,
+      "line": 9705,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "featureDetails",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9709,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7917,7 +7917,7 @@
       "verb": "refreshKanbanPlans",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 354,
+      "line": 355,
       "receiver": "this._projectPanel.webview",
       "provider": "Planning"
     },
@@ -7925,7 +7925,7 @@
       "verb": "error",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 410,
+      "line": 411,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -7933,7 +7933,7 @@
       "verb": "refreshKanbanPlans",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 437,
+      "line": 440,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -7941,7 +7941,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 449,
+      "line": 452,
       "receiver": "this._projectPanel.webview",
       "provider": "Planning"
     },
@@ -7949,7 +7949,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 451,
+      "line": 454,
       "receiver": "this._projectPanel.webview",
       "provider": "Planning"
     },
@@ -7957,7 +7957,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 453,
+      "line": 456,
       "receiver": "this._projectPanel.webview",
       "provider": "Planning"
     },
@@ -7965,7 +7965,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 474,
+      "line": 477,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -7973,7 +7973,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 478,
+      "line": 481,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -7981,7 +7981,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 482,
+      "line": 485,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -7989,7 +7989,7 @@
       "verb": "pixelFontSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 486,
+      "line": 489,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -7997,7 +7997,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 490,
+      "line": 493,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8005,7 +8005,7 @@
       "verb": "planAutoFetchState",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 496,
+      "line": 499,
       "receiver": "this._projectPanel.webview",
       "provider": "Planning"
     },
@@ -8013,7 +8013,7 @@
       "verb": "error",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 606,
+      "line": 609,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8021,7 +8021,7 @@
       "verb": "themeChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 626,
+      "line": 629,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8029,7 +8029,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 634,
+      "line": 637,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8037,7 +8037,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 638,
+      "line": 641,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8045,7 +8045,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 642,
+      "line": 645,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8053,7 +8053,7 @@
       "verb": "pixelFontSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 646,
+      "line": 649,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8061,7 +8061,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 650,
+      "line": 653,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8069,7 +8069,7 @@
       "verb": "error",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 727,
+      "line": 732,
       "receiver": "panel.webview",
       "provider": "Planning"
     },
@@ -8077,7 +8077,7 @@
       "verb": "refreshKanbanPlans",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 758,
+      "line": 765,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8085,7 +8085,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 771,
+      "line": 778,
       "receiver": "panel.webview",
       "provider": "Planning"
     },
@@ -8093,7 +8093,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 773,
+      "line": 780,
       "receiver": "panel.webview",
       "provider": "Planning"
     },
@@ -8101,7 +8101,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 775,
+      "line": 782,
       "receiver": "panel.webview",
       "provider": "Planning"
     },
@@ -8109,7 +8109,7 @@
       "verb": "themeChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 785,
+      "line": 792,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8117,7 +8117,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 793,
+      "line": 800,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8125,7 +8125,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 797,
+      "line": 804,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8133,7 +8133,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 801,
+      "line": 808,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8141,7 +8141,7 @@
       "verb": "pixelFontSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 805,
+      "line": 812,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8149,7 +8149,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 809,
+      "line": 816,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8157,7 +8157,7 @@
       "verb": "devDocDeletedExternally",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 1532,
+      "line": 1539,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8165,7 +8165,7 @@
       "verb": "devDocContent",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 1549,
+      "line": 1556,
       "receiver": "devDocsPanel.webview",
       "provider": "Planning"
     },
@@ -8173,7 +8173,7 @@
       "verb": "error",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2355,
+      "line": 2362,
       "receiver": "errorPanel?.webview",
       "provider": "Planning"
     },
@@ -8181,20 +8181,12 @@
       "verb": "notebookDefaultRoot",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2478,
+      "line": 2485,
       "receiver": "nbPanel?.webview",
       "provider": "Planning"
     },
     {
       "verb": "devDocsList",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2486,
-      "receiver": "devDocsPanel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "devDocContent",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
       "line": 2493,
@@ -8205,7 +8197,15 @@
       "verb": "devDocContent",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2502,
+      "line": 2500,
+      "receiver": "devDocsPanel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "devDocContent",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 2509,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8213,7 +8213,7 @@
       "verb": "devDocSaved",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2511,
+      "line": 2518,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8221,7 +8221,7 @@
       "verb": "devDocSaved",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2524,
+      "line": 2531,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8229,7 +8229,7 @@
       "verb": "devDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2540,
+      "line": 2547,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8237,7 +8237,7 @@
       "verb": "devDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2561,
+      "line": 2568,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8245,7 +8245,7 @@
       "verb": "devDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2563,
+      "line": 2570,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8253,7 +8253,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2571,
+      "line": 2578,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8261,7 +8261,7 @@
       "verb": "devDocDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2608,
+      "line": 2615,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8269,7 +8269,7 @@
       "verb": "devDocDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2614,
+      "line": 2621,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8277,7 +8277,7 @@
       "verb": "devDocDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2617,
+      "line": 2624,
       "receiver": "devDocsPanel?.webview",
       "provider": "Planning"
     },
@@ -8285,7 +8285,7 @@
       "verb": "commentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2773,
+      "line": 2780,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8293,7 +8293,7 @@
       "verb": "commentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2776,
+      "line": 2783,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8301,15 +8301,7 @@
       "verb": "localFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2884,
-      "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "localFoldersListed",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2894,
+      "line": 2891,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8322,10 +8314,10 @@
       "provider": "Planning"
     },
     {
-      "verb": "ticketsFoldersListed",
+      "verb": "localFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2916,
+      "line": 2908,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8333,7 +8325,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2925,
+      "line": 2923,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8349,15 +8341,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2942,
-      "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "browseTicketsFolderResult",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2954,
+      "line": 2939,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8365,7 +8349,23 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2970,
+      "line": 2949,
+      "receiver": "this._panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "browseTicketsFolderResult",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 2961,
+      "receiver": "this._panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "ticketsFoldersListed",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 2977,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8373,7 +8373,7 @@
       "verb": "planningHtmlFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2978,
+      "line": 2985,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8381,7 +8381,7 @@
       "verb": "planningHtmlFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 2994,
+      "line": 3001,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8389,23 +8389,7 @@
       "verb": "planningHtmlFoldersListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3004,
-      "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "containersReady",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3043,
-      "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "containersReady",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3048,
+      "line": 3011,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8418,10 +8402,18 @@
       "provider": "Planning"
     },
     {
-      "verb": "filteredDocsReady",
+      "verb": "containersReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3077,
+      "line": 3055,
+      "receiver": "this._panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "containersReady",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 3057,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8429,7 +8421,7 @@
       "verb": "filteredDocsReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3097,
+      "line": 3084,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8437,7 +8429,15 @@
       "verb": "filteredDocsReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3100,
+      "line": 3104,
+      "receiver": "this._panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "filteredDocsReady",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 3107,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8445,7 +8445,7 @@
       "verb": "docPagesReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3117,
+      "line": 3124,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8453,7 +8453,7 @@
       "verb": "docPagesReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3125,
+      "line": 3132,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8461,7 +8461,7 @@
       "verb": "docPagesReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3128,
+      "line": 3135,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8469,7 +8469,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3144,
+      "line": 3151,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8477,7 +8477,7 @@
       "verb": "previewReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3152,
+      "line": 3159,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8485,7 +8485,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3154,
+      "line": 3161,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8493,7 +8493,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3158,
+      "line": 3165,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8501,7 +8501,7 @@
       "verb": "importNotebookLMPlansResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3171,
+      "line": 3178,
       "receiver": "nbTarget?.webview",
       "provider": "Planning"
     },
@@ -8509,7 +8509,7 @@
       "verb": "airlock_exportComplete",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3183,
+      "line": 3190,
       "receiver": "airlockTarget?.webview",
       "provider": "Planning"
     },
@@ -8517,7 +8517,7 @@
       "verb": "artifactPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3353,
+      "line": 3360,
       "receiver": "targetPanel?.webview",
       "provider": "Planning"
     },
@@ -8525,7 +8525,7 @@
       "verb": "artifactPromptSent",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3360,
+      "line": 3367,
       "receiver": "targetPanel?.webview",
       "provider": "Planning"
     },
@@ -8533,7 +8533,7 @@
       "verb": "chatPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3369,
+      "line": 3376,
       "receiver": "targetPanel?.webview",
       "provider": "Planning"
     },
@@ -8541,7 +8541,7 @@
       "verb": "kanbanPlanOpenResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3590,
+      "line": 3597,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8549,7 +8549,7 @@
       "verb": "kanbanPlanOpenResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3596,
+      "line": 3603,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8557,15 +8557,7 @@
       "verb": "kanbanPlanOpenResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3598,
-      "receiver": "this._projectPanel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "kanbanPlanColumnChanged",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3675,
+      "line": 3605,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8581,7 +8573,15 @@
       "verb": "kanbanPlanColumnChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3684,
+      "line": 3689,
+      "receiver": "this._projectPanel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "kanbanPlanColumnChanged",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 3691,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8589,7 +8589,7 @@
       "verb": "kanbanPlanComplexityChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3700,
+      "line": 3707,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8597,7 +8597,7 @@
       "verb": "kanbanPlanComplexityChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3737,
+      "line": 3744,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8605,7 +8605,7 @@
       "verb": "kanbanPlanComplexityChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3739,
+      "line": 3746,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8613,7 +8613,7 @@
       "verb": "kanbanPlanDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3748,
+      "line": 3755,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8621,7 +8621,7 @@
       "verb": "kanbanPlanDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3758,
+      "line": 3765,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8629,7 +8629,7 @@
       "verb": "kanbanPlanDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3793,
+      "line": 3800,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8637,7 +8637,7 @@
       "verb": "kanbanPlanDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3795,
+      "line": 3802,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8645,7 +8645,7 @@
       "verb": "kanbanPlanLogReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3803,
+      "line": 3810,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8653,7 +8653,7 @@
       "verb": "kanbanPlanLogReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3812,
+      "line": 3819,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8661,15 +8661,7 @@
       "verb": "kanbanPlanLogReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3814,
-      "receiver": "this._projectPanel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "featureDetails",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3822,
+      "line": 3821,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8685,7 +8677,15 @@
       "verb": "featureDetails",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3831,
+      "line": 3836,
+      "receiver": "this._projectPanel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "featureDetails",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 3838,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8693,7 +8693,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3848,
+      "line": 3855,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8701,7 +8701,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3854,
+      "line": 3861,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8709,7 +8709,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3858,
+      "line": 3865,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8717,7 +8717,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3932,
+      "line": 3939,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8725,7 +8725,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3937,
+      "line": 3944,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8733,7 +8733,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3951,
+      "line": 3958,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8741,7 +8741,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3961,
+      "line": 3968,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8749,7 +8749,7 @@
       "verb": "featureError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 3975,
+      "line": 3982,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8757,7 +8757,7 @@
       "verb": "constitutionStatus",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4024,
+      "line": 4031,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8765,7 +8765,7 @@
       "verb": "projectContextEnabled",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4150,
+      "line": 4157,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8773,7 +8773,7 @@
       "verb": "prdPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4281,
+      "line": 4288,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8781,7 +8781,7 @@
       "verb": "constitutionAddonState",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4290,
+      "line": 4297,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8789,7 +8789,7 @@
       "verb": "constitutionPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4327,
+      "line": 4334,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8797,7 +8797,7 @@
       "verb": "constitutionPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4373,
+      "line": 4380,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8805,7 +8805,7 @@
       "verb": "systemPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4453,
+      "line": 4460,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8813,7 +8813,7 @@
       "verb": "architectPromptCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4487,
+      "line": 4494,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8821,7 +8821,7 @@
       "verb": "constitutionFileDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4498,
+      "line": 4505,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8829,7 +8829,7 @@
       "verb": "constitutionFileDeleted",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4501,
+      "line": 4508,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -8837,7 +8837,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4609,
+      "line": 4616,
       "receiver": "saveDestPanel?.webview",
       "provider": "Planning"
     },
@@ -8845,7 +8845,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4633,
+      "line": 4640,
       "receiver": "saveDestPanel?.webview",
       "provider": "Planning"
     },
@@ -8853,7 +8853,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4643,
+      "line": 4650,
       "receiver": "saveDestPanel?.webview",
       "provider": "Planning"
     },
@@ -8861,7 +8861,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 4742,
+      "line": 4749,
       "receiver": "saveDestPanel?.webview",
       "provider": "Planning"
     },
@@ -8869,7 +8869,7 @@
       "verb": "localTicketFilesListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 5995,
+      "line": 6002,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8877,7 +8877,7 @@
       "verb": "localTicketFilesListed",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6148,
+      "line": 6155,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8885,7 +8885,7 @@
       "verb": "ticketSyncStatusesLoaded",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6173,
+      "line": 6180,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8893,7 +8893,7 @@
       "verb": "localTicketFileRead",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6181,
+      "line": 6188,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8901,7 +8901,7 @@
       "verb": "localTicketFileRead",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6186,
+      "line": 6193,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8909,7 +8909,7 @@
       "verb": "localTicketFileRead",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6197,
+      "line": 6204,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8917,7 +8917,7 @@
       "verb": "localTicketFileRead",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6199,
+      "line": 6206,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8925,7 +8925,7 @@
       "verb": "moveTargetsResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6376,
+      "line": 6383,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8933,7 +8933,7 @@
       "verb": "moveTargetsResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6397,
+      "line": 6404,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8941,7 +8941,7 @@
       "verb": "moveTargetsResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6403,
+      "line": 6410,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8949,7 +8949,7 @@
       "verb": "moveTargetsResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6407,
+      "line": 6414,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8957,7 +8957,7 @@
       "verb": "moveTicketResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6432,
+      "line": 6439,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8965,7 +8965,7 @@
       "verb": "moveTicketResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 6436,
+      "line": 6443,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8973,7 +8973,7 @@
       "verb": "ticketsAskAgentResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7012,
+      "line": 7019,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8981,7 +8981,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7029,
+      "line": 7036,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8989,7 +8989,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7040,
+      "line": 7047,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -8997,7 +8997,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7045,
+      "line": 7052,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9005,7 +9005,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7053,
+      "line": 7060,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9013,7 +9013,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7068,
+      "line": 7075,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9021,7 +9021,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7074,
+      "line": 7081,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9029,7 +9029,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7114,
+      "line": 7121,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9037,7 +9037,7 @@
       "verb": "onlineDocCreated",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7117,
+      "line": 7124,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9045,7 +9045,7 @@
       "verb": "uploadLocationSet",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7138,
+      "line": 7145,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9053,7 +9053,7 @@
       "verb": "syncToOnlineResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7153,
+      "line": 7160,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9061,7 +9061,7 @@
       "verb": "syncToOnlineResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7164,
+      "line": 7171,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9069,7 +9069,7 @@
       "verb": "syncToOnlineResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7196,
+      "line": 7203,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9077,7 +9077,7 @@
       "verb": "syncToOnlineResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7198,
+      "line": 7205,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9085,7 +9085,7 @@
       "verb": "syncConfigReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7211,
+      "line": 7218,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9093,7 +9093,7 @@
       "verb": "tuningGovernanceComplete",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7299,
+      "line": 7306,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -9101,7 +9101,7 @@
       "verb": "insightLinkCopied",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7335,
+      "line": 7342,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -9109,7 +9109,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7953,
+      "line": 7960,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9117,7 +9117,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7955,
+      "line": 7962,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9125,7 +9125,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7957,
+      "line": 7964,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9133,15 +9133,7 @@
       "verb": "childrenReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7968,
-      "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "childrenReady",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7971,
+      "line": 7975,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9157,7 +9149,7 @@
       "verb": "childrenReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7984,
+      "line": 7985,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9165,7 +9157,15 @@
       "verb": "childrenReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7987,
+      "line": 7991,
+      "receiver": "this._panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "childrenReady",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 7994,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9173,7 +9173,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8012,
+      "line": 8019,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9181,7 +9181,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8032,
+      "line": 8039,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9189,15 +9189,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8080,
-      "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "previewError",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8084,
+      "line": 8087,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9213,7 +9205,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8165,
+      "line": 8098,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9221,7 +9213,15 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8204,
+      "line": 8172,
+      "receiver": "this._panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "previewError",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 8211,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9229,7 +9229,7 @@
       "verb": "plannerPromptState",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8297,
+      "line": 8304,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9237,7 +9237,7 @@
       "verb": "plannerPromptState",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8303,
+      "line": 8310,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9245,7 +9245,7 @@
       "verb": "importedDocsReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8370,
+      "line": 8377,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9253,15 +9253,7 @@
       "verb": "importedDocsReady",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8373,
-      "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "syncResult",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8486,
+      "line": 8380,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9277,7 +9269,7 @@
       "verb": "syncResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8499,
+      "line": 8500,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9285,7 +9277,7 @@
       "verb": "syncResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8505,
+      "line": 8506,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9293,7 +9285,7 @@
       "verb": "syncResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8558,
+      "line": 8512,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9301,7 +9293,7 @@
       "verb": "syncResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8560,
+      "line": 8565,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9309,12 +9301,12 @@
       "verb": "syncResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8563,
+      "line": 8567,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
     {
-      "verb": "importFullDocResult",
+      "verb": "syncResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
       "line": 8570,
@@ -9325,7 +9317,7 @@
       "verb": "importFullDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8602,
+      "line": 8577,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9333,7 +9325,7 @@
       "verb": "importFullDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8610,
+      "line": 8609,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9341,7 +9333,7 @@
       "verb": "importFullDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8621,
+      "line": 8617,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9349,7 +9341,7 @@
       "verb": "importFullDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8645,
+      "line": 8628,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9357,7 +9349,7 @@
       "verb": "importFullDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8651,
+      "line": 8652,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9365,7 +9357,7 @@
       "verb": "importFullDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8751,
+      "line": 8658,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9373,7 +9365,15 @@
       "verb": "importFullDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8785,
+      "line": 8758,
+      "receiver": "this._panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "importFullDocResult",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 8792,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9381,7 +9381,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8795,
+      "line": 8802,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9389,7 +9389,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8809,
+      "line": 8816,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9397,7 +9397,7 @@
       "verb": "previewError",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8812,
+      "line": 8819,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9405,7 +9405,7 @@
       "verb": "importResearchDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8823,
+      "line": 8830,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9413,7 +9413,7 @@
       "verb": "importResearchDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8832,
+      "line": 8839,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9421,7 +9421,7 @@
       "verb": "importResearchDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8836,
+      "line": 8843,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9429,7 +9429,7 @@
       "verb": "importResearchDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8877,
+      "line": 8884,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9437,16 +9437,8 @@
       "verb": "importResearchDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8915,
+      "line": 8922,
       "receiver": "this._panel?.webview",
-      "provider": "Planning"
-    },
-    {
-      "verb": "importDevDocResult",
-      "direction": "push",
-      "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8929,
-      "receiver": "panel?.webview",
       "provider": "Planning"
     },
     {
@@ -9461,7 +9453,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8940,
+      "line": 8943,
       "receiver": "panel?.webview",
       "provider": "Planning"
     },
@@ -9469,7 +9461,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8961,
+      "line": 8947,
       "receiver": "panel?.webview",
       "provider": "Planning"
     },
@@ -9477,7 +9469,15 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 8964,
+      "line": 8968,
+      "receiver": "panel?.webview",
+      "provider": "Planning"
+    },
+    {
+      "verb": "importDevDocResult",
+      "direction": "push",
+      "file": "src/services/PlanningPanelProvider.ts",
+      "line": 8971,
       "receiver": "panel?.webview",
       "provider": "Planning"
     },
@@ -9485,7 +9485,7 @@
       "verb": "ticketFileChanged",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 9249,
+      "line": 9256,
       "receiver": "this._panel?.webview",
       "provider": "Planning"
     },
@@ -9493,7 +9493,7 @@
       "verb": "error",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 9564,
+      "line": 9571,
       "receiver": "this._projectPanel?.webview",
       "provider": "Planning"
     },
@@ -12992,364 +12992,364 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 391,
+      "line": 392,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 404,
+      "line": 405,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 452,
+      "line": 456,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 698,
+      "line": 703,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 707,
+      "line": 712,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 822,
+      "line": 827,
       "receiver": "vscode"
     },
     {
       "verb": "getConstitutionStatus",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 928,
+      "line": 933,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1030,
+      "line": 1035,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1059,
+      "line": 1064,
       "receiver": "vscode"
     },
     {
       "verb": "fetchFeatureDocuments",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1060,
+      "line": 1065,
       "receiver": "vscode"
     },
     {
       "verb": "copyInsightLink",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1097,
+      "line": 1102,
       "receiver": "vscode"
     },
     {
       "verb": "updateInsightStatus",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1100,
+      "line": 1105,
       "receiver": "vscode"
     },
     {
       "verb": "updateInsightStatus",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1103,
+      "line": 1108,
       "receiver": "vscode"
     },
     {
       "verb": "deleteInsight",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1106,
+      "line": 1111,
       "receiver": "vscode"
     },
     {
       "verb": "loadInsights",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1114,
+      "line": 1119,
       "receiver": "vscode"
     },
     {
       "verb": "webviewReady",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1146,
+      "line": 1151,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1332,
+      "line": 1337,
       "receiver": "vscode"
     },
     {
       "verb": "getProjectPrd",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1433,
+      "line": 1438,
       "receiver": "vscode"
     },
     {
       "verb": "getProjectContextEnabled",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1439,
+      "line": 1444,
       "receiver": "vscode"
     },
     {
       "verb": "setProjectContextEnabled",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1459,
+      "line": 1464,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1708,
+      "line": 1713,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1745,
+      "line": 1750,
       "receiver": "vscode"
     },
     {
       "verb": "planShown",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1780,
+      "line": 1785,
       "receiver": "vscode"
     },
     {
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1898,
+      "line": 1903,
       "receiver": "vscode"
     },
     {
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1900,
+      "line": 1905,
       "receiver": "vscode"
     },
     {
       "verb": "setKanbanPlanComplexity",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1917,
+      "line": 1922,
       "receiver": "vscode"
     },
     {
       "verb": "fetchKanbanPlanLog",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1923,
+      "line": 1928,
       "receiver": "vscode"
     },
     {
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1926,
+      "line": 1931,
       "receiver": "vscode"
     },
     {
       "verb": "importPlans",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1952,
+      "line": 1957,
       "receiver": "vscode"
     },
     {
       "verb": "createPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1959,
+      "line": 1964,
       "receiver": "vscode"
     },
     {
       "verb": "planAutoFetchRunNow",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 1998,
+      "line": 2003,
       "receiver": "vscode"
     },
     {
       "verb": "copyArchitectPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2015,
+      "line": 2020,
       "receiver": "vscode"
     },
     {
       "verb": "copyArchitectPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2021,
+      "line": 2026,
       "receiver": "vscode"
     },
     {
       "verb": "copyArchitectPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2027,
+      "line": 2032,
       "receiver": "vscode"
     },
     {
       "verb": "getFeatureDetails",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2281,
+      "line": 2286,
       "receiver": "vscode"
     },
     {
       "verb": "setKanbanPlanComplexity",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2482,
+      "line": 2487,
       "receiver": "vscode"
     },
     {
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2491,
+      "line": 2496,
       "receiver": "vscode"
     },
     {
       "verb": "invokeConstitutionBuilder",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2819,
+      "line": 2824,
       "receiver": "vscode"
     },
     {
       "verb": "copyConstitutionPrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2825,
+      "line": 2830,
       "receiver": "vscode"
     },
     {
       "verb": "invokeConstitutionUpdater",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2831,
+      "line": 2836,
       "receiver": "vscode"
     },
     {
       "verb": "copyConstitutionUpdatePrompt",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2837,
+      "line": 2842,
       "receiver": "vscode"
     },
     {
       "verb": "toggleConstitutionAddon",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2844,
+      "line": 2849,
       "receiver": "vscode"
     },
     {
       "verb": "toggleConstitutionAddon",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2850,
+      "line": 2855,
       "receiver": "vscode"
     },
     {
       "verb": "getConstitutionPaths",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2867,
+      "line": 2872,
       "receiver": "vscode"
     },
     {
       "verb": "addConstitutionPath",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2876,
+      "line": 2881,
       "receiver": "vscode"
     },
     {
       "verb": "setConstitutionPath",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2914,
+      "line": 2919,
       "receiver": "vscode"
     },
     {
       "verb": "removeConstitutionPath",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 2922,
+      "line": 2927,
       "receiver": "vscode"
     },
     {
       "verb": "readInsight",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3297,
+      "line": 3302,
       "receiver": "vscode"
     },
     {
       "verb": "loadInsights",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3302,
+      "line": 3307,
       "receiver": "vscode"
     },
     {
       "verb": "runTuningExtract",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3314,
+      "line": 3319,
       "receiver": "vscode"
     },
     {
       "verb": "runTuningGovernance",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3320,
+      "line": 3325,
       "receiver": "vscode"
     },
     {
       "verb": "loadInsights",
       "direction": "request",
       "file": "src/webview/project.js",
-      "line": 3326,
+      "line": 3331,
       "receiver": "vscode"
     },
     {

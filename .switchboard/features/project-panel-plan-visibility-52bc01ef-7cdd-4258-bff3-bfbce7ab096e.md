@@ -13,8 +13,8 @@ Make the Project panel reliably show the correct, current plans without requirin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Project panel not refreshing — stale/empty plans until close-and-reopen](../plans/feature_plan_20260707100624_autism360-plans-not-showing-in-project-panel.md) — **CODER CODED**
-- [ ] [Fix: Review Plan button shows wrong plans after switching workspace in kanban.html](../plans/feature_plan_20260707100604_review-plan-button-wrong-plans-after-workspace-switch.md) — **CODER CODED**
+- [ ] [Fix: Project panel not refreshing — stale/empty plans until close-and-reopen](../plans/feature_plan_20260707100624_autism360-plans-not-showing-in-project-panel.md) — **CODE REVIEWED**
+- [ ] [Fix: Review Plan button shows wrong plans after switching workspace in kanban.html](../plans/feature_plan_20260707100604_review-plan-button-wrong-plans-after-workspace-switch.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -206,3 +206,7 @@ if (!reviewEffectiveRoot && reviewRawRoot) {
 8. **Automated tests:** Skipped per session directive (do NOT run `npm test` as part of this verification). Rely on the manual repro steps above; run `kanban-view-plan-removal-regression.test.js` and related webview regression tests in a follow-up session if desired.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+**Reviewed:** 2026-07-08 | **Files:** [project.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/project.js) (lines 488, 500-544), [KanbanProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts) (lines 8528-8532) | **Verdict:** PASS — all three changes implemented correctly per plan specification. Change 1 (`!_pendingKanbanSelection` guard at line 488) is the primary fix and correctly scopes suppression to the Review Plan navigation window. Change 2 (`workspaceIntentApplied` tracking) correctly prevents project/column narrowing when the workspace intent failed; cleanup at line 544 nulls the entire intent object. Change 3 is confirmed dead code (belt-and-suspenders). Cross-checked [planning.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/planning.js) `handleKanbanPlansReady` (line 7177) — does NOT have the same auto-set bug (no `kanbanWorkspaceRoot` auto-sync to `kanbanFilters`). **Remaining risk:** post-selection proactive `kanbanPlansReady` can re-narrow filters after `_pendingKanbanSelection` nulls (documented in Adversarial Synthesis as acceptable/follow-up).

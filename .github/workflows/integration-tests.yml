@@ -31,5 +31,9 @@ jobs:
       - name: Compile extension
         run: npm run compile
 
+      - name: Protocol parity check
+        run: npm run parity:check
+
       - name: Run integration suite
         run: npm run test:integration:all
+

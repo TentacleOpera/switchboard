@@ -231,3 +231,7 @@ Mirror the same registration in `deserializeWebviewPanel` (`KanbanProvider.ts:12
 8. **Automated tests:** Skipped per session directive (do NOT run `npm test` as part of this verification). Rely on the manual repro steps above; run the existing webview/kanban regression tests in a follow-up session if desired.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+**Reviewed:** 2026-07-08 | **Files:** [PlanningPanelProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/PlanningPanelProvider.ts), [KanbanProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts), [project.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/project.js) | **Verdict:** PASS — all changes implemented successfully. Fixed two major findings during review: (1) resolved memory leaks by introducing panel-specific disposable arrays (`_projectPanelDisposables` / `_panelDisposables`) to properly clean up `onDidChangeViewState`, `onDidReceiveMessage`, and `onDidDispose` listeners on panel closure; (2) added a 200ms debounce in `project.js` to mitigate fetch storms from rapid viewstate changes. The concurrent-request ID guard fallback logic works correctly, ensuring the initial full plans list is always populated without being dropped by subsequent proactive updates. **Remaining risk:** performance overhead on large workspace counts during panel initialization, which is mitigated by sqlite-indexing and caching.

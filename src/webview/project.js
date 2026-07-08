@@ -181,6 +181,7 @@
     let _pendingAutoEdit = false;
     let _pendingKanbanFilterIntent = null;   // { workspaceRoot, project, column } — applied after dropdowns populate
     let _pendingKanbanSelectionRetries = 0;  // incremented on failed resolution; fallback to widest at 3
+    let _refreshKanbanPlansDebounce = null;
 
     let _activeFeatureFilePath = '';
 
@@ -449,7 +450,11 @@
                 document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
                 break;
             case 'refreshKanbanPlans':
-                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                if (_refreshKanbanPlansDebounce) clearTimeout(_refreshKanbanPlansDebounce);
+                _refreshKanbanPlansDebounce = setTimeout(() => {
+                    _refreshKanbanPlansDebounce = null;
+                    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                }, 200);
                 break;
             case 'kanbanPlansReady':
                 if (btnCreateKanbanPlan) {

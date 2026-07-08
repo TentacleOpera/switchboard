@@ -1,3 +1,7 @@
+
+import { HostSeams, createVscodeHostSeams } from './hostSeams';
+import { BroadcastHub } from './broadcastHub';
+import { DesignService, DesignServiceContext } from './designService';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -40,6 +44,116 @@ interface TreeNode {
 
 
 export class DesignPanelProvider implements vscode.Disposable {
+
+    public async handleServiceVerb(verb: string, payload: any): Promise<any> {
+        if (!this._designService) {
+            this._initDesignService();
+        }
+        const svc = this._designService;
+        if (!svc) {
+            throw new Error('DesignService unavailable — no workspace root resolved');
+        }
+        const p = payload ?? {};
+        switch (verb) {
+            default:
+                throw new Error(`Unknown or not-yet-extracted Design verb: '${verb}'`);
+            case 'activeTabChanged': return await svc['activeTabChanged'](p);
+            case 'addBriefsFolder': return await svc['addBriefsFolder'](p);
+            case 'addClaudeFolder': return await svc['addClaudeFolder'](p);
+            case 'addDesignFolder': return await svc['addDesignFolder'](p);
+            case 'addHtmlFolder': return await svc['addHtmlFolder'](p);
+            case 'addImagesFolder': return await svc['addImagesFolder'](p);
+            case 'addStitchFolder': return await svc['addStitchFolder'](p);
+            case 'briefs': return await svc['briefs'](p);
+            case 'claude': return await svc['claude'](p);
+            case 'copyClaudeArtifactPrompt': return await svc['copyClaudeArtifactPrompt'](p);
+            case 'copyClaudeImportPrompt': return await svc['copyClaudeImportPrompt'](p);
+            case 'createBrief': return await svc['createBrief'](p);
+            case 'deleteBrief': return await svc['deleteBrief'](p);
+            case 'disableDesignDoc': return await svc['disableDesignDoc'](p);
+            case 'fetchPreview': return await svc['fetchPreview'](p);
+            case 'html-preview': return await svc['html-preview'](p);
+            case 'images': return await svc['images'](p);
+            case 'inspectRequestDataUrl': return await svc['inspectRequestDataUrl'](p);
+            case 'linkToDocument': return await svc['linkToDocument'](p);
+            case 'linkToFolder': return await svc['linkToFolder'](p);
+            case 'listBriefsFolders': return await svc['listBriefsFolders'](p);
+            case 'listClaudeFolders': return await svc['listClaudeFolders'](p);
+            case 'listDesignFolders': return await svc['listDesignFolders'](p);
+            case 'listHtmlFolders': return await svc['listHtmlFolders'](p);
+            case 'listImagesFolders': return await svc['listImagesFolders'](p);
+            case 'listStitchFolders': return await svc['listStitchFolders'](p);
+            case 'persistTabState': return await svc['persistTabState'](p);
+            case 'ready': return await svc['ready'](p);
+            case 'refreshDocsForTab': return await svc['refreshDocsForTab'](p);
+            case 'removeBriefsFolder': return await svc['removeBriefsFolder'](p);
+            case 'removeClaudeFolder': return await svc['removeClaudeFolder'](p);
+            case 'removeDesignFolder': return await svc['removeDesignFolder'](p);
+            case 'removeHtmlFolder': return await svc['removeHtmlFolder'](p);
+            case 'removeImagesFolder': return await svc['removeImagesFolder'](p);
+            case 'removeStitchFolder': return await svc['removeStitchFolder'](p);
+            case 'renderMarkdownLive': return await svc['renderMarkdownLive'](p);
+            case 'saveFileContent': return await svc['saveFileContent'](p);
+            case 'sendClaudeArtifactPrompt': return await svc['sendClaudeArtifactPrompt'](p);
+            case 'serveAndOpenHtml': return await svc['serveAndOpenHtml'](p);
+            case 'setActivePlanningContext': return await svc['setActivePlanningContext'](p);
+            case 'stitchApplyDesignSystem': return await svc['stitchApplyDesignSystem'](p);
+            case 'stitchCreateDesignSystem': return await svc['stitchCreateDesignSystem'](p);
+            case 'stitchCreateProject': return await svc['stitchCreateProject'](p);
+            case 'stitchDownloadAsset': return await svc['stitchDownloadAsset'](p);
+            case 'stitchDownloadPalette': return await svc['stitchDownloadPalette'](p);
+            case 'stitchEdit': return await svc['stitchEdit'](p);
+            case 'stitchForceReloadScreens': return await svc['stitchForceReloadScreens'](p);
+            case 'stitchGenerate': return await svc['stitchGenerate'](p);
+            case 'stitchGetProjectScreens': return await svc['stitchGetProjectScreens'](p);
+            case 'stitchListDesignSystems': return await svc['stitchListDesignSystems'](p);
+            case 'stitchListProjects': return await svc['stitchListProjects'](p);
+            case 'stitchOpenManifest': return await svc['stitchOpenManifest'](p);
+            case 'stitchPickAttachFiles': return await svc['stitchPickAttachFiles'](p);
+            case 'stitchRebuildImageCache': return await svc['stitchRebuildImageCache'](p);
+            case 'stitchRefreshScreen': return await svc['stitchRefreshScreen'](p);
+            case 'stitchSaveApiKey': return await svc['stitchSaveApiKey'](p);
+            case 'stitchSaveAuthConfig': return await svc['stitchSaveAuthConfig'](p);
+            case 'stitchSendBrief': return await svc['stitchSendBrief'](p);
+            case 'stitchUpdateDesignSystem': return await svc['stitchUpdateDesignSystem'](p);
+            case 'stitchValidateAuth': return await svc['stitchValidateAuth'](p);
+            case 'stitchVariants': return await svc['stitchVariants'](p);
+            case 'toggleStitchHtmlPreview': return await svc['toggleStitchHtmlPreview'](p);
+        }
+    }
+
+
+    private _initDesignService(): void {
+        const workspaceRoot = this._getWorkspaceRoot() || '';
+        if (!workspaceRoot) {
+            this._hostSeams = undefined;
+            this._broadcaster = undefined;
+            this._designService = undefined;
+            return;
+        }
+        this._hostSeams = createVscodeHostSeams(workspaceRoot);
+        if (!this._broadcaster) {
+            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
+        } else {
+            this._broadcaster.setWebview(this._panel?.webview);
+        }
+        const ctx: DesignServiceContext = {
+            workspaceRoot,
+            seams: this._hostSeams,
+            broadcaster: this._broadcaster,
+            handleMessage: async (msg) => this._handleMessage(msg),
+        };
+        if (this._designService) {
+            this._designService.setContext(ctx);
+        } else {
+            this._designService = new DesignService(ctx);
+        }
+    }
+
+    private _hostSeams?: HostSeams;
+    private _broadcaster?: BroadcastHub;
+    private _designService?: DesignService;
+
     private _panel?: vscode.WebviewPanel;
     private _disposables: vscode.Disposable[] = [];
     private _nonce: string = '';
