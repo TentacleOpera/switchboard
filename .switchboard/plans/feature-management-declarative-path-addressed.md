@@ -18,7 +18,6 @@ Reorganizing features from outside the webview is currently unusable — verifie
 **Root cause:** the feature surface was built **button-first** (the webview already knows every card's identity); the script/HTTP path is a retrofit that exposes low-level, UUID-keyed verbs with no declarative, intent-level, file-addressable operation. See memory `feature-ops-uuid-choreography-bad-for-agents`.
 
 ## Metadata
-- **Plan ID:** 9d3dbf13-c82c-4946-bc3b-f35f07d56214
 - **Tags:** backend, api, refactor
 - **Complexity:** 6
 - **Release phase:** Near-term (Feature A — Switchboard Remote-Control API). Consumed by `/switchboard-manage` (A0); benefits every external agent host.
@@ -38,6 +37,7 @@ Reorganizing features from outside the webview is currently unusable — verifie
 - **Inline plan-splitting.** A `subtasks` member may be a **new plan defined in the call** (`{slug,title,body}`); reconcile writes the file, imports it, and links it — removing the manual file-surgery + orphan-on-rename footgun. (Optionally expose a standalone `POST /kanban/plans/split` too.)
 - **Revise the existing feature scripts + skills to the new model:** `kanban_operations` verb scripts accept path/slug and print human-readable results (never require the caller to supply a UUID); `create_feature` skill rewritten around reconcile (its file-only fallback keeps working when the extension is down); `group-into-features` updated to emit a reconcile manifest instead of a create→assign sequence.
 - **Clean machine-readable stdout for read tools (root cause of the ID-lookup pain):** `get-state.js` — the only *documented* headless ID lookup — currently interleaves a shared `[KanbanDatabase] Resolved DB path…` log line on **stdout**, which breaks `JSON.parse`/`jq` and forces agents onto slower paths. Route that log (and its peers emitted during standalone DB resolution) to **stderr** so `node get-state.js | jq` works. (The offline `.switchboard/kanban-state-<column>.md` `<!-- planId:… -->` index is already documented in `kanban_operations/SKILL.md` as of 2026-07-08; this makes the *scripted* path work too.)
+- **Dispatch/prompt builders inject the authoritative `PLAN_ID` — no agent ever looks up or fabricates an ID:** whenever the system builds an agent-facing prompt (coder/lead/intern/reviewer dispatch, orchestration fan-out, single-column autoban), it already knows the plan's real DB `planId` — stamp it into the prompt (`PLAN_ID=<real id>` + the plan file path) so the dispatched agent acts on the exact plan with no lookup. Today this is only partial: `POST /kanban/orchestration/dispatch` promises `planId` in the prompt, but the general `agentPromptBuilder` path references the plan by file/topic only. Make it uniform across every dispatch path. (This is the *push* complement to the state-file `planId` index's *pull* side — together they mean an agent never invents an ID.)
 
 ### ⚙️ OUT OF SCOPE
 - The full 706-verb transport migration (A2) — this is only the feature/plan-structure verbs.
@@ -50,7 +50,8 @@ Reorganizing features from outside the webview is currently unusable — verifie
 4. **Optional `POST /kanban/plans/split`** primitive (or fold into reconcile only).
 5. **Revise scripts/skills** — verb scripts accept path/slug; rewrite `create_feature.md` and `group-into-features` around reconcile.
 6. **Fix stdout hygiene** — move the `[KanbanDatabase] Resolved DB path…` log (and peers) from stdout to stderr so `get-state.js` (and any read script) emits parseable JSON; verify `node get-state.js <root> | jq .` succeeds.
-7. **Cheatsheet** — one end-to-end "reorganize features" recipe in `kanban_operations/SKILL.md` (replaces the scattered per-verb docs that cost an agent minutes to assemble).
+7. **Dispatch ID injection** — every prompt-building path (`agentPromptBuilder` + the dispatch callers in `TaskViewerProvider`/`KanbanProvider`) stamps `PLAN_ID=<real DB id>` + the plan file path into the agent prompt; no path leaves the ID for the agent to discover or invent.
+8. **Cheatsheet** — one end-to-end "reorganize features" recipe in `kanban_operations/SKILL.md` (replaces the scattered per-verb docs that cost an agent minutes to assemble).
 
 ## Edge cases & risks
 - **Idempotency:** re-running the same reconcile is a no-op (converges to the same state) — required so an agent can retry safely.
@@ -124,6 +125,12 @@ Key risks: (1) **Private methods block the HTTP handler** — `_removeSubtaskFro
 - **Implementation:** `create_feature`: when the extension is running, call `POST /kanban/features/reconcile` with path/slug members instead of writing a shell file + punting to assign. When the extension is down, keep the file-write fallback. `group-into-features`: replace the `create-feature.js` + `assign-to-feature.js` sequence with a single reconcile call.
 - **Edge cases:** Extension down → `create_feature` falls back to file-write (existing behavior preserved). `group-into-features` must detect extension availability before choosing the path.
 
+### `src/services/agentPromptBuilder.ts` + dispatch callers (`TaskViewerProvider.ts` / `KanbanProvider.ts`)
+- **Context:** Dispatch prompts are built from the plan's file/topic; the card carries the real DB `planId` at dispatch time but it is not uniformly surfaced in the prompt text. `POST /kanban/orchestration/dispatch` includes it; the general autoban/coder path does not.
+- **Logic:** Every prompt-building path prepends an authoritative `PLAN_ID=<real id>` (plus the plan file path) so the agent references the exact plan without a lookup or a guess.
+- **Implementation:** Thread the dispatch card's `planId` into `agentPromptBuilder` and prepend it to the built prompt; audit the dispatch callers so none omit it.
+- **Edge cases:** Legacy cards with only a `sessionId` → fall back to `sessionId`, labelled as such. Never emit a placeholder or blank ID.
+
 ## Verification Plan
 ### Automated Tests
 - Skipped per session directive — no automated test run required.
@@ -133,6 +140,7 @@ Key risks: (1) **Private methods block the HTTP handler** — `_removeSubtaskFro
 - Existing verb scripts still work (UUID) and now also accept path/slug.
 - The 4-minute "read three skills to reorganize" experience is replaced by one documented call.
 - `node .agents/skills/kanban_operations/get-state.js <root> | jq .` parses cleanly (no `[KanbanDatabase]` log on stdout); the same for every read script.
+- A dispatched coder/reviewer prompt contains `PLAN_ID=<real DB id>` + the plan file path; no dispatch path references a plan by a fabricated or absent ID.
 - Public wrappers for `_removeSubtaskFromFeature` / `_deleteFeature` are accessible from the HTTP handler (no private-method access error).
 - Reconcile DB operations are wrapped in a single transaction — a mid-way failure rolls back (no half-assigned plans). Inline plan file creation failure → file is unlinked (no orphan on disk).
 
