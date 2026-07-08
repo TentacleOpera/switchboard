@@ -145,12 +145,12 @@ When creating plan files in multi-workspace setups, use this decision tree to de
 
 **The workspace/repo name is NOT a project. Never pin it. Never emit a placeholder like `<project>`.** A workspace is a workspace; a project is a user-created board filter. They are not interchangeable.
 
-When creating any plan file:
-1. If the user named a target project in their request, pin that: write `**Project:** <name>` in the metadata block. The user's words always beat board state.
-2. Otherwise, resolve the active project **once, at the start of the task** (read `kanban.activeProjectFilter` from the workspace's `kanban.db` config table) and pin that snapshot in every plan file written for the task. Do not re-read it at file-write time — the user may browse other boards while you work.
-   - **Remote / DB-less sessions:** a remote agent cannot read `kanban.activeProjectFilter`. If the user named a project, pin it. Otherwise **write no `**Project:**` line — do not ask the user.** Never guess, never substitute the workspace/repo name, never leave a literal `<project>` placeholder. The plan lands unassigned and can be reassigned on the board.
-3. State the pin in your reply ("Pinning to *<name>*") so a wrong snapshot is visible immediately.
-4. If neither exists (no named project, empty config), omit the line — the plan lands unassigned and can be reassigned on the board.
+When creating any plan file, resolve the project in this priority order:
+1. If the user named a target project in their request, pin that: write `**Project:** <name>` in the metadata block. The user's words always beat everything else.
+2. Otherwise, if your prompt carries a **PROJECT PIN directive**, write the exact `**Project:** <name>` it specifies. This directive is the authoritative source: the extension resolves the board's active project **once, at prompt-generation time**, and injects it — a frozen, race-free snapshot.
+3. Otherwise, omit the line. **Do not read `kanban.activeProjectFilter` or open `kanban.db` yourself.** The extension already resolved the active project at prompt-generation time; re-deriving it in-session duplicates that work and races (the user may browse other boards while the agent runs), and remote / DB-less sessions cannot read it at all. Never guess, never substitute the workspace/repo name, never leave a literal `<project>` placeholder. The plan lands unassigned and can be reassigned on the board.
+
+State the pin in your reply ("Pinning to *<name>*") so a wrong snapshot is visible immediately.
 
 Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both parse. The .md metadata is the carrier — the plan watcher reads it directly on import.
 
