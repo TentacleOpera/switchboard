@@ -28,6 +28,9 @@ import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
+import { KanbanService, type KanbanServiceContext } from './kanbanService';
+import { createVscodeHostSeams, type HostSeams } from './hostSeams';
+import { BroadcastHub } from './broadcastHub';
 import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
@@ -204,6 +207,10 @@ export class KanbanProvider implements vscode.Disposable {
     private _routingMapConfig: { lead: number[]; coder: number[]; intern: number[] } | null = null;
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
+    // A2b: host seams + broadcast hub + extracted kanban service.
+    private _hostSeams?: HostSeams;
+    private _broadcaster?: BroadcastHub;
+    private _kanbanService?: KanbanService;
     private _repoScopeFilter: string | null = null;
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
@@ -1310,6 +1317,10 @@ export class KanbanProvider implements vscode.Disposable {
         this._webviewReady = false;
         this._pendingWebviewMessages = [];
         this._panel = panel;
+        // A2b: initialize host seams + broadcast hub + kanban service for
+        // extracted verbs. The service is rebuilt when the workspace root
+        // changes (see _setCurrentWorkspaceRoot).
+        this._initKanbanService();
         // Reset webview options to the CURRENT extensionUri before loading html. VS Code
         // persists the localResourceRoots from the original panel, but after an extension
         // update those URIs point at the previous version's install dir (404 → blocked
@@ -6383,6 +6394,42 @@ This step is what moves the plan forward in the Switchboard pipeline.
         return role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
     }
 
+    /**
+     * A2b: initialize (or rebuild) the host seams + broadcast hub + kanban
+     * service for extracted verbs. Called when the panel is created and when
+     * the workspace root changes. The service delegates to the same provider
+     * methods the arms used to call directly; vscode-coupled calls route
+     * through the seams, push sites through the broadcaster.
+     */
+    private _initKanbanService(): void {
+        const workspaceRoot = this._currentWorkspaceRoot || '';
+        if (!workspaceRoot) {
+            this._hostSeams = undefined;
+            this._broadcaster = undefined;
+            this._kanbanService = undefined;
+            return;
+        }
+        this._hostSeams = createVscodeHostSeams(workspaceRoot);
+        if (!this._broadcaster) {
+            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
+        } else {
+            this._broadcaster.setWebview(this._panel?.webview);
+        }
+        const ctx: KanbanServiceContext = {
+            workspaceRoot,
+            seams: this._hostSeams,
+            broadcaster: this._broadcaster,
+            resolveSessionId: (planId?, sessionId?) => this._resolveSessionId(planId, sessionId),
+            selectSession: (sessionId) => { this._taskViewerProvider?.selectSession(sessionId); },
+            triggerPlanScan: () => this.triggerPlanScan(),
+        };
+        if (this._kanbanService) {
+            this._kanbanService.setContext(ctx);
+        } else {
+            this._kanbanService = new KanbanService(ctx);
+        }
+    }
+
 
 
     private async _handleMessage(msg: any) {
@@ -6414,43 +6461,53 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 this._taskViewerProvider?.postMcpMonitorConfig();
                 break;
             case 'selectPlan': {
-                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
-                if (resolvedSessionId && this._taskViewerProvider) {
-                    this._taskViewerProvider.selectSession(resolvedSessionId);
+                // A2b: delegated to kanbanService (extracted verb).
+                if (this._kanbanService) { await this._kanbanService.selectPlan(msg); }
+                else {
+                    const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                    if (resolvedSessionId && this._taskViewerProvider) {
+                        this._taskViewerProvider.selectSession(resolvedSessionId);
+                    }
                 }
                 break;
             }
             case 'openPlanByPath': {
-                const planPath = msg.planPath;
-                const workspaceRoot = this._currentWorkspaceRoot;
-                if (!workspaceRoot || typeof planPath !== 'string' || !planPath.trim()) break;
-                try {
-                    const fullPath = path.resolve(workspaceRoot, planPath);
-                    if (!fullPath.startsWith(workspaceRoot)) break;
-                    if (!fs.existsSync(fullPath)) {
-                        vscode.window.showWarningMessage(`Plan file not found: ${planPath}`);
-                        break;
+                // A2b: delegated to kanbanService (extracted verb).
+                if (this._kanbanService) { await this._kanbanService.openPlanByPath(msg); }
+                else {
+                    const planPath = msg.planPath;
+                    const workspaceRoot = this._currentWorkspaceRoot;
+                    if (!workspaceRoot || typeof planPath !== 'string' || !planPath.trim()) break;
+                    try {
+                        const fullPath = path.resolve(workspaceRoot, planPath);
+                        if (!fullPath.startsWith(workspaceRoot)) break;
+                        if (!fs.existsSync(fullPath)) {
+                            vscode.window.showWarningMessage(`Plan file not found: ${planPath}`);
+                            break;
+                        }
+                        const planContent = await fs.promises.readFile(fullPath, 'utf-8');
+                        const sessionIdMatch = planContent.match(/sessionId:\s*(sess_\d+)/);
+                        if (sessionIdMatch && this._taskViewerProvider) {
+                            this._taskViewerProvider.selectSession(sessionIdMatch[1]);
+                        } else {
+                            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
+                            await vscode.window.showTextDocument(doc);
+                        }
+                    } catch (err) {
+                        console.error('[KanbanProvider] openPlanByPath failed:', err);
                     }
-                    const planContent = await fs.promises.readFile(fullPath, 'utf-8');
-                    const sessionIdMatch = planContent.match(/sessionId:\s*(sess_\d+)/);
-                    if (sessionIdMatch && this._taskViewerProvider) {
-                        this._taskViewerProvider.selectSession(sessionIdMatch[1]);
-                    } else {
-                        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fullPath));
-                        await vscode.window.showTextDocument(doc);
-                    }
-                } catch (err) {
-                    console.error('[KanbanProvider] openPlanByPath failed:', err);
                 }
                 break;
             }
             case 'refresh':
-                // "Sync Board" button: same full sync path.
-                await vscode.commands.executeCommand('switchboard.fullSync');
+                // A2b: delegated to kanbanService (extracted verb).
+                if (this._kanbanService) { await this._kanbanService.refresh(); }
+                else { await vscode.commands.executeCommand('switchboard.fullSync'); }
                 break;
             case 'scanFoldersNow':
-                // Force-run periodic scan across all watch folders for immediate pickup.
-                await this.triggerPlanScan();
+                // A2b: delegated to kanbanService (extracted verb).
+                if (this._kanbanService) { await this._kanbanService.scanFoldersNow(); }
+                else { await this.triggerPlanScan(); }
                 break;
             case 'reassignPlansWorkspace': {
                 const sessionIds: string[] = msg.sessionIds;

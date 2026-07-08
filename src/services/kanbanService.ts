@@ -140,4 +140,46 @@ export class KanbanService {
         await this._ctx.triggerPlanScan();
         return { success: true };
     }
+
+    /**
+     * `focusTerminal` — focus a terminal by name.
+     * Coupling: HostCommands (executeCommand('switchboard.focusTerminalByName')).
+     * Terminal pattern: terminal-control verbs route through commands; the
+     * TerminalBackend seam is for direct terminal ops (B3's node-pty backend).
+     */
+    async focusTerminal(payload: { terminalName?: string }): Promise<{ success: boolean }> {
+        const terminalName = String(payload.terminalName || '');
+        if (!terminalName) return { success: false };
+        await this._ctx.seams.commands.executeCommand('switchboard.focusTerminalByName', terminalName);
+        return { success: true };
+    }
+
+    /**
+     * `fileExists` — check if a file exists within the workspace root.
+     * Coupling: BroadcastHub.push (postMessage response), fs (existsSync).
+     * Broadcast pattern: the response is pushed to the webview via the
+     * broadcaster (dual-fan: webview + wsHub). External HTTP callers get
+     * the response directly (no push needed).
+     */
+    async fileExists(payload: { path?: string; workspaceRoot?: string }): Promise<{ success: boolean; exists: boolean }> {
+        const filePath = payload.path;
+        if (typeof filePath !== 'string' || !filePath.trim()) {
+            return { success: false, exists: false };
+        }
+        const workspaceRoot = payload.workspaceRoot || this._ctx.workspaceRoot;
+        if (!workspaceRoot) {
+            this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false });
+            return { success: false, exists: false };
+        }
+        const resolvedPath = path.resolve(workspaceRoot, filePath);
+        if (!resolvedPath.startsWith(workspaceRoot)) {
+            this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false });
+            return { success: false, exists: false };
+        }
+        const exists = fs.existsSync(resolvedPath);
+        // Push to webview (the webview arm expects a push response).
+        // HTTP callers get the return value directly.
+        this._ctx.broadcaster.push({ type: 'fileExistsResult', exists });
+        return { success: true, exists };
+    }
 }
