@@ -3580,8 +3580,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * path (_resolveKanbanDispatchPlans in TaskViewerProvider, which passes only
      * a resolved worktreePath). Does not mutate any caller array.
      *
-     * Precedence for each subtask's worktree: its own subtask-bound worktree (per-subtask
-     * mode) -> the caller-supplied feature worktreePathMap/worktreePath -> undefined. When
+     * Precedence for each subtask's worktree: its own subtask-bound worktree (legacy
+     * per-subtask rows, now write-dead) -> the caller-supplied feature worktreePathMap/worktreePath -> undefined. When
      * subtaskWorktreePathMap is omitted (callers not yet threading it through), it is
      * fetched from the DB here so every call site benefits without a signature change.
      */
@@ -3655,7 +3655,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      *   - `worktreePathMap` provided (board adapter) → map heuristic
      *     (`planId` → `featureId` → sole-entry, no `project` match). Byte-identical
      *     to today's board path. The `subtaskWorktreePathMap` is threaded
-     *     through to `expandFeatureSubtaskPlans` for per-subtask dedicated-worktree
+     *     through to `expandFeatureSubtaskPlans` for legacy subtask dedicated-worktree
      *     resolution (handled inside the expander, not here).
      *   - `worktreePathMap` absent (CLI / batch / single-card-trigger / copy) →
      *     record heuristic via `matchWorktreePath`: `planId` vs
@@ -4403,33 +4403,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const template = (await db.getConfig('feature_prompt_template')) || undefined;
                 if (template) resolvedOptions.featurePromptTemplate = template;
 
-                // `high-low` mode: resolve the feature's planId, its worktree mode, its two
-                // tier worktree paths (for the executor directive, any role), and its
-                // subtask plan list (for the planner consolidation directive only — cheap
-                // to always resolve here since subtaskPlans is already in hand from
-                // the plans array, no extra DB round-trip beyond the worktree lookup).
-                // No-op unless feature_worktree_mode is explicitly 'high-low'.
+                // Resolve the feature's planId + worktree mode for the orchestration
+                // directive. per-subtask/high-low modes were removed; only 'none' and
+                // 'per-feature' remain. The mode is read here solely so the prompt
+                // builder's known-mode guard doesn't warn — no tier/subtask worktree
+                // resolution happens anymore.
                 const featurePlanId = featurePlan?.sessionId;
                 if (featurePlanId) {
                     resolvedOptions.featurePlanId = featurePlanId;
                     const mode = (await db.getConfig('feature_worktree_mode')) || 'none';
                     resolvedOptions.featureWorktreeMode = mode;
-                    if (mode === 'high-low') {
-                        const allWorktrees = await db.getWorktrees();
-                        const tierWorktrees = allWorktrees
-                            .filter(w => String(w.feature_id) === String(featurePlanId) && (w.tier === 'high' || w.tier === 'low'))
-                            .map(w => ({ tier: w.tier as 'high' | 'low', worktreePath: w.path }));
-                        if (tierWorktrees.length > 0) {
-                            resolvedOptions.tierWorktrees = tierWorktrees;
-                        }
-                        if (role === 'planner' && subtaskPlans.length > 0) {
-                            resolvedOptions.subtaskPlansForConsolidation = subtaskPlans.map(sp => ({
-                                planId: sp.sessionId || '',
-                                topic: sp.topic,
-                                complexity: sp.complexity
-                            })).filter(sp => sp.planId);
-                        }
-                    }
                 }
             }
         }
@@ -9124,11 +9107,12 @@ ${FOCUS_DIRECTIVE}`;
                 if (!db || !await db.ensureReady()) break;
 
                 try {
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.featureTopic, msg.repoName);
+                    const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.featureTopic, msg.repoName, defaultBranch);
 
                     // Add to worktrees database table
                     const featureId = msg.featureId ? String(msg.featureId) : undefined;
-                    await db.addWorktree(branch, wtPath, featureId, msg.project);
+                    await db.addWorktree(branch, wtPath, featureId, msg.project, undefined, defaultBranch);
 
                     // Force-create new terminals in worktree
                     if (this._taskViewerProvider) {
@@ -9163,8 +9147,9 @@ ${FOCUS_DIRECTIVE}`;
                 }
 
                 try {
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.featureTopic, msg.repoName);
-                    await db.addWorktree(branch, wtPath, msg.featureId ? String(msg.featureId) : undefined);
+                    const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.featureTopic, msg.repoName, defaultBranch);
+                    await db.addWorktree(branch, wtPath, msg.featureId ? String(msg.featureId) : undefined, undefined, undefined, defaultBranch);
 
                     // Force-create terminals in worktree using shared ensureWorktreeTerminals
                     if (this._taskViewerProvider) {
@@ -9198,8 +9183,9 @@ ${FOCUS_DIRECTIVE}`;
                 }
 
                 try {
-                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.project, msg.repoName);
-                    await db.addWorktree(branch, wtPath, undefined, msg.project);
+                    const defaultBranch = await this._resolveDefaultBranch(workspaceRoot);
+                    const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, msg.project, msg.repoName, defaultBranch);
+                    await db.addWorktree(branch, wtPath, undefined, msg.project, undefined, defaultBranch);
 
                     // Force-create terminals in worktree using shared ensureWorktreeTerminals
                     if (this._taskViewerProvider) {
@@ -9251,7 +9237,7 @@ ${FOCUS_DIRECTIVE}`;
                 const { mode, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
                 if (!workspaceRoot) break;
-                const validModes = ['none', 'per-subtask', 'high-low'];
+                const validModes = ['none', 'per-feature'];
                 if (!validModes.includes(mode)) {
                     vscode.window.showWarningMessage(`Invalid feature worktree mode: ${mode}`);
                     break;
@@ -9425,7 +9411,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                     break;
                 }
                 await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
-                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, feature.planId, feature.topic, subtask.planId, subtask.topic);
                 await this._regenerateFeatureFile(workspaceRoot, feature.planId, db);
                 await this._refreshBoard(workspaceRoot);
                 break;
@@ -9816,11 +9801,11 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
     }
 
     /**
-     * Lazy-create (idempotent) the feature integration worktree for `per-subtask` mode.
+     * Lazy-create (idempotent) the feature integration worktree for `per-feature` mode.
      * Mirrors the "feature already has an active worktree" guard from `createWorktreeForFeature`
-     * (check-then-create against `getWorktrees()`) so two near-simultaneous subtask-adds
-     * racing to provision the integration worktree converge on the same row instead of
-     * creating two. Returns the existing or newly-created worktree row.
+     * (check-then-create against `getWorktrees()`) so two near-simultaneous calls racing to
+     * provision the integration worktree converge on the same row instead of creating
+     * two. Returns the existing or newly-created worktree row.
      */
     private async _ensureFeatureIntegrationWorktree(
         workspaceRoot: string,
@@ -9829,10 +9814,10 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         featureTopic: string
     ): Promise<WorktreeRow | undefined> {
         const allWorktrees = await db.getWorktrees();
-        // The integration worktree is the one with neither subtask_plan_id (per-subtask mode's
-        // per-subtask worktrees) nor tier (high-low mode's tier worktrees) set — excluding both
-        // keeps this lookup correct in both modes rather than mistaking a tier worktree for the
-        // integration worktree it was itself branched off of.
+        // The integration worktree is the one with neither subtask_plan_id nor tier set.
+        // (per-subtask/high-low modes were removed; no new rows carry these columns, but
+        // the exclusion is kept defensive so a legacy dev-only row can't be mistaken for
+        // the integration worktree.)
         const existing = allWorktrees.find(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
         if (existing) return existing;
 
@@ -9853,135 +9838,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             // Race fallback: another near-simultaneous call may have created it first.
             const retried = await db.getWorktrees();
             return retried.find(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
-        }
-    }
-
-    /**
-     * `high-low` mode: provision the feature integration worktree, then exactly two tier
-     * worktrees branched off it — `tier='high'` and `tier='low'`. Idempotent (checks
-     * existing tier worktrees first, same guard style as `_ensureFeatureIntegrationWorktree`).
-     *
-     * All-or-nothing: if either tier worktree fails to create, the one that DID succeed
-     * (plus the integration worktree, since it has no purpose without both tiers) is torn
-     * down so a failed `createFeatureFromPlanIds` call never leaves a half-provisioned feature
-     * behind. Best-effort logs on rollback failure — a lingering worktree row is a lesser
-     * problem than throwing out of feature creation after the DB/file writes above already
-     * committed.
-     */
-    private async _provisionHighLowTierWorktrees(
-        workspaceRoot: string,
-        db: KanbanDatabase,
-        featurePlanId: string,
-        featureTopic: string
-    ): Promise<void> {
-        const allWorktrees = await db.getWorktrees();
-        const existingHigh = allWorktrees.find(w => String(w.feature_id) === String(featurePlanId) && w.tier === 'high' && w.status === 'active');
-        const existingLow = allWorktrees.find(w => String(w.feature_id) === String(featurePlanId) && w.tier === 'low' && w.status === 'active');
-        if (existingHigh && existingLow) return;
-
-        // Track whether THIS call created the integration worktree (vs. it already existing
-        // from a prior partial run) so rollback only removes what this call is responsible for.
-        const integrationPreexisted = allWorktrees.some(w => String(w.feature_id) === String(featurePlanId) && !w.subtask_plan_id && !w.tier && w.status === 'active');
-        const integration = await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, featurePlanId, featureTopic);
-        if (!integration) {
-            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: no integration worktree available for feature ${featurePlanId}, skipping tier worktrees.`);
-            return;
-        }
-
-        const activeAgents = this._taskViewerProvider
-            ? Object.entries(await this._getVisibleAgents(workspaceRoot)).filter(([_, enabled]) => enabled).map(([role]) => role)
-            : [];
-
-        let highResult: { branch: string; path: string } | undefined;
-        let lowResult: { branch: string; path: string } | undefined;
-        try {
-            if (!existingHigh) {
-                highResult = await this._createSafetyWorktree(workspaceRoot, `${featureTopic}-high`, undefined, integration.branch);
-                await db.addWorktree(highResult.branch, highResult.path, featurePlanId, undefined, undefined, integration.branch, 'high');
-                if (this._taskViewerProvider) await this._taskViewerProvider.ensureWorktreeTerminals(highResult.path, activeAgents);
-            }
-            if (!existingLow) {
-                lowResult = await this._createSafetyWorktree(workspaceRoot, `${featureTopic}-low`, undefined, integration.branch);
-                await db.addWorktree(lowResult.branch, lowResult.path, featurePlanId, undefined, undefined, integration.branch, 'low');
-                if (this._taskViewerProvider) await this._taskViewerProvider.ensureWorktreeTerminals(lowResult.path, activeAgents);
-            }
-        } catch (e: any) {
-            console.error(`[KanbanProvider] _provisionHighLowTierWorktrees: failed to create tier worktrees for feature ${featurePlanId}, rolling back:`, e);
-            const execFileAsync = promisify(cp.execFile);
-            const toRemove: Array<{ branch: string; path: string }> = [highResult, lowResult].filter((r): r is { branch: string; path: string } => !!r);
-            // Neither tier survived (both failed, or one failed before the other was even
-            // attempted) AND this call is the one that created the integration worktree —
-            // it now has no purpose, so remove it too rather than leaving an orphaned
-            // integration branch/worktree behind.
-            if (!existingHigh && !existingLow && !integrationPreexisted && toRemove.every(r => r.branch !== integration.branch)) {
-                toRemove.push(integration);
-            }
-            for (const created of toRemove) {
-                try {
-                    if (this._taskViewerProvider && created.path) {
-                        try { await this._taskViewerProvider.closeWorktreeTerminals(created.path); }
-                        catch (e) { console.warn(`[KanbanProvider] _provisionHighLowTierWorktrees rollback: terminal cleanup failed for ${created.branch} (continuing):`, e); }
-                    }
-                    if (fs.existsSync(created.path)) {
-                        await execFileAsync('git', ['worktree', 'remove', '--force', created.path], { cwd: workspaceRoot });
-                    }
-                    const row = await db.getWorktreeByBranch(created.branch);
-                    if (row) await db.updateWorktreeStatus(row.id, 'abandoned');
-                } catch (rollbackErr) {
-                    console.warn(`[KanbanProvider] _provisionHighLowTierWorktrees: rollback cleanup failed for ${created.branch} (continuing):`, rollbackErr);
-                }
-            }
-            await this._pruneWorktrees(workspaceRoot);
-        }
-    }
-
-    /**
-     * Create a per-subtask worktree branched off the feature integration branch, when the
-     * feature's mode is `per-subtask`. Lazy-creates the integration worktree first if it
-     * doesn't exist yet. Guards against duplicate creation (subtask already has an active
-     * worktree). No-op (returns undefined) when mode isn't `per-subtask` or the subtask
-     * already has one.
-     *
-     * `modeSnapshot` lets a caller that already read `feature_worktree_mode` once for the
-     * whole operation (e.g. the subtask loop in `createFeatureFromPlanIds`) pass it through,
-     * so a mode toggle mid-loop can't split one create/assign call between two behaviors.
-     * Callers that haven't already read it (single-subtask entry points) omit it and this
-     * reads it fresh.
-     */
-    private async _provisionSubtaskWorktreeIfNeeded(
-        workspaceRoot: string,
-        db: KanbanDatabase,
-        featurePlanId: string,
-        featureTopic: string,
-        subtaskPlanId: string,
-        subtaskTopic: string,
-        modeSnapshot?: string
-    ): Promise<void> {
-        const mode = modeSnapshot ?? ((await db.getConfig('feature_worktree_mode')) || 'none');
-        if (mode !== 'per-subtask') return;
-
-        const allWorktrees = await db.getWorktrees();
-        const existingForSubtask = allWorktrees.find(w => w.subtask_plan_id === subtaskPlanId && w.status === 'active');
-        if (existingForSubtask) return;
-
-        const integration = await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, featurePlanId, featureTopic);
-        if (!integration) {
-            console.error(`[KanbanProvider] _provisionSubtaskWorktreeIfNeeded: no integration worktree available for feature ${featurePlanId}, skipping subtask worktree for ${subtaskPlanId}`);
-            return;
-        }
-
-        try {
-            const { branch, path: wtPath } = await this._createSafetyWorktree(workspaceRoot, subtaskTopic, undefined, integration.branch);
-            await db.addWorktree(branch, wtPath, featurePlanId, undefined, subtaskPlanId, integration.branch);
-            if (this._taskViewerProvider) {
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                const activeAgents = Object.entries(visibleAgents)
-                    .filter(([_, enabled]) => enabled)
-                    .map(([role]) => role);
-                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
-            }
-        } catch (e: any) {
-            console.error(`[KanbanProvider] _provisionSubtaskWorktreeIfNeeded: failed to create worktree for subtask ${subtaskPlanId}:`, e);
         }
     }
 
@@ -10338,16 +10194,17 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             newContent = existingContent.replace(/\n*$/, '') + '\n\n' + subtaskSection + '\n';
         }
 
-        // WORKTREES block: only emitted when the feature actually has worktrees (per-subtask
-        // or high-low mode) — `none`-mode features see no change to their file. Mirrors the
+        // WORKTREES block: only emitted when the feature actually has worktrees
+        // (per-feature mode or a manually created feature worktree) — `none`-mode
+        // features with no worktree see no change to their file. Mirrors the
         // SUBTASKS block's begin/end marker replace-or-append shape exactly, including the
         // byte-identical no-op skip below, so this doesn't cause the file watcher to
         // re-fire on every regen.
         const allWorktrees = await db.getWorktrees();
         const featureWorktrees = allWorktrees.filter(w => String(w.feature_id) === String(featurePlanId));
         if (featureWorktrees.length > 0) {
-            // The true integration worktree has neither subtask_plan_id (per-subtask mode's
-            // per-subtask worktrees) nor tier (high-low mode's tier worktrees) set.
+            // The true integration worktree has neither subtask_plan_id nor tier set.
+            // (per-subtask/high-low modes were removed; legacy rows are harmless.)
             const integrationWt = featureWorktrees.find(w => !w.subtask_plan_id && !w.tier);
             const subtaskWtByPlanId = new Map(featureWorktrees.filter(w => w.subtask_plan_id).map(w => [String(w.subtask_plan_id), w]));
             const tierWts = featureWorktrees.filter(w => w.tier);
@@ -10411,7 +10268,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
      * list stays in sync with the DB. Called once on startup after the board is
      * first activated. This catches feature files that got out of sync due to bugs,
      * manual edits, watcher races, or extension upgrades — none of which trigger
-     * the per-subtask-mutation path that normally keeps feature files current.
+     * the subtask-mutation path that normally keeps feature files current.
      */
     public async regenerateAllFeatureFiles(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
@@ -10447,7 +10304,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
      * Remove a single subtask from its parent feature. Shared entry point for BOTH the
      * webview `removeSubtaskFromFeature` message and the agent/API path (LocalApiServer
      * `/kanban/feature/remove` → TaskViewerProvider → here). Detaches the subtask,
-     * abandons its per-subtask worktree, regenerates the feature file, refreshes the
+     * abandons its subtask worktree (if any), regenerates the feature file, refreshes the
      * board, and unlinks the subtask from external trackers (best-effort).
      */
     public async _removeSubtaskFromFeature(
@@ -10464,7 +10321,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         }
         const featureId = subtask.featureId;
         await db.updateFeatureStatus(subtask.planId, 0, '');
-        // per-subtask mode: a subtask removed from its feature gets its worktree
+        // A subtask removed from its feature gets any legacy subtask-bound worktree
         // abandoned (discarded, not merged) — it's no longer part of the feature's
         // convergence, so its branch shouldn't land in the integration branch.
         const subtaskWorktrees = (await db.getWorktrees()).filter(w => w.subtask_plan_id === subtask.planId);
@@ -10513,10 +10370,10 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         // enumerate them, and we need their plan files to unlink them from the
         // external trackers below.
         const featureSubtasks = await db.getSubtasksByFeatureId(feature.planId);
-        // Feature abandon: remove every child worktree (subtask + integration) —
-        // discarded, not merged. Runs regardless of deleteSubtasks: even when
-        // subtasks are kept on the board (unlinked from the feature), their
-        // per-subtask worktrees no longer have a convergence point to target.
+        // Feature abandon: remove every child worktree (integration + any legacy
+        // subtask/tier rows) — discarded, not merged. Runs regardless of deleteSubtasks:
+        // even when subtasks are kept on the board (unlinked from the feature), their
+        // worktrees no longer have a convergence point to target.
         await this._cleanupFeatureWorktrees(workspaceRoot, db, feature.planId, 'abandoned');
         if (deleteSubtasks) {
             for (const st of featureSubtasks) {
@@ -10798,16 +10655,15 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         GlobalPlanWatcherService.registerPendingCreation(featurePath);
         await fs.promises.writeFile(featurePath, featureContent, 'utf8');
 
-        // per-subtask mode: provision the feature integration worktree up front (even for a
-        // blank feature with zero subtasks yet) so it exists as soon as the feature does — the
-        // convergence point subtasks branch off. Read the mode once and snapshot it for
-        // the rest of this call so a mode toggle mid-creation can't split the feature between
+        // per-feature mode: provision ONE shared worktree for the whole feature at
+        // creation time, off the resolved default branch. Every subtask routes into
+        // this single worktree — no per-subtask splitting. Mode is read ONLY at
+        // feature-creation time; a later toggle is inert for already-created features.
+        // Snapshot once so a mode toggle mid-creation can't split the feature between
         // two provisioning behaviors.
         const featureWorktreeModeSnapshot = (await db.getConfig('feature_worktree_mode')) || 'none';
-        if (featureWorktreeModeSnapshot === 'per-subtask') {
+        if (featureWorktreeModeSnapshot === 'per-feature') {
             await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, effectiveFeaturePlanId, featureName);
-        } else if (featureWorktreeModeSnapshot === 'high-low') {
-            await this._provisionHighLowTierWorktrees(workspaceRoot, db, effectiveFeaturePlanId, featureName);
         }
 
         for (const st of subtasks) {
@@ -10816,8 +10672,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             const linkOk = await db.updateFeatureStatus(st.planId || st.sessionId, 0, effectiveFeaturePlanId);
             if (!linkOk) {
                 console.warn(`[KanbanProvider] createFeatureFromPlanIds: updateFeatureStatus failed for subtask ${st.planId}`);
-            } else {
-                await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, effectiveFeaturePlanId, featureName, st.planId || st.sessionId, st.topic, featureWorktreeModeSnapshot);
             }
         }
         await this._regenerateFeatureFile(workspaceRoot, effectiveFeaturePlanId, db);
@@ -10879,10 +10733,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         if (lockColumns.includes(feature.kanbanColumn)) {
             return { success: false, assigned: [], skipped: [], error: 'Cannot modify subtasks of a feature in a locked column.' };
         }
-        // Snapshot the mode once for the whole batch — see _provisionSubtaskWorktreeIfNeeded's
-        // modeSnapshot doc: a toggle mid-batch must not split one assignPlansToFeature call
-        // between two provisioning behaviors.
-        const featureWorktreeModeSnapshot = (await db.getConfig('feature_worktree_mode')) || 'none';
         const assigned: string[] = [];
         const skipped: string[] = [];
         const assignedRecords: any[] = [];
@@ -10892,7 +10742,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             if (!subtask || subtask.isFeature) { skipped.push(pid); continue; }
             if (subtask.featureId && subtask.featureId !== feature.planId) { skipped.push(pid); continue; }
             await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
-            await this._provisionSubtaskWorktreeIfNeeded(workspaceRoot, db, feature.planId, feature.topic, subtask.planId, subtask.topic, featureWorktreeModeSnapshot);
             assigned.push(pid);
             assignedRecords.push(subtask);
         }

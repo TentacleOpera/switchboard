@@ -3808,7 +3808,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!subtaskSessionId || !wsRoot) break;
                 try {
                     // Delegate to the shared KanbanProvider._removeSubtaskFromFeature — it
-                    // detaches, abandons the per-subtask worktree, regenerates the feature
+                    // detaches, abandons any subtask-bound worktree, regenerates the feature
                     // file, refreshes the kanban board, and unlinks from external trackers.
                     // The previous local body only did updateFeatureStatus and omitted regen,
                     // worktree abandon, and tracker unlink. Same shape as the existing

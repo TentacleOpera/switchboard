@@ -36,10 +36,10 @@ export interface BatchPromptPlan {
     isSubtask?: boolean;
     featureTopic?: string;
     isFeature?: boolean;
-    // True when worktreePath is THIS subtask's own dedicated worktree (per-subtask mode),
-    // as opposed to an inherited feature-level/project-level worktree shared by all subtasks.
-    // Distinguishes the two so prompt selection doesn't mistake a shared fallback worktree
-    // for per-subtask isolation.
+    // True when worktreePath is THIS subtask's own dedicated worktree (legacy
+    // per-subtask rows, now write-dead), as opposed to an inherited feature-level/
+    // project-level worktree shared by all subtasks. Retained for resolver logic
+    // that still handles legacy rows defensively.
     hasOwnWorktree?: boolean;
     /** The plan's assigned project name (from KanbanCard.project / KanbanPlanRecord.project). Drives per-plan PRD resolution. */
     project?: string;
@@ -270,16 +270,17 @@ export interface PromptBuilderOptions {
      */
     prdReferences?: Array<{ projectName: string; prdLink: string }>;
     /**
-     * The feature's `feature_worktree_mode` snapshot ('none' | 'per-subtask' | 'high-low').
-     * Only meaningful when featureMode is true. Selection between the base/per-subtask/high-low
-     * orchestration directives is a NO-OP for 'none' and unset — those keep existing behavior.
+     * The feature's `feature_worktree_mode` snapshot ('none' | 'per-feature').
+     * Only meaningful when featureMode is true. The per-subtask/high-low variants
+     * were removed — both 'none' and 'per-feature' resolve to the base orchestration
+     * directive; this field is read only so the known-mode guard doesn't warn.
      */
     featureWorktreeMode?: string;
-    /** The feature's planId. Required for the high-low planner consolidation directive (assign-to-feature.js target) and the high-low executor directive. */
+    /** The feature's planId. Retained for caller compatibility (formerly drove the high-low consolidation directive). */
     featurePlanId?: string;
-    /** Pre-provisioned tier worktrees for a `high-low`-mode feature, resolved from the worktrees table's `tier` column. Drives FEATURE_ORCHESTRATION_DIRECTIVE_HIGH_LOW. */
+    /** Formerly pre-provisioned tier worktrees for high-low mode. High-low was removed; this field is now unused and retained for caller compatibility. */
     tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
-    /** The feature's subtask plans (planId/topic/complexity), for the planner high-low consolidation directive. Only injected when featureWorktreeMode === 'high-low' and role === 'planner'. */
+    /** Formerly the feature's subtask plans for the high-low planner consolidation directive. High-low was removed; this field is now unused and retained for caller compatibility. */
     subtaskPlansForConsolidation?: Array<{ planId: string; topic: string; complexity?: string }>;
     /** The active project name to pin into generated plan files. When set, emits a PROJECT PIN directive instructing the agent to write `**Project:** <name>` into each plan's metadata. */
     manifestProject?: string;
@@ -399,6 +400,16 @@ ${perPlanDirectories}`
  */
 export const GIT_SAFETY_DIRECTIVE = `Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout \`<path>\` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward.`;
 
+/**
+ * Worktree-mode guardrail — for dispatches where agents are told to self-provision
+ * worktrees (useWorktreesPerPlanEnabled or featureMode). Permits `git worktree remove`
+ * for cleanup after merge (removes the working copy, commits survive) while keeping the
+ * ban on branch deletion (loses commits) and all other destructive ops. The standard
+ * guardrail above forbids worktree deletion because agents don't own the lifecycle in
+ * the pre-assigned-worktree path; here they do.
+ */
+export const GIT_SAFETY_DIRECTIVE_WORKTREE_MODE = `Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout \`<path>\` / git restore, git clean, git stash drop/clear, force pushes, or branch deletion. You may remove git worktrees you created with \`git worktree remove\` to clean up after merging — this removes the working copy, not commits. Do not use \`git worktree remove --force\` (would discard uncommitted work). If you make a mistake, do not discard — commit first, then correct forward.`;
+
 /** Branch clause vocabulary. */
 const GIT_BRANCH_CLAUSES: Record<string, string> = {
     current: 'Do all work on the current branch. Do NOT create new branches or worktrees.',
@@ -440,8 +451,9 @@ export function buildGitPolicyBlock(opts: {
     push?: string;
     guardrail?: boolean;
     worktreeActive?: boolean;
+    worktreePerPlanActive?: boolean;
 }): string {
-    const { branch, commit, push, guardrail, worktreeActive } = opts;
+    const { branch, commit, push, guardrail, worktreeActive, worktreePerPlanActive } = opts;
     const clauses: string[] = [];
 
     // Branch clause — suppressed when a feature worktree is already assigned
@@ -461,9 +473,13 @@ export function buildGitPolicyBlock(opts: {
         clauses.push(GIT_PUSH_CLAUSES[push]);
     }
 
-    // Safety guardrail — independent checkbox; emits only when truthy.
+    // Safety guardrail — independent checkbox; emits only when truthy. The
+    // worktreePerPlanActive flag selects the variant: when agents self-provision
+    // worktrees (useWorktreesPerPlanEnabled or featureMode), the narrowed guardrail
+    // permits `git worktree remove` for cleanup; otherwise the standard guardrail
+    // forbids worktree deletion (agents don't own the lifecycle).
     if (guardrail) {
-        clauses.push(GIT_SAFETY_DIRECTIVE);
+        clauses.push(worktreePerPlanActive ? GIT_SAFETY_DIRECTIVE_WORKTREE_MODE : GIT_SAFETY_DIRECTIVE);
     }
 
     if (clauses.length === 0) return '';
@@ -566,119 +582,31 @@ export const FEATURE_ORCHESTRATION_DIRECTIVE = (featureTopic: string, count: num
     `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
     `Before starting, briefly tell the user how you are using the workflow to handle these subtasks (e.g. parallel vs sequential and why, how they are grouped, and any review/verification pass you plan to run).`;
 
-/**
- * `per-subtask` worktree mode variant: the extension has ALREADY pre-provisioned one
- * worktree per subtask off the shared feature integration branch — this replaces the
- * "create your own worktree" guidance from the base directive with "dispatch into the
- * path already assigned to you." Falls back to the base directive at the call site when
- * no subtask worktree paths resolved (mode mismatch / lazy-create failed) so the agent
- * always gets usable orchestration guidance either way.
- */
-export const FEATURE_ORCHESTRATION_DIRECTIVE_PER_SUBTASK = (featureTopic: string, subtaskWorktrees: Array<{ topic: string; worktreePath: string }>) =>
-    `FEATURE MODE (worktree-per-subtask): You are implementing the feature "${featureTopic}" which consists of ${subtaskWorktrees.length} subtask(s).\n` +
-    `Each subtask has ALREADY been assigned its own isolated git worktree, pre-created off the shared feature integration branch. Do NOT create your own worktrees for these subtasks. ` +
-    `Use your native subagent or orchestration capabilities to dispatch one subagent per subtask into its assigned worktree path below, so subagents cannot collide on files:\n` +
-    subtaskWorktrees.map(sw => `  - [SUBTASK] ${sw.topic} → Worktree: ${sw.worktreePath}`).join('\n') + '\n' +
-    `If you do not support subagents, handle each subtask sequentially, running each one's changes from inside its assigned worktree path. ` +
-    `All subtasks are part of a single delivery unit — do not treat them as independent tickets. Do not merge branches yourself; the extension owns convergence into the feature integration branch and, later, into main.\n` +
-    `Before starting, briefly tell the user how you are using the workflow to handle these subtasks (e.g. parallel vs sequential and why, how they are grouped, and any review/verification pass you plan to run).`;
 
 /**
- * `high-low` worktree mode variant: the extension has ALREADY pre-provisioned exactly two
- * tier worktrees (high/low complexity) off the shared feature integration branch. The planner
- * (dispatched separately, see PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE) is expected to have
- * consolidated the feature's subtask plans into two new plan files, but may not have produced
- * exactly two (a broken/partial planner run) — so this directive references the tier
- * worktrees by their `tier` column/label, not by an assumed count or order of plan files.
- */
-export const FEATURE_ORCHESTRATION_DIRECTIVE_HIGH_LOW = (featureTopic: string, tierWorktrees: Array<{ tier: 'high' | 'low'; worktreePath: string }>) =>
-    `FEATURE MODE (high/low complexity split): You are implementing the feature "${featureTopic}".\n` +
-    `The feature's subtask plans have been consolidated into complexity tiers (high-complexity, low-complexity). Each tier has ALREADY been assigned its own isolated git worktree, pre-created off the shared feature integration branch. Do NOT create your own worktrees for these tiers.\n` +
-    `Use your native subagent or orchestration capabilities to dispatch one subagent per tier below, running IN PARALLEL, each from inside its assigned worktree path:\n` +
-    tierWorktrees.map(tw => `  - [${tw.tier.toUpperCase()} TIER] Worktree: ${tw.worktreePath}`).join('\n') + '\n' +
-    `Match each tier's subagent to the consolidated plan file(s) intended for that tier (check each plan's "Consolidated From" / tier marker in its metadata) — do not assume plan file order or count; a partial planner run may not have produced exactly one plan per tier. ` +
-    `If you do not support subagents, process the high tier first, then the low tier, each fully from inside its assigned worktree path. ` +
-    `Do not merge branches yourself; the extension owns convergence into the feature integration branch and, later, into main.\n` +
-    `Before starting, briefly tell the user how you are using the workflow to handle these tiers (parallel subagent assignment, which plan(s) map to which tier, and any review/verification pass you plan to run).`;
-
-/**
- * Injected into the PLANNER role's prompt only, only for `high-low`-mode features. Additive to
- * improve-plan.md, not a replacement — the planner still runs the full planning workflow, this
- * just adds a consolidation pass on top of it.
- *
- * LOAD-BEARING DETAIL: `GlobalPlanWatcherService._handlePlanFile` (src/services/GlobalPlanWatcherService.ts)
- * imports new/changed `.switchboard/plans/*.md` files via `KanbanDatabase.insertFileDerivedPlan`
- * (src/services/KanbanDatabase.ts:1387). That INSERT statement does NOT reference `feature_id` at
- * all — there is no `**Feature ID:**`-style marker the watcher parses to link a file-derived plan to
- * a feature. `feature_id` is a DB-owned column, only ever set imperatively via
- * `KanbanDatabase.updateFeatureStatus(planId, isFeature, featureId)` — see `KanbanProvider.createFeatureFromPlanIds`'s
- * subtask-linking loop, and `PlanFileImporter.ts`'s explicit comment that file-derived imports
- * have "no business setting DB-owned columns (is_feature, feature_id, ...)". So the two new consolidated
- * plans CANNOT be linked to the feature by embedding a marker in their file content — they must be
- * linked via the `assign-to-feature.js` script (routes through the running extension's
- * `/kanban/feature/assign` endpoint, which calls updateFeatureStatus + regenerates the feature file). The
- * directive below instructs the planner to write the files first (so they get a planId from the
- * watcher import) and then explicitly run assign-to-feature.js — this is the only correct linkage
- * path; a content marker would silently produce orphan CREATED cards.
- */
-export const PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE = (featureTopic: string, featurePlanId: string, subtaskPlans: Array<{ planId: string; topic: string; complexity?: string }>) =>
-    `HIGH/LOW COMPLEXITY CONSOLIDATION (additive to the planning workflow above — run this AFTER completing the normal planning steps, not instead of them):\n` +
-    `This dispatch is for the feature "${featureTopic}" (feature planId: ${featurePlanId}), which has ${subtaskPlans.length} existing subtask plan(s):\n` +
-    subtaskPlans.map(sp => `  - [${sp.complexity ?? 'Unknown'}] ${sp.topic} — planId: ${sp.planId}`).join('\n') + '\n' +
-    `1. Read all ${subtaskPlans.length} subtask plan files listed above in full.\n` +
-    `2. Consolidate them into EXACTLY TWO new plan files, following the same section structure as the subtask plans (Goal, Metadata, Complexity Audit, Proposed Changes, Verification Plan, etc.):\n` +
-    `   - One HIGH-complexity plan combining every subtask scoring 5 or above.\n` +
-    `   - One LOW-complexity plan combining every subtask scoring 4 or below.\n` +
-    `   - If every subtask lands in only one tier, still write both files — the low/high plan for the empty tier should state there is no work for that tier (do not skip writing it; the executor dispatch depends on both existing).\n` +
-    `3. Write the two new files to .switchboard/plans/ with descriptive filenames. Give each a "**Complexity:**" metadata line reflecting its tier (>=5 for the high plan, <=4 for the low plan) and a "**Consolidated From:**" metadata line listing the original subtask planIds, for human traceability.\n` +
-    `4. Do NOT delete, edit, or replace the ${subtaskPlans.length} original subtask plan files — keep them as-is; the new files are additional, not replacements.\n` +
-    `5. After writing both files, wait a few seconds for the file watcher to import them (they need to be picked up and assigned a planId before they can be linked), then run:\n` +
-    `   node .agents/skills/kanban_operations/assign-to-feature.js ${featurePlanId} '["<new-high-plan-planId>","<new-low-plan-planId>"]'\n` +
-    `   Look up each new plan's planId via .agents/skills/kanban_operations/get-state.js (matched by plan_file/topic) before running assign-to-feature.js — do not guess the planId.\n` +
-    `6. Report the two new plan file paths and their planIds at the end of your response so the executor dispatch can find them.`;
-
-/**
- * Context bundle for `resolveFeatureOrchestrationDirective` — carries whatever the
- * three variants each need. `subtaskWorktrees`/`tierWorktrees` are independent;
- * only the one matching the resolved mode is consulted.
+ * Context bundle for `resolveFeatureOrchestrationDirective`. The per-subtask/high-low
+ * variants were removed; the base directive is the sole path. This interface is retained
+ * (empty) for caller compatibility — callers still pass a context object, it is ignored.
  */
 interface FeatureOrchestrationDirectiveContext {
-    subtaskWorktrees?: Array<{ topic: string; worktreePath: string }>;
-    tierWorktrees?: Array<{ tier: 'high' | 'low'; worktreePath: string }>;
 }
 
 /**
- * Single selector for the three orchestration-directive variants, keyed on the
- * feature's `feature_worktree_mode`. Preserves the exact fallback semantics that
- * previously lived inline in `buildKanbanBatchPrompt`:
- * - `high-low` tier worktrees are only consulted when mode === 'high-low' (gated).
- * - Subtask-own worktrees (per-subtask variant) are consulted whenever any resolved
- *   — independent of the live mode value, matching the pre-refactor `else` branch,
- *   which kept selecting the per-subtask variant off `hasOwnWorktree` data alone.
- *   This intentionally covers the case where worktree rows outlive a mode change
- *   (e.g. feature switched from `per-subtask` to `none`/`high-low` mid-lifecycle
- *   without deprovisioning existing per-subtask worktree rows).
- * - Otherwise falls back to the base directive.
- * Unknown mode values (not `none`/`per-subtask`/`high-low`) that don't resolve to
- * either variant above log a warning and fall back to the base directive.
+ * Single selector for the feature orchestration directive, keyed on the feature's
+ * `feature_worktree_mode`. The per-subtask/high-low variants were removed — the base
+ * `FEATURE_ORCHESTRATION_DIRECTIVE` is the sole path for both 'none' and 'per-feature'.
+ * The base directive says "If your tool supports worktree-per-plan isolation, activate
+ * it now" — agents self-provision within-feature worktrees via git if they want
+ * parallelism. Unknown mode values (not 'none'/'per-feature') log a warning and fall
+ * back to the base directive (defensive — a stale config value degrades gracefully).
  */
 export function resolveFeatureOrchestrationDirective(
     mode: string | undefined,
     featureTopic: string,
     subtaskCount: number,
-    context?: FeatureOrchestrationDirectiveContext
+    _context?: FeatureOrchestrationDirectiveContext
 ): string {
-    const tierWorktrees = mode === 'high-low' ? (context?.tierWorktrees || []) : [];
-    if (tierWorktrees.length > 0) {
-        return FEATURE_ORCHESTRATION_DIRECTIVE_HIGH_LOW(featureTopic, tierWorktrees);
-    }
-
-    const subtaskWorktrees = context?.subtaskWorktrees || [];
-    if (subtaskWorktrees.length > 0) {
-        return FEATURE_ORCHESTRATION_DIRECTIVE_PER_SUBTASK(featureTopic, subtaskWorktrees);
-    }
-
-    if (mode !== undefined && mode !== 'none' && mode !== 'per-subtask' && mode !== 'high-low') {
+    if (mode !== undefined && !['none', 'per-feature'].includes(mode)) {
         console.warn(`[agentPromptBuilder] Unknown feature_worktree_mode "${mode}" — falling back to base orchestration directive.`);
     }
     return FEATURE_ORCHESTRATION_DIRECTIVE(featureTopic, subtaskCount);
@@ -892,13 +820,12 @@ export function buildKanbanBatchPrompt(
     // The port is plumbed at build time (Option A) so worktree CWDs don't read the
     // port file (which lives only in the main workspace root's .switchboard/).
     const phoneAFriendBlock = (options?.phoneAFriendEnabled && options?.apiPort) ? PHONE_A_FRIEND_DIRECTIVE(options.apiPort) : '';
-    // In feature mode, the per-subtask/high-low directive variants already list
-    // worktree assignments — skip the generic worktree line to avoid duplication.
-    const featureDirectiveListsWorktrees = options?.featureMode === true
-        && (options?.featureWorktreeMode === 'per-subtask' || options?.featureWorktreeMode === 'high-low')
-        && worktreePaths.length > 0;
+    // The per-subtask/high-low directive variants (which listed worktree assignments and
+    // required suppressing the generic worktree line) were removed. The base feature
+    // directive never lists worktree assignments, so the generic worktree line always
+    // emits when a worktree path is present.
     let worktreeBlock = '';
-    if (worktreePaths.length > 0 && !featureDirectiveListsWorktrees) {
+    if (worktreePaths.length > 0) {
         worktreeBlock = worktreePaths
             .map(wt => `WORKTREE: You are working in a git worktree at ${wt} — an isolated sibling checkout of the main repository. Do all work inside it; the plan file paths below already point inside it.`)
             .join('\n');
@@ -924,18 +851,10 @@ export function buildKanbanBatchPrompt(
     // before the PLANS TO PROCESS heading rather than under it.
     let featureDirectiveBlock = '';
     if (options?.featureMode && options?.featureTopic) {
-        // hasOwnWorktree distinguishes a subtask's OWN dedicated worktree (set by
-        // expandFeatureSubtaskPlans only when a subtask_plan_id-bound row exists) from an
-        // inherited feature-level/project-level worktree shared by every subtask (the
-        // `none`-mode fallback, where worktreePath is set but not owned).
-        const subtaskWorktrees = plans
-            .filter(p => p.isSubtask && p.hasOwnWorktree && p.worktreePath)
-            .map(p => ({ topic: p.topic, worktreePath: p.worktreePath as string }));
         const directive = resolveFeatureOrchestrationDirective(
             options.featureWorktreeMode,
             options.featureTopic,
-            options.subtaskCount || 0,
-            { subtaskWorktrees, tierWorktrees: options.tierWorktrees }
+            options.subtaskCount || 0
         );
         featureDirectiveBlock = directive;
         if (options?.featurePromptTemplate) {
@@ -1015,7 +934,7 @@ export function buildKanbanBatchPrompt(
 
         // Add dispatch context and plan list
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         const suffixBlock = assembleSuffix('planner', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1028,15 +947,6 @@ export function buildKanbanBatchPrompt(
             plannerPrompt += `\n\n${featureDirectiveBlock}`;
         }
         plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
-
-        // `high-low` mode: additive consolidation pass, injected only for the planner role
-        // dispatched against a high-low-mode feature with subtask plans to consolidate. No-op
-        // for 'none'/'per-subtask' modes and for non-feature dispatches (subtaskPlansForConsolidation
-        // is only populated by the caller for this exact case).
-        if (options?.featureWorktreeMode === 'high-low' && options?.featureTopic && options?.featurePlanId
-            && options.subtaskPlansForConsolidation && options.subtaskPlansForConsolidation.length > 0) {
-            plannerPrompt += '\n\n' + PLANNER_HIGH_LOW_CONSOLIDATION_DIRECTIVE(options.featureTopic, options.featurePlanId, options.subtaskPlansForConsolidation);
-        }
 
         const constitutionContent = options?.constitutionContent?.trim();
         if (constitutionContent) {
@@ -1112,7 +1022,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         const suffixBlock = assembleSuffix('reviewer', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1164,7 +1074,7 @@ For each plan:
             : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct product acceptance / intent review against the product requirements document in-place for each plan.`;
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         const suffixBlock = assembleSuffix('tester', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1221,7 +1131,7 @@ For each plan:
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         const suffixBlock = assembleSuffix('lead', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1244,15 +1154,15 @@ For each plan:
 
     if (role === 'coder') {
         // §10 — Feature-mode coder dispatch: single feature-file reference instead of
-        // per-subtask enumeration. The feature file's auto-generated SUBTASKS block
-        // already lists every subtask plan link, and its WORKTREES block lists
-        // per-subtask/per-tier worktree assignments — the prompt's per-subtask
-        // enumeration is pure duplication.
+        // enumerating each subtask. The feature file's auto-generated SUBTASKS block
+        // already lists every subtask plan link, and its WORKTREES block lists the
+        // feature's worktree assignments — enumerating subtasks in the prompt is pure
+        // duplication.
         if (options?.featureMode) {
             const featurePlan = plans.find(p => !p.isSubtask);
             const featureFilePath = featurePlan?.absolutePath || '';
             const featureFileBlock = featureFilePath
-                ? `FEATURE FILE:\n${featureFilePath}\n\nRead the feature file above. Its Subtasks section lists all subtask plan files (relative paths resolve inside this worktree). Its Worktrees section lists any per-subtask or per-tier worktree assignments. Execute each subtask plan in full.`
+                ? `FEATURE FILE:\n${featureFilePath}\n\nRead the feature file above. Its Subtasks section lists all subtask plan files (relative paths resolve inside this worktree). Its Worktrees section lists any worktree assignments. Execute each subtask plan in full.`
                 : '';
             const featureExecutionBlock = `EXECUTION MODE: The feature below is pre-approved — begin implementation immediately; do not produce a separate planning document. Execute each subtask plan in full before moving to the next; if a subtask hits an issue, report it clearly and continue with the remaining subtasks when safe. All subtasks are one delivery unit.`;
 
@@ -1269,7 +1179,7 @@ For each plan:
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
             // no subagent block, no feature directive (replaced by featureExecutionBlock).
             // gitBlock still included via assembleSuffix.
-            const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+            const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
             const suffixBlock = assembleSuffix('coder', {
                 dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
             });
@@ -1309,7 +1219,7 @@ For each plan:
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         const suffixBlock = assembleSuffix('coder', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1348,7 +1258,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         const suffixBlock = assembleSuffix('intern', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1379,7 +1289,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         // §6 — analyst is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('analyst', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1441,7 +1351,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         // §6 — ticket_updater is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('ticket_updater', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1492,7 +1402,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
         // §6 — researcher is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('researcher', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1640,7 +1550,8 @@ export function buildCustomAgentPrompt(
         commit: (addons as any)?.gitCommitStrategy,
         push: (addons as any)?.gitPushStrategy,
         guardrail: (addons as any)?.gitProhibition ?? addons?.gitProhibitionEnabled,
-        worktreeActive: customWorktreeActive
+        worktreeActive: customWorktreeActive,
+        worktreePerPlanActive: addons?.useWorktreesPerPlan === true
     });
     if (customGitBlock) prompt += '\n\n' + customGitBlock;
     if (addons?.workspaceTypeDetection && workspaceRoot) {

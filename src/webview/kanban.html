@@ -8088,7 +8088,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
                 'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
                 'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed.',
-                'orchestration': 'A system-woken orchestrator agent batches plans into features, fans work out across per-feature worktrees, and merges results back feature by feature. Selecting this mode enables per-subtask feature worktrees automatically (restored on switching away).'
+                'orchestration': 'A system-woken orchestrator agent batches plans into features, fans work out across per-feature worktrees, and merges results back feature by feature. Selecting this mode enables per-feature feature worktrees automatically (restored on switching away).'
             };
             const modeHelpText = document.createElement('div');
             modeHelpText.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
@@ -10433,8 +10433,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const currentFeatureWorktreeMode = (config && config.featureWorktreeMode) || 'none';
             const AUTO_MODE_OPTIONS = [
                 { value: 'none', label: 'None', desc: 'No automatic worktrees — use the manual creation buttons below to create an individual worktree for a single project or feature to keep work isolated.' },
-                { value: 'per-subtask', label: 'Per Subtask', desc: 'Provision a dedicated worktree for every subtask so that subagents can work in parallel.' },
-                { value: 'high-low', label: 'High/Low Complexity Split', desc: 'Provision two tier worktrees (high & low complexity) off the feature integration branch; the planner consolidates subtasks into two plans run in parallel.' }
+                { value: 'per-feature', label: 'Per Feature', desc: 'Automatically create ONE shared worktree for the whole feature at creation. Every subtask runs inside it — one branch, one working copy, one merge back to main. The isolation of a worktree without fragmenting the feature across many checkouts. For within-feature parallelism, agents can create their own worktrees via git.' }
             ];
             AUTO_MODE_OPTIONS.forEach(opt => {
                 const label = document.createElement('label');
