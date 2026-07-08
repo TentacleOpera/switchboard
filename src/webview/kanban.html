@@ -3461,7 +3461,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no push clause' }
                     ] },
                     { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-                    { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Instruct the agent to use its native subagent/orchestration capabilities to process each plan in an isolated git worktree', default: false },
+                    { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
                     { id: 'phoneAFriend', label: 'Phone-a-Friend', tooltip: 'When done coding the batch, notify the Phone-a-Friend terminal to do a second pass (requires Phone-a-Friend agent configured)', default: false },
                     { id: 'applyFeatureDirectives', label: 'Apply Feature Ultracode/Goal Directives', tooltip: 'When dispatched on a feature, prepend the board\'s ultracode//goal directives (as for Lead/Coder/Intern)', default: false }
                 ];

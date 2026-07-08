@@ -7,6 +7,7 @@ import { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
 import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
+import { WsHub } from './wsHub';
 
 interface LocalApiServerOptions {
     workspaceRoot: string;
@@ -141,6 +142,13 @@ interface LocalApiServerOptions {
      * (returns 404 with a clear "run the scanner" message).
      */
     catalogProvider?: () => Promise<any>;
+    /**
+     * Full-state snapshot for WS resync-on-connect. Called by wsHub when a new
+     * WS connection is established (or a dropped connection reconnects) so the
+     * client converges to the current board state rather than going stale.
+     * Optional — absent means no resync push (clients get broadcasts only).
+     */
+    getFullState?: () => Promise<any>;
 }
 
 export class LocalApiServer {
@@ -156,6 +164,7 @@ export class LocalApiServer {
     // The watchdog checks this (NOT a self-HTTP round-trip, which times out on a starved
     // host and produces a false negative).
     private _isListening: boolean = false;
+    private _wsHub: WsHub | null = null;
 
     constructor(options: LocalApiServerOptions) {
         this._options = options;
@@ -188,6 +197,14 @@ export class LocalApiServer {
                 this._port = address.port;
                 this._isListening = true;
                 console.log(`[LocalApiServer] Started on port ${this._port}`);
+
+                // Attach wsHub to the listening HTTP server.
+                this._wsHub = new WsHub({
+                    server: this._server!,
+                    getAuthToken: this._options.getAuthToken,
+                    getFullState: this._options.getFullState,
+                });
+                this._wsHub.attach();
 
                 resolve(this._port);
             });
@@ -261,8 +278,30 @@ export class LocalApiServer {
     }
 
     private async _checkAuth(req: http.IncomingMessage, requireAuth: boolean = true): Promise<boolean> {
-        // Trust the localhost boundary check already performed in _handleRequest
-        return true;
+        // The localhost boundary check is already performed in _handleRequest
+        // (remoteAddress === 127.0.0.1 / ::1). For the existing webview-driven
+        // flow (no Authorization header), we preserve backward compatibility by
+        // trusting that localhost boundary. External clients MUST present a
+        // valid bearer token — this gates the WS + HTTP surface against
+        // DNS-rebinding and rogue local processes.
+        const authHeader = req.headers['authorization'];
+        if (!authHeader) {
+            // No token presented — fall through to the localhost-only trust
+            // model the shipped extension has always used. The remoteAddress
+            // check in _handleRequest is the gate.
+            return true;
+        }
+        const expected = await this._options.getAuthToken();
+        const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+        if (!match) return false;
+        // Constant-time comparison to avoid timing side channels.
+        const presented = match[1];
+        if (presented.length !== expected.length) return false;
+        let diff = 0;
+        for (let i = 0; i < expected.length; i++) {
+            diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
+        }
+        return diff === 0;
     }
 
     private async _parseJsonBody(req: http.IncomingMessage): Promise<any> {

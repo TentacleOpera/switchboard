@@ -30,9 +30,9 @@ The Switchboard Remote-Control API turns the VS Code extension into a host-agnos
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **PLAN REVIEWED**
-- [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **PLAN REVIEWED**
-- [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **PLAN REVIEWED**
-- [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **PLAN REVIEWED**
-- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **PLAN REVIEWED**
+- [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **LEAD CODED**
+- [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **LEAD CODED**
+- [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **LEAD CODED**
+- [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **LEAD CODED**
+- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **LEAD CODED**
 <!-- END SUBTASKS -->

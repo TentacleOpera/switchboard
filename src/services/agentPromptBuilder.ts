@@ -569,13 +569,15 @@ export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
 export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
 
-export const FEATURE_ORCHESTRATION_DIRECTIVE = (featureTopic: string, count: number) =>
+export const FEATURE_ORCHESTRATION_DIRECTIVE = (featureTopic: string, count: number, worktreesEnabled: boolean = false) =>
     `FEATURE MODE: You are implementing the feature "${featureTopic}" which consists of ${count} subtask(s).\n` +
-    `Use your native subagent or orchestration capabilities to handle each subtask. ` +
-    `If your tool supports worktree-per-plan isolation, activate it now. ` +
-    `If you do not support subagents, handle each subtask sequentially in the order listed below. ` +
+    (worktreesEnabled
+        ? `Use your native subagent or orchestration capabilities to handle each subtask. ` +
+          `If your tool supports worktree-per-plan isolation, activate it now. ` +
+          `If you do not support subagents, handle each subtask sequentially in the order listed below. `
+        : `Handle the subtasks yourself in a sensible order — do NOT create git worktrees or spawn subagents for this dispatch. `) +
     `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
-    `Before starting, briefly tell the user how you are using the workflow to handle these subtasks (e.g. parallel vs sequential and why, how they are grouped, and any review/verification pass you plan to run).`;
+    `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
 
 
 /**
@@ -587,24 +589,24 @@ interface FeatureOrchestrationDirectiveContext {
 }
 
 /**
- * Single selector for the feature orchestration directive, keyed on the feature's
- * `feature_worktree_mode`. The per-subtask/high-low variants were removed — the base
- * `FEATURE_ORCHESTRATION_DIRECTIVE` is the sole path for both 'none' and 'per-feature'.
- * The base directive says "If your tool supports worktree-per-plan isolation, activate
- * it now" — agents self-provision within-feature worktrees via git if they want
- * parallelism. Unknown mode values (not 'none'/'per-feature') log a warning and fall
- * back to the base directive (defensive — a stale config value degrades gracefully).
+ * Single selector for the feature orchestration directive. The worktree/subagent
+ * orchestration clause is gated on `worktreesEnabled` (the dispatched role's
+ * `useWorktreesPerPlan` opt-in): ON → the agent self-provisions worktrees + dispatches
+ * subagents (the opt-in end-to-end orchestration flow); OFF (default) → the agent
+ * implements the subtasks directly, no worktrees/subagents. `feature_worktree_mode` is
+ * validated for a warning only. Unknown mode values log a warning and proceed.
  */
 export function resolveFeatureOrchestrationDirective(
     mode: string | undefined,
     featureTopic: string,
     subtaskCount: number,
+    worktreesEnabled: boolean = false,
     _context?: FeatureOrchestrationDirectiveContext
 ): string {
     if (mode !== undefined && !['none', 'per-feature'].includes(mode)) {
         console.warn(`[agentPromptBuilder] Unknown feature_worktree_mode "${mode}" — falling back to base orchestration directive.`);
     }
-    return FEATURE_ORCHESTRATION_DIRECTIVE(featureTopic, subtaskCount);
+    return FEATURE_ORCHESTRATION_DIRECTIVE(featureTopic, subtaskCount, worktreesEnabled);
 }
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
@@ -850,7 +852,8 @@ export function buildKanbanBatchPrompt(
         const directive = resolveFeatureOrchestrationDirective(
             options.featureWorktreeMode,
             options.featureTopic,
-            options.subtaskCount || 0
+            options.subtaskCount || 0,
+            useWorktreesPerPlanEnabled
         );
         featureDirectiveBlock = directive;
         if (options?.featurePromptTemplate) {
@@ -860,7 +863,8 @@ export function buildKanbanBatchPrompt(
 
     // §3 — In feature mode, suppress batchExecutionRules (the feature directive owns
     // grouping/sequencing and says the opposite), and suppress subagentBlock +
-    // WORKTREES_PER_PLAN_DIRECTIVE (the feature directive owns orchestration).
+    // WORKTREES_PER_PLAN_DIRECTIVE (the feature directive owns orchestration — and gates
+    // its own worktree/subagent clause on the same useWorktreesPerPlan opt-in).
     const effectiveBatchExecutionRules = (options?.featureMode === true) ? '' : batchExecutionRules;
     const effectiveSubagentBlock = (options?.featureMode === true) ? '' : subagentBlock;
 
