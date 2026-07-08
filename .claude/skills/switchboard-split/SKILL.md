@@ -7,7 +7,7 @@ description: Split one plan into two along complexity lines — a Complex/Risky 
 
 Split a single plan into two files by complexity, so the risky work and the routine work can be dispatched to different agents (Lead Coder vs Coder/Intern). This is the remote, file-based equivalent of the local splitter agent (`SPLIT_PLAN_DIRECTIVE`) — it needs no extension or dispatch engine, just file writes, so it works in a remote/cloud session.
 
-For splitting an **feature** into complexity tiers, use `improve-feature` in high/low mode instead — this skill is for one plan.
+For splitting a **feature** into complexity tiers, use `improve-feature` in high/low mode instead — this skill is for one plan.
 
 ## Input
 
@@ -25,12 +25,15 @@ A target plan file path (the plan to split). If none is given, ask which plan.
 
 5. **Do not lose anything.** Every implementation step, code block, and edge case in the source must land in exactly one of the two files (shared context in both). This is the split's core guarantee.
 
-6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should be linked to a feature or carry a project, add `**Feature:** <feature-plan-id>` and/or `**Project:** <name>` lines to the new plan file's frontmatter (applied on import with apply-if-empty semantics). For a column move, use the Notion/Linear provider or MCP. Commit both files.
+6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should be linked to a feature or carry a project, add `**Feature:** <feature-plan-id>` and/or `**Project:** <name>` lines to the new plan file's frontmatter (applied on import with apply-if-empty semantics). After the file is written, you MUST move the newly created companion card to `PLAN REVIEWED` using the session-appropriate mechanism:
+   - **Local (extension running — `.switchboard/api-server-port.txt` present):** Use the `kanban_operations` skill (move-card.js) to move the card to `PLAN REVIEWED`.
+   - **Remote (no extension — `.switchboard/api-server-port.txt` absent):** Use the Notion/Linear provider or MCP to move the card to `PLAN REVIEWED`.
+   The original (Complex) file is rewritten in place and retains its existing column (no move needed for it). Commit both files.
 
 ## Guardrails
 
 - Preserve information, not structure — nothing in the source may be dropped; git is the undo.
-- Never touch an feature's auto-generated `<!-- BEGIN/END SUBTASKS -->` block.
+- Never touch a feature's auto-generated `<!-- BEGIN/END SUBTASKS -->` block.
 - No `confirm()`-style gating anywhere (this is a planning-file operation, not UI).
 
 ## Report
