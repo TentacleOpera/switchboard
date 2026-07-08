@@ -10534,12 +10534,28 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         });
         const subtaskSection = `<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->\n## Subtasks\n${subtaskLines.join('\n') || '- [ ] (no subtasks)'}\n<!-- END SUBTASKS -->`;
         let newContent: string;
-        const beginMarker = '<!-- BEGIN SUBTASKS';
-        const endMarker = '<!-- END SUBTASKS -->';
-        const beginIdx = existingContent.indexOf(beginMarker);
-        const endIdx = existingContent.indexOf(endMarker);
-        if (beginIdx !== -1 && endIdx !== -1) {
-            newContent = existingContent.slice(0, beginIdx) + subtaskSection + existingContent.slice(endIdx + endMarker.length);
+        const subtaskRegexes = [
+            /<!-- BEGIN SUBTASKS[\s\S]*?<!-- END SUBTASKS -->/g,
+            /##\s*Subtasks\b[\s\S]*?<!-- END SUBTASKS -->/g,
+            /<!-- (?:BEGIN|END) SUBTASKS[^\n]*-->/g
+        ];
+        let firstSubtaskIndex = -1;
+        for (const regex of subtaskRegexes) {
+            regex.lastIndex = 0;
+            const match = regex.exec(existingContent);
+            if (match) {
+                if (firstSubtaskIndex === -1 || match.index < firstSubtaskIndex) {
+                    firstSubtaskIndex = match.index;
+                }
+            }
+        }
+        if (firstSubtaskIndex !== -1) {
+            const contentBeforeFirst = existingContent.slice(0, firstSubtaskIndex);
+            let contentAfterFirst = existingContent.slice(firstSubtaskIndex);
+            for (const regex of subtaskRegexes) {
+                contentAfterFirst = contentAfterFirst.replace(regex, '');
+            }
+            newContent = (contentBeforeFirst + '\n\n' + subtaskSection + '\n\n' + contentAfterFirst).replace(/\n{3,}/g, '\n\n');
         } else {
             newContent = existingContent.replace(/\n*$/, '') + '\n\n' + subtaskSection + '\n';
         }
@@ -10572,12 +10588,28 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                 worktreeLines.push(`- [${st.topic || basename}](../plans/${basename}): \`${wt.branch}\` → \`${wt.path}\``);
             }
             const worktreeSection = `<!-- BEGIN WORKTREES (auto-generated, do not edit) -->\n## Worktrees\n${worktreeLines.join('\n')}\n<!-- END WORKTREES -->`;
-            const wtBeginMarker = '<!-- BEGIN WORKTREES';
-            const wtEndMarker = '<!-- END WORKTREES -->';
-            const wtBeginIdx = newContent.indexOf(wtBeginMarker);
-            const wtEndIdx = newContent.indexOf(wtEndMarker);
-            if (wtBeginIdx !== -1 && wtEndIdx !== -1) {
-                newContent = newContent.slice(0, wtBeginIdx) + worktreeSection + newContent.slice(wtEndIdx + wtEndMarker.length);
+            const wtRegexes = [
+                /<!-- BEGIN WORKTREES[\s\S]*?<!-- END WORKTREES -->/g,
+                /##\s*Worktrees\b[\s\S]*?<!-- END WORKTREES -->/g,
+                /<!-- (?:BEGIN|END) WORKTREES[^\n]*-->/g
+            ];
+            let firstWtIndex = -1;
+            for (const regex of wtRegexes) {
+                regex.lastIndex = 0;
+                const match = regex.exec(newContent);
+                if (match) {
+                    if (firstWtIndex === -1 || match.index < firstWtIndex) {
+                        firstWtIndex = match.index;
+                    }
+                }
+            }
+            if (firstWtIndex !== -1) {
+                const wtBefore = newContent.slice(0, firstWtIndex);
+                let wtAfter = newContent.slice(firstWtIndex);
+                for (const regex of wtRegexes) {
+                    wtAfter = wtAfter.replace(regex, '');
+                }
+                newContent = (wtBefore + '\n\n' + worktreeSection + '\n\n' + wtAfter).replace(/\n{3,}/g, '\n\n');
             } else {
                 newContent = newContent.replace(/\n*$/, '') + '\n\n' + worktreeSection + '\n';
             }
