@@ -157,3 +157,7 @@ The guard is a fallback, not the primary mechanism. With the prompt-generation f
 ---
 
 **Implementation Note:** Implemented. Feature routing logic added to `agentPromptBuilder.ts` and test suite updated in `agentPromptBuilder.test.ts`.
+
+## Review Findings
+
+**Files reviewed:** `agentPromptBuilder.ts` (constant + routing logic at L715, L879–882), `agentPromptBuilder.test.ts` (helper hoist at L11, new suite at L293–321). **Validation:** Full caller trace of `buildKanbanBatchPrompt` confirmed only `generateUnifiedPrompt` reaches the planner branch; `chatCopyPrompt` and chat-role callers are unaffected. Existing test suites (`minimal-prompt`, `kanban-default-prompt-previews`, `§9 regression`) verified no `featureMode`/`isFeature` usage — no regressions. **Result:** 0 CRITICAL, 0 MAJOR, 3 NIT (broad substring assertion, redundant short-circuit scan, cosmetic blank lines). No code fixes applied. **Remaining risks:** None material; the broad `!prompt.includes('improve-plan.md')` assertion could false-fail if future prompt content mentions that path in documentation text.
