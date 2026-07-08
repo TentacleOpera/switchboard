@@ -1,11 +1,11 @@
 ---
 name: accuracy
-description: Implement with high accuracy and self-review (optimized for per-prompt pricing)
+description: Implement with high accuracy and self-review (invest effort up front to minimize rework)
 ---
 
 # Accuracy — Solo High-Accuracy Mode
 
-> This workflow is designed for **per-prompt pricing** (e.g., Windsurf). Every prompt costs the same regardless of tokens, so the strategy is: **maximize work per prompt, invest heavily in planning to avoid rework.**
+> This workflow trades tokens for correctness. It's designed for contexts where usage is free or low-cost, so the strategy is: **invest heavily in context-gathering and planning, verify at every gate, and red-team before finishing — to minimize rework rather than to save prompts.**
 
 ## File Creation Rules
 - When creating files in `.switchboard/`, always use `IsArtifact: false` to prevent path validation errors.
@@ -24,14 +24,14 @@ description: Implement with high accuracy and self-review (optimized for per-pro
    - MUST read ALL files that will be modified or depend on changes.
    - MUST read existing tests, types, and interfaces related to the task.
    - MUST identify every dependency and side-effect BEFORE writing any code.
-   - **WHY**: Missing context causes mistakes. Mistakes cause rework. Rework costs extra prompts.
+   - **WHY**: Missing context causes mistakes. Mistakes cause rework. Front-loading context is cheaper than fixing bugs later.
    - Mark Phase 1 complete in your reply (a brief checklist is fine) or via the Kanban UI if available. Do NOT create any tracking files on disk.
 
 3. **Internal Planning** (think before you code, but do NOT present a plan-in-reply):
    - MUST map dependencies between changes internally — which must happen first?
    - MUST identify risks: what could break? What edge cases exist?
    - **DESTRUCTION CHECK**: If deleting files, MUST run `grep_search` to confirm nothing depends on them.
-   - **RULE**: Spend more time thinking. A thought-through approach that prevents 1 rework cycle saves an entire prompt.
+   - **RULE**: Spend more time thinking. A thought-through approach that prevents a rework cycle is worth far more than the tokens it costs.
    - Do NOT produce a plan-in-reply or present a plan for approval — proceed directly to Step 4 (implementation).
    - Do NOT write a plan file to disk — plan files are the domain of `/improve-plan`, not `/accuracy` (enforced by the No-Artifact Rule above).
 
@@ -42,7 +42,7 @@ description: Implement with high accuracy and self-review (optimized for per-pro
      2. MUST read modified files back. Confirm changes are exactly as intended.
      3. If verification fails: fix immediately. If fix fails twice, **HALT** and notify user.
      4. NEVER proceed to the next group with a broken build.
-   - Do as many groups as possible within one prompt — but NEVER skip the verification gate.
+   - Do as many groups as possible in a single pass — but NEVER skip the verification gate.
    - MUST track progress in your reply as you go: mark completed items `[x]` in an in-context checklist. Do NOT create or update any `task.md` (or other tracking) file on disk.
 
 5. **Self-Review (Red Team)** — catch issues before they become rework:
@@ -54,7 +54,7 @@ description: Implement with high accuracy and self-review (optimized for per-pro
      - Could it break anything else in the codebase?
    - MUST list ≥3 concrete potential failure modes per modified file.
    - Document findings in your reply under a `### Red Team Findings` heading with specific line numbers. Do NOT write these findings to a file.
-   - Fix all issues found — NEVER leave them for a future prompt.
+   - Fix all issues found — NEVER leave them for later.
 
 6. **Final Verification & Complete**:
    - MUST run final compile/test across the whole project via `run_command`.

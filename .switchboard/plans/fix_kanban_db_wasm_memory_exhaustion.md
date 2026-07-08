@@ -1,0 +1,125 @@
+# Fix kanban.db sql.js WASM Memory Exhaustion ("disk I/O error" across all DBs)
+
+## Goal
+
+Stop the extension host from dying with `Error: disk I/O error` thrown from `dist/sql-wasm.js` across **every** open `kanban.db` at once, by bounding the sql.js WASM heap: evict idle DB instances, coalesce the per-write full-DB serialization, and add **always-on GC** for the two append-only *telemetry* tables that dominate DB size (`plan_events`/`activity_log`). Completed `plans` rows are content, not bloat — they are deliberately left to grow indefinitely (see **Out of Scope**). Keep sql.js as the engine (bundling constraint); keep DuckDB strictly optional and additive.
+
+### Core problem / background / root-cause analysis
+
+**Symptom (observed 2026-07-08).** The extension began emitting a flood of `Error: disk I/O error` originating in `dist/sql-wasm.js` (`a.handleError` → `a.tb`), hitting **every** workspace's `kanban.db` simultaneously — Gitlab, `be`, `viaapp`, `viaapp-web`, `fe`, `ai`, `funnel-sandbox`, `switchboard` (~9 resident DBs) — across `getConfig`, `hasPlan`, `getBoardFilteredByProject`, `getWorktrees`, `_writeKanbanStateBackup`, and `_writeLocalBoardMirror`. The final stack before the unhandled rejection was the **Copy Prompt** path (`getWorktrees` → `_buildActiveWorktreePathMap` → `_cardsToPromptPlans` → `_generatePromptForDestinationRole` → `_handleMessage`), which is why the user-visible trigger looked like "Copy Prompt produced the wrong prompt."
+
+**What it is NOT (verified this session):**
+- **Not disk-full** — 23 GiB free on the data volume; 244M free inodes.
+- **Not file corruption** — `PRAGMA integrity_check` returns `ok` on the affected DBs; the relevant plan rows are intact and readable via the `sqlite3` CLI.
+
+**Root cause.** sql.js runs SQLite compiled to WebAssembly over a **single linear memory (heap) shared by every DB opened in the extension host**. When that heap can't satisfy an allocation, SQLite's in-memory VFS `xRead`/`xWrite` fail and SQLite returns `SQLITE_IOERR`, which surfaces as "disk I/O error." Because the heap is shared, exhaustion manifests on **all** DBs at the same instant — exactly the observed all-at-once pattern. This is heap exhaustion, not physical I/O.
+
+**Four contributing mechanisms (in `src/services/KanbanDatabase.ts`):**
+
+1. **Full-DB serialize on every write.** `_persist()` (`:7139`) calls `this._db.export()` (`:7150`) — a fresh full-size `Uint8Array` copy of the *entire* DB — on **every** mutation (every card move, config upsert, etc.). It then also fires `_writeKanbanStateBackup()` (`:7179`), an **un-debounced** full JSON dump, on every persist. (Note: `_scheduleLocalMirror()` at `:7178` *is* already debounced at 500 ms — `:6967`/`:6948` — so the mirror is not the culprit; `export()` and the JSON backup are.) A burst of writes = a burst of whole-DB allocations + churn.
+
+2. **No idle/LRU eviction of cached instances.** Instances are cached in static maps `_instances` / `_instancesByDbPath` (`:779`, set at `:936`–`:937`). They are dropped only on `dispose()` (`:1308`) or a stale-reload (`:965`) — never on idle. Background pollers (ClickUp automation, Antigravity rescan, `IntegrationAutoPull`) keep **all ~9 workspace DBs resident permanently** in the one WASM heap, including the 4.8 MB `switchboard` DB.
+
+3. **Trigger: the refresh storm.** The known identical-distribution `refreshRunSheets` loop drives reads/writes in a tight cycle, churning the heap to exhaustion. (Tracked separately; cross-referenced here, not duplicated.)
+
+4. **DB bloat — measured.** The `switchboard` board DB is **4.8 MB**. Per-table (via `dbstat`): `plan_events` = 6,030 rows ≈ **2.1 MB with indexes (~44%)**; `activity_log` = 1,643 rows ≈ **0.47 MB (~10%)**; `plans` = 1,638 rows ≈ 1.6 MB (real content — stays). The two append-only, grows-forever, **forensic-value-decays** tables are **~54% of the DB**. Larger resident DBs = more WASM heap per instance = closer to the ceiling.
+
+5. **Bonus contributor.** `_persist()` calls a **temporary** diagnostic `_diagFeatureSnapshot('persist')` (`:7141`, def `:7128`) on every write, which runs a `SELECT` and appends to `feature-clobber-diagnostic.txt` — observed at **10 MB** in one workspace. It is explicitly marked *"TEMPORARY … Remove with the other probes."* It adds per-write CPU + unbounded file growth and should be removed (or gated) as part of this work.
+
+**Why not just switch the DB engine?** The VSIX ships with **no `node_modules`** — webpack bundles everything into one `dist/extension.js`. Native SQLite (`better-sqlite3`) ships per-platform `.node` binaries that cannot be webpack-inlined; adopting it means per-OS/arch prebuilds, `electron-rebuild`/ABI matching, and abandoning the single-bundle model, across ~4,000 installs on many old versions. sql.js is pure WASM/JS and bundles cleanly. `node:sqlite` (built-in, Node 22.5+) is the natural *future* migration target but is gated on the Electron/Node version across the install base and still experimental — **out of scope here**. **DuckDB is not a board-engine candidate**: it is an OLAP/columnar engine (wrong shape for high-frequency single-row OLTP), its Node binding is a native module (same bundling blocker, larger binary), and today it is used only via a shelled-out `duckdb` CLI (`ArchiveManager.ts`, `execFile`) that **degrades gracefully when absent and is off by default**. Most installs lack the CLI, so DuckDB must **never** be load-bearing for board data.
+
+## Metadata
+- **Tags:** infrastructure, reliability, performance, bugfix
+- **Complexity:** 7
+- **Repo:** switchboard (extension root; primary file `src/services/KanbanDatabase.ts`)
+
+## User Review Required
+
+1. **Idle-eviction TTL and exemptions.** Proposed: close + evict a cached `KanbanDatabase` instance after **10 minutes** with no read/write, reopening lazily on next access. Should the *active/focused* workspace be exempt from eviction to avoid a reopen stutter on the board the user is looking at? **Default: yes — exempt the active workspace; 10-min TTL for the rest.**
+2. **Telemetry retention windows (always-on GC).** This GC runs **unconditionally for every install** — it is *not* gated on the DuckDB archive or any opt-in, because it only ages out decayed telemetry and touches no board content. Proposed: prune `plan_events` older than **90 days** and `activity_log` older than **30 days**, keeping a **minimum of the last N=50 events per plan** regardless of age so recent forensics for any given card survive. **Confirm the windows.** (Wholesale deletion is *not* proposed — see migration constraint. Completed `plans` rows are explicitly untouched — see Out of Scope.)
+3. **Persist coalescing latency.** Proposed trailing-debounce of **300 ms** for the `export()`+file-write, with a guaranteed synchronous flush on `dispose()`/deactivate and before any read that must observe its own just-written data. Confirm 300 ms is acceptable board-write latency (it is well under human perception and the board already reads from an in-memory `_db`, so on-screen state is not delayed — only the disk mirror is).
+
+## Complexity Audit
+
+### Routine
+- Removing the temporary `_diagFeatureSnapshot`/`appendFeatureClobberDiag` probe (dead diagnostic, explicitly marked for removal).
+- Adding a `purgeOldPlanEvents(olderThanDays, minPerPlan)` method mirroring the existing `purgeOldTombstones(olderThanDays)` age-purge pattern (`:4367`).
+- Wiring `cleanupActivityLog(...)` (already exists, `:7422`) into a periodic sweep (it currently has no scheduled caller).
+
+### Complex / Risky
+- **Idle-eviction with correctness**: must drain in-flight writes (`await existing._writeTail`, pattern at `:959`–`:960`) and run the synchronous final flush (`dispose()` → `exportStateToFile()` → `flushLocalBoardMirror()`, `:1308`/`:7098`) **before** `db.close()`, or risk losing the last write / emitting a truncated file. Must also survive a read arriving mid-eviction (lazy reopen must be race-safe against the eviction timer).
+- **Persist coalescing without data loss**: debouncing `export()` means an in-memory write is not yet on disk; a crash or an external stale-reload in the debounce window must not lose or clobber it. Requires a dirty flag + forced flush on dispose, on eviction, and on the stale-reload path.
+- **Retention migration on ~4,000 installs**: `plan_events`/`activity_log` shipped in released versions; pruning must age-out only, be idempotent, clamp bad inputs (as `purgeOldTombstones` clamps `olderThanDays` to ≥1), and never run as an unbounded `DELETE` that could nuke an audit trail. `VACUUM` to reclaim pages is itself a full-DB rewrite (transient memory spike) — must be throttled/opt-in, not per-prune.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:**
+  - *Evict vs. in-flight write* — eviction must `await _writeTail` and force-flush before `close()`.
+  - *Evict vs. incoming read* — a `getInstance()` arriving during eviction must either join the teardown then reopen, or be blocked until teardown completes; never operate on a half-closed `_db`.
+  - *Debounced persist vs. stale-reload* (`_reloadIfStale`) — if a debounced write is pending and the file mtime changes, the pending in-memory state must win/flush before any reload, or be merged; do not silently discard.
+  - *VACUUM vs. concurrent write* — VACUUM must hold the write chain (`_writeTail`) so no export races the rewrite.
+- **Security:** none. No new external surface. Retention SQL uses parameterized queries (matches existing `_persistedUpdate`). Removing the diagnostic file-write *reduces* on-disk footprint of internal state.
+- **Side Effects:**
+  - Aged-out `plan_events`/`activity_log` rows become unqueryable for old forensics (acceptable by design; recent window preserved). Document in the retention setting's description.
+  - Lazy reopen adds one-time latency (~init cost) to the first access of an evicted workspace's board.
+  - Coalescing delays the on-disk mirror by up to the debounce window; the local board mirror / JSON backup / snapshot publisher fire off the *coalesced* persist, so their cadence drops too (a feature, not a regression).
+- **Dependencies & Conflicts:**
+  - Overlaps the **refresh-storm** fix (same hot path). This plan is independent and complementary — it bounds the heap regardless of trigger frequency — but landing both compounds the benefit. Do not duplicate the refresh-storm change here.
+  - Migration rule (CLAUDE.md): shipped state migrates/preserves; retention must age-out, not wipe.
+
+## Dependencies
+- `sess_refresh_storm — identical-distribution refreshRunSheets loop` (the exhaustion *trigger*; tracked separately). This plan does not require it to land first, but the two are mutually reinforcing.
+
+## Adversarial Synthesis
+
+**Risk Summary:** The dangerous failure modes are all data-loss-on-teardown: evicting or debouncing without draining/flushing the last write, and a retention `DELETE` that ages out more than intended. Mitigations: reuse the existing `_writeTail` drain + `dispose()` final-flush before every `close()`, gate `export()` behind a dirty flag with forced flush on dispose/evict/stale-reload, and model the prune on the existing clamped, age-based `purgeOldTombstones` with a per-plan minimum-keep floor. Land the four workstreams independently (eviction → coalescing → retention → probe removal), each behind its own verification, so a regression in one is isolated.
+
+## Proposed Changes
+
+### `src/services/KanbanDatabase.ts` — Workstream A: idle-eviction of cached instances
+- **Context:** static `_instances`/`_instancesByDbPath` (`:779`) never evict on idle; `getInstance` sets at `:936`–`:937`; drain-before-null pattern at `:959`–`:960`; `dispose()` at `:1308`.
+- **Logic:** track `_lastAccessMs` per instance, bumped in `ensureReady()`/read/write entry points. A single static sweep timer (one, not per-instance) evicts instances idle > TTL (default 10 min), **except** the active-workspace instance. Eviction = `await _writeTail` → force final flush (reuse `exportStateToFile()` + `_writeKanbanStateBackup()` from `dispose()`) → `this._db.close()` (frees WASM memory) → delete from both maps → null `_db`. `getInstance()` for an evicted key rebuilds via the existing lazy `_initialize()` path.
+- **Implementation:** add `_lastAccessMs`, `KanbanDatabase._evictionTimer`, `startEvictionSweep()` (idempotent, started once), and `private async _evict()` reusing the drain/flush/close sequence. Make lazy reopen race-safe: if an eviction is in progress for a key, `getInstance` awaits it before recreating.
+- **Edge Cases:** active-workspace exemption; read-arrives-mid-evict; never evict an instance with a non-settled `_writeTail` until drained; sweep must no-op cleanly when `_db` already null.
+
+### `src/services/KanbanDatabase.ts` — Workstream B: coalesce `_persist()`
+- **Context:** `_persist()` `:7139`; `this._db.export()` `:7150`; `_writeKanbanStateBackup()` un-debounced `:7179`; mirror already debounced `:6967`.
+- **Logic:** introduce a `_dirty` flag + trailing debounce (default 300 ms). Mutations mark `_dirty` and (re)arm the timer; the timer runs the single `export()`+atomic write. Fold `_writeKanbanStateBackup()` onto the same coalesced tick (or its own longer debounce). Provide `flushPersist()` that clears the timer and writes synchronously; call it from `dispose()`, from Workstream A's `_evict()`, and from `_reloadIfStale` before any reload so a pending in-memory write is never lost or clobbered.
+- **Implementation:** keep the existing `_writeTail` atomic tmp-file+rename write (`:7151`–`:7175`) as the flush body; only the *scheduling* changes. Preserve `_dataVersion++` semantics (bump on mutation, not on flush) so `KanbanProvider`'s O(1) no-op-refresh short-circuit still works.
+- **Edge Cases:** read-your-write (a read that must see its own change forces flush first); crash-in-window (bounded to ≤300 ms of the last write, acceptable and no worse than a lost debounce today); dispose/evict always flush.
+
+### `src/services/KanbanDatabase.ts` — Workstream C: local retention (no external dependency)
+- **Context:** `plan_events` DDL `:223`, inserts `:7213`/`:7380`; `activity_log` DDL `:237`, insert `:7280`; existing `cleanupActivityLog(before)` `:7422` (unscheduled); reusable age-purge `purgeOldTombstones(olderThanDays)` `:4367`; per-plan delete `deletePlanEventsByPlanId` `:7406`.
+- **Logic:** add `purgeOldPlanEvents(olderThanDays, minPerPlan)` — delete rows older than the window **except** the most-recent `minPerPlan` per `plan_id` (window function or correlated subquery), clamped like `purgeOldTombstones`. Schedule both prunes on a low-frequency sweep (e.g. daily / on activation) via `KanbanProvider`, not per-write. Optional throttled `VACUUM` (opt-in, at most once per sweep, holding `_writeTail`) to reclaim pages.
+- **Implementation:** parameterized `_persistedUpdate` SQL; expose retention windows as settings with clear descriptions ("older events are removed; recent forensics preserved"). Idempotent; safe to run repeatedly.
+- **Edge Cases:** empty tables (no-op); min-per-plan floor guarantees every card keeps recent history; never a bare `DELETE FROM plan_events`; VACUUM skipped if a write is pending.
+
+### `src/services/KanbanDatabase.ts` — Workstream D: remove the temporary diagnostic
+- **Context:** `_diagFeatureSnapshot('persist')` called at `:7141` (also on reload), def `:7128`, writing via `appendFeatureClobberDiag` to `feature-clobber-diagnostic.txt` (observed 10 MB).
+- **Logic:** remove the per-persist `SELECT`+file-append probe (or gate behind an off-by-default debug flag) and delete the stale `feature-clobber-diagnostic.txt` files on activation as a one-time cleanup. This removes per-write CPU and an unbounded on-disk file.
+- **Edge Cases:** ensure removal doesn't drop any non-diagnostic logic sharing the method; the is_feature-clobber investigation it supported is separate — confirm it's concluded before removing (the comment marks it temporary).
+
+### (Optional, secondary) DuckDB as an additive analytical mirror only
+- **Archiving is copy, not move.** `KanbanDatabase.archivePlan()` `UPDATE`s the board row (which **stays**, status→`archived`/`completed`) and `ArchiveManager.archivePlan()` writes a DuckDB copy via `INSERT … ON CONFLICT (plan_id) DO UPDATE` (idempotent *within* DuckDB — re-archiving upserts and bumps `revision_count`, so no dup rows accumulate there). A plan therefore legitimately exists in **both** stores: the board copy is authoritative/mutable; the DuckDB copy is a frozen analytical snapshot that only re-syncs on re-archive. This is deliberate (operational board vs. cross-workspace/long-term warehouse), **not** redundant storage to eliminate.
+- **DuckDB reclaims nothing in `kanban.db`** (the board row is retained) and most installs lack the CLI, so it is **never load-bearing and not a memory lever.** If desired, the telemetry GC sweep MAY forward aged-out `plan_events`/`activity_log` rows to the archive before local deletion so history survives for users who have the CLI; a missing/failed CLI is a silent no-op and never blocks the prune. **Do not build this unless Workstreams A–C are insufficient** — it is not required to fix the crash.
+
+## Verification Plan
+
+> Per project convention, `dist/` is not used in dev/testing (installed VSIX is the test surface); treat `src/` as source of truth. Compilation/tests may be skipped as planning-pass steps — the checks below are the coder's acceptance criteria.
+
+### Automated Tests
+- **Coalescing:** unit test that N rapid `_persistedUpdate` calls result in exactly one `export()`+file write within the debounce window, and that `flushPersist()`/`dispose()` force an immediate write. Assert `_dataVersion` still increments per mutation.
+- **Eviction correctness:** simulate an instance with a pending `_writeTail`; trigger `_evict()`; assert the final flush completed (file content matches last write) before `close()`, and that a subsequent `getInstance()` lazily reopens with identical data. Assert the active workspace is exempt.
+- **Retention:** seed `plan_events` with rows spanning ages and multiple `plan_id`s; run `purgeOldPlanEvents(90, 50)`; assert old rows gone, newest 50/plan kept regardless of age, other tables untouched, and re-running is a no-op. Same shape for `cleanupActivityLog`.
+- **Regression guards:** existing `review-column-persistence`, `kanban-card-prompt-labels`, and `split-coded-columns` suites still pass (Copy Prompt path exercises `getWorktrees`, the crash site).
+
+### Manual (the real acceptance gate)
+- Open ~9 workspaces, let pollers run, drive a burst of card moves + Copy Prompt on the 4.8 MB board; confirm no `disk I/O error` in Dev Tools console over an extended session, and that evicted workspaces reopen cleanly on click. Confirm the switchboard DB shrinks after a retention sweep + VACUUM.
+
+## Out of Scope
+- **Pruning completed/archived `plans` rows.** Plans are records, still rendered in the COMPLETED column, and their growth (~a few thousand rows / low-single-digit MB) is acceptable and **did not cause the crash**. Resident-heap pressure is solved by eviction (A) + coalescing (B) + telemetry GC (C) — never by deleting plan history. Bounding the *hot* DB at scale (so the per-write full-file serialize stops growing with lifetime plan count — noticeable around ~10k plans / ~10 MB) is handled **structurally** by the Phase-2 follow-up **`split_kanban_hot_cold_dbs.md`** (move dormant plans to a mandatory cold sql.js store, never delete). Out of scope for this hotfix.
+- **Auto-archive behavior/defaults.** Whether to auto-move stale completed cards off the board is a **UX/board-tidiness** decision, separate from this reliability fix, and *not a memory lever regardless*: archiving is an `UPDATE` on the board row (the row **stays**) plus an optional DuckDB upsert — it reclaims nothing in `kanban.db`. Track as a separate UX plan if wanted; note AutoArchive ships **off by default** (`enabled: false`), so today most boards never archive at all.
+- **DB engine swap** (`better-sqlite3` native prebuilds, `node:sqlite`, DuckDB-as-board-engine). Ruled out by the no-`node_modules` single-bundle constraint (see root cause); `node:sqlite` is a possible *future* migration once the Electron/Node baseline supports it across the install base.
+
+---
+**Recommendation:** Complexity 7 → **Send to Lead Coder.** Multi-mechanism, data-consistency-sensitive (teardown/flush ordering + audit-trail retention on a large install base), but decomposable into four independently shippable, independently verifiable workstreams. Land in order A → B → C → D; A alone likely stops the crash by bounding resident heap, B and C harden it, D removes an unbounded diagnostic. Keep sql.js; keep DuckDB optional.
