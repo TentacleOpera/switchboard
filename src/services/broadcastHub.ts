@@ -44,7 +44,7 @@ export class BroadcastHub {
             const queued = this._pendingWebviewMessages;
             this._pendingWebviewMessages = [];
             for (const m of queued) {
-                webview.postMessage(m).catch(() => { /* panel may have closed */ });
+                webview.postMessage(m).then(undefined, () => { /* panel may have closed */ });
             }
         }
     }
@@ -63,7 +63,7 @@ export class BroadcastHub {
     push(msg: any): void {
         // Fan-out 1: webview (with pending queue for initial-load ordering).
         if (this._target.webview) {
-            this._target.webview.postMessage(msg).catch(() => { /* panel closed */ });
+            this._target.webview.postMessage(msg).then(undefined, () => { /* panel closed */ });
         } else {
             this._pendingWebviewMessages.push(msg);
         }
@@ -80,7 +80,7 @@ export class BroadcastHub {
      */
     pushWebviewOnly(msg: any): void {
         if (this._target.webview) {
-            this._target.webview.postMessage(msg).catch(() => { /* panel closed */ });
+            this._target.webview.postMessage(msg).then(undefined, () => { /* panel closed */ });
         } else {
             this._pendingWebviewMessages.push(msg);
         }
@@ -97,7 +97,7 @@ export class BroadcastHub {
             const queued = this._pendingWebviewMessages;
             this._pendingWebviewMessages = [];
             for (const m of queued) {
-                this._target.webview.postMessage(m).catch(() => { /* panel closed */ });
+                this._target.webview.postMessage(m).then(undefined, () => { /* panel closed */ });
             }
         }
     }

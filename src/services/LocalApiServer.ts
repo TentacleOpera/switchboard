@@ -115,6 +115,21 @@ interface LocalApiServerOptions {
         warnings?: string[];
         error?: string;
     }>;
+    /**
+     * Generic Kanban verb dispatch — the A2b per-verb burn-down rail. Every
+     * catalogued Kanban handler verb, once extracted into `KanbanService`, is
+     * reachable at `POST /kanban/verb/<name>` and routed through this single
+     * callback into the service — the same host-agnostic code path the webview
+     * `case '<name>':` arm drives. A bulk coder extends the burn-down by adding
+     * a `KanbanService` method + one dispatch case in
+     * `KanbanProvider.handleServiceVerb`; NO new plumbing here per verb. `verb`
+     * is the message `type`, `payload` is the request body (the webview
+     * `postMessage` shape — untrusted network input; the service method
+     * validates its own payload). Returns the service method's result (every
+     * extracted verb returns `{ success, ... }`). Optional — absent in
+     * headless/test harnesses (returns 503).
+     */
+    kanbanVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     cleanupWorktree?: (
         workspaceRoot: string,
         worktreeId: string | number
@@ -778,6 +793,53 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanReconcileFeatures error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanReconcileFeatures failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/verb/<name> — the A2b per-verb burn-down rail. Drives an
+     * extracted `KanbanService` method over HTTP with the same host-agnostic
+     * code path the webview `case '<name>':` arm takes. `<name>` is the
+     * catalogued verb (the message `type`); the request body is the verb
+     * payload (the webview `postMessage` shape). Untrusted network input — the
+     * service method validates its own payload; the provider dispatch is an
+     * explicit allowlist (an unknown verb is rejected, never dynamically
+     * invoked). Every extracted verb returns `{ success, ... }`; the body is
+     * passed through with HTTP status derived from `success`.
+     */
+    private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const kanbanVerb = this._options.kanbanVerb;
+        if (!kanbanVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Kanban verb dispatch not available' }));
+            return;
+        }
+        if (!verb) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing verb in path' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await kanbanVerb(verb, body ?? {}, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] kanbanVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `kanban verb '${verb}' failed` }));
         }
     }
 
@@ -2157,6 +2219,10 @@ export class LocalApiServer {
                 await this._handleKanbanSplitFeature(req, res);
             } else if (pathname === '/kanban/features/reconcile' && req.method === 'POST') {
                 await this._handleKanbanReconcileFeatures(req, res);
+            } else if (pathname.startsWith('/kanban/verb/') && req.method === 'POST') {
+                // A2b per-verb burn-down rail: /kanban/verb/<name> → KanbanService.
+                const verb = decodeURIComponent(pathname.slice('/kanban/verb/'.length));
+                await this._handleKanbanVerb(verb, req, res);
             } else if (pathname === '/kanban/orchestration/dispatch' && req.method === 'POST') {
                 await this._handleOrchestrationDispatch(req, res);
             } else if (pathname === '/orchestration/start' && req.method === 'POST') {

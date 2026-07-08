@@ -6430,6 +6430,41 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
+    /**
+     * A2b HTTP verb rail — dispatch an extracted Kanban verb to `KanbanService`,
+     * driving the same host-agnostic code path the webview `case '<verb>':` arm
+     * takes. Reached by `POST /kanban/verb/<name>` via the `kanbanVerb` callback
+     * wired in `TaskViewerProvider`.
+     *
+     * The `switch` is an explicit allowlist: untrusted network input must never
+     * reach an arbitrary service method by name. A bulk coder extends the
+     * burn-down by extracting the next arm into `KanbanService` and adding one
+     * `case` here — the endpoint, auth, and dispatch plumbing already exist.
+     *
+     * Lazily constructs the service (a remote-control session drives verbs with
+     * VS Code minimised and the kanban panel possibly never opened).
+     */
+    public async handleServiceVerb(verb: string, payload: any): Promise<any> {
+        if (!this._kanbanService) {
+            this._initKanbanService();
+        }
+        const svc = this._kanbanService;
+        if (!svc) {
+            throw new Error('Kanban service unavailable — no workspace root resolved');
+        }
+        const p = payload ?? {};
+        switch (verb) {
+            case 'selectPlan':      return await svc.selectPlan(p);
+            case 'openPlanByPath':  return await svc.openPlanByPath(p);
+            case 'refresh':         return await svc.refresh();
+            case 'scanFoldersNow':  return await svc.scanFoldersNow();
+            case 'focusTerminal':   return await svc.focusTerminal(p);
+            case 'fileExists':      return await svc.fileExists(p);
+            default:
+                throw new Error(`Unknown or not-yet-extracted Kanban verb: '${verb}'`);
+        }
+    }
+
 
 
     private async _handleMessage(msg: any) {
@@ -8744,9 +8779,13 @@ ${FOCUS_DIRECTIVE}`;
             }
 
             case 'focusTerminal': {
-                const terminalName = String(msg.terminalName || '');
-                if (terminalName) {
-                    await vscode.commands.executeCommand('switchboard.focusTerminalByName', terminalName);
+                // A2b: delegated to kanbanService (extracted verb).
+                if (this._kanbanService) { await this._kanbanService.focusTerminal(msg); }
+                else {
+                    const terminalName = String(msg.terminalName || '');
+                    if (terminalName) {
+                        await vscode.commands.executeCommand('switchboard.focusTerminalByName', terminalName);
+                    }
                 }
                 break;
             }
@@ -8797,20 +8836,25 @@ ${FOCUS_DIRECTIVE}`;
                 break;
             }
             case 'fileExists': {
-                const filePath = msg.path;
-                if (typeof filePath !== 'string' || !filePath.trim()) break;
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
-                    break;
+                // A2b: delegated to kanbanService (extracted verb).
+                if (this._kanbanService) {
+                    await this._kanbanService.fileExists({ path: msg.path, workspaceRoot: this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined });
+                } else {
+                    const filePath = msg.path;
+                    if (typeof filePath !== 'string' || !filePath.trim()) break;
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    if (!workspaceRoot) {
+                        this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
+                        break;
+                    }
+                    const resolvedPath = path.resolve(workspaceRoot, filePath);
+                    if (!resolvedPath.startsWith(workspaceRoot)) {
+                        this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
+                        break;
+                    }
+                    const exists = fs.existsSync(resolvedPath);
+                    this._panel?.webview.postMessage({ type: 'fileExistsResult', exists });
                 }
-                const resolvedPath = path.resolve(workspaceRoot, filePath);
-                if (!resolvedPath.startsWith(workspaceRoot)) {
-                    this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
-                    break;
-                }
-                const exists = fs.existsSync(resolvedPath);
-                this._panel?.webview.postMessage({ type: 'fileExistsResult', exists });
                 break;
             }
             case 'saveSetting': {

@@ -1,5 +1,5 @@
 import type { Server } from 'http';
-import type { URL } from 'url';
+import { URL } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 
 /**

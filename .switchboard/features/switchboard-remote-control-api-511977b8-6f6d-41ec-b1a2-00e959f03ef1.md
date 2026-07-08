@@ -75,31 +75,31 @@ Plan: `.switchboard/plans/switchboard-manage-console-skill.md`
 4. **AGENTS.md + CLAUDE.md** — registered `switchboard-manage` in the skills tables.
 - **Commit:** `ae520bf`.
 
-### ⏳ A2b — Per-Verb Handler Burn-Down (IN PROGRESS — recipe proven, long pole remains)
+### ✅ A2b — Per-Verb Handler Burn-Down (RECIPE COMPLETE end-to-end — HANDOFF READY; long-pole burn-down remains)
 Plan: `.switchboard/plans/transport-migration-per-verb-burndown.md`
-- **Status:** Recipe proven across all 6 coupling patterns; 6 of 606 arms extracted + 4 wired into the provider. NOT one-session work (plan endorses this ceiling).
-- **`src/services/kanbanService.ts`** (new, uncommitted): host-agnostic service module. `KanbanServiceContext` interface (workspaceRoot, seams, broadcaster, resolveSessionId, selectSession, triggerPlanScan). `KanbanService` class with 6 extracted verbs: `selectPlan`, `openPlanByPath`, `refresh`, `scanFoldersNow`, `focusTerminal`, `fileExists`. Inline recipe documentation (the 7-step per-verb recipe from the plan).
-- **`KanbanProvider` wiring (partially done, uncommitted):** imports `KanbanService` + `HostSeams` + `BroadcastHub`; fields `_hostSeams`/`_broadcaster`/`_kanbanService`; `_initKanbanService()` method (constructs seams + broadcaster + service, called on panel creation); 4 arms repointed (`selectPlan`, `openPlanByPath`, `refresh`, `scanFoldersNow` — each delegates to `_kanbanService` with inline fallback to the original body for safety).
-- **Recipe (proven across all coupling patterns):** (1) extract arm body → service method, (2) route vscode-coupled calls through `HostSeams` (commands/ui/editor/pathConfig/terminal), (3) route `postMessage` through `BroadcastHub.push()`, (4) arm becomes `case 'verb': return svc.verb(msg)`, (5) add `POST /kanban/verb/<name>` endpoint, (6) parity-test row, (7) if a NEW coupling surface is found, stop + add to `hostSeams.ts` (seam-growth protocol).
-- **Coupling patterns covered (recipe proven):**
+- **Status:** The per-verb recipe is now wired end-to-end and proven across all 6 coupling patterns. **6 of 606 arms** extracted into `KanbanService`, **all 6 arms repointed** in the provider, and **all 6 reachable over HTTP** via a single generic verb rail. Build is green (`npm run compile`), catalog is in sync (`npm run catalog:check`). This is the handoff point for a bulk coder — the burn-down of the remaining 600 arms is now pure repetition of a proven, working pattern. NOT one-session work (plan endorses the multi-session ceiling).
+- **`src/services/kanbanService.ts`:** host-agnostic service module. `KanbanServiceContext` interface (workspaceRoot, seams, broadcaster, resolveSessionId, selectSession, triggerPlanScan). `KanbanService` class with 6 extracted verbs: `selectPlan`, `openPlanByPath`, `refresh`, `scanFoldersNow`, `focusTerminal`, `fileExists`. Inline recipe documentation (the 7-step per-verb recipe from the plan).
+- **`KanbanProvider` wiring:** imports `KanbanService` + `HostSeams` + `BroadcastHub`; fields `_hostSeams`/`_broadcaster`/`_kanbanService`; `_initKanbanService()` (constructs seams + broadcaster + service, called on panel creation); **all 6 arms repointed** (`selectPlan`, `openPlanByPath`, `refresh`, `scanFoldersNow`, `focusTerminal`, `fileExists` — each delegates to `_kanbanService` with an inline fallback to the original body for safety); **`handleServiceVerb(verb, payload)`** — the public HTTP-verb dispatch method (explicit allowlist switch, lazily inits the service, one `case` per extracted verb).
+- **HTTP rail (`LocalApiServer` + `TaskViewerProvider`):** implemented as **one generic route — `POST /kanban/verb/<name>`** — not 6 separate routes. `_handleKanbanVerb(verb, req, res)` parses the verb from the path + body from the request, validates auth, and calls the new `kanbanVerb(verb, payload, workspaceRoot?)` injected callback; `TaskViewerProvider` wires `kanbanVerb` → `KanbanProvider.handleServiceVerb`. **This is the key handoff ergonomic:** a bulk coder adds a verb by (1) extracting the arm body into a `KanbanService` method, (2) repointing the provider arm to delegate to it, (3) adding one `case` to `handleServiceVerb` — **no new route/handler/callback plumbing per verb.** Every extracted verb returns `{ success, ... }`; the handler passes it through with HTTP status derived from `success`.
+- **Recipe (proven + wired end-to-end):** (1) extract arm body → `KanbanService` method, (2) route vscode-coupled calls through `HostSeams` (commands/ui/editor/pathConfig/terminal), (3) route `postMessage` through `BroadcastHub.push()`, (4) repoint arm to `if (this._kanbanService) { await this._kanbanService.verb(msg); } else { <original> }`, (5) add a `case` to `handleServiceVerb` (the `/kanban/verb/<name>` endpoint already dispatches it), (6) parity-test row, (7) if a NEW coupling surface is found, stop + add to `hostSeams.ts` (seam-growth protocol).
+- **Coupling patterns covered (recipe proven + wired):**
   | Pattern | Verb | Status |
   |---------|------|--------|
-  | Internal service call (no vscode) | `selectPlan`, `scanFoldersNow` | ✅ wired |
-  | `HostCommands` (executeCommand) | `refresh`, `focusTerminal` | ✅ wired / extracted |
-  | `HostUI` (showWarningMessage) | `openPlanByPath` | ✅ wired |
-  | `HostEditor` (openTextDocument) | `openPlanByPath` | ✅ wired |
-  | `fs` ops (readFile/existsSync) | `openPlanByPath`, `fileExists` | ✅ wired / extracted |
-  | `BroadcastHub.push()` (postMessage → dual-fan) | `fileExists` | ✅ extracted |
+  | Internal service call (no vscode) | `selectPlan`, `scanFoldersNow` | ✅ wired + HTTP |
+  | `HostCommands` (executeCommand) | `refresh`, `focusTerminal` | ✅ wired + HTTP |
+  | `HostUI` (showWarningMessage) | `openPlanByPath` | ✅ wired + HTTP |
+  | `HostEditor` (openTextDocument) | `openPlanByPath` | ✅ wired + HTTP |
+  | `fs` ops (readFile/existsSync) | `openPlanByPath`, `fileExists` | ✅ wired + HTTP |
+  | `BroadcastHub.push()` (postMessage → dual-fan) | `fileExists` | ✅ wired + HTTP |
   | `TerminalBackend` (direct terminal ops) | — | ❌ not yet exercised (B3's node-pty; `focusTerminal` routes through commands, not the seam directly) |
-- **Remaining to complete the proven recipe end-to-end (~15 min):**
-  1. Repoint `focusTerminal` + `fileExists` arms in `KanbanProvider` (2 arm edits — same pattern as the 4 already done).
-  2. Add 6 HTTP endpoints on `LocalApiServer` (`POST /kanban/verb/<name>` for each extracted verb — follows the existing injected-callback pattern).
-  3. Commit.
-- **Remaining after the recipe is complete (long pole — multiple sessions):** 600 of 606 arms (Kanban 138, Planning 173, Design 62, TaskViewer 110, Setup 117). Burn-down order: kanban → planning → project → design/Stitch → setup → TaskViewer/sidebar. Then: 598 push-site audit through `BroadcastHub.push()`, CI parity gate (catalogued verbs ⊆ live endpoints).
+- **Build-health fixes required to reach a compiling handoff state (pre-existing, NOT A2b burn-down):** the tree did not compile at HEAD — three trivial bugs in previously-committed A2a/Manage code blocked `npm run compile`. Fixed so the bulk coder inherits a green tree:
+  - `broadcastHub.ts` (A2a) — `.catch()` called on a `Thenable<boolean>` (VS Code `postMessage` returns `Thenable`, not `Promise`) at 4 sites → changed to `.then(undefined, …)`.
+  - `wsHub.ts` (A2a) — `URL` imported via `import type` but used as a value (`new URL(...)`) → changed to a value import.
+  - `TaskViewerProvider.ts` (Manage) — `catalogProvider` referenced a nonexistent `this._workspaceRoot` → changed to the in-scope resolved `effectiveRoot` (as `getFullState` beside it already does). **The catalog was also stale** (A3's `/kanban/features/reconcile` + Manage's `/orchestration/start|stop` endpoints were never captured); regenerated `protocol-catalog.json` now reflects all live endpoints incl. `/kanban/verb/` (44 endpoints).
+- **Remaining (long pole — multiple sessions, THIS is the "600 burn-down" — deliberately NOT started this session):** 600 of 606 arms (Kanban 138, Planning 173, Design 62, TaskViewer 110, Setup 117). Burn-down order: kanban → planning → project → design/Stitch → setup → TaskViewer/sidebar. For panels other than Kanban, the bulk coder replicates the KanbanService/handleServiceVerb pattern per provider (a `PlanningService` + its own `/planning/verb/<name>` rail, etc.). Then: 598 push-site audit through `BroadcastHub.push()` (wire the broadcaster's `apiServer` target so the WS fan-out is live — currently `null`), CI parity gate (catalogued verbs ⊆ live endpoints).
 
 ### Suggested next-session sequencing
-1. **A2b — finish the recipe** (repoint 2 arms, add 6 HTTP endpoints, commit). ~15 min. This completes the proven recipe end-to-end and is the handoff point for a bulk coder.
-2. **A2b — mechanical burn-down** (repeat the recipe for the remaining ~138 kanban arms, then the other 4 providers). Long pole — multiple sessions. A bulk coder can parallelize once the recipe is wired.
-3. **A2b — push-site audit + CI parity gate** (after all arms extracted).
-4. **A1 ✅, A2a ✅, A3 ✅, Manage ✅** — no further work (A3's deferred skill-rewrite polish is optional follow-up).
+1. **A2b — mechanical burn-down** (repeat the proven recipe for the remaining ~132 kanban arms, then the other 4 providers). Long pole — multiple sessions. **This is the "600 burn-down"** — the routine work to hand to a bulk coder. The recipe, seams, broadcast rail, and generic HTTP verb endpoint are all in place; each new verb is service-method + arm-repoint + one `handleServiceVerb` case.
+2. **A2b — push-site audit + CI parity gate** (after all arms extracted).
+3. **A1 ✅, A2a ✅, A3 ✅, Manage ✅** — no further work (A3's deferred skill-rewrite polish is optional follow-up).
 
