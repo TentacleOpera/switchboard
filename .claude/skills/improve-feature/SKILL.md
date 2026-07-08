@@ -34,6 +34,10 @@ Restructuring is expected — but bounded:
 
 2. **Improve every subtask (run improve-plan on each).** For each subtask plan file, execute the `improve-plan` workflow's per-plan Steps in full (Load → all Required Sections → adversarial critique → write back → complexity-based recommendation). Improve each in place, with sibling context in hand. This is the same behaviour as dispatching improve-plan across a feature's subtasks locally. Report a per-subtask summary (complexity, routing, key changes).
 
+   ### Project Pinning
+   When updating subtask plans, ensure each has `**Project:** <name>` in Metadata if a project is active; if none is active, omit the line — never ask the user. The workspace/repo name is NOT a project — never pin it (the importer silently drops workspace-name pins to unassigned). See AGENTS.md "Plan Project Pinning" for the full protocol.
+
+
 3. **Cross-subtask reconciliation audit — the real value.** For every file/symbol touched by more than one subtask, classify each finding:
    - **Overlap** — two+ subtasks doing duplicate work.
    - **Contradiction** — incompatible designs on the same surface (e.g. two subtasks rewriting one function with different signatures; two defining the same field differently).
