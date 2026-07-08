@@ -176,12 +176,30 @@ export class SetupPanelProvider implements vscode.Disposable {
             seams: this._hostSeams,
             broadcaster: this._broadcaster,
             handleMessage: async (msg) => this._handleMessage(msg),
+            handleGetStartupCommands: async () => {
+                if (this._taskViewerProvider) {
+                    return this._taskViewerProvider.handleGetStartupCommands();
+                }
+                return { commands: {}, planIngestionFolder: '', visibleAgents: {}, autoCommitOnCodeReview: false };
+            },
+            handleSaveStartupCommands: async (data) => {
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.handleSaveStartupCommands(data);
+                }
+            },
+            refreshUI: async () => {
+                await vscode.commands.executeCommand('switchboard.refreshUI');
+            }
         };
         if (this._setupService) {
             this._setupService.setContext(ctx);
         } else {
             this._setupService = new SetupService(ctx);
         }
+    }
+
+    public setApiServer(server: any): void {
+        this._broadcaster?.setApiServer(server);
     }
 
     private _hostSeams?: HostSeams;
@@ -709,12 +727,20 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await vscode.commands.executeCommand('switchboard.openKanban');
                     break;
                 case 'saveStartupCommands':
-                    await this._taskViewerProvider.handleSaveStartupCommands(message);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    if (this._setupService) {
+                        await this._setupService.saveStartupCommands(message);
+                    } else {
+                        await this._taskViewerProvider.handleSaveStartupCommands(message);
+                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                    }
                     break;
                 case 'getStartupCommands': {
-                    const startupState = await this._taskViewerProvider.handleGetStartupCommands();
-                    this._panel.webview.postMessage({ type: 'startupCommands', ...startupState });
+                    if (this._setupService) {
+                        await this._setupService.getStartupCommands(message);
+                    } else {
+                        const startupState = await this._taskViewerProvider.handleGetStartupCommands();
+                        this._panel.webview.postMessage({ type: 'startupCommands', ...startupState });
+                    }
                     break;
                 }
                 case 'getVisibleAgents': {

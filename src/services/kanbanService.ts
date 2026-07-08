@@ -57,6 +57,14 @@ export interface KanbanServiceContext {
     /** Trigger a plan scan across watch folders. */
     triggerPlanScan(): Promise<void>;
     handleMessage(msg: any): Promise<any>;
+    workspaceStateGet(key: string): any;
+    workspaceStateUpdate(key: string, value: any): Promise<void>;
+    getScopedRoleConfig(roleName: string): any;
+    updateScopedRoleConfig(roleName: string, value: any): Promise<void>;
+    getScopedSetting(key: string, defaultValue?: any): any;
+    updateScopedSetting(key: string, value: any): Promise<void>;
+    remoteGetConfigPayload(workspaceRoot?: string): Promise<Record<string, any> | null>;
+    remoteSetConfig(workspaceRoot: string | undefined, config: any): Promise<Record<string, any> | null>;
 }
 
 export class KanbanService {
@@ -361,7 +369,11 @@ export class KanbanService {
     }
 
     async "getRemoteConfig"(payload: any): Promise<any> {
-        return this._ctx.handleMessage({ type: 'getRemoteConfig', ...payload });
+        const result = await this._ctx.remoteGetConfigPayload(payload.workspaceRoot);
+        if (result) {
+            this._ctx.broadcaster.push(result);
+        }
+        return { success: true, payload: result };
     }
 
     async "getSafetySession"(payload: any): Promise<any> {
@@ -369,7 +381,24 @@ export class KanbanService {
     }
 
     async "getSetting"(payload: any): Promise<any> {
-        return this._ctx.handleMessage({ type: 'getSetting', ...payload });
+        const { key } = payload;
+        if (typeof key !== 'string') {
+            return { success: false, error: 'Key is not a string' };
+        }
+        const fullKey = `switchboard.prompts.${key}`;
+        
+        let value: any;
+        if (key === 'selectedRole') {
+            value = this._ctx.workspaceStateGet(fullKey);
+        } else if (key.startsWith('roleConfig_')) {
+            const roleName = key.replace('roleConfig_', '');
+            value = this._ctx.getScopedRoleConfig(roleName);
+        } else {
+            value = this._ctx.getScopedSetting(fullKey, undefined);
+        }
+        
+        this._ctx.broadcaster.push({ type: 'settingResult', key, value });
+        return { success: true, key, value };
     }
 
     async "getStartupCommands"(payload: any): Promise<any> {
@@ -545,7 +574,24 @@ export class KanbanService {
     }
 
     async "saveSetting"(payload: any): Promise<any> {
-        return this._ctx.handleMessage({ type: 'saveSetting', ...payload });
+        const { key, value } = payload;
+        if (typeof key !== 'string') {
+            return { success: false, error: 'Key is not a string' };
+        }
+        const fullKey = `switchboard.prompts.${key}`;
+        
+        if (key === 'selectedRole') {
+            await this._ctx.workspaceStateUpdate(fullKey, value);
+            return { success: true };
+        }
+
+        if (key.startsWith('roleConfig_')) {
+            const roleName = key.replace('roleConfig_', '');
+            await this._ctx.updateScopedRoleConfig(roleName, value);
+        } else {
+            await this._ctx.updateScopedSetting(fullKey, value);
+        }
+        return { success: true };
     }
 
     async "saveStartupCommands"(payload: any): Promise<any> {
@@ -585,7 +631,11 @@ export class KanbanService {
     }
 
     async "setRemoteConfig"(payload: any): Promise<any> {
-        return this._ctx.handleMessage({ type: 'setRemoteConfig', ...payload });
+        const result = await this._ctx.remoteSetConfig(payload.workspaceRoot, payload.config);
+        if (result) {
+            this._ctx.broadcaster.push(result);
+        }
+        return { success: true, payload: result };
     }
 
     async "setSuppressMainTerminals"(payload: any): Promise<any> {

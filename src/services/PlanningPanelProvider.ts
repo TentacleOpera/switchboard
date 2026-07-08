@@ -288,6 +288,10 @@ export class PlanningPanelProvider {
         }
     }
 
+    public setApiServer(server: any): void {
+        this._broadcaster?.setApiServer(server);
+    }
+
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
     private _planningService?: PlanningService;

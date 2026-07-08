@@ -6432,13 +6432,25 @@ This step is what moves the plan forward in the Switchboard pipeline.
             resolveSessionId: (planId?, sessionId?) => this._resolveSessionId(planId, sessionId),
             selectSession: (sessionId) => { this._taskViewerProvider?.selectSession(sessionId); },
             triggerPlanScan: () => this.triggerPlanScan(),
-                    handleMessage: async (msg) => this._handleMessage(msg),
+            handleMessage: async (msg) => this._handleMessage(msg),
+            workspaceStateGet: (key) => this._context.workspaceState.get(key),
+            workspaceStateUpdate: async (key, value) => { await this._context.workspaceState.update(key, value); },
+            getScopedRoleConfig: (roleName) => this.getScopedRoleConfig(roleName),
+            updateScopedRoleConfig: (roleName, value) => this.updateScopedRoleConfig(roleName, value),
+            getScopedSetting: (key, defaultValue) => this._getScopedSetting(key, defaultValue),
+            updateScopedSetting: (key, value) => this._updateScopedSetting(key, value),
+            remoteGetConfigPayload: (wsRoot) => this.remoteGetConfigPayload(wsRoot),
+            remoteSetConfig: (wsRoot, config) => this.remoteSetConfig(wsRoot, config),
         };
         if (this._kanbanService) {
             this._kanbanService.setContext(ctx);
         } else {
             this._kanbanService = new KanbanService(ctx);
         }
+    }
+
+    public setApiServer(server: any): void {
+        this._broadcaster?.setApiServer(server);
     }
 
     /**
@@ -7143,15 +7155,21 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
 
             case 'getRemoteConfig': {
-                // The Remote tab now lives in project.html; this case remains for the
-                // kanban toolbar toggle's state hydration on webview boot.
-                const payload = await this.remoteGetConfigPayload(msg.workspaceRoot);
-                if (payload) { this._panel?.webview.postMessage(payload); }
+                if (this._kanbanService) {
+                    await this._kanbanService.getRemoteConfig(msg);
+                } else {
+                    const payload = await this.remoteGetConfigPayload(msg.workspaceRoot);
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                }
                 break;
             }
             case 'setRemoteConfig': {
-                const payload = await this.remoteSetConfig(msg.workspaceRoot, msg.config as RemoteConfig);
-                if (payload) { this._panel?.webview.postMessage(payload); }
+                if (this._kanbanService) {
+                    await this._kanbanService.setRemoteConfig(msg);
+                } else {
+                    const payload = await this.remoteSetConfig(msg.workspaceRoot, msg.config as RemoteConfig);
+                    if (payload) { this._panel?.webview.postMessage(payload); }
+                }
                 break;
             }
             case 'runNotionRemoteSetup': {
@@ -9023,41 +9041,43 @@ ${FOCUS_DIRECTIVE}`;
                 break;
             }
             case 'saveSetting': {
-                const { key, value } = msg;
-                if (typeof key !== 'string') break;
-                const fullKey = `switchboard.prompts.${key}`;
-                
-                // selectedRole is ephemeral UI state and should remain workspace-scoped
-                if (key === 'selectedRole') {
-                    await this._context.workspaceState.update(fullKey, value);
-                    break;
-                }
-
-                if (key.startsWith('roleConfig_')) {
-                    const roleName = key.replace('roleConfig_', '');
-                    await this.updateScopedRoleConfig(roleName, value);
+                if (this._kanbanService) {
+                    await this._kanbanService.saveSetting(msg);
                 } else {
-                    await this._updateScopedSetting(fullKey, value);
+                    const { key, value } = msg;
+                    if (typeof key !== 'string') break;
+                    const fullKey = `switchboard.prompts.${key}`;
+                    if (key === 'selectedRole') {
+                        await this._context.workspaceState.update(fullKey, value);
+                        break;
+                    }
+                    if (key.startsWith('roleConfig_')) {
+                        const roleName = key.replace('roleConfig_', '');
+                        await this.updateScopedRoleConfig(roleName, value);
+                    } else {
+                        await this._updateScopedSetting(fullKey, value);
+                    }
                 }
                 break;
             }
             case 'getSetting': {
-                const { key } = msg;
-                if (typeof key !== 'string') break;
-                const fullKey = `switchboard.prompts.${key}`;
-                
-                let value: any;
-                if (key === 'selectedRole') {
-                    // selectedRole is ephemeral UI state and should remain workspace-scoped
-                    value = this._context.workspaceState.get(fullKey);
-                } else if (key.startsWith('roleConfig_')) {
-                    const roleName = key.replace('roleConfig_', '');
-                    value = this.getScopedRoleConfig(roleName);
+                if (this._kanbanService) {
+                    await this._kanbanService.getSetting(msg);
                 } else {
-                    value = this._getScopedSetting(fullKey, undefined);
+                    const { key } = msg;
+                    if (typeof key !== 'string') break;
+                    const fullKey = `switchboard.prompts.${key}`;
+                    let value: any;
+                    if (key === 'selectedRole') {
+                        value = this._context.workspaceState.get(fullKey);
+                    } else if (key.startsWith('roleConfig_')) {
+                        const roleName = key.replace('roleConfig_', '');
+                        value = this.getScopedRoleConfig(roleName);
+                    } else {
+                        value = this._getScopedSetting(fullKey, undefined);
+                    }
+                    this._panel?.webview.postMessage({ type: 'settingResult', key, value });
                 }
-                
-                this._panel?.webview.postMessage({ type: 'settingResult', key, value });
                 break;
             }
             case 'getDefaultPromptPreviews': {

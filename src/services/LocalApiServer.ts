@@ -130,6 +130,10 @@ interface LocalApiServerOptions {
      * headless/test harnesses (returns 503).
      */
     kanbanVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    planningVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    designVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    setupVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    taskViewerVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     cleanupWorktree?: (
         workspaceRoot: string,
         worktreeId: string | number
@@ -851,6 +855,118 @@ export class LocalApiServer {
             console.error(`[LocalApiServer] kanbanVerb '${verb}' error:`, err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `kanban verb '${verb}' failed` }));
+        }
+    }
+
+    private async _handlePlanningVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            return;
+        }
+        const planningVerb = this._options.planningVerb;
+        if (!planningVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Planning verb dispatch not available' }));
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await planningVerb(verb, body, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] planningVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `planning verb '${verb}' failed` }));
+        }
+    }
+
+    private async _handleDesignVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            return;
+        }
+        const designVerb = this._options.designVerb;
+        if (!designVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Design verb dispatch not available' }));
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await designVerb(verb, body, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] designVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `design verb '${verb}' failed` }));
+        }
+    }
+
+    private async _handleSetupVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            return;
+        }
+        const setupVerb = this._options.setupVerb;
+        if (!setupVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Setup verb dispatch not available' }));
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await setupVerb(verb, body, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] setupVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `setup verb '${verb}' failed` }));
+        }
+    }
+
+    private async _handleTaskViewerVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            return;
+        }
+        const taskViewerVerb = this._options.taskViewerVerb;
+        if (!taskViewerVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'TaskViewer verb dispatch not available' }));
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await taskViewerVerb(verb, body, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] taskViewerVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `taskViewer verb '${verb}' failed` }));
         }
     }
 
@@ -2243,6 +2359,18 @@ export class LocalApiServer {
                 // A2b per-verb burn-down rail: /kanban/verb/<name> → KanbanService.
                 const verb = decodeURIComponent(pathname.slice('/kanban/verb/'.length));
                 await this._handleKanbanVerb(verb, req, res);
+            } else if (pathname.startsWith('/planning/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/planning/verb/'.length));
+                await this._handlePlanningVerb(verb, req, res);
+            } else if (pathname.startsWith('/design/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/design/verb/'.length));
+                await this._handleDesignVerb(verb, req, res);
+            } else if (pathname.startsWith('/setup/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/setup/verb/'.length));
+                await this._handleSetupVerb(verb, req, res);
+            } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/taskViewer/verb/'.length));
+                await this._handleTaskViewerVerb(verb, req, res);
             } else if (pathname === '/kanban/orchestration/dispatch' && req.method === 'POST') {
                 await this._handleOrchestrationDispatch(req, res);
             } else if (pathname === '/orchestration/start' && req.method === 'POST') {

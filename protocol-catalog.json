@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-08T12:18:40.705Z",
+  "generatedAt": "2026-07-08T20:08:03.470Z",
   "summary": {
     "totalArms": 606,
     "totalVerbs": 518,
@@ -13,7 +13,7 @@
       "TaskViewer": 110,
       "Setup": 117
     },
-    "apiEndpointCount": 44,
+    "apiEndpointCount": 48,
     "manualReviewCount": 4
   },
   "providers": {
@@ -170,722 +170,722 @@
       "arms": [
         {
           "verb": "ready",
-          "line": 6611,
+          "line": 6641,
           "dynamic": false
         },
         {
           "verb": "selectPlan",
-          "line": 6637,
+          "line": 6667,
           "dynamic": false
         },
         {
           "verb": "openPlanByPath",
-          "line": 6648,
+          "line": 6678,
           "dynamic": false
         },
         {
           "verb": "refresh",
-          "line": 6676,
+          "line": 6706,
           "dynamic": false
         },
         {
           "verb": "scanFoldersNow",
-          "line": 6681,
+          "line": 6711,
           "dynamic": false
         },
         {
           "verb": "reassignPlansWorkspace",
-          "line": 6686,
+          "line": 6716,
           "dynamic": false
         },
         {
           "verb": "selectWorkspace",
-          "line": 6829,
+          "line": 6859,
           "dynamic": false
         },
         {
           "verb": "addProject",
-          "line": 6867,
+          "line": 6897,
           "dynamic": false
         },
         {
           "verb": "copyPrdPrompt",
-          "line": 6910,
+          "line": 6940,
           "dynamic": false
         },
         {
           "verb": "deleteProject",
-          "line": 6951,
-          "dynamic": false
-        },
-        {
-          "verb": "setProjectFilter",
-          "line": 6973,
-          "dynamic": false
-        },
-        {
-          "verb": "assignSelectedToProject",
           "line": 6981,
           "dynamic": false
         },
         {
+          "verb": "setProjectFilter",
+          "line": 7003,
+          "dynamic": false
+        },
+        {
+          "verb": "assignSelectedToProject",
+          "line": 7011,
+          "dynamic": false
+        },
+        {
           "verb": "setAutomationMode",
-          "line": 6999,
+          "line": 7029,
           "dynamic": false
         },
         {
           "verb": "startOrchestrator",
-          "line": 7035,
+          "line": 7065,
           "dynamic": false
         },
         {
           "verb": "stopOrchestrator",
-          "line": 7042,
+          "line": 7072,
           "dynamic": false
         },
         {
           "verb": "setMcpMonitorConfig",
-          "line": 7048,
+          "line": 7078,
           "dynamic": false
         },
         {
           "verb": "launchMcpMonitorTerminal",
-          "line": 7054,
+          "line": 7084,
           "dynamic": false
         },
         {
           "verb": "stopMcpMonitorTerminal",
-          "line": 7058,
+          "line": 7088,
           "dynamic": false
         },
         {
           "verb": "checkMcpMonitorAuth",
-          "line": 7062,
+          "line": 7092,
           "dynamic": false
         },
         {
           "verb": "startMcpMonitorPolling",
-          "line": 7066,
+          "line": 7096,
           "dynamic": false
         },
         {
           "verb": "stopMcpMonitorPolling",
-          "line": 7070,
+          "line": 7100,
           "dynamic": false
         },
         {
           "verb": "renderMcpMonitorPreview",
-          "line": 7074,
-          "dynamic": false
-        },
-        {
-          "verb": "updateAutobanConfig",
-          "line": 7081,
-          "dynamic": false
-        },
-        {
-          "verb": "toggleAutoban",
-          "line": 7087,
-          "dynamic": false
-        },
-        {
-          "verb": "resetAutobanTimers",
           "line": 7104,
           "dynamic": false
         },
         {
+          "verb": "updateAutobanConfig",
+          "line": 7111,
+          "dynamic": false
+        },
+        {
+          "verb": "toggleAutoban",
+          "line": 7117,
+          "dynamic": false
+        },
+        {
+          "verb": "resetAutobanTimers",
+          "line": 7134,
+          "dynamic": false
+        },
+        {
           "verb": "toggleAutobanPause",
-          "line": 7108,
+          "line": 7138,
           "dynamic": false
         },
         {
           "verb": "setPairProgrammingMode",
-          "line": 7112,
+          "line": 7142,
           "dynamic": false
         },
         {
           "verb": "getRemoteConfig",
-          "line": 7123,
+          "line": 7153,
           "dynamic": false
         },
         {
           "verb": "setRemoteConfig",
-          "line": 7130,
+          "line": 7162,
           "dynamic": false
         },
         {
           "verb": "runNotionRemoteSetup",
-          "line": 7135,
+          "line": 7171,
           "dynamic": false
         },
         {
           "verb": "startRemoteControl",
-          "line": 7143,
+          "line": 7179,
           "dynamic": false
         },
         {
           "verb": "stopRemoteControl",
-          "line": 7147,
+          "line": 7183,
           "dynamic": false
         },
         {
           "verb": "triggerAction",
-          "line": 7151,
+          "line": 7187,
           "dynamic": false
         },
         {
           "verb": "triggerBatchAction",
-          "line": 7351,
+          "line": 7387,
           "dynamic": false
         },
         {
           "verb": "moveCardBackwards",
-          "line": 7376,
+          "line": 7412,
           "dynamic": false
         },
         {
           "verb": "moveCardForward",
-          "line": 7393,
+          "line": 7429,
           "dynamic": false
         },
         {
           "verb": "openSetupPanel",
-          "line": 7410,
+          "line": 7446,
           "dynamic": false
         },
         {
           "verb": "saveIntegrationAutoPullSettings",
-          "line": 7416,
+          "line": 7452,
           "dynamic": false
         },
         {
           "verb": "setWorkspaceOverride",
-          "line": 7466,
+          "line": 7502,
           "dynamic": false
         },
         {
           "verb": "setProjectOverride",
-          "line": 7487,
+          "line": 7523,
           "dynamic": false
         },
         {
           "verb": "toggleCliTriggers",
-          "line": 7522,
+          "line": 7558,
           "dynamic": false
         },
         {
           "verb": "setFeatureWorkflowMode",
-          "line": 7527,
+          "line": 7563,
           "dynamic": false
         },
         {
           "verb": "toggleDynamicComplexityRouting",
-          "line": 7549,
+          "line": 7585,
           "dynamic": false
         },
         {
           "verb": "toggleAllowUnknownComplexityAutoMove",
-          "line": 7561,
+          "line": 7597,
           "dynamic": false
         },
         {
           "verb": "toggleClearTerminalBeforePrompt",
-          "line": 7573,
+          "line": 7609,
           "dynamic": false
         },
         {
           "verb": "updateClearTerminalBeforePromptDelay",
-          "line": 7592,
+          "line": 7628,
           "dynamic": false
         },
         {
           "verb": "updateRoutingConfig",
-          "line": 7610,
+          "line": 7646,
           "dynamic": false
         },
         {
           "verb": "setColumnDragDropMode",
-          "line": 7615,
+          "line": 7651,
           "dynamic": false
         },
         {
           "verb": "recoverSelected",
-          "line": 7624,
+          "line": 7660,
           "dynamic": false
         },
         {
           "verb": "archiveSelected",
-          "line": 7641,
+          "line": 7677,
           "dynamic": false
         },
         {
           "verb": "recoverAll",
-          "line": 7751,
+          "line": 7787,
           "dynamic": false
         },
         {
           "verb": "showInfo",
-          "line": 7774,
+          "line": 7810,
           "dynamic": false
         },
         {
           "verb": "showWarning",
-          "line": 7779,
+          "line": 7815,
           "dynamic": false
         },
         {
           "verb": "promptOnDrop",
-          "line": 7785,
+          "line": 7821,
           "dynamic": false
         },
         {
           "verb": "batchPlannerPrompt",
-          "line": 7887,
+          "line": 7923,
           "dynamic": false
         },
         {
           "verb": "batchDispatchLow",
-          "line": 7907,
+          "line": 7943,
           "dynamic": false
         },
         {
           "verb": "batchLowComplexity",
-          "line": 7915,
+          "line": 7951,
           "dynamic": false
         },
         {
           "verb": "julesLowComplexity",
-          "line": 7936,
+          "line": 7972,
           "dynamic": false
         },
         {
           "verb": "moveSelected",
-          "line": 7965,
+          "line": 8001,
           "dynamic": false
         },
         {
           "verb": "moveAll",
-          "line": 8092,
+          "line": 8128,
           "dynamic": false
         },
         {
           "verb": "chatCopyPrompt",
-          "line": 8228,
-          "dynamic": false
-        },
-        {
-          "verb": "copyChatWorkflow",
-          "line": 8257,
-          "dynamic": false
-        },
-        {
-          "verb": "promptSelected",
           "line": 8264,
           "dynamic": false
         },
         {
+          "verb": "copyChatWorkflow",
+          "line": 8297,
+          "dynamic": false
+        },
+        {
+          "verb": "promptSelected",
+          "line": 8304,
+          "dynamic": false
+        },
+        {
           "verb": "promptAll",
-          "line": 8357,
+          "line": 8397,
           "dynamic": false
         },
         {
           "verb": "julesSelected",
-          "line": 8464,
+          "line": 8504,
           "dynamic": false
         },
         {
           "verb": "completePlan",
-          "line": 8484,
+          "line": 8524,
           "dynamic": false
         },
         {
           "verb": "completeSelected",
-          "line": 8513,
+          "line": 8553,
           "dynamic": false
         },
         {
           "verb": "completeAll",
-          "line": 8545,
+          "line": 8585,
           "dynamic": false
         },
         {
           "verb": "uncompleteCard",
-          "line": 8588,
+          "line": 8628,
           "dynamic": false
         },
         {
           "verb": "reviewPlan",
-          "line": 8651,
+          "line": 8691,
           "dynamic": false
         },
         {
           "verb": "pauseLiveSync",
-          "line": 8685,
+          "line": 8725,
           "dynamic": false
         },
         {
           "verb": "resumeLiveSync",
-          "line": 8690,
+          "line": 8730,
           "dynamic": false
         },
         {
           "verb": "copyPlanLink",
-          "line": 8699,
+          "line": 8739,
           "dynamic": false
         },
         {
           "verb": "createPlan",
-          "line": 8707,
+          "line": 8747,
           "dynamic": false
         },
         {
           "verb": "toggleBacklogView",
-          "line": 8728,
+          "line": 8768,
           "dynamic": false
         },
         {
           "verb": "sendToBacklog",
-          "line": 8733,
+          "line": 8773,
           "dynamic": false
         },
         {
           "verb": "sendToNew",
-          "line": 8742,
+          "line": 8782,
           "dynamic": false
         },
         {
           "verb": "importFromClipboard",
-          "line": 8751,
+          "line": 8791,
           "dynamic": false
         },
         {
           "verb": "rePlanSelected",
-          "line": 8754,
+          "line": 8794,
           "dynamic": false
         },
         {
           "verb": "codeMapConfirm",
-          "line": 8776,
-          "dynamic": false
-        },
-        {
-          "verb": "codeMapSelected",
-          "line": 8787,
-          "dynamic": false
-        },
-        {
-          "verb": "getDbPath",
-          "line": 8810,
-          "dynamic": false
-        },
-        {
-          "verb": "testingFailed",
           "line": 8816,
           "dynamic": false
         },
         {
+          "verb": "codeMapSelected",
+          "line": 8827,
+          "dynamic": false
+        },
+        {
+          "verb": "getDbPath",
+          "line": 8850,
+          "dynamic": false
+        },
+        {
+          "verb": "testingFailed",
+          "line": 8856,
+          "dynamic": false
+        },
+        {
           "verb": "addAutobanTerminal",
-          "line": 8900,
+          "line": 8940,
           "dynamic": false
         },
         {
           "verb": "removeAutobanTerminal",
-          "line": 8907,
+          "line": 8947,
           "dynamic": false
         },
         {
           "verb": "resetAutobanPools",
-          "line": 8915,
+          "line": 8955,
           "dynamic": false
         },
         {
           "verb": "focusTerminal",
-          "line": 8920,
+          "line": 8960,
           "dynamic": false
         },
         {
           "verb": "getStartupCommands",
-          "line": 8931,
-          "dynamic": false
-        },
-        {
-          "verb": "saveStartupCommands",
-          "line": 8938,
-          "dynamic": false
-        },
-        {
-          "verb": "getPromptsConfig",
-          "line": 8951,
-          "dynamic": false
-        },
-        {
-          "verb": "savePromptsConfig",
-          "line": 8958,
-          "dynamic": false
-        },
-        {
-          "verb": "getDefaultPromptOverrides",
-          "line": 8964,
-          "dynamic": false
-        },
-        {
-          "verb": "saveDefaultPromptOverrides",
           "line": 8971,
           "dynamic": false
         },
         {
+          "verb": "saveStartupCommands",
+          "line": 8978,
+          "dynamic": false
+        },
+        {
+          "verb": "getPromptsConfig",
+          "line": 8991,
+          "dynamic": false
+        },
+        {
+          "verb": "savePromptsConfig",
+          "line": 8998,
+          "dynamic": false
+        },
+        {
+          "verb": "getDefaultPromptOverrides",
+          "line": 9004,
+          "dynamic": false
+        },
+        {
+          "verb": "saveDefaultPromptOverrides",
+          "line": 9011,
+          "dynamic": false
+        },
+        {
           "verb": "fileExists",
-          "line": 8977,
+          "line": 9017,
           "dynamic": false
         },
         {
           "verb": "saveSetting",
-          "line": 8999,
+          "line": 9039,
           "dynamic": false
         },
         {
           "verb": "getSetting",
-          "line": 9018,
+          "line": 9059,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptPreviews",
-          "line": 9037,
+          "line": 9079,
           "dynamic": false
         },
         {
           "verb": "getPromptPreview",
-          "line": 9044,
+          "line": 9086,
           "dynamic": false
         },
         {
           "verb": "planner",
-          "line": 9068,
+          "line": 9110,
           "dynamic": false
         },
         {
           "verb": "lead",
-          "line": 9070,
+          "line": 9112,
           "dynamic": false
         },
         {
           "verb": "coder",
-          "line": 9071,
+          "line": 9113,
           "dynamic": false
         },
         {
           "verb": "intern",
-          "line": 9072,
+          "line": 9114,
           "dynamic": false
         },
         {
           "verb": "reviewer",
-          "line": 9081,
+          "line": 9123,
           "dynamic": false
         },
         {
           "verb": "tester",
-          "line": 9083,
+          "line": 9125,
           "dynamic": false
         },
         {
           "verb": "generateAntigravityPrompt",
-          "line": 9108,
+          "line": 9150,
           "dynamic": false
         },
         {
           "verb": "getPersonaForRole",
-          "line": 9116,
+          "line": 9158,
           "dynamic": false
         },
         {
           "verb": "copyGatherPrompt",
-          "line": 9130,
+          "line": 9172,
           "dynamic": false
         },
         {
           "verb": "copyExecutePrompt",
-          "line": 9147,
+          "line": 9189,
           "dynamic": false
         },
         {
           "verb": "getKanbanStructure",
-          "line": 9163,
+          "line": 9205,
           "dynamic": false
         },
         {
           "verb": "getAutoArchiveConfig",
-          "line": 9171,
+          "line": 9213,
           "dynamic": false
         },
         {
           "verb": "saveAutoArchiveConfig",
-          "line": 9176,
+          "line": 9218,
           "dynamic": false
         },
         {
           "verb": "updateKanbanStructure",
-          "line": 9181,
+          "line": 9223,
           "dynamic": false
         },
         {
           "verb": "saveKanbanColumn",
-          "line": 9190,
+          "line": 9232,
           "dynamic": false
         },
         {
           "verb": "deleteKanbanColumn",
-          "line": 9200,
+          "line": 9242,
           "dynamic": false
         },
         {
           "verb": "restoreKanbanDefaults",
-          "line": 9210,
+          "line": 9252,
           "dynamic": false
         },
         {
           "verb": "toggleKanbanColumnVisibility",
-          "line": 9220,
+          "line": 9262,
           "dynamic": false
         },
         {
           "verb": "exportAgentAsSkill",
-          "line": 9230,
+          "line": 9272,
           "dynamic": false
         },
         {
           "verb": "saveCustomAgent",
-          "line": 9261,
+          "line": 9303,
           "dynamic": false
         },
         {
           "verb": "deleteCustomAgent",
-          "line": 9276,
+          "line": 9318,
           "dynamic": false
         },
         {
           "verb": "getCustomAgents",
-          "line": 9291,
+          "line": 9333,
           "dynamic": false
         },
         {
           "verb": "getUATData",
-          "line": 9305,
+          "line": 9347,
           "dynamic": false
         },
         {
           "verb": "setUATCheckState",
-          "line": 9369,
+          "line": 9411,
           "dynamic": false
         },
         {
           "verb": "getWorktreeConfig",
-          "line": 9386,
+          "line": 9428,
           "dynamic": false
         },
         {
           "verb": "getSafetySession",
-          "line": 9387,
+          "line": 9429,
           "dynamic": false
         },
         {
           "verb": "createWorktree",
-          "line": 9393,
+          "line": 9435,
           "dynamic": false
         },
         {
           "verb": "createWorktreeForFeature",
-          "line": 9426,
+          "line": 9468,
           "dynamic": false
         },
         {
           "verb": "createWorktreeForProject",
-          "line": 9462,
+          "line": 9504,
           "dynamic": false
         },
         {
           "verb": "toggleWorktreeAgentsOpenWithGrid",
-          "line": 9499,
+          "line": 9541,
           "dynamic": false
         },
         {
           "verb": "setSuppressMainTerminals",
-          "line": 9510,
+          "line": 9552,
           "dynamic": false
         },
         {
           "verb": "getFeatureWorktreeMode",
-          "line": 9521,
+          "line": 9563,
           "dynamic": false
         },
         {
           "verb": "setFeatureWorktreeMode",
-          "line": 9527,
+          "line": 9569,
           "dynamic": false
         },
         {
           "verb": "openWorktreeTerminals",
-          "line": 9547,
+          "line": 9589,
           "dynamic": false
         },
         {
           "verb": "copyWorktreeMergePrompt",
-          "line": 9571,
+          "line": 9613,
           "dynamic": false
         },
         {
           "verb": "cleanupWorktree",
-          "line": 9632,
+          "line": 9674,
           "dynamic": false
         },
         {
           "verb": "abandonWorktree",
-          "line": 9639,
+          "line": 9681,
           "dynamic": false
         },
         {
           "verb": "getWorktreeStatuses",
-          "line": 9663,
+          "line": 9705,
           "dynamic": false
         },
         {
           "verb": "addSubtaskToFeature",
-          "line": 9678,
+          "line": 9720,
           "dynamic": false
         },
         {
           "verb": "promoteToFeature",
-          "line": 9709,
+          "line": 9751,
           "dynamic": false
         },
         {
           "verb": "createFeature",
-          "line": 9778,
-          "dynamic": false
-        },
-        {
-          "verb": "suggestFeatures",
-          "line": 9796,
-          "dynamic": false
-        },
-        {
-          "verb": "removeSubtaskFromFeature",
           "line": 9820,
           "dynamic": false
         },
         {
+          "verb": "suggestFeatures",
+          "line": 9838,
+          "dynamic": false
+        },
+        {
+          "verb": "removeSubtaskFromFeature",
+          "line": 9862,
+          "dynamic": false
+        },
+        {
           "verb": "deleteFeature",
-          "line": 9826,
+          "line": 9868,
           "dynamic": false
         },
         {
           "verb": "getFeatureDetails",
-          "line": 9832,
+          "line": 9874,
           "dynamic": false
         },
         {
           "verb": "updateFeatureConfig",
-          "line": 9850,
+          "line": 9892,
           "dynamic": false
         }
       ]
@@ -2436,552 +2436,552 @@
       "arms": [
         {
           "verb": "ready",
-          "line": 9927,
+          "line": 9955,
           "dynamic": false
         },
         {
           "verb": "runSetup",
-          "line": 9976,
+          "line": 10004,
           "dynamic": false
         },
         {
           "verb": "runSetupIDEs",
-          "line": 9979,
+          "line": 10007,
           "dynamic": false
         },
         {
           "verb": "guidedSetup",
-          "line": 9982,
+          "line": 10010,
           "dynamic": false
         },
         {
           "verb": "openKanban",
-          "line": 9985,
+          "line": 10013,
           "dynamic": false
         },
         {
           "verb": "openPlanningPanel",
-          "line": 9988,
+          "line": 10016,
           "dynamic": false
         },
         {
           "verb": "openDesignPanel",
-          "line": 9991,
+          "line": 10019,
           "dynamic": false
         },
         {
           "verb": "openSetupPanel",
-          "line": 9994,
+          "line": 10022,
           "dynamic": false
         },
         {
           "verb": "openProjectPanel",
-          "line": 9997,
+          "line": 10025,
           "dynamic": false
         },
         {
           "verb": "linearLoadProject",
-          "line": 10000,
+          "line": 10028,
           "dynamic": false
         },
         {
           "verb": "linearLoadProjects",
-          "line": 10056,
+          "line": 10084,
           "dynamic": false
         },
         {
           "verb": "linearLoadTaskDetails",
-          "line": 10096,
+          "line": 10124,
           "dynamic": false
         },
         {
           "verb": "linearImportTask",
-          "line": 10165,
+          "line": 10193,
           "dynamic": false
         },
         {
           "verb": "clickupImportTask",
-          "line": 10190,
+          "line": 10218,
           "dynamic": false
         },
         {
           "verb": "linearImportAndSendToPlanner",
-          "line": 10215,
+          "line": 10243,
           "dynamic": false
         },
         {
           "verb": "clickupLoadProject",
-          "line": 10276,
+          "line": 10304,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaces",
-          "line": 10341,
+          "line": 10369,
           "dynamic": false
         },
         {
           "verb": "clickupLoadFolders",
-          "line": 10368,
+          "line": 10396,
           "dynamic": false
         },
         {
           "verb": "clickupLoadLists",
-          "line": 10397,
+          "line": 10425,
           "dynamic": false
         },
         {
           "verb": "clickupSaveListSelection",
-          "line": 10426,
+          "line": 10454,
           "dynamic": false
         },
         {
           "verb": "clickupSaveSpaceSelection",
-          "line": 10448,
+          "line": 10476,
           "dynamic": false
         },
         {
           "verb": "clickupSaveFolderSelection",
-          "line": 10471,
+          "line": 10499,
           "dynamic": false
         },
         {
           "verb": "linearSaveProjectSelection",
-          "line": 10493,
+          "line": 10521,
           "dynamic": false
         },
         {
           "verb": "clickupLoadTaskDetails",
-          "line": 10511,
+          "line": 10539,
           "dynamic": false
         },
         {
           "verb": "linearUpdateIssueLabels",
-          "line": 10553,
+          "line": 10581,
           "dynamic": false
         },
         {
           "verb": "clickupUpdateTaskTags",
-          "line": 10589,
+          "line": 10617,
           "dynamic": false
         },
         {
           "verb": "linearLoadAutomationCatalog",
-          "line": 10626,
+          "line": 10654,
           "dynamic": false
         },
         {
           "verb": "clickupLoadSpaceTags",
-          "line": 10647,
+          "line": 10675,
           "dynamic": false
         },
         {
           "verb": "copyTextToClipboard",
-          "line": 10670,
-          "dynamic": false
-        },
-        {
-          "verb": "showInfo",
-          "line": 10682,
-          "dynamic": false
-        },
-        {
-          "verb": "showWarning",
-          "line": 10687,
-          "dynamic": false
-        },
-        {
-          "verb": "initializeProtocols",
-          "line": 10692,
-          "dynamic": false
-        },
-        {
-          "verb": "finishOnboarding",
-          "line": 10695,
-          "dynamic": false
-        },
-        {
-          "verb": "scaffoldMultiRepo",
           "line": 10698,
           "dynamic": false
         },
         {
+          "verb": "showInfo",
+          "line": 10710,
+          "dynamic": false
+        },
+        {
+          "verb": "showWarning",
+          "line": 10715,
+          "dynamic": false
+        },
+        {
+          "verb": "initializeProtocols",
+          "line": 10720,
+          "dynamic": false
+        },
+        {
+          "verb": "finishOnboarding",
+          "line": 10723,
+          "dynamic": false
+        },
+        {
+          "verb": "scaffoldMultiRepo",
+          "line": 10726,
+          "dynamic": false
+        },
+        {
           "verb": "openExternalUrl",
-          "line": 10729,
-          "dynamic": false
-        },
-        {
-          "verb": "openDocs",
-          "line": 10736,
-          "dynamic": false
-        },
-        {
-          "verb": "toggleSilentSetup",
-          "line": 10746,
-          "dynamic": false
-        },
-        {
-          "verb": "setTerminalRole",
-          "line": 10752,
-          "dynamic": false
-        },
-        {
-          "verb": "focusTerminal",
           "line": 10757,
           "dynamic": false
         },
         {
+          "verb": "openDocs",
+          "line": 10764,
+          "dynamic": false
+        },
+        {
+          "verb": "toggleSilentSetup",
+          "line": 10774,
+          "dynamic": false
+        },
+        {
+          "verb": "setTerminalRole",
+          "line": 10780,
+          "dynamic": false
+        },
+        {
+          "verb": "focusTerminal",
+          "line": 10785,
+          "dynamic": false
+        },
+        {
           "verb": "focus",
-          "line": 10758,
+          "line": 10786,
           "dynamic": false
         },
         {
           "verb": "closeTerminal",
-          "line": 10768,
-          "dynamic": false
-        },
-        {
-          "verb": "executeRemote",
-          "line": 10773,
-          "dynamic": false
-        },
-        {
-          "verb": "executeLocal",
-          "line": 10778,
-          "dynamic": false
-        },
-        {
-          "verb": "renameTerminal",
-          "line": 10783,
-          "dynamic": false
-        },
-        {
-          "verb": "requestContextFile",
-          "line": 10788,
-          "dynamic": false
-        },
-        {
-          "verb": "registerAllTerminals",
-          "line": 10793,
-          "dynamic": false
-        },
-        {
-          "verb": "deregisterAllTerminals",
           "line": 10796,
           "dynamic": false
         },
         {
-          "verb": "createAgentGrid",
-          "line": 10799,
+          "verb": "executeRemote",
+          "line": 10801,
           "dynamic": false
         },
         {
-          "verb": "createAgentGridEditor",
-          "line": 10807,
+          "verb": "executeLocal",
+          "line": 10806,
           "dynamic": false
         },
         {
-          "verb": "closeChatAgent",
-          "line": 10810,
+          "verb": "renameTerminal",
+          "line": 10811,
           "dynamic": false
         },
         {
-          "verb": "setChatAgentRole",
-          "line": 10815,
+          "verb": "requestContextFile",
+          "line": 10816,
           "dynamic": false
         },
         {
-          "verb": "triggerAgentAction",
+          "verb": "registerAllTerminals",
           "line": 10821,
           "dynamic": false
         },
         {
-          "verb": "sendAnalystMessage",
-          "line": 10826,
+          "verb": "deregisterAllTerminals",
+          "line": 10824,
           "dynamic": false
         },
         {
-          "verb": "generateContextMap",
-          "line": 10831,
+          "verb": "createAgentGrid",
+          "line": 10827,
           "dynamic": false
         },
         {
-          "verb": "reviewPlan",
+          "verb": "createAgentGridEditor",
           "line": 10835,
           "dynamic": false
         },
         {
+          "verb": "closeChatAgent",
+          "line": 10838,
+          "dynamic": false
+        },
+        {
+          "verb": "setChatAgentRole",
+          "line": 10843,
+          "dynamic": false
+        },
+        {
+          "verb": "triggerAgentAction",
+          "line": 10849,
+          "dynamic": false
+        },
+        {
+          "verb": "sendAnalystMessage",
+          "line": 10854,
+          "dynamic": false
+        },
+        {
+          "verb": "generateContextMap",
+          "line": 10859,
+          "dynamic": false
+        },
+        {
+          "verb": "reviewPlan",
+          "line": 10863,
+          "dynamic": false
+        },
+        {
           "verb": "viewPlan",
-          "line": 10857,
-          "dynamic": false
-        },
-        {
-          "verb": "copyPlanLink",
-          "line": 10870,
-          "dynamic": false
-        },
-        {
-          "verb": "deletePlan",
-          "line": 10877,
-          "dynamic": false
-        },
-        {
-          "verb": "importPlans",
-          "line": 10882,
-          "dynamic": false
-        },
-        {
-          "verb": "completePlan",
           "line": 10885,
           "dynamic": false
         },
         {
+          "verb": "copyPlanLink",
+          "line": 10898,
+          "dynamic": false
+        },
+        {
+          "verb": "deletePlan",
+          "line": 10905,
+          "dynamic": false
+        },
+        {
+          "verb": "importPlans",
+          "line": 10910,
+          "dynamic": false
+        },
+        {
+          "verb": "completePlan",
+          "line": 10913,
+          "dynamic": false
+        },
+        {
           "verb": "recoverPlanFromSidebar",
-          "line": 10890,
+          "line": 10918,
           "dynamic": false
         },
         {
           "verb": "claimPlan",
-          "line": 10895,
+          "line": 10923,
           "dynamic": false
         },
         {
           "verb": "createDraftPlanTicket",
-          "line": 10900,
+          "line": 10928,
           "dynamic": false
         },
         {
           "verb": "getRecoverablePlans",
-          "line": 10903,
+          "line": 10931,
           "dynamic": false
         },
         {
           "verb": "restorePlan",
-          "line": 10908,
+          "line": 10936,
           "dynamic": false
         },
         {
           "verb": "saveStartupCommands",
-          "line": 10919,
+          "line": 10947,
           "dynamic": false
         },
         {
           "verb": "fetchNotionContent",
-          "line": 10922,
+          "line": 10950,
           "dynamic": false
         },
         {
           "verb": "getNotionFetchState",
-          "line": 10952,
+          "line": 10980,
           "dynamic": false
         },
         {
           "verb": "getStartupCommands",
-          "line": 10971,
+          "line": 10999,
           "dynamic": false
         },
         {
           "verb": "getVisibleAgents",
-          "line": 10976,
+          "line": 11004,
           "dynamic": false
         },
         {
           "verb": "getMcpMonitorConfig",
-          "line": 10981,
+          "line": 11009,
           "dynamic": false
         },
         {
           "verb": "setMcpMonitorConfig",
-          "line": 10985,
+          "line": 11013,
           "dynamic": false
         },
         {
           "verb": "getAccurateCodingSetting",
-          "line": 10991,
+          "line": 11019,
           "dynamic": false
         },
         {
           "verb": "getAdvancedReviewerSetting",
-          "line": 10996,
+          "line": 11024,
           "dynamic": false
         },
         {
           "verb": "getLeadChallengeSetting",
-          "line": 11001,
+          "line": 11029,
           "dynamic": false
         },
         {
           "verb": "getJulesAutoSyncSetting",
-          "line": 11006,
+          "line": 11034,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptOverrides",
-          "line": 11011,
+          "line": 11039,
           "dynamic": false
         },
         {
           "verb": "saveDefaultPromptOverrides",
-          "line": 11016,
+          "line": 11044,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptPreviews",
-          "line": 11020,
+          "line": 11048,
           "dynamic": false
         },
         {
           "verb": "setActiveTab",
-          "line": 11025,
+          "line": 11053,
           "dynamic": false
         },
         {
           "verb": "setActiveSubTab",
-          "line": 11030,
+          "line": 11058,
           "dynamic": false
         },
         {
           "verb": "memoLoad",
-          "line": 11036,
+          "line": 11064,
           "dynamic": false
         },
         {
           "verb": "memoSave",
-          "line": 11050,
+          "line": 11078,
           "dynamic": false
         },
         {
           "verb": "memoClear",
-          "line": 11062,
+          "line": 11090,
           "dynamic": false
         },
         {
           "verb": "memoGeneratePrompt",
-          "line": 11072,
+          "line": 11100,
           "dynamic": false
         },
         {
           "verb": "getRecentActivity",
-          "line": 11124,
-          "dynamic": false
-        },
-        {
-          "verb": "updateAutobanState",
-          "line": 11130,
-          "dynamic": false
-        },
-        {
-          "verb": "addAutobanTerminal",
           "line": 11152,
           "dynamic": false
         },
         {
-          "verb": "removeAutobanTerminal",
+          "verb": "updateAutobanState",
           "line": 11158,
           "dynamic": false
         },
         {
+          "verb": "addAutobanTerminal",
+          "line": 11180,
+          "dynamic": false
+        },
+        {
+          "verb": "removeAutobanTerminal",
+          "line": 11186,
+          "dynamic": false
+        },
+        {
           "verb": "resetAutobanPools",
-          "line": 11164,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineStart",
-          "line": 11168,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineStop",
-          "line": 11175,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelinePause",
-          "line": 11178,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineUnpause",
-          "line": 11181,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineSetInterval",
-          "line": 11184,
-          "dynamic": false
-        },
-        {
-          "verb": "airlock_export",
-          "line": 11189,
-          "dynamic": false
-        },
-        {
-          "verb": "airlock_sendToCoder",
           "line": 11192,
           "dynamic": false
         },
         {
-          "verb": "airlock_syncRepo",
-          "line": 11197,
+          "verb": "pipelineStart",
+          "line": 11196,
           "dynamic": false
         },
         {
-          "verb": "airlock_openNotebookLM",
-          "line": 11200,
-          "dynamic": false
-        },
-        {
-          "verb": "airlock_openFolder",
+          "verb": "pipelineStop",
           "line": 11203,
           "dynamic": false
         },
         {
-          "verb": "kanban_workflowEvent",
+          "verb": "pipelinePause",
           "line": 11206,
           "dynamic": false
         },
         {
-          "verb": "getDbPath",
-          "line": 11211,
+          "verb": "pipelineUnpause",
+          "line": 11209,
           "dynamic": false
         },
         {
-          "verb": "setLocalDb",
-          "line": 11216,
+          "verb": "pipelineSetInterval",
+          "line": 11212,
           "dynamic": false
         },
         {
-          "verb": "editDbPath",
+          "verb": "airlock_export",
+          "line": 11217,
+          "dynamic": false
+        },
+        {
+          "verb": "airlock_sendToCoder",
           "line": 11220,
           "dynamic": false
         },
         {
+          "verb": "airlock_syncRepo",
+          "line": 11225,
+          "dynamic": false
+        },
+        {
+          "verb": "airlock_openNotebookLM",
+          "line": 11228,
+          "dynamic": false
+        },
+        {
+          "verb": "airlock_openFolder",
+          "line": 11231,
+          "dynamic": false
+        },
+        {
+          "verb": "kanban_workflowEvent",
+          "line": 11234,
+          "dynamic": false
+        },
+        {
+          "verb": "getDbPath",
+          "line": 11239,
+          "dynamic": false
+        },
+        {
+          "verb": "setLocalDb",
+          "line": 11244,
+          "dynamic": false
+        },
+        {
+          "verb": "editDbPath",
+          "line": 11248,
+          "dynamic": false
+        },
+        {
           "verb": "testDbConnection",
-          "line": 11263,
+          "line": 11291,
           "dynamic": false
         },
         {
           "verb": "setCustomDbPath",
-          "line": 11286,
+          "line": 11314,
           "dynamic": false
         },
         {
           "verb": "setPresetDbPath",
-          "line": 11290,
+          "line": 11318,
           "dynamic": false
         },
         {
           "verb": "queryArchives",
-          "line": 11294,
+          "line": 11322,
           "dynamic": false
         },
         {
           "verb": "resetDatabase",
-          "line": 11321,
+          "line": 11349,
           "dynamic": false
         },
         {
           "verb": "sendToTerminal",
-          "line": 11325,
+          "line": 11353,
           "dynamic": false
         }
       ]
@@ -3112,587 +3112,587 @@
       "arms": [
         {
           "verb": "setThemeSetting",
-          "line": 294,
+          "line": 308,
           "dynamic": false
         },
         {
           "verb": "ready",
-          "line": 313,
+          "line": 327,
           "dynamic": false
         },
         {
           "verb": "getIntegrationSetupStates",
-          "line": 320,
+          "line": 334,
           "dynamic": false
         },
         {
           "verb": "exportPromptSettings",
-          "line": 325,
+          "line": 339,
           "dynamic": false
         },
         {
           "verb": "importPromptSettings",
-          "line": 330,
+          "line": 344,
           "dynamic": false
         },
         {
           "verb": "copyDbSettingsToGlobal",
-          "line": 335,
+          "line": 349,
           "dynamic": false
         },
         {
           "verb": "getControlPlaneStatus",
-          "line": 340,
+          "line": 354,
           "dynamic": false
         },
         {
           "verb": "setExplicitControlPlaneRoot",
-          "line": 345,
+          "line": 359,
           "dynamic": false
         },
         {
           "verb": "resetExplicitControlPlaneRoot",
-          "line": 357,
+          "line": 371,
           "dynamic": false
         },
         {
           "verb": "clearControlPlaneCache",
-          "line": 368,
+          "line": 382,
           "dynamic": false
         },
         {
           "verb": "detectControlPlaneCandidate",
-          "line": 393,
+          "line": 407,
           "dynamic": false
         },
         {
           "verb": "previewControlPlaneMigration",
-          "line": 403,
+          "line": 417,
           "dynamic": false
         },
         {
           "verb": "executeControlPlaneMigration",
-          "line": 408,
+          "line": 422,
           "dynamic": false
         },
         {
           "verb": "executeControlPlaneFreshSetup",
-          "line": 443,
+          "line": 457,
           "dynamic": false
         },
         {
           "verb": "setBoardStateExport",
-          "line": 477,
+          "line": 491,
           "dynamic": false
         },
         {
           "verb": "setBoardStateExportRemoteUrl",
-          "line": 486,
+          "line": 500,
           "dynamic": false
         },
         {
           "verb": "initControlPlaneGit",
-          "line": 495,
+          "line": 509,
           "dynamic": false
         },
         {
           "verb": "scaffoldMultiRepo",
-          "line": 524,
+          "line": 538,
           "dynamic": false
         },
         {
           "verb": "applyClickUpConfig",
-          "line": 555,
+          "line": 569,
           "dynamic": false
         },
         {
           "verb": "saveClickUpMappings",
-          "line": 565,
+          "line": 579,
           "dynamic": false
         },
         {
           "verb": "saveClickUpAutomation",
-          "line": 574,
+          "line": 588,
           "dynamic": false
         },
         {
           "verb": "applyLinearConfig",
-          "line": 583,
+          "line": 597,
           "dynamic": false
         },
         {
           "verb": "saveLinearAutomation",
-          "line": 602,
+          "line": 616,
           "dynamic": false
         },
         {
           "verb": "linearBrowseProjects",
-          "line": 611,
+          "line": 625,
           "dynamic": false
         },
         {
           "verb": "enableTriagePipeline",
-          "line": 651,
+          "line": 665,
           "dynamic": false
         },
         {
           "verb": "applyNotionConfig",
-          "line": 662,
+          "line": 676,
           "dynamic": false
         },
         {
           "verb": "configureNotionBackup",
-          "line": 671,
+          "line": 685,
           "dynamic": false
         },
         {
           "verb": "backupToNotion",
-          "line": 679,
-          "dynamic": false
-        },
-        {
-          "verb": "restoreFromNotion",
-          "line": 686,
-          "dynamic": false
-        },
-        {
-          "verb": "autoCreateNotionDatabase",
           "line": 693,
           "dynamic": false
         },
         {
-          "verb": "runSetup",
+          "verb": "restoreFromNotion",
           "line": 700,
           "dynamic": false
         },
         {
+          "verb": "autoCreateNotionDatabase",
+          "line": 707,
+          "dynamic": false
+        },
+        {
+          "verb": "runSetup",
+          "line": 714,
+          "dynamic": false
+        },
+        {
           "verb": "openDocs",
-          "line": 705,
+          "line": 719,
           "dynamic": false
         },
         {
           "verb": "openKanban",
-          "line": 708,
+          "line": 722,
           "dynamic": false
         },
         {
           "verb": "saveStartupCommands",
-          "line": 711,
-          "dynamic": false
-        },
-        {
-          "verb": "getStartupCommands",
-          "line": 715,
-          "dynamic": false
-        },
-        {
-          "verb": "getVisibleAgents",
-          "line": 720,
-          "dynamic": false
-        },
-        {
-          "verb": "getCustomAgents",
           "line": 725,
           "dynamic": false
         },
         {
-          "verb": "getKanbanStructure",
-          "line": 731,
+          "verb": "getStartupCommands",
+          "line": 733,
           "dynamic": false
         },
         {
-          "verb": "getPlanScannerConfig",
-          "line": 736,
-          "dynamic": false
-        },
-        {
-          "verb": "setPlanScannerConfig",
+          "verb": "getVisibleAgents",
           "line": 742,
           "dynamic": false
         },
         {
+          "verb": "getCustomAgents",
+          "line": 747,
+          "dynamic": false
+        },
+        {
+          "verb": "getKanbanStructure",
+          "line": 753,
+          "dynamic": false
+        },
+        {
+          "verb": "getPlanScannerConfig",
+          "line": 758,
+          "dynamic": false
+        },
+        {
+          "verb": "setPlanScannerConfig",
+          "line": 764,
+          "dynamic": false
+        },
+        {
           "verb": "getAccurateCodingSetting",
-          "line": 749,
+          "line": 771,
           "dynamic": false
         },
         {
           "verb": "getAdvancedReviewerSetting",
-          "line": 755,
-          "dynamic": false
-        },
-        {
-          "verb": "getLeadChallengeSetting",
-          "line": 761,
-          "dynamic": false
-        },
-        {
-          "verb": "getAutoCommitOnCodeReviewSetting",
-          "line": 769,
-          "dynamic": false
-        },
-        {
-          "verb": "getExcludeReviewedBacklogSetting",
           "line": 777,
           "dynamic": false
         },
         {
-          "verb": "getPersistPanelsSetting",
+          "verb": "getLeadChallengeSetting",
           "line": 783,
           "dynamic": false
         },
         {
+          "verb": "getAutoCommitOnCodeReviewSetting",
+          "line": 791,
+          "dynamic": false
+        },
+        {
+          "verb": "getExcludeReviewedBacklogSetting",
+          "line": 799,
+          "dynamic": false
+        },
+        {
+          "verb": "getPersistPanelsSetting",
+          "line": 805,
+          "dynamic": false
+        },
+        {
           "verb": "getHideGuidedSetupSetting",
-          "line": 789,
-          "dynamic": false
-        },
-        {
-          "verb": "setExcludeReviewedBacklogSetting",
-          "line": 796,
-          "dynamic": false
-        },
-        {
-          "verb": "setHideGuidedSetup",
-          "line": 800,
-          "dynamic": false
-        },
-        {
-          "verb": "setPersistPanelsSetting",
-          "line": 804,
-          "dynamic": false
-        },
-        {
-          "verb": "getProtocolTarget",
           "line": 811,
           "dynamic": false
         },
         {
+          "verb": "setExcludeReviewedBacklogSetting",
+          "line": 818,
+          "dynamic": false
+        },
+        {
+          "verb": "setHideGuidedSetup",
+          "line": 822,
+          "dynamic": false
+        },
+        {
+          "verb": "setPersistPanelsSetting",
+          "line": 826,
+          "dynamic": false
+        },
+        {
+          "verb": "getProtocolTarget",
+          "line": 833,
+          "dynamic": false
+        },
+        {
           "verb": "setProtocolTarget",
-          "line": 817,
+          "line": 839,
           "dynamic": false
         },
         {
           "verb": "getStatusShowTerminalsSetting",
-          "line": 825,
+          "line": 847,
           "dynamic": false
         },
         {
           "verb": "setStatusShowTerminalsSetting",
-          "line": 831,
+          "line": 853,
           "dynamic": false
         },
         {
           "verb": "getStatusShowKanbanSetting",
-          "line": 835,
+          "line": 857,
           "dynamic": false
         },
         {
           "verb": "setStatusShowKanbanSetting",
-          "line": 841,
+          "line": 863,
           "dynamic": false
         },
         {
           "verb": "getStatusShowArtifactsSetting",
-          "line": 845,
+          "line": 867,
           "dynamic": false
         },
         {
           "verb": "setStatusShowArtifactsSetting",
-          "line": 851,
+          "line": 873,
           "dynamic": false
         },
         {
           "verb": "getStatusShowDesignSetting",
-          "line": 855,
+          "line": 877,
           "dynamic": false
         },
         {
           "verb": "setStatusShowDesignSetting",
-          "line": 861,
+          "line": 883,
           "dynamic": false
         },
         {
           "verb": "getStatusShowProjectSetting",
-          "line": 865,
+          "line": 887,
           "dynamic": false
         },
         {
           "verb": "setStatusShowProjectSetting",
-          "line": 871,
+          "line": 893,
           "dynamic": false
         },
         {
           "verb": "getStatusShowMemoSetting",
-          "line": 875,
-          "dynamic": false
-        },
-        {
-          "verb": "setStatusShowMemoSetting",
-          "line": 881,
-          "dynamic": false
-        },
-        {
-          "verb": "getMemoHotkey",
-          "line": 885,
-          "dynamic": false
-        },
-        {
-          "verb": "saveMemoHotkey",
-          "line": 891,
-          "dynamic": false
-        },
-        {
-          "verb": "openKeybindings",
           "line": 897,
           "dynamic": false
         },
         {
+          "verb": "setStatusShowMemoSetting",
+          "line": 903,
+          "dynamic": false
+        },
+        {
+          "verb": "getMemoHotkey",
+          "line": 907,
+          "dynamic": false
+        },
+        {
+          "verb": "saveMemoHotkey",
+          "line": 913,
+          "dynamic": false
+        },
+        {
+          "verb": "openKeybindings",
+          "line": 919,
+          "dynamic": false
+        },
+        {
           "verb": "getThemeSetting",
-          "line": 900,
+          "line": 922,
           "dynamic": false
         },
         {
           "verb": "getCyberAnimationDisabledSetting",
-          "line": 906,
-          "dynamic": false
-        },
-        {
-          "verb": "setCyberAnimationDisabledSetting",
-          "line": 912,
-          "dynamic": false
-        },
-        {
-          "verb": "getCyberScanlinesDisabledSetting",
-          "line": 917,
-          "dynamic": false
-        },
-        {
-          "verb": "setCyberScanlinesDisabledSetting",
-          "line": 923,
-          "dynamic": false
-        },
-        {
-          "verb": "getColourKanbanIconsSetting",
           "line": 928,
           "dynamic": false
         },
         {
-          "verb": "setColourKanbanIconsSetting",
+          "verb": "setCyberAnimationDisabledSetting",
           "line": 934,
           "dynamic": false
         },
         {
+          "verb": "getCyberScanlinesDisabledSetting",
+          "line": 939,
+          "dynamic": false
+        },
+        {
+          "verb": "setCyberScanlinesDisabledSetting",
+          "line": 945,
+          "dynamic": false
+        },
+        {
+          "verb": "getColourKanbanIconsSetting",
+          "line": 950,
+          "dynamic": false
+        },
+        {
+          "verb": "setColourKanbanIconsSetting",
+          "line": 956,
+          "dynamic": false
+        },
+        {
           "verb": "getUltracodeAnimationSetting",
-          "line": 943,
+          "line": 965,
           "dynamic": false
         },
         {
           "verb": "setUltracodeAnimationSetting",
-          "line": 949,
+          "line": 971,
           "dynamic": false
         },
         {
           "verb": "getPixelFontSetting",
-          "line": 954,
+          "line": 976,
           "dynamic": false
         },
         {
           "verb": "setPixelFontSetting",
-          "line": 960,
+          "line": 982,
           "dynamic": false
         },
         {
           "verb": "getDesignSystemDocSetting",
-          "line": 966,
+          "line": 988,
           "dynamic": false
         },
         {
           "verb": "getGitIgnoreConfig",
-          "line": 975,
-          "dynamic": false
-        },
-        {
-          "verb": "getDefaultPromptOverrides",
-          "line": 980,
-          "dynamic": false
-        },
-        {
-          "verb": "updateGitIgnoreConfig",
-          "line": 985,
-          "dynamic": false
-        },
-        {
-          "verb": "saveDefaultPromptOverrides",
-          "line": 989,
-          "dynamic": false
-        },
-        {
-          "verb": "updateKanbanStructure",
-          "line": 994,
-          "dynamic": false
-        },
-        {
-          "verb": "restoreKanbanDefaults",
           "line": 997,
           "dynamic": false
         },
         {
-          "verb": "savePlanningSources",
+          "verb": "getDefaultPromptOverrides",
           "line": 1002,
           "dynamic": false
         },
         {
+          "verb": "updateGitIgnoreConfig",
+          "line": 1007,
+          "dynamic": false
+        },
+        {
+          "verb": "saveDefaultPromptOverrides",
+          "line": 1011,
+          "dynamic": false
+        },
+        {
+          "verb": "updateKanbanStructure",
+          "line": 1016,
+          "dynamic": false
+        },
+        {
+          "verb": "restoreKanbanDefaults",
+          "line": 1019,
+          "dynamic": false
+        },
+        {
+          "verb": "savePlanningSources",
+          "line": 1024,
+          "dynamic": false
+        },
+        {
           "verb": "getDefaultPromptPreviews",
-          "line": 1021,
+          "line": 1043,
           "dynamic": false
         },
         {
           "verb": "getDbPath",
-          "line": 1026,
+          "line": 1048,
           "dynamic": false
         },
         {
           "verb": "getAllDbPaths",
-          "line": 1031,
-          "dynamic": false
-        },
-        {
-          "verb": "setLocalDb",
-          "line": 1036,
-          "dynamic": false
-        },
-        {
-          "verb": "setCustomDbPath",
-          "line": 1041,
-          "dynamic": false
-        },
-        {
-          "verb": "setPresetDbPath",
-          "line": 1047,
-          "dynamic": false
-        },
-        {
-          "verb": "resetDatabase",
           "line": 1053,
           "dynamic": false
         },
         {
-          "verb": "getPlanningSources",
+          "verb": "setLocalDb",
           "line": 1058,
           "dynamic": false
         },
         {
+          "verb": "setCustomDbPath",
+          "line": 1063,
+          "dynamic": false
+        },
+        {
+          "verb": "setPresetDbPath",
+          "line": 1069,
+          "dynamic": false
+        },
+        {
+          "verb": "resetDatabase",
+          "line": 1075,
+          "dynamic": false
+        },
+        {
+          "verb": "getPlanningSources",
+          "line": 1080,
+          "dynamic": false
+        },
+        {
           "verb": "getWorkspaceMappings",
-          "line": 1074,
+          "line": 1096,
           "dynamic": false
         },
         {
           "verb": "setWorkspaceMappingEnabled",
-          "line": 1102,
+          "line": 1124,
           "dynamic": false
         },
         {
           "verb": "saveWorkspaceMappings",
-          "line": 1139,
+          "line": 1161,
           "dynamic": false
         },
         {
           "verb": "initializeWorkspaceDatabase",
-          "line": 1217,
+          "line": 1239,
           "dynamic": false
         },
         {
           "verb": "browseWorkspaceMappingDbPath",
-          "line": 1304,
+          "line": 1326,
           "dynamic": false
         },
         {
           "verb": "browseWorkspaceMappingFolder",
-          "line": 1321,
+          "line": 1343,
           "dynamic": false
         },
         {
           "verb": "browseParentFolder",
-          "line": 1338,
+          "line": 1360,
           "dynamic": false
         },
         {
           "verb": "browseTicketsFolder",
-          "line": 1358,
+          "line": 1380,
           "dynamic": false
         },
         {
           "verb": "saveTicketsFolder",
-          "line": 1375,
+          "line": 1397,
           "dynamic": false
         },
         {
           "verb": "saveTicketsAutoSync",
-          "line": 1391,
+          "line": 1413,
           "dynamic": false
         },
         {
           "verb": "listTicketsFolders",
-          "line": 1395,
+          "line": 1417,
           "dynamic": false
         },
         {
           "verb": "getRemoteConfig",
-          "line": 1414,
+          "line": 1436,
           "dynamic": false
         },
         {
           "verb": "setRemoteConfig",
-          "line": 1419,
+          "line": 1441,
           "dynamic": false
         },
         {
           "verb": "runNotionRemoteSetup",
-          "line": 1424,
+          "line": 1446,
           "dynamic": false
         },
         {
           "verb": "startRemoteControl",
-          "line": 1433,
+          "line": 1455,
           "dynamic": false
         },
         {
           "verb": "stopRemoteControl",
-          "line": 1438,
+          "line": 1460,
           "dynamic": false
         },
         {
           "verb": "getRemoteHealth",
-          "line": 1443,
+          "line": 1465,
           "dynamic": false
         },
         {
           "verb": "copyLinearAgentSkill",
-          "line": 1448,
+          "line": 1470,
           "dynamic": false
         },
         {
           "verb": "getProjectContextSyncStatus",
-          "line": 1461,
+          "line": 1483,
           "dynamic": false
         },
         {
           "verb": "setProjectContextSyncEnabled",
-          "line": 1466,
+          "line": 1488,
           "dynamic": false
         },
         {
           "verb": "projectContextSyncNow",
-          "line": 1471,
+          "line": 1493,
           "dynamic": false
         },
         {
           "verb": "getAgentDirCleanupState",
-          "line": 1478,
+          "line": 1500,
           "dynamic": false
         },
         {
           "verb": "performAgentDirCleanup",
-          "line": 1483,
+          "line": 1505,
           "dynamic": false
         }
       ]
@@ -6837,7 +6837,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1677,
+      "line": 1679,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6845,7 +6845,7 @@
       "verb": "updateWorkspaceSelection",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1686,
+      "line": 1688,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6853,7 +6853,7 @@
       "verb": "updateBoard",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1725,
+      "line": 1727,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6861,7 +6861,7 @@
       "verb": "cliTriggersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1734,
+      "line": 1736,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6869,7 +6869,7 @@
       "verb": "dynamicComplexityRoutingState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1738,
+      "line": 1740,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6877,7 +6877,7 @@
       "verb": "allowUnknownComplexityAutoMoveState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1743,
+      "line": 1745,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6885,7 +6885,7 @@
       "verb": "clearTerminalBeforePromptState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1747,
+      "line": 1749,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6893,7 +6893,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1757,
+      "line": 1759,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6901,7 +6901,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1758,
+      "line": 1760,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6909,7 +6909,7 @@
       "verb": "updateColumnDragDropModes",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1770,
+      "line": 1772,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6917,7 +6917,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1773,
+      "line": 1775,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6925,7 +6925,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1774,
+      "line": 1776,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6933,7 +6933,7 @@
       "verb": "liveSyncStates",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 1782,
+      "line": 1784,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6941,7 +6941,7 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 2203,
+      "line": 2205,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -6949,7 +6949,7 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 2237,
+      "line": 2239,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -6957,7 +6957,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3237,
+      "line": 3239,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6965,7 +6965,7 @@
       "verb": "updateWorkspaceSelection",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3258,
+      "line": 3260,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6973,7 +6973,7 @@
       "verb": "updateBoard",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3279,
+      "line": 3281,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6981,7 +6981,7 @@
       "verb": "cliTriggersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3287,
+      "line": 3289,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6989,7 +6989,7 @@
       "verb": "allowUnknownComplexityAutoMoveState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3290,
+      "line": 3292,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -6997,7 +6997,7 @@
       "verb": "clearTerminalBeforePromptState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3294,
+      "line": 3296,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7005,7 +7005,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3300,
+      "line": 3302,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7013,7 +7013,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3301,
+      "line": 3303,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7021,7 +7021,7 @@
       "verb": "updateColumnDragDropModes",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3311,
+      "line": 3313,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7029,7 +7029,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3314,
+      "line": 3316,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7037,7 +7037,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3315,
+      "line": 3317,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7045,7 +7045,7 @@
       "verb": "updateColumns",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3422,
+      "line": 3424,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7053,7 +7053,7 @@
       "verb": "updateWorkspaceSelection",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3434,
+      "line": 3436,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7061,7 +7061,7 @@
       "verb": "updateBoard",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3451,
+      "line": 3453,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7069,7 +7069,7 @@
       "verb": "cliTriggersState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3452,
+      "line": 3454,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7077,7 +7077,7 @@
       "verb": "allowUnknownComplexityAutoMoveState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3455,
+      "line": 3457,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7085,7 +7085,7 @@
       "verb": "updateAgentNames",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3459,
+      "line": 3461,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7093,7 +7093,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3460,
+      "line": 3462,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7101,7 +7101,7 @@
       "verb": "updateColumnDragDropModes",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3470,
+      "line": 3472,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7109,7 +7109,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3473,
+      "line": 3475,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7117,7 +7117,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3474,
+      "line": 3476,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7125,7 +7125,7 @@
       "verb": "featureWorkflowModeState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3918,
+      "line": 3920,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7133,7 +7133,7 @@
       "verb": "saveDefaultPromptOverridesResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3974,
+      "line": 3976,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7141,7 +7141,7 @@
       "verb": "saveDefaultPromptOverridesResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 3977,
+      "line": 3979,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7149,7 +7149,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4757,
+      "line": 4759,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7157,7 +7157,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4768,
+      "line": 4770,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7165,7 +7165,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4781,
+      "line": 4783,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7173,7 +7173,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4793,
+      "line": 4795,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7181,7 +7181,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4913,
+      "line": 4915,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7189,7 +7189,7 @@
       "verb": "antigravityPrompt",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 4919,
+      "line": 4921,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7197,7 +7197,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5020,
+      "line": 5022,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7205,7 +7205,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5023,
+      "line": 5025,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7213,7 +7213,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5039,
+      "line": 5041,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7221,7 +7221,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5062,
+      "line": 5064,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7229,7 +7229,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5065,
+      "line": 5067,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7237,7 +7237,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5115,
+      "line": 5117,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7245,7 +7245,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5399,
+      "line": 5401,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7253,7 +7253,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5668,
+      "line": 5670,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7261,7 +7261,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5676,
+      "line": 5678,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7269,7 +7269,7 @@
       "verb": "updatePairProgrammingMode",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5677,
+      "line": 5679,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7277,7 +7277,7 @@
       "verb": "overrideState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 5948,
+      "line": 5950,
       "receiver": "this._panel.webview",
       "provider": "Kanban"
     },
@@ -7285,7 +7285,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6618,
+      "line": 6648,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7293,7 +7293,7 @@
       "verb": "switchToTab",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6621,
+      "line": 6651,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7301,7 +7301,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6902,
+      "line": 6932,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7309,7 +7309,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6936,
+      "line": 6966,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7317,7 +7317,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 6943,
+      "line": 6973,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7325,7 +7325,7 @@
       "verb": "mcpMonitorPreview",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7077,
+      "line": 7107,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7333,7 +7333,7 @@
       "verb": "updateAutobanConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7101,
+      "line": 7131,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7341,7 +7341,7 @@
       "verb": "notionRemoteSetupResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7139,
+      "line": 7175,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7349,7 +7349,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7228,
+      "line": 7264,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7357,7 +7357,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7245,
+      "line": 7281,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7365,7 +7365,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7319,
+      "line": 7355,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7373,7 +7373,7 @@
       "verb": "dispatchFailedPromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7337,
+      "line": 7373,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7381,7 +7381,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7389,
+      "line": 7425,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7389,7 +7389,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7406,
+      "line": 7442,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7397,7 +7397,7 @@
       "verb": "featureWorkflowModeState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7546,
+      "line": 7582,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7405,7 +7405,7 @@
       "verb": "clearTerminalBeforePromptState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7585,
+      "line": 7621,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7413,7 +7413,7 @@
       "verb": "clearTerminalBeforePromptDelayState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7605,
+      "line": 7641,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7421,7 +7421,7 @@
       "verb": "promptOnDropResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7802,
+      "line": 7838,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7429,7 +7429,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7830,
+      "line": 7866,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7437,7 +7437,7 @@
       "verb": "promptOnDropResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7831,
+      "line": 7867,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7445,7 +7445,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7833,
+      "line": 7869,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7453,7 +7453,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7860,
+      "line": 7896,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7461,7 +7461,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7872,
+      "line": 7908,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7469,7 +7469,7 @@
       "verb": "promptOnDropResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7883,
+      "line": 7919,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7477,7 +7477,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7884,
+      "line": 7920,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7485,7 +7485,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7904,
+      "line": 7940,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7493,7 +7493,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7933,
+      "line": 7969,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7501,7 +7501,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7962,
+      "line": 7998,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7509,7 +7509,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 7997,
+      "line": 8033,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7517,7 +7517,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8000,
+      "line": 8036,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7525,7 +7525,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8013,
+      "line": 8049,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7533,7 +7533,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8025,
+      "line": 8061,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7541,7 +7541,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8069,
+      "line": 8105,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7549,7 +7549,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8072,
+      "line": 8108,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7557,7 +7557,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8135,
+      "line": 8171,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7565,7 +7565,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8138,
+      "line": 8174,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7573,7 +7573,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8152,
+      "line": 8188,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7581,7 +7581,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8163,
+      "line": 8199,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7589,7 +7589,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8209,
+      "line": 8245,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7597,23 +7597,7 @@
       "verb": "moveCardsFailed",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8212,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8224,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8254,
+      "line": 8248,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7626,10 +7610,10 @@
       "provider": "Kanban"
     },
     {
-      "verb": "moveCards",
+      "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8316,
+      "line": 8294,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7637,31 +7621,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8317,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "moveCards",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8337,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8340,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8342,
+      "line": 8300,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7669,7 +7629,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8352,
+      "line": 8356,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7677,7 +7637,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8353,
+      "line": 8357,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7685,7 +7645,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8404,
+      "line": 8377,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7693,7 +7653,15 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8405,
+      "line": 8380,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8382,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7701,7 +7669,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8429,
+      "line": 8392,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7709,15 +7677,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8438,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "showStatusMessage",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 8440,
+      "line": 8393,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7725,7 +7685,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8453,
+      "line": 8444,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7733,7 +7693,15 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8460,
+      "line": 8445,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "moveCards",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8469,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7741,7 +7709,39 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8481,
+      "line": 8478,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8480,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "moveCards",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8493,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8500,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "showStatusMessage",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 8521,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7749,7 +7749,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8542,
+      "line": 8582,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7757,7 +7757,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8585,
+      "line": 8625,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7765,7 +7765,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8703,
+      "line": 8743,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7773,7 +7773,7 @@
       "verb": "backlogViewState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8710,
+      "line": 8750,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7781,7 +7781,7 @@
       "verb": "backlogViewState",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8730,
+      "line": 8770,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7789,7 +7789,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8807,
+      "line": 8847,
       "receiver": "this",
       "provider": "Kanban"
     },
@@ -7797,7 +7797,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8813,
+      "line": 8853,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7805,7 +7805,7 @@
       "verb": "moveCards",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8892,
+      "line": 8932,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7813,7 +7813,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8935,
+      "line": 8975,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7821,7 +7821,7 @@
       "verb": "promptsConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8955,
+      "line": 8995,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7829,7 +7829,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8968,
+      "line": 9008,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7837,7 +7837,7 @@
       "verb": "fileExistsResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8986,
+      "line": 9026,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7845,7 +7845,7 @@
       "verb": "fileExistsResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8991,
+      "line": 9031,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7853,7 +7853,7 @@
       "verb": "fileExistsResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 8995,
+      "line": 9035,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7861,7 +7861,7 @@
       "verb": "settingResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9034,
+      "line": 9075,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7869,7 +7869,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9041,
+      "line": 9083,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7877,7 +7877,7 @@
       "verb": "promptPreviewResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9102,
+      "line": 9144,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7885,7 +7885,7 @@
       "verb": "promptPreviewResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9104,
+      "line": 9146,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7893,7 +7893,7 @@
       "verb": "personaContent",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9119,
+      "line": 9161,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7901,20 +7901,12 @@
       "verb": "personaContent",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9124,
+      "line": 9166,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
     {
       "verb": "personaContent",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9126,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
       "line": 9168,
@@ -7925,7 +7917,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9187,
+      "line": 9210,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7933,7 +7925,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9196,
+      "line": 9229,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7941,7 +7933,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9206,
+      "line": 9238,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7949,7 +7941,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9216,
+      "line": 9248,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7957,7 +7949,15 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9226,
+      "line": 9258,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "kanbanStructure",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9268,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7965,7 +7965,7 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9236,
+      "line": 9278,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7973,7 +7973,7 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9243,
+      "line": 9285,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -7981,84 +7981,12 @@
       "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9247,
+      "line": 9289,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
     {
       "verb": "exportAgentAsSkillResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9252,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "exportAgentAsSkillResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9254,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "exportAgentAsSkillResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9257,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "saveCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9264,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "saveCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9269,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "saveCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9272,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "deleteCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9279,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "deleteCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9284,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "deleteCustomAgentResult",
-      "direction": "push",
-      "file": "src/services/KanbanProvider.ts",
-      "line": 9287,
-      "receiver": "this._panel?.webview",
-      "provider": "Kanban"
-    },
-    {
-      "verb": "customAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
       "line": 9294,
@@ -8066,7 +7994,15 @@
       "provider": "Kanban"
     },
     {
-      "verb": "customAgents",
+      "verb": "exportAgentAsSkillResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9296,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "exportAgentAsSkillResult",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
       "line": 9299,
@@ -8074,10 +8010,74 @@
       "provider": "Kanban"
     },
     {
+      "verb": "saveCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9306,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "saveCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9311,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "saveCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9314,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "deleteCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9321,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "deleteCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9326,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "deleteCustomAgentResult",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9329,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9301,
+      "line": 9336,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "customAgents",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9341,
+      "receiver": "this._panel?.webview",
+      "provider": "Kanban"
+    },
+    {
+      "verb": "customAgents",
+      "direction": "push",
+      "file": "src/services/KanbanProvider.ts",
+      "line": 9343,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8085,7 +8085,7 @@
       "verb": "uatData",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9364,
+      "line": 9406,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8093,7 +8093,7 @@
       "verb": "mergePromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9581,
+      "line": 9623,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8101,7 +8101,7 @@
       "verb": "mergePromptReady",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9629,
+      "line": 9671,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8109,7 +8109,7 @@
       "verb": "worktreeStatuses",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9672,
+      "line": 9714,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8117,7 +8117,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9812,
+      "line": 9854,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8125,7 +8125,7 @@
       "verb": "showStatusMessage",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9817,
+      "line": 9859,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8133,7 +8133,7 @@
       "verb": "featureDetails",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9839,
+      "line": 9881,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8141,7 +8141,7 @@
       "verb": "featureDetails",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 9843,
+      "line": 9885,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -8149,7 +8149,7 @@
       "verb": "worktreeConfig",
       "direction": "push",
       "file": "src/services/KanbanProvider.ts",
-      "line": 10370,
+      "line": 10412,
       "receiver": "this._panel?.webview",
       "provider": "Kanban"
     },
@@ -12285,7 +12285,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 2502,
+      "line": 2530,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12293,7 +12293,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 3154,
+      "line": 3182,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12301,7 +12301,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 3163,
+      "line": 3191,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12309,7 +12309,7 @@
       "verb": "loading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 3204,
+      "line": 3232,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12317,7 +12317,7 @@
       "verb": "openMemoTab",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 3454,
+      "line": 3482,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12325,7 +12325,7 @@
       "verb": "openMemoTab",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 3457,
+      "line": 3485,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12333,7 +12333,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 3708,
+      "line": 3736,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12341,7 +12341,7 @@
       "verb": "workspaceChanged",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4928,
+      "line": 4956,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12349,7 +12349,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4932,
+      "line": 4960,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12357,7 +12357,7 @@
       "verb": "terminalAgentNames",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4936,
+      "line": 4964,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12365,7 +12365,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4939,
+      "line": 4967,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12373,7 +12373,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4942,
+      "line": 4970,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12381,7 +12381,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4943,
+      "line": 4971,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer"
     },
@@ -12389,7 +12389,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4945,
+      "line": 4973,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12397,7 +12397,7 @@
       "verb": "hideGuidedSetupSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4950,
+      "line": 4978,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12405,7 +12405,7 @@
       "verb": "designSystemDocSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4958,
+      "line": 4986,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12413,7 +12413,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4966,
+      "line": 4994,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -12421,7 +12421,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4978,
+      "line": 5006,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12429,7 +12429,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4981,
+      "line": 5009,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12437,7 +12437,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4983,
+      "line": 5011,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12445,7 +12445,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4992,
+      "line": 5020,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12453,7 +12453,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4993,
+      "line": 5021,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12461,7 +12461,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 4997,
+      "line": 5025,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12469,7 +12469,7 @@
       "verb": "hideGuidedSetupSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5002,
+      "line": 5030,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12477,7 +12477,7 @@
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5009,
+      "line": 5037,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12485,7 +12485,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5013,
+      "line": 5041,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12493,7 +12493,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5017,
+      "line": 5045,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12501,7 +12501,7 @@
       "verb": "excludeReviewedBacklogSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5022,
+      "line": 5050,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12509,7 +12509,7 @@
       "verb": "statusShowTerminalsSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5027,
+      "line": 5055,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12517,7 +12517,7 @@
       "verb": "statusShowKanbanSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5031,
+      "line": 5059,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12525,7 +12525,7 @@
       "verb": "statusShowArtifactsSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5035,
+      "line": 5063,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12533,7 +12533,7 @@
       "verb": "statusShowDesignSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5039,
+      "line": 5067,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12541,7 +12541,7 @@
       "verb": "statusShowProjectSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5043,
+      "line": 5071,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12549,7 +12549,7 @@
       "verb": "statusShowMemoSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5047,
+      "line": 5075,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12557,7 +12557,7 @@
       "verb": "cyberAnimationDisabledSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5052,
+      "line": 5080,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12565,7 +12565,7 @@
       "verb": "boardStateExportSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5062,
+      "line": 5090,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12573,7 +12573,7 @@
       "verb": "cyberScanlinesDisabledSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5070,
+      "line": 5098,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12581,7 +12581,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5075,
+      "line": 5103,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12589,7 +12589,7 @@
       "verb": "pixelFontSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5080,
+      "line": 5108,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12597,7 +12597,7 @@
       "verb": "gitIgnoreConfig",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5088,
+      "line": 5116,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12605,7 +12605,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5091,
+      "line": 5119,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12613,7 +12613,7 @@
       "verb": "controlPlaneStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5094,
+      "line": 5122,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12621,7 +12621,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5095,
+      "line": 5123,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12629,7 +12629,7 @@
       "verb": "integrationSetupStates",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5098,
+      "line": 5126,
       "receiver": "this._setupPanelProvider",
       "provider": "TaskViewer"
     },
@@ -12637,7 +12637,7 @@
       "verb": "selectPlanFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 5915,
+      "line": 5943,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12645,7 +12645,7 @@
       "verb": "selectPlanFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6010,
+      "line": 6038,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12653,7 +12653,7 @@
       "verb": "initialState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6255,
+      "line": 6283,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12661,7 +12661,7 @@
       "verb": "recentActivity",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 6322,
+      "line": 6350,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12669,7 +12669,7 @@
       "verb": "autobanStateSync",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 7760,
+      "line": 7788,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12677,7 +12677,7 @@
       "verb": "pipelineState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 7769,
+      "line": 7797,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12685,7 +12685,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 8947,
+      "line": 8975,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12693,7 +12693,7 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 9965,
+      "line": 9993,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12701,7 +12701,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10003,
+      "line": 10031,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12709,7 +12709,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10015,
+      "line": 10043,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12717,7 +12717,7 @@
       "verb": "linearProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10041,
+      "line": 10069,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12725,7 +12725,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10048,
+      "line": 10076,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12733,7 +12733,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10059,
+      "line": 10087,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12741,7 +12741,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10071,
+      "line": 10099,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12749,7 +12749,7 @@
       "verb": "linearProjectsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10082,
+      "line": 10110,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12757,15 +12757,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10088,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "linearError",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10100,
+      "line": 10116,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12778,14 +12770,6 @@
       "provider": "TaskViewer"
     },
     {
-      "verb": "linearTaskDetailsLoaded",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10147,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
@@ -12794,10 +12778,18 @@
       "provider": "TaskViewer"
     },
     {
-      "verb": "linearTaskImported",
+      "verb": "linearTaskDetailsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10169,
+      "line": 10175,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "linearError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10184,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12805,7 +12797,15 @@
       "verb": "linearTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10179,
+      "line": 10197,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "linearTaskImported",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10207,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12813,7 +12813,7 @@
       "verb": "clickupTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10194,
+      "line": 10222,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12821,7 +12821,7 @@
       "verb": "clickupTaskImported",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10204,
+      "line": 10232,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12829,23 +12829,7 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10219,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "linearTaskImportedToPlanner",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10229,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "linearTaskImportedToPlanner",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10252,
+      "line": 10247,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12861,20 +12845,20 @@
       "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10269,
+      "line": 10280,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
-      "verb": "clickupProjectLoaded",
+      "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10284,
+      "line": 10285,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
-      "verb": "clickupProjectLoaded",
+      "verb": "linearTaskImportedToPlanner",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
       "line": 10297,
@@ -12885,7 +12869,7 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10309,
+      "line": 10312,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12893,31 +12877,23 @@
       "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10324,
+      "line": 10325,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
-      "verb": "clickupError",
+      "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10332,
+      "line": 10337,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
-      "verb": "clickupError",
+      "verb": "clickupProjectLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10344,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "clickupSpacesLoaded",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10355,
+      "line": 10352,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12933,7 +12909,31 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10371,
+      "line": 10372,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "clickupSpacesLoaded",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10383,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "clickupError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10388,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "clickupError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10399,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12941,7 +12941,7 @@
       "verb": "clickupFoldersLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10382,
+      "line": 10410,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12949,7 +12949,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10389,
+      "line": 10417,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12957,7 +12957,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10400,
+      "line": 10428,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12965,7 +12965,7 @@
       "verb": "clickupListsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10411,
+      "line": 10439,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12973,7 +12973,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10418,
+      "line": 10446,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12981,7 +12981,7 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10514,
+      "line": 10542,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -12989,28 +12989,12 @@
       "verb": "clickupTaskDetailsLoaded",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10535,
+      "line": 10563,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
       "verb": "clickupError",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10544,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "linearError",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10559,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "linearLabelsUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
       "line": 10572,
@@ -13021,39 +13005,15 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10579,
+      "line": 10587,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
-      "verb": "clickupError",
+      "verb": "linearLabelsUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10596,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "clickupTagsUpdated",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10609,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "clickupError",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10616,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "linearAutomationCatalogLoaded",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10632,
+      "line": 10600,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13061,15 +13021,7 @@
       "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10638,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "clickupSpaceTagsLoaded",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10654,
+      "line": 10607,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13077,15 +13029,55 @@
       "verb": "clickupError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
+      "line": 10624,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "clickupTagsUpdated",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10637,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "clickupError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10644,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "linearAutomationCatalogLoaded",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
       "line": 10660,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
-      "verb": "multiRepoScaffoldResult",
+      "verb": "linearError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10716,
+      "line": 10666,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "clickupSpaceTagsLoaded",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10682,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "clickupError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10688,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13093,7 +13085,15 @@
       "verb": "multiRepoScaffoldResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10718,
+      "line": 10744,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "multiRepoScaffoldResult",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10746,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13101,7 +13101,7 @@
       "verb": "createAgentGridResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10802,
+      "line": 10830,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13109,7 +13109,7 @@
       "verb": "createAgentGridResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10804,
+      "line": 10832,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13117,7 +13117,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10837,
+      "line": 10865,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13125,7 +13125,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10852,
+      "line": 10880,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13133,7 +13133,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10862,
+      "line": 10890,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13141,7 +13141,7 @@
       "verb": "planLoading",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10866,
+      "line": 10894,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13149,7 +13149,7 @@
       "verb": "recoverablePlans",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10905,
+      "line": 10933,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13157,28 +13157,12 @@
       "verb": "restorePlanResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10911,
+      "line": 10939,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
       "verb": "recoverablePlans",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10914,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "notionFetchState",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 10934,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
       "line": 10942,
@@ -13189,7 +13173,23 @@
       "verb": "notionFetchState",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10960,
+      "line": 10962,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "notionFetchState",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10970,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "notionFetchState",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 10988,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13197,7 +13197,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10973,
+      "line": 11001,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13205,7 +13205,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10978,
+      "line": 11006,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13213,7 +13213,7 @@
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10993,
+      "line": 11021,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13221,7 +13221,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 10998,
+      "line": 11026,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13229,7 +13229,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11003,
+      "line": 11031,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13237,7 +13237,7 @@
       "verb": "julesAutoSyncSetting",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11008,
+      "line": 11036,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13245,7 +13245,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11013,
+      "line": 11041,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13253,7 +13253,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11022,
+      "line": 11050,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13261,36 +13261,12 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11039,
+      "line": 11067,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
     {
       "verb": "memoContent",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 11047,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "memoError",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 11053,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "memoError",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 11065,
-      "receiver": "this._view?.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
       "line": 11075,
@@ -13298,10 +13274,34 @@
       "provider": "TaskViewer"
     },
     {
+      "verb": "memoError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 11081,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "memoError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 11093,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "memoError",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 11103,
+      "receiver": "this._view?.webview",
+      "provider": "TaskViewer"
+    },
+    {
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11082,
+      "line": 11110,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13309,7 +13309,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11111,
+      "line": 11139,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13317,7 +13317,7 @@
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11114,
+      "line": 11142,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13325,7 +13325,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11213,
+      "line": 11241,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13333,7 +13333,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11257,
+      "line": 11285,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13341,7 +13341,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11269,
+      "line": 11297,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13349,7 +13349,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11274,
+      "line": 11302,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13357,7 +13357,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11281,
+      "line": 11309,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13365,7 +13365,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 11710,
+      "line": 11738,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13373,7 +13373,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 13075,
+      "line": 13103,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13381,7 +13381,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14942,
+      "line": 14970,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13389,7 +13389,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15196,
+      "line": 15224,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13397,7 +13397,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15201,
+      "line": 15229,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13405,7 +13405,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15490,
+      "line": 15518,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13413,7 +13413,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15548,
+      "line": 15576,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13421,7 +13421,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16622,
+      "line": 16650,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -13429,7 +13429,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16633,
+      "line": 16661,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13437,7 +13437,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16688,
+      "line": 16716,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13445,7 +13445,7 @@
       "verb": "refresh",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16790,
+      "line": 16818,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13453,7 +13453,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17481,
+      "line": 17509,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13461,7 +13461,7 @@
       "verb": "airlock_syncStart",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17493,
+      "line": 17521,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13469,7 +13469,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17501,
+      "line": 17529,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13477,7 +13477,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17505,
+      "line": 17533,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13485,7 +13485,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17508,
+      "line": 17536,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13493,7 +13493,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17519,
+      "line": 17547,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13501,7 +13501,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17700,
+      "line": 17728,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13509,7 +13509,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17716,
+      "line": 17744,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13517,7 +13517,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17726,
+      "line": 17754,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13525,7 +13525,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17747,
+      "line": 17775,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13533,7 +13533,7 @@
       "verb": "planCreated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17977,
+      "line": 18005,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13541,7 +13541,7 @@
       "verb": "insertContextFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18727,
+      "line": 18755,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -13549,7 +13549,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18737,
+      "line": 18765,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13557,7 +13557,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18745,
+      "line": 18773,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13565,7 +13565,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18747,
+      "line": 18775,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13573,7 +13573,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18750,
+      "line": 18778,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13581,7 +13581,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18763,
+      "line": 18791,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13589,7 +13589,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18768,
+      "line": 18796,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13597,7 +13597,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18769,
+      "line": 18797,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer"
     },
@@ -13605,7 +13605,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18808,
+      "line": 18836,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -13613,7 +13613,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18815,
+      "line": 18843,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -13621,7 +13621,7 @@
       "verb": "julesStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19103,
+      "line": 19131,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -13629,7 +13629,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19515,
+      "line": 19543,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13637,7 +13637,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19534,
+      "line": 19562,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13645,23 +13645,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19790,
-      "receiver": "this._view.webview",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "terminalStatuses",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 19791,
-      "receiver": "this._kanbanProvider?",
-      "provider": "TaskViewer"
-    },
-    {
-      "verb": "terminalStatuses",
-      "direction": "push",
-      "file": "src/services/TaskViewerProvider.ts",
-      "line": 19812,
+      "line": 19818,
       "receiver": "this._view.webview",
       "provider": "TaskViewer"
     },
@@ -13674,10 +13658,26 @@
       "provider": "TaskViewer"
     },
     {
+      "verb": "terminalStatuses",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 19840,
+      "receiver": "this._view.webview",
+      "provider": "TaskViewer"
+    },
+    {
+      "verb": "terminalStatuses",
+      "direction": "push",
+      "file": "src/services/TaskViewerProvider.ts",
+      "line": 19847,
+      "receiver": "this._kanbanProvider?",
+      "provider": "TaskViewer"
+    },
+    {
       "verb": "airlock_exportError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19906,
+      "line": 19934,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13685,7 +13685,7 @@
       "verb": "airlock_exportComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19956,
+      "line": 19984,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13693,7 +13693,7 @@
       "verb": "airlock_exportError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19959,
+      "line": 19987,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13701,7 +13701,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19997,
+      "line": 20025,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13709,7 +13709,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20002,
+      "line": 20030,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13717,7 +13717,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20021,
+      "line": 20049,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13725,7 +13725,7 @@
       "verb": "airlock_coderSent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20031,
+      "line": 20059,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13733,7 +13733,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20034,
+      "line": 20062,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13741,7 +13741,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20042,
+      "line": 20070,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13749,7 +13749,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20045,
+      "line": 20073,
       "receiver": "this._view?.webview",
       "provider": "TaskViewer"
     },
@@ -13757,7 +13757,7 @@
       "verb": "openSetupSection",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 220,
+      "line": 234,
       "receiver": "this",
       "provider": "Setup"
     },
@@ -13765,7 +13765,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 300,
+      "line": 314,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -13773,7 +13773,7 @@
       "verb": "colourKanbanIconsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 307,
+      "line": 321,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -13781,7 +13781,7 @@
       "verb": "openSetupSection",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 316,
+      "line": 330,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13789,7 +13789,7 @@
       "verb": "integrationSetupStates",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 322,
+      "line": 336,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13797,7 +13797,7 @@
       "verb": "exportPromptSettingsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 327,
+      "line": 341,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13805,7 +13805,7 @@
       "verb": "importPromptSettingsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 332,
+      "line": 346,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13813,7 +13813,7 @@
       "verb": "copyDbSettingsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 337,
+      "line": 351,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13821,7 +13821,7 @@
       "verb": "controlPlaneStatusResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 342,
+      "line": 356,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13829,15 +13829,7 @@
       "verb": "controlPlaneOverrideResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 350,
-      "receiver": "this._panel.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "controlPlaneOverrideResult",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 361,
+      "line": 364,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13853,12 +13845,12 @@
       "verb": "controlPlaneOverrideResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 386,
+      "line": 389,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
     {
-      "verb": "controlPlaneCandidateResult",
+      "verb": "controlPlaneOverrideResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
       "line": 400,
@@ -13866,10 +13858,18 @@
       "provider": "Setup"
     },
     {
+      "verb": "controlPlaneCandidateResult",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 414,
+      "receiver": "this._panel.webview",
+      "provider": "Setup"
+    },
+    {
       "verb": "controlPlaneMigrationPreview",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 405,
+      "line": 419,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13877,7 +13877,7 @@
       "verb": "controlPlaneMigrationResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 440,
+      "line": 454,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13885,7 +13885,7 @@
       "verb": "controlPlaneFreshSetupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 474,
+      "line": 488,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13893,7 +13893,7 @@
       "verb": "controlPlaneGitInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 509,
+      "line": 523,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -13901,7 +13901,7 @@
       "verb": "multiRepoScaffoldResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 542,
+      "line": 556,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13909,7 +13909,7 @@
       "verb": "multiRepoScaffoldResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 544,
+      "line": 558,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13917,7 +13917,7 @@
       "verb": "clickupApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 560,
+      "line": 574,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13925,7 +13925,7 @@
       "verb": "clickupMappingsSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 569,
+      "line": 583,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13933,7 +13933,7 @@
       "verb": "clickupAutomationSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 578,
+      "line": 592,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13941,7 +13941,7 @@
       "verb": "linearApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 589,
+      "line": 603,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13949,7 +13949,7 @@
       "verb": "linearApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 594,
+      "line": 608,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13957,7 +13957,7 @@
       "verb": "linearAutomationSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 606,
+      "line": 620,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13965,7 +13965,7 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 614,
+      "line": 628,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -13973,20 +13973,12 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 635,
+      "line": 649,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
     {
       "verb": "linearBrowseProjectsResult",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 643,
-      "receiver": "this._panel.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "triagePipelineResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
       "line": 657,
@@ -13994,10 +13986,18 @@
       "provider": "Setup"
     },
     {
+      "verb": "triagePipelineResult",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 671,
+      "receiver": "this._panel.webview",
+      "provider": "Setup"
+    },
+    {
       "verb": "notionApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 666,
+      "line": 680,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14005,7 +14005,7 @@
       "verb": "notionBackupConfigResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 676,
+      "line": 690,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14013,7 +14013,7 @@
       "verb": "notionBackupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 683,
+      "line": 697,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14021,7 +14021,7 @@
       "verb": "notionRestoreResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 690,
+      "line": 704,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14029,7 +14029,7 @@
       "verb": "notionAutoCreateResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 697,
+      "line": 711,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14037,7 +14037,7 @@
       "verb": "setupComplete",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 702,
+      "line": 716,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14045,7 +14045,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 717,
+      "line": 738,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14053,7 +14053,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 722,
+      "line": 744,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14061,7 +14061,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 728,
+      "line": 750,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14069,7 +14069,7 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 733,
+      "line": 755,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14077,7 +14077,7 @@
       "verb": "planScannerConfig",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 737,
+      "line": 759,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14085,7 +14085,7 @@
       "verb": "planScannerConfig",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 744,
+      "line": 766,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14093,7 +14093,7 @@
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 750,
+      "line": 772,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14101,7 +14101,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 756,
+      "line": 778,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14109,7 +14109,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 762,
+      "line": 784,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14117,7 +14117,7 @@
       "verb": "autoCommitOnCodeReviewSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 771,
+      "line": 793,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14125,23 +14125,7 @@
       "verb": "excludeReviewedBacklogSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 778,
-      "receiver": "this._panel.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "persistPanelsSetting",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 786,
-      "receiver": "this._panel.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "hideGuidedSetupSetting",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 790,
+      "line": 800,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14154,31 +14138,23 @@
       "provider": "Setup"
     },
     {
-      "verb": "protocolTarget",
+      "verb": "hideGuidedSetupSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 814,
+      "line": 812,
+      "receiver": "this._panel.webview",
+      "provider": "Setup"
+    },
+    {
+      "verb": "persistPanelsSetting",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 830,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
     {
       "verb": "protocolTarget",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 821,
-      "receiver": "this._panel.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "statusShowTerminalsSetting",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 826,
-      "receiver": "this._panel.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "statusShowKanbanSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
       "line": 836,
@@ -14186,10 +14162,34 @@
       "provider": "Setup"
     },
     {
+      "verb": "protocolTarget",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 843,
+      "receiver": "this._panel.webview",
+      "provider": "Setup"
+    },
+    {
+      "verb": "statusShowTerminalsSetting",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 848,
+      "receiver": "this._panel.webview",
+      "provider": "Setup"
+    },
+    {
+      "verb": "statusShowKanbanSetting",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 858,
+      "receiver": "this._panel.webview",
+      "provider": "Setup"
+    },
+    {
       "verb": "statusShowArtifactsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 846,
+      "line": 868,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14197,7 +14197,7 @@
       "verb": "statusShowDesignSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 856,
+      "line": 878,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14205,7 +14205,7 @@
       "verb": "statusShowProjectSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 866,
+      "line": 888,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14213,7 +14213,7 @@
       "verb": "statusShowMemoSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 876,
+      "line": 898,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14221,7 +14221,7 @@
       "verb": "memoHotkey",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 888,
+      "line": 910,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14229,7 +14229,7 @@
       "verb": "memoHotkeySaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 894,
+      "line": 916,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14237,7 +14237,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 903,
+      "line": 925,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14245,7 +14245,7 @@
       "verb": "cyberAnimationDisabledSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 907,
+      "line": 929,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14253,7 +14253,7 @@
       "verb": "cyberScanlinesDisabledSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 918,
+      "line": 940,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14261,7 +14261,7 @@
       "verb": "colourKanbanIconsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 929,
+      "line": 951,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14269,7 +14269,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 944,
+      "line": 966,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14277,7 +14277,7 @@
       "verb": "pixelFontSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 955,
+      "line": 977,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14285,7 +14285,7 @@
       "verb": "designSystemDocSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 968,
+      "line": 990,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14293,7 +14293,7 @@
       "verb": "gitIgnoreConfig",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 977,
+      "line": 999,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14301,7 +14301,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 982,
+      "line": 1004,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14309,7 +14309,7 @@
       "verb": "planningSourcesSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1017,
+      "line": 1039,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14317,7 +14317,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1023,
+      "line": 1045,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14325,7 +14325,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1028,
+      "line": 1050,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14333,7 +14333,7 @@
       "verb": "allDbPathsUpdated",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1033,
+      "line": 1055,
       "receiver": "this._panel.webview",
       "provider": "Setup"
     },
@@ -14341,7 +14341,7 @@
       "verb": "planningSources",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1068,
+      "line": 1090,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14349,7 +14349,7 @@
       "verb": "workspaceMappings",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1095,
+      "line": 1117,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14357,7 +14357,7 @@
       "verb": "workspaceMappingEnabled",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1131,
+      "line": 1153,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14365,7 +14365,7 @@
       "verb": "workspaceMappingStatus",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1192,
+      "line": 1214,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14373,7 +14373,7 @@
       "verb": "workspaceMappingStatus",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1212,
+      "line": 1234,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14381,7 +14381,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1220,
+      "line": 1242,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14389,7 +14389,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1233,
+      "line": 1255,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14397,7 +14397,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1241,
+      "line": 1263,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14405,7 +14405,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1251,
+      "line": 1273,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14413,7 +14413,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1295,
+      "line": 1317,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14421,7 +14421,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1300,
+      "line": 1322,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14429,7 +14429,7 @@
       "verb": "workspaceMappingDbPathSelected",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1313,
+      "line": 1335,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14437,7 +14437,7 @@
       "verb": "workspaceMappingFolderSelected",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1329,
+      "line": 1351,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14445,7 +14445,7 @@
       "verb": "parentFolderSelected",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1349,
+      "line": 1371,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14453,7 +14453,7 @@
       "verb": "browseTicketsFolderResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1367,
+      "line": 1389,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14461,7 +14461,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1382,
+      "line": 1404,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14469,7 +14469,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1399,
+      "line": 1421,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14477,7 +14477,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1405,
+      "line": 1427,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14485,7 +14485,7 @@
       "verb": "notionRemoteSetupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1426,
+      "line": 1448,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14493,7 +14493,7 @@
       "verb": "notionRemoteSetupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1430,
+      "line": 1452,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14501,7 +14501,7 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1435,
+      "line": 1457,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14509,28 +14509,12 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1440,
+      "line": 1462,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
     {
       "verb": "linearAgentSkillText",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 1450,
-      "receiver": "this._panel?.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "linearAgentSkillText",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 1454,
-      "receiver": "this._panel?.webview",
-      "provider": "Setup"
-    },
-    {
-      "verb": "projectContextSyncRunning",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
       "line": 1472,
@@ -14538,10 +14522,26 @@
       "provider": "Setup"
     },
     {
+      "verb": "linearAgentSkillText",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 1476,
+      "receiver": "this._panel?.webview",
+      "provider": "Setup"
+    },
+    {
+      "verb": "projectContextSyncRunning",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 1494,
+      "receiver": "this._panel?.webview",
+      "provider": "Setup"
+    },
+    {
       "verb": "projectContextSyncStatus",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1475,
+      "line": 1497,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14549,7 +14549,7 @@
       "verb": "agentDirCleanupState",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1480,
+      "line": 1502,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     },
@@ -14557,7 +14557,7 @@
       "verb": "agentDirCleanupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1485,
+      "line": 1507,
       "receiver": "this._panel?.webview",
       "provider": "Setup"
     }
@@ -18672,6 +18672,26 @@
     },
     {
       "path": "/kanban/verb/",
+      "method": "POST",
+      "prefix": true
+    },
+    {
+      "path": "/planning/verb/",
+      "method": "POST",
+      "prefix": true
+    },
+    {
+      "path": "/design/verb/",
+      "method": "POST",
+      "prefix": true
+    },
+    {
+      "path": "/setup/verb/",
+      "method": "POST",
+      "prefix": true
+    },
+    {
+      "path": "/taskViewer/verb/",
       "method": "POST",
       "prefix": true
     },

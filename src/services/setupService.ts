@@ -6,6 +6,9 @@ export interface SetupServiceContext {
     readonly seams: HostSeams;
     readonly broadcaster: BroadcastHub;
     handleMessage(msg: any): Promise<any>;
+    handleGetStartupCommands(): Promise<any>;
+    handleSaveStartupCommands(data: any): Promise<void>;
+    refreshUI(): Promise<void>;
 }
 
 export class SetupService {
@@ -208,7 +211,9 @@ export class SetupService {
     }
 
     async "getStartupCommands"(payload: any): Promise<any> {
-        return this._ctx.handleMessage({ type: 'getStartupCommands', ...payload });
+        const startupState = await this._ctx.handleGetStartupCommands();
+        this._ctx.broadcaster.push({ type: 'startupCommands', ...startupState });
+        return { success: true, ...startupState };
     }
 
     async "getStatusShowArtifactsSetting"(payload: any): Promise<any> {
@@ -348,7 +353,9 @@ export class SetupService {
     }
 
     async "saveStartupCommands"(payload: any): Promise<any> {
-        return this._ctx.handleMessage({ type: 'saveStartupCommands', ...payload });
+        await this._ctx.handleSaveStartupCommands(payload);
+        await this._ctx.refreshUI();
+        return { success: true };
     }
 
     async "saveTicketsAutoSync"(payload: any): Promise<any> {

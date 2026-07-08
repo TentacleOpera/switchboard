@@ -567,8 +567,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _kanbanProvider?: KanbanProvider;
     private _setupPanelProvider?: SetupPanelProvider;
-    private _designPanelProvider?: { postMessage(message: any): void };
-    private _planningPanelProvider?: { postMessage(message: any): void };
+    private _designPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
+    private _planningPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _lastKanbanDbWarnings = new Map<string, string | null>();
     private _lastPlanIngestionValidationWarning: string | null = null;
@@ -1335,18 +1335,46 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             },
             kanbanVerb: async (verb, payload, wsRoot) => {
-                // A2b per-verb HTTP rail — dispatch an extracted Kanban verb to the
-                // KanbanService (same code path the webview `case` arm drives).
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
                 }
-                // Fold an explicit workspaceRoot into the payload so verbs that
-                // read it (e.g. fileExists) honor the caller's target; verbs that
-                // use the provider's current workspace ignore it.
                 const p = (wsRoot && payload && payload.workspaceRoot == null)
                     ? { ...payload, workspaceRoot: wsRoot }
                     : payload;
                 return await this._kanbanProvider.handleServiceVerb(verb, p);
+            },
+            planningVerb: async (verb, payload, wsRoot) => {
+                if (!this._planningPanelProvider) {
+                    return { success: false, error: 'Planning provider not available' };
+                }
+                const p = (wsRoot && payload && payload.workspaceRoot == null)
+                    ? { ...payload, workspaceRoot: wsRoot }
+                    : payload;
+                return await this._planningPanelProvider.handleServiceVerb(verb, p);
+            },
+            designVerb: async (verb, payload, wsRoot) => {
+                if (!this._designPanelProvider) {
+                    return { success: false, error: 'Design provider not available' };
+                }
+                const p = (wsRoot && payload && payload.workspaceRoot == null)
+                    ? { ...payload, workspaceRoot: wsRoot }
+                    : payload;
+                return await this._designPanelProvider.handleServiceVerb(verb, p);
+            },
+            setupVerb: async (verb, payload, wsRoot) => {
+                if (!this._setupPanelProvider) {
+                    return { success: false, error: 'Setup provider not available' };
+                }
+                const p = (wsRoot && payload && payload.workspaceRoot == null)
+                    ? { ...payload, workspaceRoot: wsRoot }
+                    : payload;
+                return await this._setupPanelProvider.handleServiceVerb(verb, p);
+            },
+            taskViewerVerb: async (verb, payload, wsRoot) => {
+                const p = (wsRoot && payload && payload.workspaceRoot == null)
+                    ? { ...payload, workspaceRoot: wsRoot }
+                    : payload;
+                return await this.handleServiceVerb(verb, p);
             },
             onPhoneAFriend: async (planFile: string, originRole?: string) => {
                 // Route the coder's batch-end POST to the Phone-a-Friend terminal dispatch.
@@ -1400,6 +1428,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
         });
+
+        this._broadcaster?.setApiServer(this._localApiServer);
+        if (this._kanbanProvider) {
+            this._kanbanProvider.setApiServer(this._localApiServer);
+        }
+        if (this._setupPanelProvider) {
+            this._setupPanelProvider.setApiServer(this._localApiServer);
+        }
+        if (this._designPanelProvider && typeof (this._designPanelProvider as any).setApiServer === 'function') {
+            (this._designPanelProvider as any).setApiServer(this._localApiServer);
+        }
+        if (this._planningPanelProvider && typeof (this._planningPanelProvider as any).setApiServer === 'function') {
+            (this._planningPanelProvider as any).setApiServer(this._localApiServer);
+        }
 
         try {
             const port = await this._localApiServer.start();
@@ -2462,6 +2504,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setKanbanProvider(provider: KanbanProvider) {
         this._kanbanProvider = provider;
+        if (this._localApiServer) {
+            this._kanbanProvider.setApiServer(this._localApiServer);
+        }
         this._kanbanProvider.updateAutobanConfig(this._getAutobanBroadcastState());
         this._postMcpMonitorConfig();
 
@@ -2483,14 +2528,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setSetupPanelProvider(provider: SetupPanelProvider) {
         this._setupPanelProvider = provider;
+        if (this._localApiServer) {
+            this._setupPanelProvider.setApiServer(this._localApiServer);
+        }
     }
 
-    public setDesignPanelProvider(provider: { postMessage(message: any): void }) {
+    public setDesignPanelProvider(provider: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> }) {
         this._designPanelProvider = provider;
+        if (this._localApiServer && typeof (provider as any).setApiServer === 'function') {
+            (provider as any).setApiServer(this._localApiServer);
+        }
     }
 
-    public setPlanningPanelProvider(provider: { postMessage(message: any): void }) {
+    public setPlanningPanelProvider(provider: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> }) {
         this._planningPanelProvider = provider;
+        if (this._localApiServer && typeof (provider as any).setApiServer === 'function') {
+            (provider as any).setApiServer(this._localApiServer);
+        }
     }
 
     /**

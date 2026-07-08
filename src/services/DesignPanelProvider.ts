@@ -150,6 +150,10 @@ export class DesignPanelProvider implements vscode.Disposable {
         }
     }
 
+    public setApiServer(server: any): void {
+        this._broadcaster?.setApiServer(server);
+    }
+
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
     private _designService?: DesignService;
