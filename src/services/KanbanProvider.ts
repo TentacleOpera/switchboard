@@ -417,11 +417,11 @@ export class KanbanProvider implements vscode.Disposable {
                 vscode.workspace.onDidChangeConfiguration(e => {
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                        this.postMessage({ type: 'switchboardThemeChanged', theme });
                     }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                        this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                 })
             );
@@ -1236,7 +1236,7 @@ export class KanbanProvider implements vscode.Disposable {
             // change. A fullSync here is redundant and blocks for seconds while scanning
             // all session files from disk.
             if (this._pendingTab) {
-                this._panel.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
+                this.postMessage({ type: 'switchToTab', tab: this._pendingTab });
                 this._pendingTab = undefined;
             }
             // Fire-and-forget: push current DB state to the webview without blocking the
@@ -1676,7 +1676,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             const nextColumnsSignature = this._columnsSignature(columns);
             if (this._lastColumnsSignature !== nextColumnsSignature) {
-                this._panel.webview.postMessage({ type: 'updateColumns', columns });
+                this.postMessage({ type: 'updateColumns', columns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
 
@@ -1685,7 +1685,7 @@ export class KanbanProvider implements vscode.Disposable {
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             const cpStatus = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
@@ -1724,7 +1724,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._lastBoardSnapshotKey = snapshotKey;
             this._lastBoardSnapshotHash = snapshotHash;
             if (!snapshotUnchanged) {
-                this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees });
+                this.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees });
             }
 
             // Hydrate worktree state (indicator + WORKTREES tab) on every board refresh so it
@@ -1733,20 +1733,20 @@ export class KanbanProvider implements vscode.Disposable {
             // is idempotent, so this is safe to run unconditionally here.
             await this._sendWorktreeConfig(resolvedWorkspaceRoot);
 
-            this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
 
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'dynamicComplexityRoutingState',
                 enabled: this._dynamicComplexityRoutingEnabled
             });
 
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
             });
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'clearTerminalBeforePromptState',
                 enabled: this._clearTerminalBeforePrompt,
                 delay: this._clearTerminalBeforePromptDelay
@@ -1756,8 +1756,8 @@ export class KanbanProvider implements vscode.Disposable {
             try {
                 agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
             } catch { /* non-critical */ }
-            this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
-            this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+            this.postMessage({ type: 'updateAgentNames', agentNames });
+            this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
 
 
@@ -1769,11 +1769,11 @@ export class KanbanProvider implements vscode.Disposable {
                     ? 'disabled'
                     : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
             }
-            this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+            this.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
 
             if (this._autobanState) {
-                this._panel.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
-                this._panel.webview.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
+                this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
+                this.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
             }
 
             // Send live sync states to webview
@@ -1781,7 +1781,7 @@ export class KanbanProvider implements vscode.Disposable {
                 const liveSyncStates: Array<[string, LiveSyncState]> = Array.from(
                     this._continuousSync.getAllStates().entries()
                 );
-                this._panel.webview.postMessage({
+                this.postMessage({
                     type: 'liveSyncStates',
                     states: liveSyncStates.map(([sessionId, state]) => state)
                 });
@@ -1805,11 +1805,14 @@ export class KanbanProvider implements vscode.Disposable {
      * Post message to webview (used by ContinuousSyncService).
      */
     public postMessage(message: any): void {
-        if (!this._panel) { return; }
-        if (this._webviewReady) {
-            this._panel.webview.postMessage(message);
-        } else {
-            this._pendingWebviewMessages.push(message);
+        if (this._broadcaster) {
+            this._broadcaster.push(message);
+        } else if (this._panel) {
+            if (this._webviewReady) {
+                this._panel.webview.postMessage(message);
+            } else {
+                this._pendingWebviewMessages.push(message);
+            }
         }
     }
 
@@ -2202,7 +2205,7 @@ export class KanbanProvider implements vscode.Disposable {
         } else {
             this._remoteControlActive = false;
         }
-        this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+        this.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
         return this._remoteControlActive;
     }
 
@@ -2236,7 +2239,7 @@ export class KanbanProvider implements vscode.Disposable {
         } else {
             this._remoteControlActive = false;
         }
-        this._panel?.webview.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
+        this.postMessage({ type: 'remoteControlState', active: this._remoteControlActive });
         return this._remoteControlActive;
     }
 
@@ -2664,7 +2667,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const implicitWarning = !explicitWarning && unmappedColumnCount > 0
             ? `ClickUp has ${unmappedColumnCount} unmapped column${unmappedColumnCount === 1 ? '' : 's'}.`
             : '';
-        this._panel.webview.postMessage(
+        this.postMessage(
             this._buildClickUpState(
                 config,
                 syncError,
@@ -2680,7 +2683,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             return;
         }
         const config = await this._getLinearService(workspaceRoot).loadConfig();
-        this._panel.webview.postMessage(this._buildLinearState(config, syncError));
+        this.postMessage(this._buildLinearState(config, syncError));
     }
 
     private async _postIntegrationStates(workspaceRoot: string): Promise<void> {
@@ -3236,7 +3239,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const filteredColumns = this._filterDynamicColumns(columns, visibleAgents, cards);
             const nextColumnsSignature = this._columnsSignature(filteredColumns);
             if (this._lastColumnsSignature !== nextColumnsSignature) {
-                this._panel.webview.postMessage({ type: 'updateColumns', columns: filteredColumns });
+                this.postMessage({ type: 'updateColumns', columns: filteredColumns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
 
@@ -3257,7 +3260,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             const cpStatus2 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
@@ -3278,7 +3281,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const featureWorktrees = allWorktrees
                 .filter(w => w.feature_id !== null && w.status === 'active')
                 .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'updateBoard',
                 cards,
                 dbUnavailable,
@@ -3286,21 +3289,21 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 routingConfig: this._routingMapConfig,
                 featureWorktrees
             });
-            this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
             });
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'clearTerminalBeforePromptState',
                 enabled: this._clearTerminalBeforePrompt,
                 delay: this._clearTerminalBeforePromptDelay
             });
 
-            this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
-            this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+            this.postMessage({ type: 'updateAgentNames', agentNames });
+            this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
@@ -3310,11 +3313,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     ? 'disabled'
                     : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
             }
-            this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+            this.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
 
             if (this._autobanState) {
-                this._panel.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
-                this._panel.webview.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
+                this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
+                this.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
             }
         } catch (e) {
             console.error('[KanbanProvider] Failed to refresh board:', e);
@@ -3421,7 +3424,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const filteredColumns = this._filterDynamicColumns(columns, visibleAgents, cards);
             const nextColumnsSignature = this._columnsSignature(filteredColumns);
             if (this._lastColumnsSignature !== nextColumnsSignature) {
-                this._panel.webview.postMessage({ type: 'updateColumns', columns: filteredColumns });
+                this.postMessage({ type: 'updateColumns', columns: filteredColumns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
 
@@ -3433,7 +3436,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             const cpStatus3 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
@@ -3450,16 +3453,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
             });
             this._lastCards = cards;
-            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
-            this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
+            this.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
-            this._panel.webview.postMessage({
+            this.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
             });
-            this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
-            this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+            this.postMessage({ type: 'updateAgentNames', agentNames });
+            this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
@@ -3469,11 +3472,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     ? 'disabled'
                     : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
             }
-            this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+            this.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
 
             if (this._autobanState) {
-                this._panel.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
-                this._panel.webview.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
+                this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
+                this.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
             }
 
             // Use resolvedWorkspaceRoot (not this._currentWorkspaceRoot) to avoid
@@ -3917,7 +3920,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 await db.setConfig('feature_goal_enabled', goal ? 'true' : 'false');
             }
         }
-        this._panel?.webview.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
+        this.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
     }
 
     private async _getDefaultPromptOverrides(
@@ -3973,10 +3976,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             } catch { /* file may not exist */ }
             state.defaultPromptOverrides = overrides;
             await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
-            this._panel?.webview.postMessage({ type: 'saveDefaultPromptOverridesResult', success: true });
+            this.postMessage({ type: 'saveDefaultPromptOverridesResult', success: true });
         } catch (err) {
             console.error('[KanbanProvider] Failed to save default prompt overrides:', err);
-            this._panel?.webview.postMessage({ type: 'saveDefaultPromptOverridesResult', success: false });
+            this.postMessage({ type: 'saveDefaultPromptOverridesResult', success: false });
         }
     }
 
@@ -4756,7 +4759,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     private async _generateAntigravityPrompt(agentName: string, workspaceRoot: string, column: string = 'CREATED', batchSize?: number): Promise<void> {
         try {
             if (!agentName) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'antigravityPrompt',
                     prompt: null,
                     error: 'No agent specified'
@@ -4767,7 +4770,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // Get the oldest plan in the specified column
             const db = this._getKanbanDb(workspaceRoot);
             if (!await db.ensureReady()) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'antigravityPrompt',
                     prompt: null,
                     error: 'Database not available'
@@ -4780,7 +4783,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 || await db.getDominantWorkspaceId();
 
             if (!workspaceId) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'antigravityPrompt',
                     prompt: null,
                     error: 'No workspace ID found'
@@ -4792,7 +4795,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const columnPlans = await db.getPlansByColumn(workspaceId, column, this._projectFilter);
 
             if (!columnPlans || columnPlans.length === 0) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'antigravityPrompt',
                     prompt: null,
                     error: `No plans found in ${column} column`
@@ -4912,13 +4915,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
             preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
             prompt = preamble + targetBlock + sqlInstruction;
 
-            this._panel?.webview.postMessage({
+            this.postMessage({
                 type: 'antigravityPrompt',
                 prompt
             });
         } catch (error) {
             console.error('[KanbanProvider] Failed to generate antigravity prompt:', error);
-            this._panel?.webview.postMessage({
+            this.postMessage({
                 type: 'antigravityPrompt',
                 prompt: null,
                 error: String(error)
@@ -5019,10 +5022,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
             }
             if (movedIds.length > 0) {
-                this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
             }
             if (failures.length > 0) {
-                this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                this.postMessage({ type: 'moveCardsFailed', failures });
             }
             await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot);
             return;
@@ -5038,7 +5041,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const plans = limit ? ordered.slice(0, terminals.length) : ordered;
 
         if (plans.length === 0) {
-            this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false });
+            this.postMessage({ type: 'showStatusMessage', message: 'No plans to dispatch.', isError: false });
             return;
         }
 
@@ -5061,10 +5064,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
         }
         if (movedIds.length > 0) {
-            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+            this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
         }
         if (failures.length > 0) {
-            this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+            this.postMessage({ type: 'moveCardsFailed', failures });
         }
 
         // Round-robin partition into per-terminal buckets, starting from the
@@ -5114,7 +5117,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const limitSuffix = limit && ordered.length > terminals.length
             ? ` (${ordered.length - terminals.length} plan(s) held — limit ON)`
             : '';
-        this._panel?.webview.postMessage({
+        this.postMessage({
             type: 'showStatusMessage',
             message: `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} planner terminal(s).${limitSuffix}`,
             isError: false
@@ -5398,7 +5401,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             byTarget.get(targetColumn)!.push(...movedIds);
         }
         for (const [targetColumn, sessionIds] of byTarget) {
-            this._panel.webview.postMessage({ type: 'moveCards', sessionIds, targetColumn });
+            this.postMessage({ type: 'moveCards', sessionIds, targetColumn });
         }
     }
 
@@ -5667,7 +5670,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
         const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-        this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+        this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
     }
 
     /** Receive updated Autoban configuration from the sidebar and relay to the Kanban webview. */
@@ -5675,8 +5678,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
         this._autobanState = state;
         this._markConfigDirty();
         if (!this._panel) { return; }
-        this._panel.webview.postMessage({ type: 'updateAutobanConfig', state });
-        this._panel.webview.postMessage({ type: 'updatePairProgrammingMode', mode: state.pairProgrammingMode });
+        this.postMessage({ type: 'updateAutobanConfig', state });
+        this.postMessage({ type: 'updatePairProgrammingMode', mode: state.pairProgrammingMode });
     }
 
     /**
@@ -5947,7 +5950,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             : this._workspaceOverrideEnabled
                 ? 'Workspace'
                 : 'Global (default)';
-        this._panel.webview.postMessage({
+        this.postMessage({
             type: 'overrideState',
             workspaceOverride: this._workspaceOverrideEnabled,
             projectOverride: this._projectOverrideEnabled,
@@ -6649,17 +6652,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.commands.executeCommand('switchboard.fullSync');
                 {
                     const currentTheme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                    this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
+                    this.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
                 }
                 if (this._pendingTab) {
-                    this._panel?.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
+                    this.postMessage({ type: 'switchToTab', tab: this._pendingTab });
                     this._pendingTab = undefined;
                 }
                 if (this._pendingWebviewMessages.length) {
                     const queued = this._pendingWebviewMessages;
                     this._pendingWebviewMessages = [];
                     for (const m of queued) {
-                        this._panel?.webview.postMessage(m);
+                        this.postMessage(m);
                     }
                 }
                 // Push persisted MCP monitor config to the kanban webview on
@@ -6933,7 +6936,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 // addProject returns false on duplicate (UNIQUE constraint) — report it
                 if (!created) {
-                    this._panel?.webview.postMessage({
+                    this.postMessage({
                         type: 'showStatusMessage',
                         message: `Project "${projectName}" may already exist.`,
                         isError: true
@@ -6967,14 +6970,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 try {
                     await vscode.env.clipboard.writeText(prompt);
-                    this._panel?.webview.postMessage({
+                    this.postMessage({
                         type: 'showStatusMessage',
                         message: `PRD prompt copied to clipboard — paste into your agent. It will save to ${prdPath}`,
                         isError: false
                     });
                 } catch (err) {
                     console.error('[KanbanProvider] copyPrdPrompt failed:', err);
-                    this._panel?.webview.postMessage({
+                    this.postMessage({
                         type: 'showStatusMessage',
                         message: `Failed to copy PRD prompt to clipboard.`,
                         isError: true
@@ -7108,7 +7111,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'renderMcpMonitorPreview': {
                 if (this._taskViewerProvider && msg.config) {
                     const preview = this._taskViewerProvider.buildMcpMonitorPreview(msg.config);
-                    this._panel?.webview.postMessage({ type: 'mcpMonitorPreview', preview });
+                    this.postMessage({ type: 'mcpMonitorPreview', preview });
                 }
                 break;
             }
@@ -7132,7 +7135,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         this._autobanState = { ...this._autobanState, enabled: !enabled };
                     }
                 }
-                this._panel?.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
+                this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
                 break;
             }
             case 'resetAutobanTimers': {
@@ -7159,7 +7162,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     await this._kanbanService.getRemoteConfig(msg);
                 } else {
                     const payload = await this.remoteGetConfigPayload(msg.workspaceRoot);
-                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    if (payload) { this.postMessage(payload); }
                 }
                 break;
             }
@@ -7168,7 +7171,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     await this._kanbanService.setRemoteConfig(msg);
                 } else {
                     const payload = await this.remoteSetConfig(msg.workspaceRoot, msg.config as RemoteConfig);
-                    if (payload) { this._panel?.webview.postMessage(payload); }
+                    if (payload) { this.postMessage(payload); }
                 }
                 break;
             }
@@ -7176,7 +7179,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot) {
                     const result = await this.remoteRunNotionSetup(workspaceRoot);
-                    this._panel?.webview.postMessage({ type: 'notionRemoteSetupResult', ...result });
+                    this.postMessage({ type: 'notionRemoteSetupResult', ...result });
                 }
                 break;
             }
@@ -7265,7 +7268,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             if (card && workspaceRoot && sourceColumnForPrompt) {
                                 const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
                                 await vscode.env.clipboard.writeText(prompt);
-                                this._panel?.webview.postMessage({
+                                this.postMessage({
                                     type: 'dispatchFailedPromptReady',
                                     planId: card.planId || sessionId,
                                     sessionId: card.sessionId,
@@ -7282,7 +7285,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         if (card && sourceColumnForPrompt) {
                             const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
                             await vscode.env.clipboard.writeText(prompt);
-                            this._panel?.webview.postMessage({
+                            this.postMessage({
                                 type: 'dispatchFailedPromptReady',
                                 planId: card.planId || sessionId,
                                 sessionId: card.sessionId,
@@ -7356,7 +7359,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             if (card && sourceColumnForPrompt) {
                                 const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
                                 await vscode.env.clipboard.writeText(prompt);
-                                this._panel?.webview.postMessage({
+                                this.postMessage({
                                     type: 'dispatchFailedPromptReady',
                                     planId: card.planId || sessionId,
                                     sessionId: card.sessionId,
@@ -7374,7 +7377,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (card && sourceColumnForPrompt) {
                         const prompt = await this._generatePromptForColumn([card], sourceColumnForPrompt, workspaceRoot, targetColumn);
                         await vscode.env.clipboard.writeText(prompt);
-                        this._panel?.webview.postMessage({
+                        this.postMessage({
                             type: 'dispatchFailedPromptReady',
                             planId: card.planId || sessionId,
                             sessionId: card.sessionId,
@@ -7426,7 +7429,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     // Targeted delta, not a full-board redraw — the move is already persisted
                     // and the target column is known. Keeps drag-advance snappy.
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
                 }
                 break;
             }
@@ -7443,7 +7446,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     // Targeted delta, not a full-board redraw — the move is already persisted
                     // and the target column is known. Keeps drag-advance snappy.
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
                 }
                 break;
             }
@@ -7583,7 +7586,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     await db.setConfig('feature_ultracode_enabled', ultracode ? 'true' : 'false');
                     await db.setConfig('feature_goal_enabled', goal ? 'true' : 'false');
                 }
-                this._panel?.webview.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
+                this.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
                 break;
             }
             case 'toggleDynamicComplexityRouting':
@@ -7622,7 +7625,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 } catch (err) {
                     console.error('[KanbanProvider] Failed to persist clearTerminalBeforePrompt:', err);
                 }
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'clearTerminalBeforePromptState',
                     enabled: this._clearTerminalBeforePrompt,
                     delay: this._clearTerminalBeforePromptDelay
@@ -7642,7 +7645,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 } catch (err) {
                     console.error('[KanbanProvider] Failed to persist clearTerminalBeforePromptDelay:', err);
                 }
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'clearTerminalBeforePromptDelayState',
                     delay: clampedDelay
                 });
@@ -7839,7 +7842,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, sessionIds)
                 );
                 if (sourceCards.length === 0) {
-                    this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
+                    this.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
                     break;
                 }
 
@@ -7867,10 +7870,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                         allMovedIds.push(...movedIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
-                    this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
+                    this.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
                     if (dispatched) {
-                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
+                        this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                     }
                     break;
                 }
@@ -7897,7 +7900,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                             allMovedSids.push(...movedIds);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedSids, targetColumn: targetCol });
+                        this.postMessage({ type: 'moveCards', sessionIds: allMovedSids, targetColumn: targetCol });
                     }
                 } else {
                     const allMovedIds2: string[] = [];
@@ -7909,7 +7912,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                         allMovedIds2.push(...movedIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds2, targetColumn });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds2, targetColumn });
                 }
 
                 // Pair programming: dispatch coder work for high-complexity cards routed to Lead
@@ -7920,8 +7923,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
 
-                this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
+                this.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
+                this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                 break;
             }
             case 'batchPlannerPrompt': {
@@ -7941,7 +7944,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'CREATED', 'improve-plan', workspaceRoot);
                 // Per-target moveCards deltas instead of a trailing full refresh.
                 await this._postMoveCardsByTarget(advanced, workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`, isError: false });
+                this.postMessage({ type: 'showStatusMessage', message: `Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`, isError: false });
                 break;
             }
             case 'batchDispatchLow': {
@@ -7970,7 +7973,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', undefined, workspaceRoot);
                 // Per-target moveCards deltas (target derived dynamically by the helper) — no full refresh.
                 await this._postMoveCardsByTarget(advanced, workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
+                this.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
                 break;
             }
             case 'julesLowComplexity': {
@@ -8034,10 +8037,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                         }
                         if (movedSids.length > 0) {
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                         }
                         if (failures.length > 0) {
-                            this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                            this.postMessage({ type: 'moveCardsFailed', failures });
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
@@ -8050,7 +8053,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                     if (movedParts.length > 0) {
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
+                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                     }
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
@@ -8062,7 +8065,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                             allMovedIds.push(...cascadeIds);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
@@ -8106,10 +8109,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 }
                             }
                             if (movedIds.length > 0) {
-                                this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                                this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
                             }
                             if (failures.length > 0) {
-                                this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                                this.postMessage({ type: 'moveCardsFailed', failures });
                             }
                             if (this._cliTriggersEnabled && role) {
                                 const instruction = role === 'planner' ? 'improve-plan' : undefined;
@@ -8172,10 +8175,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                         }
                         if (movedSids.length > 0) {
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                         }
                         if (failures.length > 0) {
-                            this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                            this.postMessage({ type: 'moveCardsFailed', failures });
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
@@ -8189,7 +8192,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // No full refresh — each complexity group already posted its own targeted
                     // moveCards delta above (one per target column). N small deltas, not a redraw.
                     const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
+                    this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { break; }
@@ -8200,7 +8203,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                             allMovedIds.push(...cascadeIds);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
@@ -8246,10 +8249,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 }
                             }
                             if (movedIds.length > 0) {
-                                this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                                this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
                             }
                             if (failures.length > 0) {
-                                this._panel?.webview.postMessage({ type: 'moveCardsFailed', failures });
+                                this.postMessage({ type: 'moveCardsFailed', failures });
                             }
                             if (this._cliTriggersEnabled && role) {
                                 await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot);
@@ -8261,7 +8264,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // No full refresh — the custom-user and general branches each posted their
                     // own targeted moveCards delta. Persist already happened; the move sticks
                     // independent of dispatch.
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
+                    this.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
                 }
                 break;
             }
@@ -8295,13 +8298,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.env.clipboard.writeText(prompt);
                 const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Planning chat prompt copied${planWord}.`, isError: false });
+                this.postMessage({ type: 'showStatusMessage', message: `Planning chat prompt copied${planWord}.`, isError: false });
                 break;
             }
             case 'copyChatWorkflow': {
                 const prompt = await this.copyGeneralChatPrompt(msg.workspaceRoot);
                 if (prompt) {
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
+                    this.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
                 }
                 break;
             }
@@ -8357,8 +8360,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                         allMovedIds.push(...cascadeIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                    this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
 
@@ -8378,12 +8381,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                                 movedSids.push(...cascadeIds);
                             }
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                         }
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`, isError: false });
+                        this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`, isError: false });
                     } else {
-                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`, isError: false });
+                        this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`, isError: false });
                     }
                 } else {
                     const allMovedIds: string[] = [];
@@ -8393,8 +8396,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                         allMovedIds.push(...cascadeIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to next stage.`, isError: false });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                    this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to next stage.`, isError: false });
                 }
                 break;
             }
@@ -8445,8 +8448,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                         allMovedIds.push(...cascadeIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                    this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
 
@@ -8470,7 +8473,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                                 movedSids.push(...cascadeIds);
                             }
-                            this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                             // Column already persisted above. Preserve only the run-sheet workflow-event
                             // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
                             // drop its trailing full refreshUI that defeated this delta.
@@ -8479,9 +8482,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             }
                             movedParts.push(`${sids.length} → ${targetCol}`);
                         }
-                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`, isError: false });
+                        this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`, isError: false });
                     } else {
-                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced.`, isError: false });
+                        this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced.`, isError: false });
                     }
                     this._notifySkippedUnknownComplexity(skippedCount, knownIds.length);
                 } else {
@@ -8494,14 +8497,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                         allMovedIds.push(...cascadeIds);
                     }
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
                     // Column already persisted above. Preserve only the run-sheet workflow-event
                     // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
                     // drop its trailing full refreshUI that defeated this delta.
                     for (const sid of sessionIds) {
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                     }
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
+                    this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                 }
                 break;
             }
@@ -8744,14 +8747,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const copySessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (copySessionId) {
                     const success = await vscode.commands.executeCommand<boolean>('switchboard.copyPlanFromKanban', copySessionId, msg.column, msg.workspaceRoot);
-                    this._panel?.webview.postMessage({ type: 'copyPlanLinkResult', planId: msg.planId || '', sessionId: copySessionId, success });
+                    this.postMessage({ type: 'copyPlanLinkResult', planId: msg.planId || '', sessionId: copySessionId, success });
                 }
                 break;
             }
             case 'createPlan':
                 if (this._showingBacklog) {
                     this._showingBacklog = false;
-                    this._panel?.webview.postMessage({ type: 'backlogViewState', showing: false });
+                    this.postMessage({ type: 'backlogViewState', showing: false });
                 }
 
                 // LAZY CHANGE: Ensure DB exists before plan creation
@@ -8771,7 +8774,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             case 'toggleBacklogView':
                 this._showingBacklog = !this._showingBacklog;
-                this._panel?.webview.postMessage({ type: 'backlogViewState', showing: this._showingBacklog });
+                this.postMessage({ type: 'backlogViewState', showing: this._showingBacklog });
                 this.refresh();
                 break;
             case 'sendToBacklog': {
@@ -8854,7 +8857,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'getDbPath': {
                 const config = vscode.workspace.getConfiguration('switchboard');
                 const dbPath = config.get<string>('kanban.dbPath', '') || '.switchboard/kanban.db';
-                this._panel?.webview.postMessage({ type: 'dbPathUpdated', path: dbPath });
+                this.postMessage({ type: 'dbPathUpdated', path: dbPath });
                 break;
             }
             case 'testingFailed': {
@@ -8933,7 +8936,7 @@ ${FOCUS_DIRECTIVE}`;
                     }
 
                     // Cards persisted to LEAD CODED via db.updateColumn above — targeted delta, no full refresh.
-                    this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: 'LEAD CODED' });
+                    this.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: 'LEAD CODED' });
                     const verb = msg.action === 'sendToLead' ? 'Prompt dispatched to lead coder.' : '';
                     vscode.window.showInformationMessage(
                         `Testing failure prompt copied and ${sourceCards.length} plan(s) moved to Lead Coder. ${verb}`.trim()
@@ -8976,7 +8979,7 @@ ${FOCUS_DIRECTIVE}`;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 const startupState = await this._getStartupCommands(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'startupCommands', ...startupState });
+                this.postMessage({ type: 'startupCommands', ...startupState });
                 break;
             }
             case 'saveStartupCommands': {
@@ -8996,7 +8999,7 @@ ${FOCUS_DIRECTIVE}`;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'promptsConfig', ...promptsConfig });
+                this.postMessage({ type: 'promptsConfig', ...promptsConfig });
                 break;
             }
             case 'savePromptsConfig': {
@@ -9009,7 +9012,7 @@ ${FOCUS_DIRECTIVE}`;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 const overrides = await this._getDefaultPromptOverrides(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'defaultPromptOverrides', overrides });
+                this.postMessage({ type: 'defaultPromptOverrides', overrides });
                 break;
             }
             case 'saveDefaultPromptOverrides': {
@@ -9027,16 +9030,16 @@ ${FOCUS_DIRECTIVE}`;
                     if (typeof filePath !== 'string' || !filePath.trim()) break;
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     if (!workspaceRoot) {
-                        this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
+                        this.postMessage({ type: 'fileExistsResult', exists: false });
                         break;
                     }
                     const resolvedPath = path.resolve(workspaceRoot, filePath);
                     if (!resolvedPath.startsWith(workspaceRoot)) {
-                        this._panel?.webview.postMessage({ type: 'fileExistsResult', exists: false });
+                        this.postMessage({ type: 'fileExistsResult', exists: false });
                         break;
                     }
                     const exists = fs.existsSync(resolvedPath);
-                    this._panel?.webview.postMessage({ type: 'fileExistsResult', exists });
+                    this.postMessage({ type: 'fileExistsResult', exists });
                 }
                 break;
             }
@@ -9076,7 +9079,7 @@ ${FOCUS_DIRECTIVE}`;
                     } else {
                         value = this._getScopedSetting(fullKey, undefined);
                     }
-                    this._panel?.webview.postMessage({ type: 'settingResult', key, value });
+                    this.postMessage({ type: 'settingResult', key, value });
                 }
                 break;
             }
@@ -9084,7 +9087,7 @@ ${FOCUS_DIRECTIVE}`;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
                 const previews = await this._getDefaultPromptPreviews(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'defaultPromptPreviews', previews });
+                this.postMessage({ type: 'defaultPromptPreviews', previews });
                 break;
             }
             case 'getPromptPreview': {
@@ -9145,9 +9148,9 @@ ${FOCUS_DIRECTIVE}`;
                         sourceColumnLabel,
                         instruction: (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined
                     });
-                    this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview, planCount });
+                    this.postMessage({ type: 'promptPreviewResult', role, preview, planCount });
                 } catch (err) {
-                    this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview: 'Error generating preview: ' + (err as Error).message, planCount: 0 });
+                    this.postMessage({ type: 'promptPreviewResult', role, preview: 'Error generating preview: ' + (err as Error).message, planCount: 0 });
                 }
                 break;
             }
@@ -9162,14 +9165,14 @@ ${FOCUS_DIRECTIVE}`;
             case 'getPersonaForRole': {
                 const { role } = msg;
                 if (typeof role !== 'string' || !this._taskViewerProvider) {
-                    this._panel?.webview.postMessage({ type: 'personaContent', role, content: null, error: 'Invalid request' });
+                    this.postMessage({ type: 'personaContent', role, content: null, error: 'Invalid request' });
                     break;
                 }
                 try {
                     const content = await this._taskViewerProvider.getPersonaForRole(role);
-                    this._panel?.webview.postMessage({ type: 'personaContent', role, content: content ?? null });
+                    this.postMessage({ type: 'personaContent', role, content: content ?? null });
                 } catch (error: any) {
-                    this._panel?.webview.postMessage({ type: 'personaContent', role, content: null, error: error?.message || 'Unknown error' });
+                    this.postMessage({ type: 'personaContent', role, content: null, error: error?.message || 'Unknown error' });
                 }
                 break;
             }
@@ -9211,17 +9214,17 @@ ${FOCUS_DIRECTIVE}`;
                 if (!workspaceRoot || !this._taskViewerProvider) { break; }
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 break;
             }
             case 'getAutoArchiveConfig': {
                 const payload = await this.autoArchiveGetConfigPayload(msg.workspaceRoot);
-                this._panel?.webview.postMessage(payload);
+                this.postMessage(payload);
                 break;
             }
             case 'saveAutoArchiveConfig': {
                 const payload = await this.autoArchiveSetConfig(msg.workspaceRoot, msg.config);
-                this._panel?.webview.postMessage(payload);
+                this.postMessage(payload);
                 break;
             }
             case 'updateKanbanStructure': {
@@ -9230,7 +9233,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleUpdateKanbanStructure(msg.sequence, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 break;
             }
             case 'saveKanbanColumn': {
@@ -9239,7 +9242,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleSaveKanbanColumn(msg.column, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 await vscode.commands.executeCommand('switchboard.refreshUI');
                 break;
             }
@@ -9249,7 +9252,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleDeleteKanbanColumn(msg.id, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 await vscode.commands.executeCommand('switchboard.refreshUI');
                 break;
             }
@@ -9259,7 +9262,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleRestoreKanbanDefaults(workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 await vscode.commands.executeCommand('switchboard.refreshUI');
                 break;
             }
@@ -9269,7 +9272,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleToggleKanbanColumnVisibility(msg.id, msg.visible, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 await vscode.commands.executeCommand('switchboard.refreshUI');
                 break;
             }
@@ -9279,72 +9282,72 @@ ${FOCUS_DIRECTIVE}`;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 try {
                     if (!workspaceRoot) {
-                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Workspace root not resolved' });
+                        this.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Workspace root not resolved' });
                         break;
                     }
                     if (agentId) {
                         const customAgents = await this._getCustomAgents(workspaceRoot);
                         const agent = customAgents.find(a => a.id === agentId);
                         if (!agent) {
-                            this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Agent not found' });
+                            this.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Agent not found' });
                             break;
                         }
                         const result = await AgentSkillExporter.exportCustomAgent(agent, workspaceRoot);
-                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', ...result });
+                        this.postMessage({ type: 'exportAgentAsSkillResult', ...result });
                     } else if (role) {
                         const roleConfig: any = this._getRoleConfig(role);
                         const label = BUILT_IN_AGENT_LABELS[role as BuiltInAgentRole] || role;
                         const result = await AgentSkillExporter.exportBuiltinAgent(role as BuiltInAgentRole, label, roleConfig, workspaceRoot);
-                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', ...result });
+                        this.postMessage({ type: 'exportAgentAsSkillResult', ...result });
                     } else {
-                        this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Missing agentId or role' });
+                        this.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Missing agentId or role' });
                     }
                 } catch (e: any) {
-                    this._panel?.webview.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: e.message || String(e) });
+                    this.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: e.message || String(e) });
                 }
                 break;
             }
             case 'saveCustomAgent': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.agent || typeof msg.agent !== 'object') {
-                    this._panel?.webview.postMessage({ type: 'saveCustomAgentResult', success: false, error: 'Missing agent data or workspace' });
+                    this.postMessage({ type: 'saveCustomAgentResult', success: false, error: 'Missing agent data or workspace' });
                     break;
                 }
                 try {
                     await this._taskViewerProvider?.handleSaveCustomAgent(msg.agent, workspaceRoot);
-                    this._panel?.webview.postMessage({ type: 'saveCustomAgentResult', success: true });
+                    this.postMessage({ type: 'saveCustomAgentResult', success: true });
                     await this._refreshBoard(workspaceRoot);
                 } catch (e: any) {
-                    this._panel?.webview.postMessage({ type: 'saveCustomAgentResult', success: false, error: e.message || 'Failed to save custom agent' });
+                    this.postMessage({ type: 'saveCustomAgentResult', success: false, error: e.message || 'Failed to save custom agent' });
                 }
                 break;
             }
             case 'deleteCustomAgent': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || typeof msg.agentId !== 'string') {
-                    this._panel?.webview.postMessage({ type: 'deleteCustomAgentResult', success: false, error: 'Missing agent ID or workspace' });
+                    this.postMessage({ type: 'deleteCustomAgentResult', success: false, error: 'Missing agent ID or workspace' });
                     break;
                 }
                 try {
                     await this._taskViewerProvider?.handleDeleteCustomAgent(msg.agentId, workspaceRoot);
-                    this._panel?.webview.postMessage({ type: 'deleteCustomAgentResult', success: true });
+                    this.postMessage({ type: 'deleteCustomAgentResult', success: true });
                     await this._refreshBoard(workspaceRoot);
                 } catch (e: any) {
-                    this._panel?.webview.postMessage({ type: 'deleteCustomAgentResult', success: false, error: e.message || 'Failed to delete custom agent' });
+                    this.postMessage({ type: 'deleteCustomAgentResult', success: false, error: e.message || 'Failed to delete custom agent' });
                 }
                 break;
             }
             case 'getCustomAgents': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({ type: 'customAgents', customAgents: [], workspaceRoot });
+                    this.postMessage({ type: 'customAgents', customAgents: [], workspaceRoot });
                     break;
                 }
                 try {
                     const customAgents = await this._taskViewerProvider?.getCustomAgents(workspaceRoot) ?? [];
-                    this._panel?.webview.postMessage({ type: 'customAgents', customAgents, workspaceRoot });
+                    this.postMessage({ type: 'customAgents', customAgents, workspaceRoot });
                 } catch {
-                    this._panel?.webview.postMessage({ type: 'customAgents', customAgents: [], workspaceRoot });
+                    this.postMessage({ type: 'customAgents', customAgents: [], workspaceRoot });
                 }
                 break;
             }
@@ -9407,7 +9410,7 @@ ${FOCUS_DIRECTIVE}`;
                                 });
                             }
                         }
-                        this._panel?.webview.postMessage({ type: 'uatData', plans: plansWithSteps });
+                        this.postMessage({ type: 'uatData', plans: plansWithSteps });
                     }
                 }
                 break;
@@ -9624,7 +9627,7 @@ ${FOCUS_DIRECTIVE}`;
                 const allWorktrees = await db.getWorktrees();
                 const wtRow = allWorktrees.find(w => w.id === Number(worktreeId));
                 if (!wtRow) {
-                    this._panel?.webview.postMessage({ type: 'mergePromptReady', worktreeId, error: 'Worktree not found' });
+                    this.postMessage({ type: 'mergePromptReady', worktreeId, error: 'Worktree not found' });
                     break;
                 }
 
@@ -9672,7 +9675,7 @@ ${steps}
 
 After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree_cleanup\` skill (\`.agents/skills/worktree_cleanup.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
 
-                this._panel?.webview.postMessage({ type: 'mergePromptReady', worktreeId, prompt });
+                this.postMessage({ type: 'mergePromptReady', worktreeId, prompt });
                 break;
             }
             case 'cleanupWorktree': {
@@ -9715,7 +9718,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                     const status = await this._getWorktreeStatus(wt.path);
                     statuses.push({ id: Number(wt.id), status });
                 }
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'worktreeStatuses',
                     statuses
                 });
@@ -9855,12 +9858,12 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                     this._cardMatchesProjectFilter(card, projectFilter)
                 );
                 if (candidateCards.length === 0) {
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into features (in the current project scope).', isError: true });
+                    this.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into features (in the current project scope).', isError: true });
                     break;
                 }
                 const prompt = this._buildSuggestFeaturesPrompt(workspaceRoot, projectFilter);
                 await vscode.env.clipboard.writeText(prompt);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Suggest-features prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
+                this.postMessage({ type: 'showStatusMessage', message: `Suggest-features prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
                 break;
             }
             case 'removeSubtaskFromFeature': {
@@ -9882,11 +9885,11 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                 if (!db || !(await db.ensureReady())) break;
                 const feature = await db.getPlanByPlanId(msg.sessionId);
                 if (!feature || !feature.isFeature) {
-                    this._panel?.webview.postMessage({ type: 'featureDetails', feature: null, subtasks: [] });
+                    this.postMessage({ type: 'featureDetails', feature: null, subtasks: [] });
                     break;
                 }
                 const subtasks = await db.getSubtasksByFeatureId(feature.planId);
-                this._panel?.webview.postMessage({ type: 'featureDetails', feature, subtasks });
+                this.postMessage({ type: 'featureDetails', feature, subtasks });
                 // The legacy `source:'kanban'` branch (which sent kanbanFeatureDetails to the
                 // removed on-board feature-manage modal) is gone. feature_prompt_template is
                 // read as a fallback in generateUnifiedPrompt, never surfaced for per-feature
@@ -10413,7 +10416,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             }
         }
 
-        this._panel?.webview.postMessage({
+        this.postMessage({
             type: 'worktreeConfig',
             worktrees: mappedWorktrees,
             controlPlaneMode: cpStatus.mode,

@@ -746,7 +746,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _notifyTerminalAgentNamesChanged(): void {
         if (this._view) {
             const terminalAgentNames = this.getActualTerminalAgentNames();
-            this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
+            this.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
         }
     }
 
@@ -2547,13 +2547,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    public postMessage(message: any): void {
+        if (this._broadcaster) {
+            this._broadcaster.push(message);
+        } else {
+            this._view?.webview.postMessage(message);
+        }
+    }
+
     /**
      * Programmatically select a session in the sidebar dropdown.
      * Called by KanbanProvider when the user clicks a card on the Kanban board.
      */
     public selectSession(sessionId: string) {
         this._lastSessionId = sessionId;
-        this._view?.webview.postMessage({ type: 'selectSession', sessionId });
+        this.postMessage({ type: 'selectSession', sessionId });
     }
 
     private _deriveLastActionFromEvents(events: any[]): string {
@@ -3205,7 +3213,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public async fullSync() {
         if (this._view) {
-            this._view.webview.postMessage({ type: 'loading', value: true });
+            this.postMessage({ type: 'loading', value: true });
         }
         await Promise.all([
             this._refreshSessionStatus(),
@@ -3214,7 +3222,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._refreshJulesStatus()
         ]);
         if (this._view) {
-            this._view.webview.postMessage({ type: 'loading', value: false });
+            this.postMessage({ type: 'loading', value: false });
         }
     }
 
@@ -3255,7 +3263,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public sendLoadingState(loading: boolean) {
-        this._view?.webview.postMessage({ type: 'loading', value: loading });
+        this.postMessage({ type: 'loading', value: loading });
     }
 
     public async sendPromptToAgentTerminal(role: string, text: string, workspaceRoot?: string): Promise<void> {
@@ -3505,10 +3513,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // 2. Reveal the sidebar (resolves the view if not yet created).
         await vscode.commands.executeCommand('switchboard-view.focus');
         // 3. If the view is already live, switch immediately (initialState won't re-fire).
-        this._view?.webview.postMessage({ type: 'openMemoTab' });
+        this.postMessage({ type: 'openMemoTab' });
         // 4. Cold-open safety net: re-assert Memo once the webview has had a moment to mount.
         setTimeout(() => {
-            this._view?.webview.postMessage({ type: 'openMemoTab' });
+            this.postMessage({ type: 'openMemoTab' });
         }, 300);
     }
 
@@ -3759,7 +3767,7 @@ Each plan file must include:
         }
 
         this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
-        this._view?.webview.postMessage({ type: 'actionTriggered', role, success: true });
+        this.postMessage({ type: 'actionTriggered', role, success: true });
         return true;
     }
 
@@ -4960,7 +4968,7 @@ Each plan file must include:
     }
 
     private _postSharedWebviewMessage(message: any): void {
-        this._view?.webview.postMessage(message);
+        this.postMessage(message);
         this._setupPanelProvider?.postMessage(message);
     }
 
@@ -4979,29 +4987,29 @@ Each plan file must include:
         // Push the current workspace root so the webview's currentWorkspaceRoot stays in sync
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (resolvedRoot) {
-            this._view.webview.postMessage({ type: 'workspaceChanged', workspaceRoot: resolvedRoot });
+            this.postMessage({ type: 'workspaceChanged', workspaceRoot: resolvedRoot });
         }
 
         const startupState = await this.handleGetStartupCommands(workspaceRoot);
-        this._view.webview.postMessage({ type: 'startupCommands', ...startupState });
+        this.postMessage({ type: 'startupCommands', ...startupState });
 
         // Send terminal-derived agent names (workspace-agnostic, locked to actual running terminals)
         const terminalAgentNames = this.getActualTerminalAgentNames();
-        this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
+        this.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
 
         const visibleAgents = await this.getVisibleAgents(workspaceRoot);
-        this._view.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+        this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
         const customAgents = await this.getCustomAgents(workspaceRoot);
-        this._view.webview.postMessage({ type: 'customAgents', customAgents });
+        this.postMessage({ type: 'customAgents', customAgents });
         this._kanbanProvider?.postMessage({ type: 'customAgents', customAgents });
 
-        this._view.webview.postMessage({
+        this.postMessage({
             type: 'julesAutoSyncSetting',
             enabled: this.handleGetJulesAutoSyncSetting()
         });
 
-        this._view.webview.postMessage({
+        this.postMessage({
             type: 'hideGuidedSetupSetting',
             enabled: this.handleGetHideGuidedSetupSetting()
         });
@@ -5009,7 +5017,7 @@ Each plan file must include:
 
 
         const designSystemDocSetting = this.handleGetDesignSystemDocSetting();
-        this._view.webview.postMessage({
+        this.postMessage({
             type: 'designSystemDocSetting',
             enabled: designSystemDocSetting.enabled,
             link: designSystemDocSetting.link
@@ -5017,7 +5025,7 @@ Each plan file must include:
 
 
 
-        this._view.webview.postMessage({
+        this.postMessage({
             type: 'switchboardThemeNameSetting',
             theme: this.handleGetThemeSetting()
         });
@@ -5966,7 +5974,7 @@ Each plan file must include:
         }
         if (!skipSync) {
             await this._syncFilesAndRefreshRunSheets(effectiveRoot);
-            this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFile });
+            this.postMessage({ type: 'selectPlanFile', planFile: rootPlanFile });
         }
 
         return {
@@ -6061,7 +6069,7 @@ Each plan file must include:
 
             if (!skipSync) {
                 await this._syncFilesAndRefreshRunSheets(effectiveRoot);
-                this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFileRelative });
+                this.postMessage({ type: 'selectPlanFile', planFile: rootPlanFileRelative });
             }
 
             const taskName = task.name || task.id;
@@ -6306,7 +6314,7 @@ Each plan file must include:
             }
         }
 
-        this._view?.webview.postMessage({
+        this.postMessage({
             type: 'initialState',
             needsSetup: this._needsSetup,
 
@@ -6373,7 +6381,7 @@ Each plan file must include:
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) return;
         const page = await this._getSessionLog(resolvedRoot).getRecentActivity(limit, beforeTimestamp);
-        this._view?.webview.postMessage({
+        this.postMessage({
             type: 'recentActivity',
             events: page.events,
             hasMore: page.hasMore,
@@ -7811,7 +7819,7 @@ Each plan file must include:
     /** Actual broadcast implementation — sends state to both webviews. */
     private _postAutobanStateImmediate(): void {
         const state = this._getAutobanBroadcastState();
-        this._view?.webview.postMessage({
+        this.postMessage({
             type: 'autobanStateSync',
             state
         });
@@ -7820,7 +7828,7 @@ Each plan file must include:
     }
 
     private _postPipelineState(): void {
-        this._view?.webview.postMessage({
+        this.postMessage({
             type: 'pipelineState',
             state: this._pipeline.getState()
         });
@@ -8998,7 +9006,7 @@ Each plan file must include:
             }
 
             if (data.onboardingComplete === true) {
-                this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
+                this.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
             }
 
             await Promise.all([
@@ -10016,7 +10024,7 @@ Each plan file must include:
                                 const notionConfig = await notionService.loadConfig();
                                 if (notionConfig?.setupComplete && notionConfig.lastFetchAt) {
                                     const cached = await notionService.loadCachedContent();
-                                    this._view?.webview.postMessage({
+                                    this.postMessage({
                                         type: 'notionFetchState',
                                         syncedAt: notionConfig.lastFetchAt,
                                         pageTitle: notionConfig.pageTitle,
@@ -10054,7 +10062,7 @@ Each plan file must include:
                     case 'linearLoadProject': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearProjectLoaded',
                                 status: 'error',
                                 issues: [],
@@ -10066,7 +10074,7 @@ Each plan file must include:
                         const linear = this._getLinearService(workspaceRoot);
                         const config = await linear.loadConfig();
                         if (!config?.setupComplete) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearProjectLoaded',
                                 status: 'setup-required',
                                 issues: [],
@@ -10092,14 +10100,14 @@ Each plan file must include:
                                 : includeNames.length > 0
                                     ? `${includeNames.slice(0, 2).join(', ')}${includeNames.length > 2 ? '...' : ''}`
                                     : `${config.teamName || 'Configured Linear Team'} (team-wide)`;
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearProjectLoaded',
                                 status: 'loaded',
                                 issues,
                                 projectName
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearError',
                                 scope: 'project',
                                 error: error instanceof Error ? error.message : String(error)
@@ -10110,7 +10118,7 @@ Each plan file must include:
                     case 'linearLoadProjects': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearProjectsLoaded',
                                 status: 'error',
                                 projects: [],
@@ -10122,7 +10130,7 @@ Each plan file must include:
                         const linear = this._getLinearService(workspaceRoot);
                         const config = await linear.loadConfig();
                         if (!config?.setupComplete) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearProjectsLoaded',
                                 status: 'setup-required',
                                 projects: [],
@@ -10133,13 +10141,13 @@ Each plan file must include:
 
                         try {
                             const projects = await linear.getAvailableProjects();
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearProjectsLoaded',
                                 status: 'loaded',
                                 projects
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearError',
                                 scope: 'project',
                                 error: error instanceof Error ? error.message : String(error)
@@ -10151,7 +10159,7 @@ Each plan file must include:
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         const issueId = String(data.issueId || '').trim();
                         if (!workspaceRoot || !issueId) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
                                 issueId,
@@ -10179,7 +10187,7 @@ Each plan file must include:
                             }
 
                             if (!issue) {
-                                this._view?.webview.postMessage({
+                                this.postMessage({
                                     type: 'linearError',
                                     scope: 'task',
                                     issueId,
@@ -10198,7 +10206,7 @@ Each plan file must include:
                                 renderedDescriptionHtml = '';
                             }
 
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearTaskDetailsLoaded',
                                 issue,
                                 subtasks,
@@ -10207,7 +10215,7 @@ Each plan file must include:
                                 renderedDescriptionHtml
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
                                 issueId,
@@ -10220,7 +10228,7 @@ Each plan file must include:
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         const issueId = String(data.issueId || '').trim();
                         if (!workspaceRoot || !issueId) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearTaskImported',
                                 success: false,
                                 importedPlanFiles: [],
@@ -10230,7 +10238,7 @@ Each plan file must include:
                         }
 
                         const result = await this.importLinearTask(workspaceRoot, issueId, data.includeSubtasks !== false);
-                        this._view?.webview.postMessage({
+                        this.postMessage({
                             type: 'linearTaskImported',
                             ...result
                         });
@@ -10245,7 +10253,7 @@ Each plan file must include:
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         const taskId = String(data.taskId || '').trim();
                         if (!workspaceRoot || !taskId) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupTaskImported',
                                 success: false,
                                 importedPlanFiles: [],
@@ -10255,7 +10263,7 @@ Each plan file must include:
                         }
 
                         const result = await this.importClickUpTask(workspaceRoot, taskId, data.includeSubtasks !== false);
-                        this._view?.webview.postMessage({
+                        this.postMessage({
                             type: 'clickupTaskImported',
                             ...result
                         });
@@ -10270,7 +10278,7 @@ Each plan file must include:
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         const issueId = String(data.issueId || '').trim();
                         if (!workspaceRoot || !issueId) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearTaskImportedToPlanner',
                                 error: 'Missing workspace or issue ID.'
                             });
@@ -10280,7 +10288,7 @@ Each plan file must include:
                         try {
                             const result = await this.importLinearTask(workspaceRoot, issueId, data.includeSubtasks !== false);
                             if (!result.success) {
-                                this._view?.webview.postMessage({
+                                this.postMessage({
                                     type: 'linearTaskImportedToPlanner',
                                     error: result.error || 'Failed to import the Linear task.'
                                 });
@@ -10303,12 +10311,12 @@ Each plan file must include:
 
                             if (moveFailed) {
                                 // Import succeeded but one or more column moves failed
-                                this._view?.webview.postMessage({
+                                this.postMessage({
                                     type: 'linearTaskImportedToPlanner',
                                     error: 'Imported but failed to move to Planned column. The card remains in Created.'
                                 });
                             } else {
-                                this._view?.webview.postMessage({
+                                this.postMessage({
                                     type: 'linearTaskImportedToPlanner',
                                     message: result.message
                                         ? result.message.replace('Imported', 'Imported and sent to planner')
@@ -10320,7 +10328,7 @@ Each plan file must include:
                             this.refresh();
                             await this._kanbanProvider?.refresh();
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearTaskImportedToPlanner',
                                 error: error instanceof Error ? error.message : 'Unknown error occurred.'
                             });
@@ -10335,7 +10343,7 @@ Each plan file must include:
                             this._recordLastAccessedClickUpList(String(data.listId));
                         }
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupProjectLoaded',
                                 status: 'error',
                                 message: 'No workspace open.',
@@ -10348,7 +10356,7 @@ Each plan file must include:
                         const config = await this._getCachedClickUpConfig(workspaceRoot);
 
                         if (!config?.setupComplete) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupProjectLoaded',
                                 status: 'setup-required',
                                 message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
@@ -10360,7 +10368,7 @@ Each plan file must include:
                         // Use listId from message if provided (avoids race condition with config save)
                         const listId = data.listId || config.selectedListId;
                         if (!listId) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupProjectLoaded',
                                 status: 'setup-required',
                                 message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
@@ -10375,7 +10383,7 @@ Each plan file must include:
                                 archived: false
                             });
 
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupProjectLoaded',
                                 status: 'loaded',
                                 tasks: tasks.map(t => this._mapClickUpTaskToSidebar(t)),
@@ -10383,7 +10391,7 @@ Each plan file must include:
                                 loadSeq
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'project',
                                 error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
@@ -10395,7 +10403,7 @@ Each plan file must include:
                     case 'clickupLoadSpaces': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
                                 error: 'No workspace folder found'
@@ -10406,12 +10414,12 @@ Each plan file must include:
 
                         try {
                             const spaces = await clickUp.getSpaces();
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupSpacesLoaded',
                                 spaces
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
                                 error: error instanceof Error ? error.message : 'Failed to load Spaces'
@@ -10422,7 +10430,7 @@ Each plan file must include:
                     case 'clickupLoadFolders': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
                                 error: 'No workspace folder found'
@@ -10433,14 +10441,14 @@ Each plan file must include:
 
                         try {
                             const folders = await clickUp.getFolders(data.spaceId);
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupFoldersLoaded',
                                 spaceId: data.spaceId,
                                 folders,
                                 directLists: await clickUp.getLists(data.spaceId)
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
                                 error: error instanceof Error ? error.message : 'Failed to load Folders'
@@ -10451,7 +10459,7 @@ Each plan file must include:
                     case 'clickupLoadLists': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
                                 error: 'No workspace folder found'
@@ -10462,14 +10470,14 @@ Each plan file must include:
 
                         try {
                             const lists = await clickUp.getLists(data.spaceId, data.folderId);
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupListsLoaded',
                                 spaceId: data.spaceId,
                                 folderId: data.folderId,
                                 lists
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
                                 error: error instanceof Error ? error.message : 'Failed to load Lists'
@@ -10565,7 +10573,7 @@ Each plan file must include:
                     case 'clickupLoadTaskDetails': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
                                 error: 'No workspace folder found'
@@ -10586,7 +10594,7 @@ Each plan file must include:
                                 renderedDescriptionHtml = '';
                             }
 
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupTaskDetailsLoaded',
                                 task: this._mapClickUpTaskToSidebar(details.task),
                                 subtasks: details.subtasks.map(s => this._mapClickUpTaskToSidebar(s)),
@@ -10595,7 +10603,7 @@ Each plan file must include:
                                 renderedDescriptionHtml
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
                                 taskId: data.taskId,
@@ -10610,7 +10618,7 @@ Each plan file must include:
                         const labelIds = Array.isArray(data.labelIds) ? data.labelIds : [];
                         
                         if (!workspaceRoot || !issueId) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
                                 issueId,
@@ -10623,14 +10631,14 @@ Each plan file must include:
                         try {
                             const linear = this._getLinearService(workspaceRoot);
                             await linear.updateIssueLabels(issueId, labelIds);
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearLabelsUpdated',
                                 issueId,
                                 labelIds,
                                 workspaceRoot
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
                                 issueId,
@@ -10647,7 +10655,7 @@ Each plan file must include:
                         const tagNames = rawTags.map((t: any) => typeof t === 'string' ? t : String(t?.name || '')).filter(Boolean);
 
                         if (!workspaceRoot || !taskId) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
                                 taskId,
@@ -10660,14 +10668,14 @@ Each plan file must include:
                         try {
                             const clickUp = this._getClickUpService(workspaceRoot);
                             await clickUp.updateTask(taskId, { tags: tagNames });
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupTagsUpdated',
                                 taskId,
                                 tags: tagNames,
                                 workspaceRoot
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
                                 taskId,
@@ -10683,13 +10691,13 @@ Each plan file must include:
                         try {
                             const linear = this._getLinearService(workspaceRoot);
                             const catalog = await linear.getAutomationCatalog();
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearAutomationCatalogLoaded',
                                 labels: catalog.labels,
                                 workspaceRoot
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
                                 error: error instanceof Error ? error.message : String(error),
@@ -10705,13 +10713,13 @@ Each plan file must include:
                         try {
                             const clickUp = this._getClickUpService(workspaceRoot);
                             const tags = await clickUp.getSpaceTags(spaceId);
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupSpaceTagsLoaded',
                                 tags,
                                 workspaceRoot
                             });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
                                 error: error instanceof Error ? error.message : String(error),
@@ -10767,9 +10775,9 @@ Each plan file must include:
                                     this._extensionUri.fsPath
                                 )
                             );
-                            this._view?.webview.postMessage({ type: 'multiRepoScaffoldResult', result });
+                            this.postMessage({ type: 'multiRepoScaffoldResult', result });
                         } catch (error) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'multiRepoScaffoldResult',
                                 result: {
                                     success: false,
@@ -10853,9 +10861,9 @@ Each plan file must include:
                     case 'createAgentGrid':
                         try {
                             await vscode.commands.executeCommand('switchboard.createAgentGrid');
-                            this._view?.webview.postMessage({ type: 'createAgentGridResult', success: true });
+                            this.postMessage({ type: 'createAgentGridResult', success: true });
                         } catch (e) {
-                            this._view?.webview.postMessage({ type: 'createAgentGridResult', success: false });
+                            this.postMessage({ type: 'createAgentGridResult', success: false });
                         }
                         break;
                     case 'createAgentGridEditor':
@@ -10888,7 +10896,7 @@ Each plan file must include:
                         break;
                     case 'reviewPlan': {
                         if (data.sessionId) {
-                            this._view?.webview.postMessage({ type: 'planLoading', value: true, sessionId: data.sessionId });
+                            this.postMessage({ type: 'planLoading', value: true, sessionId: data.sessionId });
                             try {
                                 const workspaceRoot = this._resolveWorkspaceRoot();
                                 const planFile = data.planFile || '';
@@ -10903,7 +10911,7 @@ Each plan file must include:
                                     await this._handleViewPlan(data.sessionId);
                                 }
                             } finally {
-                                this._view?.webview.postMessage({ type: 'planLoading', value: false, sessionId: data.sessionId });
+                                this.postMessage({ type: 'planLoading', value: false, sessionId: data.sessionId });
                             }
                         }
                         break;
@@ -10913,11 +10921,11 @@ Each plan file must include:
                         // was the only sender and now sends reviewPlan). Retained as dead code in case
                         // a future caller needs the raw VS Code editor open path.
                         if (data.sessionId) {
-                            this._view?.webview.postMessage({ type: 'planLoading', value: true, sessionId: data.sessionId });
+                            this.postMessage({ type: 'planLoading', value: true, sessionId: data.sessionId });
                             try {
                                 await this._handleViewPlan(data.sessionId);
                             } finally {
-                                this._view?.webview.postMessage({ type: 'planLoading', value: false, sessionId: data.sessionId });
+                                this.postMessage({ type: 'planLoading', value: false, sessionId: data.sessionId });
                             }
                         }
                         break;
@@ -10956,16 +10964,16 @@ Each plan file must include:
                         break;
                     case 'getRecoverablePlans': {
                         const plans = await this._getRecoverablePlans();
-                        this._view?.webview.postMessage({ type: 'recoverablePlans', plans });
+                        this.postMessage({ type: 'recoverablePlans', plans });
                         break;
                     }
                     case 'restorePlan': {
                         if (data.planId) {
                             const success = await this._handleRestorePlan(data.planId);
-                            this._view?.webview.postMessage({ type: 'restorePlanResult', success, planId: data.planId });
+                            this.postMessage({ type: 'restorePlanResult', success, planId: data.planId });
                             if (success) {
                                 const plans = await this._getRecoverablePlans();
-                                this._view?.webview.postMessage({ type: 'recoverablePlans', plans });
+                                this.postMessage({ type: 'recoverablePlans', plans });
                             }
                         }
                         break;
@@ -10985,7 +10993,7 @@ Each plan file must include:
                                 if (result.success) {
                                     this._notionContentCache.delete(wsRoot);
                                     const config = await service.loadConfig();
-                                    this._view?.webview.postMessage({
+                                    this.postMessage({
                                         type: 'notionFetchState',
                                         syncedAt: config?.lastFetchAt,
                                         pageTitle: config?.pageTitle,
@@ -10993,7 +11001,7 @@ Each plan file must include:
                                         charCount: result.charCount
                                     });
                                 } else {
-                                    this._view?.webview.postMessage({
+                                    this.postMessage({
                                         type: 'notionFetchState',
                                         error: result.error || 'Fetch failed'
                                     });
@@ -11011,7 +11019,7 @@ Each plan file must include:
                             const config = await notionService.loadConfig();
                             if (config?.setupComplete && config.lastFetchAt) {
                                 const cached = await notionService.loadCachedContent();
-                                this._view?.webview.postMessage({
+                                this.postMessage({
                                     type: 'notionFetchState',
                                     syncedAt: config.lastFetchAt,
                                     pageTitle: config.pageTitle,
@@ -11024,12 +11032,12 @@ Each plan file must include:
                     }
                     case 'getStartupCommands': {
                         const startupState = await this.handleGetStartupCommands();
-                        this._view?.webview.postMessage({ type: 'startupCommands', ...startupState });
+                        this.postMessage({ type: 'startupCommands', ...startupState });
                         break;
                     }
                     case 'getVisibleAgents': {
                         const vis = await this.getVisibleAgents();
-                        this._view?.webview.postMessage({ type: 'visibleAgents', agents: vis });
+                        this.postMessage({ type: 'visibleAgents', agents: vis });
                         break;
                     }
                     case 'getMcpMonitorConfig': {
@@ -11044,27 +11052,27 @@ Each plan file must include:
                     }
                     case 'getAccurateCodingSetting': {
                         const enabled = this._isAccurateCodingEnabled();
-                        this._view?.webview.postMessage({ type: 'accurateCodingSetting', enabled });
+                        this.postMessage({ type: 'accurateCodingSetting', enabled });
                         break;
                     }
                     case 'getAdvancedReviewerSetting': {
                         const enabled = this._isAdvancedReviewerEnabled();
-                        this._view?.webview.postMessage({ type: 'advancedReviewerSetting', enabled });
+                        this.postMessage({ type: 'advancedReviewerSetting', enabled });
                         break;
                     }
                     case 'getLeadChallengeSetting': {
                         const enabled = this._isLeadInlineChallengeEnabled();
-                        this._view?.webview.postMessage({ type: 'leadChallengeSetting', enabled });
+                        this.postMessage({ type: 'leadChallengeSetting', enabled });
                         break;
                     }
                     case 'getJulesAutoSyncSetting': {
                         const enabled = this._isJulesAutoSyncEnabled();
-                        this._view?.webview.postMessage({ type: 'julesAutoSyncSetting', enabled });
+                        this.postMessage({ type: 'julesAutoSyncSetting', enabled });
                         break;
                     }
                     case 'getDefaultPromptOverrides': {
                         const overrides = await this.handleGetDefaultPromptOverrides();
-                        this._view?.webview.postMessage({ type: 'defaultPromptOverrides', overrides });
+                        this.postMessage({ type: 'defaultPromptOverrides', overrides });
                         break;
                     }
                     case 'saveDefaultPromptOverrides': {
@@ -11073,7 +11081,7 @@ Each plan file must include:
                     }
                     case 'getDefaultPromptPreviews': {
                         const previews = await this.handleGetDefaultPromptPreviews();
-                        this._view?.webview.postMessage({ type: 'defaultPromptPreviews', previews });
+                        this.postMessage({ type: 'defaultPromptPreviews', previews });
                         break;
                     }
                     case 'setActiveTab': {
@@ -11090,7 +11098,7 @@ Each plan file must include:
                     case 'memoLoad': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
                             break;
                         }
                         const memoPath = this._getMemoPath(workspaceRoot);
@@ -11098,13 +11106,13 @@ Each plan file must include:
                         try {
                             content = await fs.promises.readFile(memoPath, 'utf8');
                         } catch { /* file doesn't exist yet — that's fine */ }
-                        this._view?.webview.postMessage({ type: 'memoContent', content });
+                        this.postMessage({ type: 'memoContent', content });
                         break;
                     }
                     case 'memoSave': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
                             break;
                         }
                         const memoPath = this._getMemoPath(workspaceRoot);
@@ -11116,7 +11124,7 @@ Each plan file must include:
                     case 'memoClear': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
                             break;
                         }
                         const memoPath = this._getMemoPath(workspaceRoot);
@@ -11126,14 +11134,14 @@ Each plan file must include:
                     case 'memoGeneratePrompt': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this._view?.webview.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
+                            this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
                             break;
                         }
                         const content = typeof data.content === 'string' ? data.content : '';
                         const action = data.action === 'send' ? 'send' : 'copy';
                         const issues = this._parseMemoEntries(content);
                         if (issues.length === 0) {
-                            this._view?.webview.postMessage({
+                            this.postMessage({
                                 type: 'memoPromptResult',
                                 message: 'No entries to process.'
                             });
@@ -11162,10 +11170,10 @@ Each plan file must include:
                         if (sendSucceeded) {
                             const memoPath = this._getMemoPath(workspaceRoot);
                             await fs.promises.writeFile(memoPath, '', 'utf8');
-                            this._view?.webview.postMessage({ type: 'memoContent', content: '' });
+                            this.postMessage({ type: 'memoContent', content: '' });
                         }
 
-                        this._view?.webview.postMessage({
+                        this.postMessage({
                             type: 'memoPromptResult',
                             message: sendSucceeded
                                 ? (action === 'send'
@@ -11264,7 +11272,7 @@ Each plan file must include:
                         break;
                     case 'getDbPath': {
                         const dbPath = await this.handleGetDbPath();
-                        this._view?.webview.postMessage({ type: 'dbPathUpdated', ...dbPath });
+                        this.postMessage({ type: 'dbPathUpdated', ...dbPath });
                         break;
                     }
                     case 'setLocalDb': {
@@ -11308,7 +11316,7 @@ Each plan file must include:
                                 await KanbanDatabase.invalidateWorkspace(wsRoot);
                             }
                             await dbConfig.update('kanban.dbPath', trimmedPath || undefined, vscode.ConfigurationTarget.Workspace);
-                            this._view?.webview.postMessage({ type: 'dbPathUpdated', path: trimmedPath || '.switchboard/kanban.db' });
+                            this.postMessage({ type: 'dbPathUpdated', path: trimmedPath || '.switchboard/kanban.db' });
                             void this._refreshSessionStatus();
                             this._showTemporaryNotification('✅ Database path updated successfully.');
                         }
@@ -11320,19 +11328,19 @@ Each plan file must include:
                             if (wsRoot) {
                                 const db = await this._getKanbanDb(wsRoot);
                                 if (db) {
-                                    this._view?.webview.postMessage({ type: 'dbConnectionResult', success: true });
+                                    this.postMessage({ type: 'dbConnectionResult', success: true });
                                     this._showTemporaryNotification('✅ Database connection successful');
                                 } else {
                                     const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(wsRoot) || wsRoot;
                                     const error = this._lastKanbanDbWarnings.get(effectiveRoot) || 'Unknown initialization error';
-                                    this._view?.webview.postMessage({ type: 'dbConnectionResult', success: false, error });
+                                    this.postMessage({ type: 'dbConnectionResult', success: false, error });
                                     vscode.window.showErrorMessage(`❌ Database connection failed: ${error}`);
                                 }
                             } else {
                                 throw new Error('No active workspace root found.');
                             }
                         } catch (dbErr: any) {
-                            this._view?.webview.postMessage({ type: 'dbConnectionResult', success: false, error: dbErr.message });
+                            this.postMessage({ type: 'dbConnectionResult', success: false, error: dbErr.message });
                             vscode.window.showErrorMessage(`⚠️ Database test error: ${dbErr.message}`);
                         }
                         break;
@@ -11761,7 +11769,7 @@ What would you like to find?`;
         } catch (e: any) {
             if (e?.code !== 'ENOENT') { return; }
         }
-        this._view?.webview.postMessage({ type: 'memoContent', content });
+        this.postMessage({ type: 'memoContent', content });
     }
 
     private _setupSessionWatcher() {
@@ -13126,7 +13134,7 @@ What would you like to find?`;
         });
         await this._syncFilesAndRefreshRunSheets(workspaceRoot);
         if (resolvedSessionId) {
-            this._view?.webview.postMessage({ type: 'selectSession', sessionId: resolvedSessionId });
+            this.postMessage({ type: 'selectSession', sessionId: resolvedSessionId });
         }
         this._showTemporaryNotification(`Restored plan: ${entry.topic || planId}`);
         return true;
@@ -14993,7 +15001,7 @@ What would you like to find?`;
                 // would re-feed the mirror→watch→mirror loop. A genuine new runsheet (no
                 // existingSheet) or a changed mirror still refreshes the UI.
                 await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
-                this._view?.webview.postMessage({ type: 'selectSession', sessionId: runSheetId });
+                this.postMessage({ type: 'selectSession', sessionId: runSheetId });
             }
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to mirror brain plan:', e);
@@ -15247,12 +15255,12 @@ What would you like to find?`;
             }, 1500);
 
             // Auto-focus the new plan in the sidebar dropdown and kanban board.
-            this._view?.webview.postMessage({ type: 'selectSession', sessionId: planId });
+            this.postMessage({ type: 'selectSession', sessionId: planId });
         } catch (e) {
             console.error('[TaskViewerProvider] Incremental registration failed, falling back to full sync:', e);
             // Full fallback: repairs any partial state from the failed refresh.
             await this._syncFilesAndRefreshRunSheets(workspaceRoot);
-            this._view?.webview.postMessage({ type: 'selectSession', sessionId: planId });
+            this.postMessage({ type: 'selectSession', sessionId: planId });
         }
     }
 
@@ -15541,7 +15549,7 @@ What would you like to find?`;
 
             // Send copyPlanLinkResult IMMEDIATELY — include both planId and sessionId
             // so the frontend can reliably find the button via data-plan-id (primary) or data-session (fallback)
-            this._view?.webview.postMessage({
+            this.postMessage({
                 type: 'copyPlanLinkResult',
                 success: true,
                 planId: planId || '',
@@ -15599,7 +15607,7 @@ What would you like to find?`;
             return true;
         } catch (e: any) {
             const errorMessage = e?.message || String(e);
-            this._view?.webview.postMessage({
+            this.postMessage({
                 type: 'copyPlanLinkResult',
                 success: false,
                 error: errorMessage,
@@ -16673,7 +16681,7 @@ What would you like to find?`;
                 const activeSheets = visibleActiveRows.map(toSheet);
                 const completedSheets = visibleCompletedRows.map(toSheet);
                 const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
-                this._view.webview.postMessage({
+                this.postMessage({
                     type: 'runSheets',
                     activeSheets,
                     completedSheets,
@@ -16684,7 +16692,7 @@ What would you like to find?`;
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh Run Sheets from DB:', e);
             const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
-            this._view?.webview.postMessage({
+            this.postMessage({
                 type: 'runSheets',
                 activeSheets: [],
                 completedSheets: [],
@@ -16739,7 +16747,7 @@ What would you like to find?`;
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh from DB:', e);
             const currentProjectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
-            this._view?.webview.postMessage({
+            this.postMessage({
                 type: 'runSheets',
                 activeSheets: [],
                 completedSheets: [],
@@ -16841,7 +16849,7 @@ What would you like to find?`;
         });
         // Optimistic UI: post refresh immediately so the sidebar shows the new name
         // without waiting for the async _refreshTerminalStatuses to complete.
-        this._view?.webview.postMessage({ type: 'refresh' });
+        this.postMessage({ type: 'refresh' });
         this._refreshTerminalStatuses();
     }
 
@@ -17532,7 +17540,7 @@ What would you like to find?`;
             clearDispatchLock();
             const displayName = role === 'jules_monitor' ? "Jules Monitor" : TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
             vscode.window.showWarningMessage(`The '${displayName}' terminal is monitor-only and cannot receive agent actions.`);
-            this._view?.webview.postMessage({ type: 'actionTriggered', role, success: false });
+            this.postMessage({ type: 'actionTriggered', role, success: false });
             return false;
         }
 
@@ -17544,7 +17552,7 @@ What would you like to find?`;
                     return false; // Drop duplicate click while sync is in progress
                 }
                 this._julesSyncInFlight = true;
-                this._view?.webview.postMessage({ type: 'airlock_syncStart' });
+                this.postMessage({ type: 'airlock_syncStart' });
                 try {
                     await Promise.race([
                         this._performGitSync(),
@@ -17552,14 +17560,14 @@ What would you like to find?`;
                             setTimeout(() => reject(new Error('Auto-sync timed out after 60 seconds')), 60_000)
                         )
                     ]);
-                    this._view?.webview.postMessage({ type: 'airlock_syncComplete' });
+                    this.postMessage({ type: 'airlock_syncComplete' });
                 } catch (err: any) {
                     this._julesSyncInFlight = false;
                     const msg = err?.message || String(err);
-                    this._view?.webview.postMessage({ type: 'airlock_syncError', message: msg });
+                    this.postMessage({ type: 'airlock_syncError', message: msg });
                     vscode.window.showWarningMessage(`Auto-sync failed — Jules send cancelled: ${msg}`);
                     clearDispatchLock();
-                    this._view?.webview.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
+                    this.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
                     return false;
                 } finally {
                     this._julesSyncInFlight = false;
@@ -17570,7 +17578,7 @@ What would you like to find?`;
             if (!pushGuard.ok) {
                 clearDispatchLock();
                 vscode.window.showWarningMessage(pushGuard.message);
-                this._view?.webview.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
+                this.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
                 return false;
             }
             await this._updateSessionRunSheet(sessionId, 'jules', undefined, false, resolvedWorkspaceRoot);
@@ -17751,7 +17759,7 @@ What would you like to find?`;
                         }
                     }
                 }
-                this._view?.webview.postMessage({ type: 'actionTriggered', role, success: true, nextPlannerTarget });
+                this.postMessage({ type: 'actionTriggered', role, success: true, nextPlannerTarget });
                 await this._logEvent('dispatch', {
                     event: 'dispatch_sent',
                     role,
@@ -17767,7 +17775,7 @@ What would you like to find?`;
                     await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
                     this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
                 }
-                this._view?.webview.postMessage({ type: 'actionTriggered', role, success: false });
+                this.postMessage({ type: 'actionTriggered', role, success: false });
                 clearDispatchLock();
                 return false;
             }
@@ -17777,7 +17785,7 @@ What would you like to find?`;
                 await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
                 this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
             }
-            this._view?.webview.postMessage({ type: 'actionTriggered', role, success: false });
+            this.postMessage({ type: 'actionTriggered', role, success: false });
             clearDispatchLock();
             await this._logEvent('dispatch', {
                 event: 'dispatch_failed',
@@ -17798,7 +17806,7 @@ What would you like to find?`;
         resultRole: 'analyst' | 'analystMap' = 'analyst'
     ): Promise<boolean> {
         const postAnalystResult = (success: boolean) => {
-            this._view?.webview.postMessage({ type: 'actionTriggered', role: resultRole, success });
+            this.postMessage({ type: 'actionTriggered', role: resultRole, success });
         };
         const messageText = (instruction || '').trim();
         if (!messageText) {
@@ -18028,7 +18036,7 @@ What would you like to find?`;
             if (!activatedInProjectPanel) {
                 await this._openPlanInReviewPanel(planFileAbsolute, title);
             }
-            this._view?.webview.postMessage({ type: 'planCreated' });
+            this.postMessage({ type: 'planCreated' });
             this._kanbanProvider?.postMessage?.({ type: 'planCreated' });
         } catch (err: any) {
             const msg = err?.message || String(err);
@@ -18778,7 +18786,7 @@ What would you like to find?`;
         });
 
         if (files && files[0] && this._view) {
-            this._view.webview.postMessage({
+            this.postMessage({
                 type: 'insertContextFile',
                 terminalName,
                 path: files[0].fsPath
@@ -18788,7 +18796,7 @@ What would you like to find?`;
 
     public setSetupStatus(needsSetup: boolean) {
         this._needsSetup = needsSetup;
-        this._view?.webview.postMessage({ type: 'setupStatus', needsSetup });
+        this.postMessage({ type: 'setupStatus', needsSetup });
     }
 
     /**
@@ -18796,12 +18804,12 @@ What would you like to find?`;
      */
     private async _handleInitializeProtocols() {
         try {
-            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'initializing' });
+            this.postMessage({ type: 'onboardingProgress', step: 'initializing' });
             await vscode.commands.executeCommand('switchboard.setup');
-            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'initialized' });
+            this.postMessage({ type: 'onboardingProgress', step: 'initialized' });
         } catch (e) {
             console.error('[TaskViewerProvider] initializeProtocols failed:', e);
-            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'error', message: String(e) });
+            this.postMessage({ type: 'onboardingProgress', step: 'error', message: String(e) });
         }
     }
 
@@ -18814,12 +18822,12 @@ What would you like to find?`;
         // Re-evaluate needsSetup by checking if configs now exist
         // We delegate to the extension command that re-checks and calls setSetupStatus
         this._needsSetup = false;
-        this._view?.webview.postMessage({ type: 'setupStatus', needsSetup: false });
+        this.postMessage({ type: 'setupStatus', needsSetup: false });
         this.refresh();
     }
 
     public updateTerminalStatuses(terminals: any) {
-        this._view?.webview.postMessage({ type: 'terminalStatuses', terminals });
+        this.postMessage({ type: 'terminalStatuses', terminals });
         this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals });
     }
 
@@ -18859,14 +18867,14 @@ What would you like to find?`;
                     this._lastActiveWorkflow = sessionWorkflow;
                 }
 
-                this._view.webview.postMessage({
+                this.postMessage({
                     type: 'sessionStatus',
                     active: !!sessionWorkflow,
                     workflow: sessionWorkflow,
                     status: sessionStatus
                 });
             } else {
-                this._view.webview.postMessage({ type: 'sessionStatus', active: false, workflow: null, status: 'IDLE' });
+                this.postMessage({ type: 'sessionStatus', active: false, workflow: null, status: 'IDLE' });
             }
         } catch (e) {
             console.error('Failed to check session status:', e);
@@ -19154,7 +19162,7 @@ What would you like to find?`;
                 .filter(entry => entry.switchboardStatus && !['Completed', 'Completed (No Changes)', 'Send Failed', 'Pull Failed', 'Failed'].includes(entry.switchboardStatus))
                 .map(entry => entry.sessionId);
 
-            this._view.webview.postMessage({
+            this.postMessage({
                 type: 'julesStatus',
                 activePlans,
                 sessions: displayableSessions
@@ -19566,7 +19574,7 @@ What would you like to find?`;
                 : `Jules Session Started! Session ID: ${sessionId}.`;
 
             this._showTemporaryNotification(message);
-            this._view?.webview.postMessage({ type: 'actionTriggered', role: 'jules', success: true });
+            this.postMessage({ type: 'actionTriggered', role: 'jules', success: true });
             await this._refreshJulesStatus();
         } catch (error) {
             await this.updateState(async (state) => {
@@ -19585,7 +19593,7 @@ What would you like to find?`;
             const detail = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim();
             const shortDetail = detail.length > 220 ? `${detail.slice(0, 220)}...` : detail;
             vscode.window.showWarningMessage(`Jules remote start failed: ${shortDetail || 'unknown error'}.`);
-            this._view?.webview.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
+            this.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
         }
     }
 
@@ -19841,7 +19849,7 @@ What would you like to find?`;
                     }
                 }
 
-                this._view.webview.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness, currentPlannerTarget });
+                this.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness, currentPlannerTarget });
                 this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness, currentPlannerTarget });
 
                 // Send ALL open terminals for the dropdown, with alias/friendlyName prioritized as displayName
@@ -19863,7 +19871,7 @@ What would you like to find?`;
                     return { name: t.name, pid: pid || null, displayName };
                 });
 
-                this._view.webview.postMessage({
+                this.postMessage({
                     type: 'terminalStatuses',
                     terminals: enrichedTerminals,
                     dispatchReadiness,
@@ -19957,7 +19965,7 @@ What would you like to find?`;
     private async _handleAirlockExport(): Promise<void> {
         const workspaceRoot = this._resolveStateWorkspaceRoot();
         if (!workspaceRoot) {
-            this._view?.webview.postMessage({ type: 'airlock_exportError', message: 'No workspace open' });
+            this.postMessage({ type: 'airlock_exportError', message: 'No workspace open' });
             return;
         }
 
@@ -20007,10 +20015,10 @@ What would you like to find?`;
                 }
             }
 
-            this._view?.webview.postMessage({ type: 'airlock_exportComplete' });
+            this.postMessage({ type: 'airlock_exportComplete' });
         } catch (err: any) {
             const msg = err?.message || String(err);
-            this._view?.webview.postMessage({ type: 'airlock_exportError', message: msg });
+            this.postMessage({ type: 'airlock_exportError', message: msg });
             vscode.window.showErrorMessage(`NotebookLM export failed: ${msg}`);
         }
     }
@@ -20048,12 +20056,12 @@ What would you like to find?`;
 
     private async _handleAirlockSendToCoder(text: string): Promise<void> {
         if (Buffer.byteLength(text, 'utf8') > TaskViewerProvider.MAX_AIRLOCK_TEXT_BYTES) {
-            this._view?.webview.postMessage({ type: 'airlock_coderError', message: 'Text exceeds 2MB limit. Please reduce the size.' });
+            this.postMessage({ type: 'airlock_coderError', message: 'Text exceeds 2MB limit. Please reduce the size.' });
             return;
         }
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
-            this._view?.webview.postMessage({ type: 'airlock_coderError', message: 'No workspace open' });
+            this.postMessage({ type: 'airlock_coderError', message: 'No workspace open' });
             return;
         }
 
@@ -20072,7 +20080,7 @@ What would you like to find?`;
             const targetAgent = await this._getAgentNameForRole('coder');
 
             if (!targetAgent) {
-                this._view?.webview.postMessage({ type: 'airlock_coderError', message: 'No Coder agent assigned. Assign a terminal role first.' });
+                this.postMessage({ type: 'airlock_coderError', message: 'No Coder agent assigned. Assign a terminal role first.' });
                 return;
             }
 
@@ -20082,10 +20090,10 @@ What would you like to find?`;
                 patchFile: patchPath,
             }, 'airlock');
 
-            this._view?.webview.postMessage({ type: 'airlock_coderSent' });
+            this.postMessage({ type: 'airlock_coderSent' });
         } catch (err: any) {
             const msg = err?.message || String(err);
-            this._view?.webview.postMessage({ type: 'airlock_coderError', message: msg });
+            this.postMessage({ type: 'airlock_coderError', message: msg });
             vscode.window.showErrorMessage(`NotebookLM send to coder failed: ${msg}`);
         }
     }
@@ -20093,10 +20101,10 @@ What would you like to find?`;
     private async _handleAirlockSyncRepo(): Promise<void> {
         try {
             await this._performGitSync();
-            this._view?.webview.postMessage({ type: 'airlock_syncComplete' });
+            this.postMessage({ type: 'airlock_syncComplete' });
         } catch (err: any) {
             const msg = err?.message || String(err);
-            this._view?.webview.postMessage({ type: 'airlock_syncError', message: msg });
+            this.postMessage({ type: 'airlock_syncError', message: msg });
             vscode.window.showErrorMessage(`NotebookLM sync failed: ${msg}`);
         }
     }
@@ -21724,7 +21732,7 @@ What would you like to find?`;
             presets: TaskViewerProvider.SOURCE_PRESETS,
             resolvedStartupCommand
         };
-        this._view?.webview.postMessage(message);
+        this.postMessage(message);
         this._kanbanProvider?.postMessage(message);
     }
 

@@ -8,11 +8,11 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const CATALOG_PATH = path.join(REPO_ROOT, 'protocol-catalog.json');
 
 const PROVIDERS = [
-    { name: 'Kanban', file: 'src/services/KanbanProvider.ts' },
-    { name: 'Planning', file: 'src/services/PlanningPanelProvider.ts' },
-    { name: 'Design', file: 'src/services/DesignPanelProvider.ts' },
-    { name: 'TaskViewer', file: 'src/services/TaskViewerProvider.ts' },
-    { name: 'Setup', file: 'src/services/SetupPanelProvider.ts' },
+    { name: 'Kanban', file: 'src/services/KanbanProvider.ts', serviceFile: 'src/services/kanbanService.ts' },
+    { name: 'Planning', file: 'src/services/PlanningPanelProvider.ts', serviceFile: 'src/services/planningService.ts' },
+    { name: 'Design', file: 'src/services/DesignPanelProvider.ts', serviceFile: 'src/services/designService.ts' },
+    { name: 'TaskViewer', file: 'src/services/TaskViewerProvider.ts', serviceFile: 'src/services/taskViewerService.ts' },
+    { name: 'Setup', file: 'src/services/SetupPanelProvider.ts', serviceFile: 'src/services/setupService.ts' },
 ];
 
 function checkParity() {
@@ -24,6 +24,8 @@ function checkParity() {
     const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8'));
     let totalCataloged = 0;
     let totalImplemented = 0;
+    let totalGenuine = 0;
+    let totalShims = 0;
     let errors = 0;
 
     console.log('=== Protocol Parity Check ===\n');
@@ -48,13 +50,44 @@ function checkParity() {
             }
         }
 
+        // Analyze service file for shims vs genuine extractions
+        let shimsCount = 0;
+        let genuineCount = 0;
+        const serviceFullPath = path.join(REPO_ROOT, p.serviceFile);
+        if (fs.existsSync(serviceFullPath)) {
+            const serviceSrc = fs.readFileSync(serviceFullPath, 'utf8');
+            for (const verb of implementedVerbs) {
+                // Find method definition in service file
+                // A simple regex match to find the method block of the verb
+                const escapedVerb = verb.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                const methodRe = new RegExp(`async\\s+["']?${escapedVerb}["']?\\s*\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\s*(?:async|\\}|$)`);
+                const methodMatch = serviceSrc.match(methodRe);
+                if (methodMatch) {
+                    const body = methodMatch[1];
+                    if (body.includes('handleMessage(') || body.includes('this._ctx.handleMessage')) {
+                        shimsCount++;
+                    } else {
+                        genuineCount++;
+                    }
+                } else {
+                    // Verb is handled by service but no direct async method matches or it's dynamically routed
+                    shimsCount++;
+                }
+            }
+        } else {
+            shimsCount = implementedVerbs.size;
+        }
+
+        totalGenuine += genuineCount;
+        totalShims += shimsCount;
+
         const catalogedVerbs = catalog.providers[p.name]?.verbs || [];
         totalCataloged += catalogedVerbs.length;
         totalImplemented += implementedVerbs.size;
 
         console.log(`${p.name} Panel:`);
         console.log(`  Cataloged: ${catalogedVerbs.length} verbs`);
-        console.log(`  Implemented: ${implementedVerbs.size} verbs`);
+        console.log(`  Implemented: ${implementedVerbs.size} verbs (Genuinely Extracted: ${genuineCount}, Shims: ${shimsCount})`);
         
         // Check if any implemented verb is NOT cataloged
         for (const iv of implementedVerbs) {
@@ -74,6 +107,8 @@ function checkParity() {
 
     const percentage = ((totalImplemented / totalCataloged) * 100).toFixed(1);
     console.log(`Overall coverage: ${totalImplemented}/${totalCataloged} verbs (${percentage}%)`);
+    console.log(`  Genuinely Extracted: ${totalGenuine} verbs`);
+    console.log(`  Shims (delegating to VS Code host): ${totalShims} verbs`);
 
     if (errors > 0) {
         console.error(`\n❌ Parity check failed with ${errors} error(s).`);

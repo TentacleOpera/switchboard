@@ -579,7 +579,7 @@ export class PlanningPanelProvider {
         if (this._projectPanel) {
             this._projectPanel.reveal(vscode.ViewColumn.One);
             if (this._projectPanelReady) {
-                this._projectPanel.webview.postMessage({ type: 'refreshKanbanPlans' });
+                this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
             }
             return;
         }
@@ -635,7 +635,7 @@ export class PlanningPanelProvider {
                     await this._handleMessage(message, true);
                 } catch (err) {
                     console.error('[ProjectPanel] Message handler error:', err);
-                    this._projectPanel?.webview.postMessage({ type: 'error', message: String(err) });
+                    this.postMessageToProjectWebview({ type: 'error', message: String(err) });
                 }
             },
             null,
@@ -662,7 +662,7 @@ export class PlanningPanelProvider {
         this._projectPanel.onDidChangeViewState(
             (e) => {
                 if (e.webviewPanel.visible) {
-                    this._projectPanel?.webview.postMessage({ type: 'refreshKanbanPlans' });
+                    this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
                 }
             },
             null,
@@ -674,17 +674,17 @@ export class PlanningPanelProvider {
         this._registerProjectPanelConfigListener();
 
         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-        this._projectPanel.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+        this.postMessageToProjectWebview({ type: 'switchboardThemeChanged', theme });
         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-        this._projectPanel.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+        this.postMessageToProjectWebview({ type: 'cyberAnimationSetting', disabled });
         const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-        this._projectPanel.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+        this.postMessageToProjectWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
 
         if (this._planAutoFetchService) {
             const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
             if (wsRoot) {
                 const status = this._planAutoFetchService.getStatus(wsRoot);
-                this._projectPanel.webview.postMessage({
+                this.postMessageToProjectWebview({
                     type: 'planAutoFetchState',
                     ...status
                 });
@@ -699,29 +699,29 @@ export class PlanningPanelProvider {
         this._projectPanelConfigDisposable = vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('switchboard.theme.name')) {
                 const t = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                this._projectPanel?.webview.postMessage({ type: 'switchboardThemeChanged', theme: t });
+                this.postMessageToProjectWebview({ type: 'switchboardThemeChanged', theme: t });
             }
             if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
                 const d = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-                this._projectPanel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: d });
+                this.postMessageToProjectWebview({ type: 'cyberAnimationSetting', disabled: d });
             }
             if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
                 const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-                this._projectPanel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+                this.postMessageToProjectWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
             }
             if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
                 const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                this._projectPanel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                this.postMessageToProjectWebview({ type: 'pixelFontSetting', enabled });
             }
             if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                 const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                this._projectPanel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                this.postMessageToProjectWebview({ type: 'ultracodeAnimationSetting', enabled });
             }
             if (e.affectsConfiguration('switchboard.planAutoFetch') && this._planAutoFetchService && this._projectPanel) {
                 const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
                 if (wsRoot) {
                     const status = this._planAutoFetchService.getStatus(wsRoot);
-                    this._projectPanel.webview.postMessage({ type: 'planAutoFetchState', ...status });
+                    this.postMessageToProjectWebview({ type: 'planAutoFetchState', ...status });
                 }
             }
         });
@@ -831,7 +831,7 @@ export class PlanningPanelProvider {
                     await this._handleMessage(message);
                 } catch (err) {
                     console.error('[PlanningPanel] Message handler error:', err);
-                    this._panel?.webview.postMessage({ type: 'error', message: String(err) });
+                    this.postMessageToWebview({ type: 'error', message: String(err) });
                 }
             },
             null,
@@ -851,7 +851,7 @@ export class PlanningPanelProvider {
 
         this._disposables.push(
             vscode.window.onDidChangeActiveColorTheme(() => {
-                this._panel?.webview.postMessage({ type: 'themeChanged' });
+                this.postMessageToWebview({ type: 'themeChanged' });
             })
         );
 
@@ -859,23 +859,23 @@ export class PlanningPanelProvider {
             vscode.workspace.onDidChangeConfiguration(e => {
                 if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
                     const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-                    this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+                    this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled });
                 }
                 if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
                     const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-                    this._panel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+                    this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
                 }
                 if (e.affectsConfiguration('switchboard.theme.name')) {
                     const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                    this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                    this.postMessageToWebview({ type: 'switchboardThemeChanged', theme });
                 }
                 if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
                     const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                    this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                    this.postMessageToWebview({ type: 'pixelFontSetting', enabled });
                 }
                 if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                     const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                    this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                    this.postMessageToWebview({ type: 'ultracodeAnimationSetting', enabled });
                 }
             })
         );
@@ -889,7 +889,7 @@ export class PlanningPanelProvider {
                 this._setupFeatureDocsWatcher();
                 this._setupConstitutionWatcher();
                 this._setupInsightsWatcher();
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'workspaceItemsUpdated',
                     items: buildWorkspaceItems(this._getWorkspaceRoots())
                 });
@@ -983,7 +983,7 @@ export class PlanningPanelProvider {
             panel.onDidChangeViewState(
                 (e) => {
                     if (e.webviewPanel.visible) {
-                        this._projectPanel?.webview.postMessage({ type: 'refreshKanbanPlans' });
+                        this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
                     }
                 },
                 null,
@@ -1010,7 +1010,7 @@ export class PlanningPanelProvider {
         if (!isProject) {
             this._disposables.push(
                 vscode.window.onDidChangeActiveColorTheme(() => {
-                    this._panel?.webview.postMessage({ type: 'themeChanged' });
+                    this.postMessageToWebview({ type: 'themeChanged' });
                 })
             );
 
@@ -1018,23 +1018,23 @@ export class PlanningPanelProvider {
                 vscode.workspace.onDidChangeConfiguration(e => {
                     if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
                         const animDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-                        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: animDisabled });
+                        this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled: animDisabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
                         const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-                        this._panel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+                        this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const themeName = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme: themeName });
+                        this.postMessageToWebview({ type: 'switchboardThemeChanged', theme: themeName });
                     }
                     if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                        this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                        this.postMessageToWebview({ type: 'pixelFontSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                        this.postMessageToWebview({ type: 'ultracodeAnimationSetting', enabled });
                     }
                 })
             );
@@ -1050,7 +1050,7 @@ export class PlanningPanelProvider {
                     this._setupFeatureDocsWatcher();
                     this._setupConstitutionWatcher();
                     this._setupInsightsWatcher();
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'workspaceItemsUpdated',
                         items: buildWorkspaceItems(this._getWorkspaceRoots())
                     });
@@ -1086,7 +1086,11 @@ export class PlanningPanelProvider {
     }
 
     public postMessageToWebview(message: any): void {
-        this._panel?.webview.postMessage(message);
+        if (this._broadcaster) {
+            this._broadcaster.push(message);
+        } else {
+            this._panel?.webview.postMessage(message);
+        }
     }
 
     public revealProject(): void {
@@ -1106,11 +1110,20 @@ export class PlanningPanelProvider {
     }
 
     public postMessageToProjectWebview(message: any): void {
-        if (!this._projectPanelReady) {
-            this._pendingProjectMessages.push(message);
-            return;
+        if (this._broadcaster) {
+            this._broadcaster.push(message);
+            if (this._projectPanelReady) {
+                this._projectPanel?.webview.postMessage(message).then(undefined, () => {});
+            } else {
+                this._pendingProjectMessages.push(message);
+            }
+        } else {
+            if (!this._projectPanelReady) {
+                this._pendingProjectMessages.push(message);
+                return;
+            }
+            this._projectPanel?.webview.postMessage(message);
         }
-        this._projectPanel?.webview.postMessage(message);
     }
 
     private _flushPendingProjectMessages(): void {
@@ -1120,7 +1133,7 @@ export class PlanningPanelProvider {
             this._projectPanelReadyTimer = undefined;
         }
         for (const m of this._pendingProjectMessages) {
-            this._projectPanel?.webview.postMessage(m);
+            this.postMessageToProjectWebview(m);
         }
         this._pendingProjectMessages = [];
     }
@@ -1481,7 +1494,7 @@ Start by checking which documents exist, then present the menu.`;
                     // governanceFileChanged handler already gates on the currently-
                     // selected file-type and edit-mode, and constitutionFileRead has
                     // a race guard, so immediate dispatch is safe.
-                    this._projectPanel?.webview.postMessage({
+                    this.postMessageToProjectWebview({
                         type: 'governanceFileChanged',
                         workspaceRoot: root,
                         governanceFile: key
@@ -1685,7 +1698,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (this._activeDocWatchDebounce) {
                     clearTimeout(this._activeDocWatchDebounce);
                 }
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'previewError',
                     sourceId: this._activePreviewSourceId || 'local-folder',
                     requestId: -1,
@@ -1799,7 +1812,7 @@ Start by checking which documents exist, then present the menu.`;
             if (this._projectPanel) {
                 this.postMessageToProjectWebview(message);
             } else {
-                this._panel?.webview.postMessage(message);
+                this.postMessageToWebview(message);
             }
         };
 
@@ -2124,7 +2137,7 @@ Start by checking which documents exist, then present the menu.`;
             };
             const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
 
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'previewReady',
                 sourceId,
                 requestId,
@@ -2140,7 +2153,7 @@ Start by checking which documents exist, then present the menu.`;
             });
         } catch (err: any) {
             if (requestId === -1) return;
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'previewError',
                 sourceId,
                 requestId,
@@ -2180,7 +2193,7 @@ Start by checking which documents exist, then present the menu.`;
 
                 if (!this._panel) return;
 
-                this._panel.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'planningHtmlDocsReady',
                     sourceId: 'planning-html-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
@@ -2188,7 +2201,7 @@ Start by checking which documents exist, then present the menu.`;
                     workspaceItems: this._buildKanbanWorkspaceItems()
                 });
             } catch (err) {
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'planningHtmlDocsReady',
                     sourceId: 'planning-html-folder',
                     folderPathsByRoot: {},
@@ -2622,18 +2635,18 @@ Start by checking which documents exist, then present the menu.`;
                 const items = buildWorkspaceItems(allRoots);
                 const tabKeys = ['local', 'online', 'kanban', 'tickets', 'research', 'notebook', 'localDocs.root', 'onlineDocs.root', 'kanban.root', 'kanban.project', 'tickets.root', 'research.root', 'notebook.root'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'workspaceItemsUpdated',
                     items
                 });
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'restoredTabState',
                     panel: statePayload.panel,
                     byRoot: statePayload.byRoot
                 });
 
                 const integrationWorkspaces = await this._getIntegrationWorkspaces();
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'integrationWorkspaces',
                     workspaces: integrationWorkspaces
                 });
@@ -2664,7 +2677,7 @@ Start by checking which documents exist, then present the menu.`;
                     const provider = activeProvider || null;
                     const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
                     if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'integrationProviderStates',
                         clickupSetupComplete,
                         linearSetupComplete,
@@ -2882,7 +2895,7 @@ Start by checking which documents exist, then present the menu.`;
                     }
                 } catch {}
 
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'ticketsDefaultRoot',
                     workspaceRoot: defaultRoot,
                     provider: defaultProvider
@@ -2916,7 +2929,7 @@ Start by checking which documents exist, then present the menu.`;
                         const ticketsAutoSync = await this._getTicketsAutoSync(root);
                         if (provider) { this._updateTicketsAutoSyncWatcher(root, ticketsAutoSync); }
                         this._setupTicketsViewWatcher(root);
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'integrationProviderStates',
                             clickupSetupComplete,
                             linearSetupComplete,
@@ -2942,7 +2955,7 @@ Start by checking which documents exist, then present the menu.`;
                         const linearSetupComplete = linearConfig?.setupComplete === true;
                         const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
                         if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'integrationProviderStates',
                             clickupSetupComplete,
                             linearSetupComplete,
@@ -2998,10 +3011,10 @@ Start by checking which documents exist, then present the menu.`;
                         ? result
                         : { ok: false, message: 'Review comment dispatch failed (no response).' };
 
-                    this._panel?.webview.postMessage({ type: 'commentResult', ...normalizedResult });
+                    this.postMessageToWebview({ type: 'commentResult', ...normalizedResult });
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
-                    this._panel?.webview.postMessage({ type: 'commentResult', ok: false, message });
+                    this.postMessageToWebview({ type: 'commentResult', ok: false, message });
                 }
                 break;
             }
@@ -3079,7 +3092,7 @@ Start by checking which documents exist, then present the menu.`;
                 const service = this._getLocalFolderService(allRoots[0] || '');
                 const result = await service.fetchAntigravityArtifact(artifactPath);
                 if (result.success) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'previewReady',
                         sourceId: 'antigravity',
                         requestId,
@@ -3087,7 +3100,7 @@ Start by checking which documents exist, then present the menu.`;
                         docName: path.basename(artifactPath, '.md')
                     });
                 } else {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'previewError',
                         sourceId: 'antigravity',
                         requestId,
@@ -3109,7 +3122,7 @@ Start by checking which documents exist, then present the menu.`;
                     await service.addFolderPath(result[0].fsPath);
                     this._setupLocalFolderWatchers();
                     await this._sendLocalDocsReady();
-                    this._panel?.webview.postMessage({ type: 'localFoldersListed', paths: service.getFolderPaths(), workspaceRoot: root });
+                    this.postMessageToWebview({ type: 'localFoldersListed', paths: service.getFolderPaths(), workspaceRoot: root });
                 }
                 break;
             }
@@ -3119,14 +3132,14 @@ Start by checking which documents exist, then present the menu.`;
                 await service.removeFolderPath(msg.folderPath);
                 this._setupLocalFolderWatchers();
                 await this._sendLocalDocsReady();
-                this._panel?.webview.postMessage({ type: 'localFoldersListed', paths: service.getFolderPaths(), workspaceRoot: root });
+                this.postMessageToWebview({ type: 'localFoldersListed', paths: service.getFolderPaths(), workspaceRoot: root });
                 break;
             }
             case 'listLocalFolders': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const service = this._getLocalFolderService(root);
                 const paths = service.getFolderPaths();
-                this._panel?.webview.postMessage({ type: 'localFoldersListed', paths, workspaceRoot: root });
+                this.postMessageToWebview({ type: 'localFoldersListed', paths, workspaceRoot: root });
                 break;
             }
             case 'addTicketsFolder': {
@@ -3141,7 +3154,7 @@ Start by checking which documents exist, then present the menu.`;
                     const service = this._getLocalFolderService(root);
                     await service.addTicketsFolderPath(result[0].fsPath);
                     await this._sendLocalDocsReady(true);
-                    this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
+                    this.postMessageToWebview({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
                 }
                 break;
             }
@@ -3150,14 +3163,14 @@ Start by checking which documents exist, then present the menu.`;
                 const service = this._getLocalFolderService(root);
                 await service.removeTicketsFolderPath(msg.folderPath);
                 await this._sendLocalDocsReady(true);
-                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
+                this.postMessageToWebview({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
                 break;
             }
             case 'listTicketsFolders': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const service = this._getLocalFolderService(root);
                 const paths = service.getTicketsFolderPaths();
-                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths, workspaceRoot: root });
+                this.postMessageToWebview({ type: 'ticketsFoldersListed', paths, workspaceRoot: root });
                 break;
             }
             case 'saveTicketsFolderPaths': {
@@ -3167,7 +3180,7 @@ Start by checking which documents exist, then present the menu.`;
                 config.ticketsFolderPaths = msg.paths || [];
                 await service.saveFolderPathsConfig(config);
                 await this._sendLocalDocsReady(true);
-                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
+                this.postMessageToWebview({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
                 break;
             }
             case 'browseTicketsFolder': {
@@ -3179,7 +3192,7 @@ Start by checking which documents exist, then present the menu.`;
                     openLabel: 'Select Tickets Folder'
                 });
                 if (result && result.length > 0) {
-                    this._panel?.webview.postMessage({ type: 'browseTicketsFolderResult', path: result[0].fsPath, workspaceRoot: root });
+                    this.postMessageToWebview({ type: 'browseTicketsFolderResult', path: result[0].fsPath, workspaceRoot: root });
                 }
                 break;
             }
@@ -3195,7 +3208,7 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 await service.saveFolderPathsConfig(config);
                 await this._sendLocalDocsReady(true);
-                this._panel?.webview.postMessage({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
+                this.postMessageToWebview({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
                 break;
             }
 
@@ -3203,7 +3216,7 @@ Start by checking which documents exist, then present the menu.`;
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const service = this._getLocalFolderService(root);
                 const paths = service.getPlanningHtmlFolderPaths();
-                this._panel?.webview.postMessage({ type: 'planningHtmlFoldersListed', paths, workspaceRoot: root });
+                this.postMessageToWebview({ type: 'planningHtmlFoldersListed', paths, workspaceRoot: root });
                 break;
             }
             case 'addPlanningHtmlFolder': {
@@ -3219,7 +3232,7 @@ Start by checking which documents exist, then present the menu.`;
                     await service.addPlanningHtmlFolderPath(result[0].fsPath);
                     this._setupPlanningHtmlFolderWatchers();
                     await this._sendPlanningHtmlDocsReady();
-                    this._panel?.webview.postMessage({ type: 'planningHtmlFoldersListed', paths: service.getPlanningHtmlFolderPaths(), workspaceRoot: root });
+                    this.postMessageToWebview({ type: 'planningHtmlFoldersListed', paths: service.getPlanningHtmlFolderPaths(), workspaceRoot: root });
                 }
                 break;
             }
@@ -3229,7 +3242,7 @@ Start by checking which documents exist, then present the menu.`;
                 await service.removePlanningHtmlFolderPath(msg.folderPath);
                 this._setupPlanningHtmlFolderWatchers();
                 await this._sendPlanningHtmlDocsReady();
-                this._panel?.webview.postMessage({ type: 'planningHtmlFoldersListed', paths: service.getPlanningHtmlFolderPaths(), workspaceRoot: root });
+                this.postMessageToWebview({ type: 'planningHtmlFoldersListed', paths: service.getPlanningHtmlFolderPaths(), workspaceRoot: root });
                 break;
             }
             case 'serveAndOpenHtml': {
@@ -3268,14 +3281,14 @@ Start by checking which documents exist, then present the menu.`;
                 const sourceId = msg.sourceId;
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter) {
-                    this._panel?.webview.postMessage({ type: 'containersReady', sourceId, containers: [] });
+                    this.postMessageToWebview({ type: 'containersReady', sourceId, containers: [] });
                     break;
                 }
                 try {
                     const containers = await adapter.listContainers();
-                    this._panel?.webview.postMessage({ type: 'containersReady', sourceId, containers });
+                    this.postMessageToWebview({ type: 'containersReady', sourceId, containers });
                 } catch {
-                    this._panel?.webview.postMessage({ type: 'containersReady', sourceId, containers: [] });
+                    this.postMessageToWebview({ type: 'containersReady', sourceId, containers: [] });
                 }
                 break;
             }
@@ -3302,7 +3315,7 @@ Start by checking which documents exist, then present the menu.`;
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter) {
-                    this._panel?.webview.postMessage({ type: 'filteredDocsReady', sourceId, nodes: [], requestId });
+                    this.postMessageToWebview({ type: 'filteredDocsReady', sourceId, nodes: [], requestId });
                     break;
                 }
                 try {
@@ -3322,10 +3335,10 @@ Start by checking which documents exist, then present the menu.`;
                     }
                     // Drop if stale
                     if (requestId !== this._latestRequestIds.get(filterKey)) { break; }
-                    this._panel?.webview.postMessage({ type: 'filteredDocsReady', sourceId, nodes, requestId });
+                    this.postMessageToWebview({ type: 'filteredDocsReady', sourceId, nodes, requestId });
                 } catch {
                     if (requestId === this._latestRequestIds.get(filterKey)) {
-                        this._panel?.webview.postMessage({ type: 'filteredDocsReady', sourceId, nodes: [], requestId });
+                        this.postMessageToWebview({ type: 'filteredDocsReady', sourceId, nodes: [], requestId });
                     }
                 }
                 break;
@@ -3342,7 +3355,7 @@ Start by checking which documents exist, then present the menu.`;
                 const adapter = this._researchImportService.getAdapter(sourceId);
 
                 if (!adapter || !adapter.listDocPages) {
-                    this._panel?.webview.postMessage({ type: 'docPagesReady', sourceId, docId, pages: [], requestId });
+                    this.postMessageToWebview({ type: 'docPagesReady', sourceId, docId, pages: [], requestId });
                     break;
                 }
 
@@ -3350,10 +3363,10 @@ Start by checking which documents exist, then present the menu.`;
                     const pages = await adapter.listDocPages(docId);
                     // Drop if stale
                     if (requestId !== this._latestRequestIds.get(pagesKey)) { break; }
-                    this._panel?.webview.postMessage({ type: 'docPagesReady', sourceId, docId, pages, requestId });
+                    this.postMessageToWebview({ type: 'docPagesReady', sourceId, docId, pages, requestId });
                 } catch {
                     if (requestId === this._latestRequestIds.get(pagesKey)) {
-                        this._panel?.webview.postMessage({ type: 'docPagesReady', sourceId, docId, pages: [], requestId });
+                        this.postMessageToWebview({ type: 'docPagesReady', sourceId, docId, pages: [], requestId });
                     }
                 }
                 break;
@@ -3369,7 +3382,7 @@ Start by checking which documents exist, then present the menu.`;
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter || !adapter.fetchPageContent) {
-                    this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' });
+                    this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' });
                     break;
                 }
 
@@ -3377,13 +3390,13 @@ Start by checking which documents exist, then present the menu.`;
                     const result = await adapter.fetchPageContent(docId, pageId);
                     if (requestId !== this._latestRequestIds.get(sourceId)) { break; }
                     if (result.success) {
-                        this._panel?.webview.postMessage({ type: 'previewReady', sourceId, requestId, content: result.content, docName: result.docName });
+                        this.postMessageToWebview({ type: 'previewReady', sourceId, requestId, content: result.content, docName: result.docName });
                     } else {
-                        this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: result.error });
+                        this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: result.error });
                     }
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(sourceId)) {
-                        this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: String(err) });
+                        this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
                     }
                 }
                 break;
@@ -3450,7 +3463,7 @@ Start by checking which documents exist, then present the menu.`;
                 const docRoot = msg.workspaceRoot || workspaceRoot;
                 const sourceFolder = msg.sourceFolder;
                 if (!sourceFolder) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'localDocDeleted',
                         docId,
                         success: false,
@@ -3464,13 +3477,13 @@ Start by checking which documents exist, then present the menu.`;
                 if (result.success) {
                     // Refresh the local docs list
                     await this._sendLocalDocsReady();
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'localDocDeleted',
                         docId,
                         success: true
                     });
                 } else {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'localDocDeleted',
                         docId,
                         success: false,
@@ -3489,7 +3502,7 @@ Start by checking which documents exist, then present the menu.`;
                         localPath = await this._cacheService.resolveImportedDocPath(slugPrefix, workspaceId);
                     }
                     if (!localPath) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'saveOnlineDocFileResult',
                             success: false,
                             error: 'Document not imported yet'
@@ -3502,7 +3515,7 @@ Start by checking which documents exist, then present the menu.`;
                     const resolved = path.resolve(localPath);
                     const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
                     if (!isAllowed) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'saveOnlineDocFileResult',
                             success: false,
                             error: 'Path access not allowed'
@@ -3513,12 +3526,12 @@ Start by checking which documents exist, then present the menu.`;
                     this._lastPanelWriteTimestamp = Date.now();
                     await fs.promises.writeFile(resolved, content, 'utf8');
 
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'saveOnlineDocFileResult',
                         success: true
                     });
                 } catch (err) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'saveOnlineDocFileResult',
                         success: false,
                         error: String(err)
@@ -3555,13 +3568,13 @@ Start by checking which documents exist, then present the menu.`;
                     
                     // Refresh imported docs list
                     await this._handleFetchImportedDocs(workspaceRoot);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'importedDocDeleted',
                         slugPrefix,
                         success: true
                     });
                 } catch (err) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'importedDocDeleted',
                         slugPrefix,
                         success: false,
@@ -3602,7 +3615,7 @@ Start by checking which documents exist, then present the menu.`;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { planFile, topic } = msg;
                 if (!workspaceRoot || !planFile) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'uploadPlanAttachmentResult',
                         success: false,
                         error: 'Missing workspace root or plan file.',
@@ -3615,7 +3628,7 @@ Start by checking which documents exist, then present the menu.`;
                     const workspaceId = await this._getWorkspaceId(workspaceRoot);
                     const plan = await db.getPlanByPlanFile(planFile, workspaceId);
                     if (!plan) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'uploadPlanAttachmentResult',
                             success: false,
                             error: 'Plan not found in kanban database.',
@@ -3624,7 +3637,7 @@ Start by checking which documents exist, then present the menu.`;
                         break;
                     }
                     if (!plan.clickupTaskId && !plan.linearIssueId) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'uploadPlanAttachmentResult',
                             success: false,
                             error: 'Plan is not linked to a ClickUp task or Linear issue.',
@@ -3639,7 +3652,7 @@ Start by checking which documents exist, then present the menu.`;
                     const resolvedFile = path.resolve(planFileAbsolute);
                     const resolvedRoot = path.resolve(workspaceRoot);
                     if (!resolvedFile.startsWith(resolvedRoot + path.sep) && resolvedFile !== resolvedRoot) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'uploadPlanAttachmentResult',
                             success: false,
                             error: 'Plan file path is outside the workspace root.',
@@ -3655,7 +3668,7 @@ Start by checking which documents exist, then present the menu.`;
                     if (clickupTaskId) {
                         const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                         const result = await clickup.attachFile(clickupTaskId, fileName, buffer);
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'uploadPlanAttachmentResult',
                             success: true,
                             url: result?.url || '',
@@ -3665,7 +3678,7 @@ Start by checking which documents exist, then present the menu.`;
                     } else if (linearIssueId) {
                         const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                         const result = await linear.uploadAttachment(linearIssueId, buffer, fileName);
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'uploadPlanAttachmentResult',
                             success: true,
                             url: result?.url || '',
@@ -3675,7 +3688,7 @@ Start by checking which documents exist, then present the menu.`;
                     }
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'uploadPlanAttachmentResult',
                         success: false,
                         error: errMsg,
@@ -3700,7 +3713,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (this._planAutoFetchService) {
                     const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
                     if (wsRoot) {
-                        this._projectPanel?.webview.postMessage({
+                        this.postMessageToProjectWebview({
                             type: 'planAutoFetchState',
                             enabled: this._planAutoFetchService.getStatus(wsRoot).enabled,
                             lastOutcome: 'idle',
@@ -3709,7 +3722,7 @@ Start by checking which documents exist, then present the menu.`;
                         });
                         await this._planAutoFetchService.runCycle();
                         const status = this._planAutoFetchService.getStatus(wsRoot);
-                        this._projectPanel?.webview.postMessage({
+                        this.postMessageToProjectWebview({
                             type: 'planAutoFetchState',
                             ...status
                         });
@@ -3815,15 +3828,15 @@ Start by checking which documents exist, then present the menu.`;
                 const resolved = path.resolve(filePath);
                 const isAllowed = Array.from(this._getAllowedRoots()).some(r => resolved.startsWith(path.resolve(r)));
                 if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: false, error: 'File not found or not in workspace' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanOpenResult', success: false, error: 'File not found or not in workspace' });
                     break;
                 }
                 try {
                     const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved));
                     await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: true });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanOpenResult', success: true });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: false, error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanOpenResult', success: false, error: String(err) });
                 }
                 break;
             }
@@ -3900,16 +3913,16 @@ Start by checking which documents exist, then present the menu.`;
                 const newColumn = String(msg.newColumn || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!planFile || !newColumn) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: false, error: 'Missing planFile or newColumn' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', success: false, error: 'Missing planFile or newColumn' });
                     break;
                 }
                 try {
                     const moved = await vscode.commands.executeCommand<boolean>(
                         'switchboard.moveKanbanCardByPlanFile', wsRoot, planFile, newColumn
                     );
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: !!moved, error: moved ? undefined : 'Column update failed' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', success: !!moved, error: moved ? undefined : 'Column update failed' });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: false, error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', success: false, error: String(err) });
                 }
                 break;
             }
@@ -3925,7 +3938,7 @@ Start by checking which documents exist, then present the menu.`;
                 const complexity = String(msg.complexity || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!planId) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: false, error: 'Missing planId' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanComplexityChanged', success: false, error: 'Missing planId' });
                     break;
                 }
                 let normalizedComplexity = complexity;
@@ -3962,9 +3975,9 @@ Start by checking which documents exist, then present the menu.`;
                     const allPlans = await this._getKanbanPlans(wsRoot);
                     const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
                     this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: true });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanComplexityChanged', success: true });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanComplexityChanged', success: false, error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanComplexityChanged', success: false, error: String(err) });
                 }
                 break;
             }
@@ -3973,7 +3986,7 @@ Start by checking which documents exist, then present the menu.`;
                 const planFile = String(msg.planFile || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!planId || !wsRoot) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: 'Missing planId or workspaceRoot' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanDeleted', success: false, error: 'Missing planId or workspaceRoot' });
                     break;
                 }
                 if (planFile) {
@@ -3983,7 +3996,7 @@ Start by checking which documents exist, then present the menu.`;
                     const resolvedRoot = path.resolve(wsRoot);
                     const rel = path.relative(resolvedRoot, resolvedPlanFile);
                     if (rel.startsWith('..') || path.isAbsolute(rel)) {
-                        this._projectPanel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: 'Plan file is outside workspace root' });
+                        this.postMessageToProjectWebview({ type: 'kanbanPlanDeleted', success: false, error: 'Plan file is outside workspace root' });
                         break;
                     }
                 }
@@ -4018,9 +4031,9 @@ Start by checking which documents exist, then present the menu.`;
                             console.warn(`[PlanningPanelProvider] regenerateFeatureFile failed for ${featureId}:`, regenErr);
                         }
                     }
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: true, planId });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanDeleted', success: true, planId });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanDeleted', success: false, error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanDeleted', success: false, error: String(err) });
                 }
                 break;
             }
@@ -4028,7 +4041,7 @@ Start by checking which documents exist, then present the menu.`;
                 const sessionId = String(msg.sessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId || !wsRoot) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanLogReady', entries: [], error: 'Missing sessionId or workspaceRoot' });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanLogReady', entries: [], error: 'Missing sessionId or workspaceRoot' });
                     break;
                 }
                 try {
@@ -4037,9 +4050,9 @@ Start by checking which documents exist, then present the menu.`;
                     const sheet = await log.getRunSheet(sessionId);
                     const events: any[] = Array.isArray(sheet?.events) ? sheet.events : [];
                     const entries = formatReviewLogEntries(events);
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanLogReady', entries });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanLogReady', entries });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'kanbanPlanLogReady', entries: [], error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanLogReady', entries: [], error: String(err) });
                 }
                 break;
             }
@@ -4047,16 +4060,16 @@ Start by checking which documents exist, then present the menu.`;
                 const sessionId = String(msg.sessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId || !wsRoot) {
-                    this._projectPanel?.webview.postMessage({ type: 'featureDetails', feature: null, subtasks: [] });
+                    this.postMessageToProjectWebview({ type: 'featureDetails', feature: null, subtasks: [] });
                     break;
                 }
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const feature = await db.getPlanByPlanId(sessionId);
                     const subtasks = feature && feature.isFeature ? await db.getSubtasksByFeatureId(feature.planId) : [];
-                    this._projectPanel?.webview.postMessage({ type: 'featureDetails', feature, subtasks });
+                    this.postMessageToProjectWebview({ type: 'featureDetails', feature, subtasks });
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'featureDetails', feature: null, subtasks: [], error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'featureDetails', feature: null, subtasks: [], error: String(err) });
                 }
                 break;
             }
@@ -4073,17 +4086,17 @@ Start by checking which documents exist, then present the menu.`;
                     const lockColumnsRaw = await db.getConfig('feature_lock_columns');
                     const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
                     if (lockColumns.includes(feature.kanbanColumn)) {
-                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Cannot modify subtasks of a feature in a locked column.' });
+                        this.postMessageToProjectWebview({ type: 'featureError', message: 'Cannot modify subtasks of a feature in a locked column.' });
                         break;
                     }
                     const subtask = await db.getPlanByPlanId(subtaskSessionId);
                     if (!subtask) break;
                     if (subtask.isFeature) {
-                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Cannot add a feature as a subtask.' });
+                        this.postMessageToProjectWebview({ type: 'featureError', message: 'Cannot add a feature as a subtask.' });
                         break;
                     }
                     if (subtask.featureId && subtask.featureId !== feature.planId) {
-                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Subtask already belongs to another feature.' });
+                        this.postMessageToProjectWebview({ type: 'featureError', message: 'Subtask already belongs to another feature.' });
                         break;
                     }
                     await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
@@ -4157,12 +4170,12 @@ Start by checking which documents exist, then present the menu.`;
                 try {
                     const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     if (!wsRoot) {
-                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'No workspace root resolved.' });
+                        this.postMessageToProjectWebview({ type: 'featureError', message: 'No workspace root resolved.' });
                         break;
                     }
                     const name = String(msg.name || '').trim();
                     if (!name) {
-                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Feature name is required.' });
+                        this.postMessageToProjectWebview({ type: 'featureError', message: 'Feature name is required.' });
                         break;
                     }
                     const description = msg.description ? String(msg.description).trim() : undefined;
@@ -4176,7 +4189,7 @@ Start by checking which documents exist, then present the menu.`;
                     // three, which is why a Features-tab feature never appeared on the board (and
                     // showed up as a plain plan once a later refresh ran).
                     if (!this._kanbanProvider) {
-                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: 'Kanban provider not available.' });
+                        this.postMessageToProjectWebview({ type: 'featureError', message: 'Kanban provider not available.' });
                         break;
                     }
                     const result = await this._kanbanProvider.createFeatureFromPlanIds(
@@ -4186,7 +4199,7 @@ Start by checking which documents exist, then present the menu.`;
                         description
                     );
                     if (!result.success) {
-                        this._projectPanel?.webview.postMessage({ type: 'featureError', message: result.error || 'Failed to create feature.' });
+                        this.postMessageToProjectWebview({ type: 'featureError', message: result.error || 'Failed to create feature.' });
                         break;
                     }
 
@@ -4200,7 +4213,7 @@ Start by checking which documents exist, then present the menu.`;
                     });
                 } catch (err) {
                     console.error('[PlanningPanelProvider] createFeature failed:', err);
-                    this._projectPanel?.webview.postMessage({ type: 'featureError', message: String(err) });
+                    this.postMessageToProjectWebview({ type: 'featureError', message: String(err) });
                 }
                 break;
             }
@@ -4225,7 +4238,7 @@ Start by checking which documents exist, then present the menu.`;
                         hasConstitution: governance[0].exists /* keep legacy field */
                     };
                 });
-                this._projectPanel?.webview.postMessage({
+                this.postMessageToProjectWebview({
                     type: 'constitutionFilesLoaded',
                     workspaces,
                     kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null
@@ -4249,7 +4262,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (enabled && exists) { status = path.basename(filePath); }
                 else if (enabled) { status = 'File not found'; }
                 else { status = 'Disabled'; }
-                this._projectPanel?.webview.postMessage({ type: 'constitutionStatus', status, planFile: msg.planFile, enabled, workspaceRoot: wr });
+                this.postMessageToProjectWebview({ type: 'constitutionStatus', status, planFile: msg.planFile, enabled, workspaceRoot: wr });
                 break;
             }
             case 'readConstitutionFile': {
@@ -4375,7 +4388,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (wsRoot) {
                     await this._kanbanProvider?.setProjectContextEnabled(wsRoot, !!msg.enabled);
                 }
-                this._projectPanel?.webview.postMessage({ type: 'projectContextEnabled', enabled: !!msg.enabled, workspaceRoot: wsRoot });
+                this.postMessageToProjectWebview({ type: 'projectContextEnabled', enabled: !!msg.enabled, workspaceRoot: wsRoot });
                 break;
             }
             case 'getProjectPrd': {
@@ -4506,7 +4519,7 @@ Start by checking which documents exist, then present the menu.`;
                     `## Non-Goals\n- [explicit exclusion]\n\n` +
                     `## Open Questions\n- [unresolved decision or risk]\n`;
                 await vscode.env.clipboard.writeText(promptText);
-                this._projectPanel?.webview.postMessage({ type: 'prdPromptCopied' });
+                this.postMessageToProjectWebview({ type: 'prdPromptCopied' });
                 break;
             }
             case 'toggleConstitutionAddon': {
@@ -4515,7 +4528,7 @@ Start by checking which documents exist, then present the menu.`;
                 plannerConfig.addons = plannerConfig.addons || {};
                 plannerConfig.addons.constitution = !!msg.enabled;
                 await store.update('switchboard.prompts.roleConfig_planner', plannerConfig);
-                this._projectPanel?.webview.postMessage({ type: 'constitutionAddonState', enabled: !!msg.enabled });
+                this.postMessageToProjectWebview({ type: 'constitutionAddonState', enabled: !!msg.enabled });
                 break;
             }
             case 'copyConstitutionPrompt': {
@@ -4552,7 +4565,7 @@ Please format the output document strictly as follows:
 - [Explicit exclusion 2]
 `;
                 await vscode.env.clipboard.writeText(promptText);
-                this._projectPanel?.webview.postMessage({ type: 'constitutionPromptCopied' });
+                this.postMessageToProjectWebview({ type: 'constitutionPromptCopied' });
                 break;
             }
             case 'copyConstitutionUpdatePrompt': {
@@ -4598,7 +4611,7 @@ Please format the updated output document strictly as follows:
 - [Explicit exclusion 2]
 `;
                 await vscode.env.clipboard.writeText(promptText);
-                this._projectPanel?.webview.postMessage({ type: 'constitutionPromptCopied' }); // reuse copied notification
+                this.postMessageToProjectWebview({ type: 'constitutionPromptCopied' }); // reuse copied notification
                 break;
             }
             case 'invokeConstitutionBuilder': {
@@ -4678,7 +4691,7 @@ Please format the updated output document strictly as follows:
                     `4. Project-specific conventions, invariants, and gotchas an agent must respect.\n` +
                     `Keep it tight and high-signal; do not pad.`;
                 await vscode.env.clipboard.writeText(promptText);
-                this._projectPanel?.webview.postMessage({ type: 'systemPromptCopied' });
+                this.postMessageToProjectWebview({ type: 'systemPromptCopied' });
                 break;
             }
             case 'openArchitectTerminal': {
@@ -4712,7 +4725,7 @@ Please format the updated output document strictly as follows:
                 }
                 const promptText = this.buildArchitectPrompt(wsRoot);
                 await vscode.env.clipboard.writeText(promptText);
-                this._projectPanel?.webview.postMessage({ type: 'architectPromptCopied' });
+                this.postMessageToProjectWebview({ type: 'architectPromptCopied' });
                 break;
             }
 
@@ -4723,17 +4736,17 @@ Please format the updated output document strictly as follows:
                 const filePath = this._getGovernanceFilePath(wsRoot, key);
                 try {
                     if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); }
-                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, governanceFile: key });
+                    this.postMessageToProjectWebview({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, governanceFile: key });
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
-                    this._projectPanel?.webview.postMessage({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, governanceFile: key, success: false, error: String(err) });
+                    this.postMessageToProjectWebview({ type: 'constitutionFileDeleted', workspaceRoot: wsRoot, governanceFile: key, success: false, error: String(err) });
                 }
                 break;
             }
             case 'getConstitutionPaths': {
                 const wsRoot = msg.workspaceRoot;
                 if (!allRoots.includes(wsRoot)) { break; }
-                this._projectPanel?.webview.postMessage({
+                this.postMessageToProjectWebview({
                     type: 'constitutionPaths',
                     workspaceRoot: wsRoot,
                     paths: this._getConstitutionPathList(wsRoot),
@@ -4762,7 +4775,7 @@ Please format the updated output document strictly as follows:
                 await this._setConstitutionPathList(wsRoot, list);
                 // Activate the newly added path (routes through existing validated handler + watcher refresh).
                 await this._handleMessage({ type: 'setConstitutionPath', workspaceRoot: wsRoot, relativePath: rel }, true);
-                this._projectPanel?.webview.postMessage({
+                this.postMessageToProjectWebview({
                     type: 'constitutionPaths', workspaceRoot: wsRoot,
                     paths: this._getConstitutionPathList(wsRoot), active: this._activeConstitutionRel(wsRoot),
                 });
@@ -4779,7 +4792,7 @@ Please format the updated output document strictly as follows:
                 if (this._activeConstitutionRel(wsRoot) === rel) {
                     await this._handleMessage({ type: 'setConstitutionPath', workspaceRoot: wsRoot, relativePath: list[0] }, true);
                 }
-                this._projectPanel?.webview.postMessage({
+                this.postMessageToProjectWebview({
                     type: 'constitutionPaths', workspaceRoot: wsRoot,
                     paths: this._getConstitutionPathList(wsRoot), active: this._activeConstitutionRel(wsRoot),
                 });
@@ -4815,7 +4828,7 @@ Please format the updated output document strictly as follows:
                 // "(active)" marker and sidebar label update after an Activate click.
                 // (addConstitutionPath/removeConstitutionPath also broadcast after their
                 //  inner setConstitutionPath call; the duplicate is idempotent and harmless.)
-                this._projectPanel?.webview.postMessage({
+                this.postMessageToProjectWebview({
                     type: 'constitutionPaths', workspaceRoot: wsRoot,
                     paths: this._getConstitutionPathList(wsRoot), active: this._activeConstitutionRel(wsRoot),
                 });
@@ -4974,7 +4987,7 @@ Please format the updated output document strictly as follows:
             case 'linearLoadProject': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearProjectLoaded',
                         status: 'error',
                         issues: [],
@@ -4987,7 +5000,7 @@ Please format the updated output document strictly as follows:
                 const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                 const config = await linear.loadConfig();
                 if (!config?.setupComplete) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearProjectLoaded',
                         status: 'setup-required',
                         issues: [],
@@ -5010,7 +5023,7 @@ Please format the updated output document strictly as follows:
                         : includeNames.length > 0
                             ? `${includeNames.slice(0, 2).join(', ')}${includeNames.length > 2 ? '...' : ''}`
                             : `${config.teamName || 'Configured Linear Team'} (team-wide)`;
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearProjectLoaded',
                         status: 'loaded',
                         issues,
@@ -5018,7 +5031,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : String(error),
@@ -5030,7 +5043,7 @@ Please format the updated output document strictly as follows:
             case 'linearLoadProjects': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearProjectsLoaded',
                         status: 'error',
                         projects: [],
@@ -5043,7 +5056,7 @@ Please format the updated output document strictly as follows:
                 const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                 const config = await linear.loadConfig();
                 if (!config?.setupComplete) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearProjectsLoaded',
                         status: 'setup-required',
                         projects: [],
@@ -5055,14 +5068,14 @@ Please format the updated output document strictly as follows:
 
                 try {
                     const projects = await linear.getAvailableProjects();
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearProjectsLoaded',
                         status: 'loaded',
                         projects,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : String(error),
@@ -5075,7 +5088,7 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const issueId = String(msg.issueId || '').trim();
                 if (!workspaceRoot || !issueId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5104,7 +5117,7 @@ Please format the updated output document strictly as follows:
                     }
 
                     if (!issue) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'linearError',
                             scope: 'task',
                             issueId,
@@ -5123,7 +5136,7 @@ Please format the updated output document strictly as follows:
                         renderedDescriptionHtml = '';
                     }
 
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearTaskDetailsLoaded',
                         issue,
                         subtasks,
@@ -5139,7 +5152,7 @@ Please format the updated output document strictly as follows:
                         ? error.statusCode
                         : (statusMatch ? Number(statusMatch[1]) : null);
                     const kind = statusCode != null ? classifyHttpError(statusCode) : 'generic';
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5171,7 +5184,7 @@ Please format the updated output document strictly as follows:
             case 'clickupLoadSpaces': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: 'No workspace folder found',
@@ -5183,13 +5196,13 @@ Please format the updated output document strictly as follows:
 
                 try {
                     const spaces = await clickUp.getSpaces();
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupSpacesLoaded',
                         spaces,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: error instanceof Error ? error.message : 'Failed to load Spaces',
@@ -5201,7 +5214,7 @@ Please format the updated output document strictly as follows:
             case 'clickupLoadFolders': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: 'No workspace folder found',
@@ -5213,7 +5226,7 @@ Please format the updated output document strictly as follows:
 
                 try {
                     const folders = await clickUp.getFolders(msg.spaceId);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupFoldersLoaded',
                         spaceId: msg.spaceId,
                         folders,
@@ -5221,7 +5234,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: error instanceof Error ? error.message : 'Failed to load Folders',
@@ -5233,7 +5246,7 @@ Please format the updated output document strictly as follows:
             case 'clickupLoadLists': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: 'No workspace folder found',
@@ -5245,7 +5258,7 @@ Please format the updated output document strictly as follows:
 
                 try {
                     const lists = await clickUp.getLists(msg.spaceId, msg.folderId);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupListsLoaded',
                         spaceId: msg.spaceId,
                         folderId: msg.folderId,
@@ -5253,7 +5266,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: error instanceof Error ? error.message : 'Failed to load Lists',
@@ -5275,7 +5288,7 @@ Please format the updated output document strictly as follows:
                 const loadSeq = msg.loadSeq;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupProjectLoaded',
                         status: 'error',
                         message: 'No workspace open.',
@@ -5289,7 +5302,7 @@ Please format the updated output document strictly as follows:
                 const config = await clickUp.loadConfig();
 
                 if (!config?.setupComplete) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
@@ -5301,7 +5314,7 @@ Please format the updated output document strictly as follows:
 
                 const listId = msg.listId || config.selectedListId;
                 if (!listId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
@@ -5320,7 +5333,7 @@ Please format the updated output document strictly as follows:
                         archived: false
                     });
 
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupProjectLoaded',
                         status: 'loaded',
                         tasks: tasks.map((t: any) => this._mapClickUpTaskToSidebar(t)),
@@ -5329,7 +5342,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
@@ -5342,7 +5355,7 @@ Please format the updated output document strictly as follows:
             case 'clickupLoadTaskDetails': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         error: 'No workspace folder found',
@@ -5363,7 +5376,7 @@ Please format the updated output document strictly as follows:
                         renderedDescriptionHtml = '';
                     }
 
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupTaskDetailsLoaded',
                         task: this._mapClickUpTaskToSidebar(details.task),
                         subtasks: details.subtasks.map((s: any) => this._mapClickUpTaskToSidebar(s)),
@@ -5379,7 +5392,7 @@ Please format the updated output document strictly as follows:
                         ? error.statusCode
                         : (statusMatch ? Number(statusMatch[1]) : null);
                     const kind = statusCode != null ? classifyHttpError(statusCode) : 'generic';
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         taskId: msg.taskId,
@@ -5396,7 +5409,7 @@ Please format the updated output document strictly as follows:
                 const labelIds = Array.isArray(msg.labelIds) ? msg.labelIds : [];
                 
                 if (!workspaceRoot || !issueId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5409,14 +5422,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                     await linear.updateIssueLabels(issueId, labelIds);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearLabelsUpdated',
                         issueId,
                         labelIds,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5433,7 +5446,7 @@ Please format the updated output document strictly as follows:
                 const tagNames = rawTags.map((t: any) => typeof t === 'string' ? t : String(t?.name || '')).filter(Boolean);
 
                 if (!workspaceRoot || !taskId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         taskId,
@@ -5446,14 +5459,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                     await clickUp.updateTask(taskId, { tags: tagNames });
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupTagsUpdated',
                         taskId,
                         tags: tagNames,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         taskId,
@@ -5470,7 +5483,7 @@ Please format the updated output document strictly as follows:
                 let listId = msg.listId ? String(msg.listId).trim() : '';
 
                 if (!workspaceRoot || !id || !provider) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketAssigneesError',
                         id,
                         provider,
@@ -5497,7 +5510,7 @@ Please format the updated output document strictly as follows:
                             members = await clickup.getListMembers(listId);
                         }
                     }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketAssigneesLoaded',
                         provider,
                         id,
@@ -5505,7 +5518,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketAssigneesError',
                         provider,
                         id,
@@ -5521,7 +5534,7 @@ Please format the updated output document strictly as follows:
                 const assigneeId = msg.assigneeId === null ? null : String(msg.assigneeId || '').trim();
 
                 if (!workspaceRoot || !issueId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5534,14 +5547,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                     await linear.updateIssueAssignee(issueId, assigneeId);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearAssigneeUpdated',
                         issueId,
                         assigneeId,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5558,7 +5571,7 @@ Please format the updated output document strictly as follows:
                 const desiredAssigneeIds = Array.isArray(msg.desiredAssigneeIds) ? msg.desiredAssigneeIds.map(String) : [];
 
                 if (!workspaceRoot || !taskId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         taskId,
@@ -5572,7 +5585,7 @@ Please format the updated output document strictly as follows:
                 const remIds = currentAssigneeIds.filter((id: string) => !desiredAssigneeIds.includes(id)).map(Number).filter((n: number) => !isNaN(n));
 
                 if (addIds.length === 0 && remIds.length === 0) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupAssigneesUpdated',
                         taskId,
                         assigneeIds: desiredAssigneeIds,
@@ -5585,14 +5598,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                     await clickup.updateTaskAssignees(taskId, addIds, remIds);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupAssigneesUpdated',
                         taskId,
                         assigneeIds: desiredAssigneeIds,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         taskId,
@@ -5608,7 +5621,7 @@ Please format the updated output document strictly as follows:
                 const priority = Number(msg.priority);
 
                 if (!workspaceRoot || !issueId || isNaN(priority)) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5621,14 +5634,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                     await linear.updateIssuePriority(issueId, priority);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearPriorityUpdated',
                         issueId,
                         priority,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         issueId,
@@ -5644,7 +5657,7 @@ Please format the updated output document strictly as follows:
                 const priority = Number(msg.priority);
 
                 if (!workspaceRoot || !taskId || isNaN(priority)) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         taskId,
@@ -5657,14 +5670,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                     await clickup.updateTask(taskId, { priority });
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupPriorityUpdated',
                         taskId,
                         priority,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         taskId,
@@ -5680,14 +5693,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                     const catalog = await linear.getAutomationCatalog();
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearAutomationCatalogLoaded',
                         labels: catalog.labels,
                         states: catalog.states,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearError',
                         scope: 'task',
                         error: error instanceof Error ? error.message : String(error),
@@ -5703,13 +5716,13 @@ Please format the updated output document strictly as follows:
                 try {
                     const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                     const tags = await clickUp.getSpaceTags(spaceId);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupSpaceTagsLoaded',
                         tags,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         error: error instanceof Error ? error.message : String(error),
@@ -5725,14 +5738,14 @@ Please format the updated output document strictly as follows:
                 try {
                     const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                     const statuses = await clickUp.getListStatuses(listId);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupListStatusesLoaded',
                         statuses,
                         listId,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupError',
                         scope: 'task',
                         error: error instanceof Error ? error.message : String(error),
@@ -5816,7 +5829,7 @@ Please format the updated output document strictly as follows:
                 const mode = msg.mode || 'plan';
 
                 if (!workspaceRoot || !issueId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearTaskImported',
                         success: false,
                         error: 'Missing workspace or issue ID',
@@ -5837,14 +5850,14 @@ Please format the updated output document strictly as follows:
                             { workspaceRoot, issueId, includeSubtasks }
                         );
                     }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearTaskImported',
                         success: true,
                         workspaceRoot
                     });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to import Linear task:', error);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearTaskImported',
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
@@ -5860,7 +5873,7 @@ Please format the updated output document strictly as follows:
                 const mode = msg.mode || 'plan';
 
                 if (!workspaceRoot || !taskId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupTaskImported',
                         success: false,
                         error: 'Missing workspace or task ID',
@@ -5881,14 +5894,14 @@ Please format the updated output document strictly as follows:
                             { workspaceRoot, taskId, includeSubtasks }
                         );
                     }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupTaskImported',
                         success: true,
                         workspaceRoot
                     });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to import ClickUp task:', error);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupTaskImported',
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
@@ -5939,7 +5952,7 @@ Please format the updated output document strictly as follows:
                     } else if ((result.failCount || 0) > 0) {
                         vscode.window.showWarningMessage(`Import all (${importMode}): ${result.successCount} imported, ${result.failCount} failed — ${errDetail}`);
                     }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'importAllTicketsComplete',
                         success: result.success,
                         successCount: result.successCount,
@@ -5955,7 +5968,7 @@ Please format the updated output document strictly as follows:
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
                     vscode.window.showErrorMessage(`Import all (${importMode}) failed: ${errMsg}`);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'importAllTicketsComplete',
                         success: false,
                         error: errMsg,
@@ -6048,7 +6061,7 @@ Please format the updated output document strictly as follows:
                         vscode.window.showWarningMessage(`Refresh: ${result.successCount} updated, ${result.failCount} failed — ${errDetail}`);
                     }
 
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'importAllTicketsComplete',
                         success: result.success,
                         successCount: result.successCount,
@@ -6065,7 +6078,7 @@ Please format the updated output document strictly as follows:
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
                     vscode.window.showErrorMessage(`Refresh failed: ${errMsg}`);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'importAllTicketsComplete',
                         success: false,
                         error: errMsg,
@@ -6138,7 +6151,7 @@ Please format the updated output document strictly as follows:
                         'switchboard.importTaskAsDocument',
                         { workspaceRoot, provider, id, includeSubtasks: true }
                     );
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'editTicketResult',
                         success: result.success,
                         id,
@@ -6147,7 +6160,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'editTicketResult',
                         success: false,
                         id,
@@ -6169,7 +6182,7 @@ Please format the updated output document strictly as follows:
                         // Webview status is silent; surface the real reason natively.
                         vscode.window.showErrorMessage(`Push to ${provider} failed: ${result?.error || 'unknown error'}`);
                     }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'pushTicketResult',
                         success: result.success,
                         id,
@@ -6180,7 +6193,7 @@ Please format the updated output document strictly as follows:
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
                     vscode.window.showErrorMessage(`Push to ${provider} failed: ${errMsg}`);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'pushTicketResult',
                         success: false,
                         id,
@@ -6198,7 +6211,7 @@ Please format the updated output document strictly as follows:
                         'switchboard.deleteTicket',
                         { workspaceRoot, provider, id }
                     );
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketDeleted',
                         success: result.success,
                         id,
@@ -6206,7 +6219,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketDeleted',
                         success: false,
                         id,
@@ -6220,7 +6233,7 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets: [] });
+                    this.postMessageToWebview({ type: 'localTicketFilesListed', provider, tickets: [] });
                     break;
                 }
                 const ticketDirs = this._getTicketDocumentDirs(workspaceRoot, provider);
@@ -6373,7 +6386,7 @@ Please format the updated output document strictly as follows:
                     }
                 }
 
-                this._panel?.webview.postMessage({ type: 'localTicketFilesListed', provider, tickets });
+                this.postMessageToWebview({ type: 'localTicketFilesListed', provider, tickets });
                 break;
             }
             case 'getTicketSyncStatuses': {
@@ -6398,7 +6411,7 @@ Please format the updated output document strictly as follows:
                 } catch (err) {
                     console.error('[PlanningPanelProvider] getTicketSyncStatuses error:', err);
                 }
-                this._panel?.webview.postMessage({ type: 'ticketSyncStatusesLoaded', provider, statuses });
+                this.postMessageToWebview({ type: 'ticketSyncStatusesLoaded', provider, statuses });
                 break;
             }
             case 'readLocalTicketFile': {
@@ -6406,12 +6419,12 @@ Please format the updated output document strictly as follows:
                 const provider = msg.provider as 'clickup' | 'linear';
                 const id = msg.id;
                 if (!workspaceRoot || !provider || !id) {
-                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
+                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: false });
                     break;
                 }
                 const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) {
-                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
+                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: false });
                     break;
                 }
                 try {
@@ -6422,9 +6435,9 @@ Please format the updated output document strictly as follows:
                     // Rewrite local image paths to webview-accessible URIs for display only.
                     // rawContent preserves original local paths for edit mode + push flow.
                     const displayContent = this._rewriteLocalImagePaths(content, path.dirname(filePath));
-                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: true, title, content: displayContent, rawContent: content });
+                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: true, title, content: displayContent, rawContent: content });
                 } catch {
-                    this._panel?.webview.postMessage({ type: 'localTicketFileRead', provider, id, success: false });
+                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: false });
                 }
                 break;
             }
@@ -6504,7 +6517,7 @@ Please format the updated output document strictly as follows:
                         }
                     }
                     
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'syncAllTicketsResult',
                         success: results.failed === 0,
                         count: tickets.length,
@@ -6513,7 +6526,7 @@ Please format the updated output document strictly as follows:
                         errors: results.errors
                     });
                 } else {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'syncAllTicketsResult',
                         success: false,
                         count: 0,
@@ -6558,7 +6571,7 @@ Please format the updated output document strictly as follows:
                 }
                 if (Array.isArray(msg.ticketIds) && msg.ticketIds.length > 0) {
                     if (paths.length === 0) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'ticketLinkFailed',
                             error: missingIds.length > 0
                                 ? `No local files found for ${missingIds.length} ticket(s). Click "Refetch" to import them first.`
@@ -6566,7 +6579,7 @@ Please format the updated output document strictly as follows:
                         });
                     } else {
                         await vscode.env.clipboard.writeText(paths.join('\n'));
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'ticketLinkCopied',
                             count: paths.length,
                             requestedCount: msg.ticketIds.length,
@@ -6601,7 +6614,7 @@ Please format the updated output document strictly as follows:
                     const { provider, ticketId, refresh } = msg;
                     const cached = this._moveTargetsCache.get(provider);
                     if (!refresh && cached && Date.now() - cached.at < PlanningPanelProvider.MOVE_TARGETS_TTL_MS) {
-                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets: cached.targets });
+                        this.postMessageToWebview({ type: 'moveTargetsResult', provider, ticketId, targets: cached.targets });
                         break;
                     }
                     if (provider === 'clickup') {
@@ -6622,17 +6635,17 @@ Please format the updated output document strictly as follows:
                             }
                         }
                         this._moveTargetsCache.set('clickup', { at: Date.now(), targets });
-                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets });
+                        this.postMessageToWebview({ type: 'moveTargetsResult', provider, ticketId, targets });
                     } else {
                         const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
                         const projects = await linearService.getAvailableProjects();
                         const targets = projects.map((p: { id: string; name: string }) => ({ id: p.id, name: p.name, path: p.name }));
                         this._moveTargetsCache.set('linear', { at: Date.now(), targets });
-                        this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider, ticketId, targets });
+                        this.postMessageToWebview({ type: 'moveTargetsResult', provider, ticketId, targets });
                     }
                 } catch (err) {
                     console.error('[PlanningPanelProvider] Failed to fetch move targets:', err);
-                    this._panel?.webview.postMessage({ type: 'moveTargetsResult', provider: msg.provider, ticketId: msg.ticketId, targets: [], error: String(err) });
+                    this.postMessageToWebview({ type: 'moveTargetsResult', provider: msg.provider, ticketId: msg.ticketId, targets: [], error: String(err) });
                 }
                 break;
             }
@@ -6646,7 +6659,7 @@ Please format the updated output document strictly as follows:
                     if (provider === 'clickup') {
                         const clickUpService = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                         const result = await clickUpService.moveTask(ticketId, targetId);
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'moveTicketResult',
                             success: true,
                             provider,
@@ -6657,11 +6670,11 @@ Please format the updated output document strictly as follows:
                     } else {
                         const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
                         await linearService.updateIssueProject(ticketId, targetId);
-                        this._panel?.webview.postMessage({ type: 'moveTicketResult', success: true, provider, ticketId, targetId });
+                        this.postMessageToWebview({ type: 'moveTicketResult', success: true, provider, ticketId, targetId });
                     }
                 } catch (err) {
                     console.error('[PlanningPanelProvider] Failed to move ticket:', err);
-                    this._panel?.webview.postMessage({ type: 'moveTicketResult', success: false, provider: msg.provider, ticketId: msg.ticketId, error: String(err) });
+                    this.postMessageToWebview({ type: 'moveTicketResult', success: false, provider: msg.provider, ticketId: msg.ticketId, error: String(err) });
                 }
                 break;
             }
@@ -6785,7 +6798,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         'switchboard.changeTicketStatus',
                         { workspaceRoot, provider, id, statusId }
                     );
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'changeTicketStatusResult',
                         success: result.success,
                         id,
@@ -6794,7 +6807,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'changeTicketStatusResult',
                         success: false,
                         id,
@@ -6813,7 +6826,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         'switchboard.postTicketComment',
                         { workspaceRoot, provider, id, comment, mentions }
                     );
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'postTicketCommentResult',
                         success: result.success,
                         id,
@@ -6822,7 +6835,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'postTicketCommentResult',
                         success: false,
                         id,
@@ -6841,7 +6854,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         'switchboard.loadTicketComments',
                         { workspaceRoot, provider, id }
                     );
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketCommentsLoaded',
                         success: result.success,
                         id,
@@ -6853,7 +6866,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketCommentsLoaded',
                         success: false,
                         id,
@@ -6874,7 +6887,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         'switchboard.postTicketReply',
                         { workspaceRoot, provider, id, commentId, commentText, mentions }
                     );
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'postTicketReplyResult',
                         success: result.success,
                         id,
@@ -6883,7 +6896,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'postTicketReplyResult',
                         success: false,
                         id,
@@ -6902,7 +6915,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         'switchboard.downloadAttachment',
                         { workspaceRoot, provider, url, filename, ticketId, ticketTitle }
                     );
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'attachmentDownloaded',
                         success: result.success,
                         url,
@@ -6911,7 +6924,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'attachmentDownloaded',
                         success: false,
                         url,
@@ -6972,14 +6985,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     }
                     const uri = vscode.Uri.file(localPath);
                     await vscode.env.openExternal(uri);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'attachmentOpened',
                         success: true,
                         localPath,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'attachmentOpened',
                         success: false,
                         localPath,
@@ -6998,14 +7011,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     }
                     const uri = vscode.Uri.file(localPath);
                     await vscode.commands.executeCommand('revealInExplorer', uri);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'attachmentRevealed',
                         success: true,
                         localPath,
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'attachmentRevealed',
                         success: false,
                         localPath,
@@ -7018,7 +7031,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             case 'clickupCreateTask': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupTaskCreated',
                         success: false,
                         error: 'No workspace folder found',
@@ -7062,14 +7075,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             importError = importErr instanceof Error ? importErr.message : String(importErr);
                             console.error('[PlanningPanel] Created ClickUp task but local import failed:', importErr);
                         }
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'clickupTaskCreated',
                             success: importOk,
                             ...(importError ? { error: `Task created remotely, but local file write failed: ${importError}` } : {}),
                             workspaceRoot
                         });
                     } else {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'clickupTaskCreated',
                             success: false,
                             error: 'Failed to create ClickUp task (empty result).',
@@ -7077,7 +7090,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         });
                     }
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'clickupTaskCreated',
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
@@ -7089,7 +7102,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             case 'linearCreateIssue': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearIssueCreated',
                         success: false,
                         error: 'No workspace folder found',
@@ -7151,7 +7164,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             console.error('[PlanningPanel] Created Linear issue but local import failed:', importErr);
                         }
                     }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearIssueCreated',
                         success: importOk,
                         result,
@@ -7159,7 +7172,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'linearIssueCreated',
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
@@ -7171,7 +7184,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             case 'convertToSubtask': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'subtaskConverted',
                         success: false,
                         error: 'No workspace folder found',
@@ -7191,7 +7204,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     } else {
                         throw new Error(`Unknown provider: ${msg.provider}`);
                     }
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'subtaskConverted',
                         success: true,
                         provider: msg.provider,
@@ -7200,7 +7213,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     });
                 } catch (error) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'subtaskConverted',
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
@@ -7217,7 +7230,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const provider = msg.provider === 'clickup' ? 'clickup' : 'linear';
 
                 if (!askWorkspaceRoot || !ticketId) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketsAskAgentResult',
                         success: false,
                         error: 'Missing workspace or ticket ID',
@@ -7237,10 +7250,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             provider
                         }
                     );
-                    this._panel?.webview.postMessage({ type: 'ticketsAskAgentResult', success: true, workspaceRoot: askWorkspaceRoot });
+                    this.postMessageToWebview({ type: 'ticketsAskAgentResult', success: true, workspaceRoot: askWorkspaceRoot });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to send ticket to agent:', error);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'ticketsAskAgentResult',
                         success: false,
                         error: error instanceof Error ? error.message : String(error),
@@ -7254,7 +7267,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 let parentId = String(msg.parentId || '').trim() || undefined;
                 let title = String(msg.title || '').trim();
                 if (!sourceId) {
-                    this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'Missing source' });
+                    this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'Missing source' });
                     break;
                 }
                 try {
@@ -7265,12 +7278,12 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             // Show picker
                             const adapter = this._researchImportService.getAdapter(sourceId);
                             if (!adapter) {
-                                this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'Adapter not available' });
+                                this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'Adapter not available' });
                                 break;
                             }
                             const containers = await adapter.listContainers();
                             if (!containers || containers.length === 0) {
-                                this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'No containers available to create doc' });
+                                this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'No containers available to create doc' });
                                 break;
                             }
                             const pick = await vscode.window.showQuickPick(
@@ -7278,7 +7291,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                                 { placeHolder: `Choose a location for new ${sourceId} document` }
                             );
                             if (!pick) {
-                                this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'No location selected' });
+                                this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'No location selected' });
                                 break;
                             }
                             parentId = pick.value;
@@ -7293,13 +7306,13 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     if (!title) {
                         title = (await vscode.window.showInputBox({ prompt: 'Document title', placeHolder: 'Enter document title' })) || '';
                         if (!title) {
-                            this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'No title provided' });
+                            this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'No title provided' });
                             break;
                         }
                     }
                     const adapter = this._researchImportService.getAdapter(sourceId);
                     if (!adapter || !adapter.createDocument) {
-                        this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: 'Adapter does not support document creation' });
+                        this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'Adapter does not support document creation' });
                         break;
                     }
                     const result = await adapter.createDocument({ parentId, title });
@@ -7329,7 +7342,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         // Refresh source
                         this._sendOnlineDocsReady();
                         await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'onlineDocCreated',
                             success: true,
                             docId: result.docId,
@@ -7339,10 +7352,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             autoImported
                         });
                     } else {
-                        this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: result.error || 'Creation failed' });
+                        this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: result.error || 'Creation failed' });
                     }
                 } catch (err) {
-                    this._panel?.webview.postMessage({ type: 'onlineDocCreated', success: false, error: String(err) });
+                    this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: String(err) });
                 }
                 break;
             }
@@ -7363,7 +7376,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         const updated = { ...config, uploadLocations: { ...(config.uploadLocations || {}), [sourceId]: pick.value } };
                         await fs.promises.writeFile(configPath, JSON.stringify(updated, null, 2));
                         this._resolvedConfigCache = { configPath, config: updated, sourceRoot };
-                        this._panel?.webview.postMessage({ type: 'uploadLocationSet', sourceId, containerId: pick.value });
+                        this.postMessageToWebview({ type: 'uploadLocationSet', sourceId, containerId: pick.value });
                     }
                 } catch (err) {
                     console.error('[PlanningPanel] Failed to set upload location:', err);
@@ -7378,7 +7391,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const rememberLocation = Boolean(msg.rememberLocation);
                 const docName = String(msg.docName || '');
                 if (!localDocPath || !sourceId) {
-                    this._panel?.webview.postMessage({ type: 'syncToOnlineResult', success: false, error: 'Missing local doc path or source' });
+                    this.postMessageToWebview({ type: 'syncToOnlineResult', success: false, error: 'Missing local doc path or source' });
                     break;
                 }
                 try {
@@ -7389,7 +7402,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
                     const adapter = this._researchImportService.getAdapter(sourceId);
                     if (!adapter) {
-                        this._panel?.webview.postMessage({ type: 'syncToOnlineResult', success: false, error: 'Adapter not available' });
+                        this.postMessageToWebview({ type: 'syncToOnlineResult', success: false, error: 'Adapter not available' });
                         break;
                     }
 
@@ -7421,22 +7434,22 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         this._resolvedConfigCache = { configPath, config: updatedConfig, sourceRoot };
                     }
 
-                    this._panel?.webview.postMessage({ type: 'syncToOnlineResult', ...result });
+                    this.postMessageToWebview({ type: 'syncToOnlineResult', ...result });
                 } catch (err) {
-                    this._panel?.webview.postMessage({ type: 'syncToOnlineResult', success: false, error: String(err) });
+                    this.postMessageToWebview({ type: 'syncToOnlineResult', success: false, error: String(err) });
                 }
                 break;
             }
             case 'getSyncConfig': {
                 try {
                     const { config } = await this._resolveSyncConfig();
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'syncConfigReady',
                         uploadLocations: config.uploadLocations || {},
                         docMappings: config.docMappings || {}
                     });
                 } catch (err) {
-                    this._panel?.webview.postMessage({ type: 'syncConfigReady', uploadLocations: {}, docMappings: {} });
+                    this.postMessageToWebview({ type: 'syncConfigReady', uploadLocations: {}, docMappings: {} });
                 }
                 break;
             }
@@ -7524,7 +7537,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const governancePrompt = `Run the tuning skill in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
                 await vscode.env.clipboard.writeText(governancePrompt);
                 showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
-                this._projectPanel?.webview.postMessage({ type: 'tuningGovernanceComplete' });
+                this.postMessageToProjectWebview({ type: 'tuningGovernanceComplete' });
                 break;
             }
             case 'updateInsightStatus': {
@@ -7560,7 +7573,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 if (link) {
                     const linkRef = link;
                     await vscode.env.clipboard.writeText(linkRef);
-                    this._projectPanel?.webview.postMessage({ type: 'insightLinkCopied' });
+                    this.postMessageToProjectWebview({ type: 'insightLinkCopied' });
                 }
                 break;
             }
@@ -7774,7 +7787,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
             this._lastLocalDocsSignature = '';
             await this._sendLocalDocsReady();
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'selectLocalDoc',
                 docId,
                 docName: sanitized
@@ -7793,7 +7806,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
     ): Promise<void> {
         try {
             if (action === 'skip') {
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'duplicateResolved', success: true, message: 'Import skipped (duplicate)'
                 });
                 return;
@@ -7817,7 +7830,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
                 // Re-import: the old registry entry is gone, so duplicate check won't trigger
                 await this._handleImportFullDoc(workspaceRoot, sourceId, docId, docName);
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'duplicateResolved', success: true, message: 'Replaced existing document'
                 });
                 return;
@@ -7835,7 +7848,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         newName = `${docName} (${counter})`;
                         counter++;
                         if (counter > 100) {
-                            this._panel?.webview.postMessage({
+                            this.postMessageToWebview({
                                 type: 'duplicateResolved', success: false,
                                 error: 'Could not generate a unique name (too many duplicates)'
                             });
@@ -7845,17 +7858,17 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
                 // Import with the new name; duplicate check passes because name is unique
                 await this._handleImportFullDoc(workspaceRoot, sourceId, docId, newName);
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'duplicateResolved', success: true, message: `Imported as "${newName}"`
                 });
                 return;
             }
 
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'duplicateResolved', success: false, error: 'Invalid action'
             });
         } catch (err) {
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'duplicateResolved', success: false, error: String(err)
             });
         }
@@ -8109,7 +8122,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             this._lastLocalDocsSignature = signature;
 
             console.log('[PlanningPanel] Sending localDocsReady, total nodes count:', allFiles.length);
-            this._panel.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPathsByRoot: configuredFolderPathsByRoot,
@@ -8122,7 +8135,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         } catch (err) {
             console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
             this._lastLocalDocsSignature = ''; // force re-render on next successful send
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPathsByRoot: {},
@@ -8164,7 +8177,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 enabledSources[s] = enabledSourcesConfig[s] !== false;
             }
         });
-        this._panel.webview.postMessage({
+        this.postMessageToWebview({
             type: 'onlineDocsReady',
             roots,
             enabledSources,
@@ -8178,11 +8191,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
         await this._sendPlanningHtmlDocsReady();
         await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');
         const cyberAnimationDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
+        this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
         const cyberScanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-        this._panel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: cyberScanlinesDisabled });
+        this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: cyberScanlinesDisabled });
         const currentTheme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-        this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
+        this.postMessageToWebview({ type: 'switchboardThemeNameSetting', theme: currentTheme });
     }
 
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {
@@ -8193,26 +8206,26 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const files = await localFolderService.listFiles();
                 const nodes = this._mapLocalFilesToTreeNodes(files)
                     .filter(node => node.parentId === parentId || (!parentId && !node.parentId));
-                this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes });
+                this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes });
             } catch (err) {
                 console.error(`Failed to fetch children for ${sourceId}:`, err);
-                this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes: [] });
+                this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes: [] });
             }
             return;
         }
 
         const adapter = this._researchImportService.getAdapter(sourceId);
         if (!adapter) {
-            this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes: [] });
+            this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes: [] });
             return;
         }
 
         try {
             const nodes = await adapter.fetchChildren(parentId);
-            this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes });
+            this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes });
         } catch (err) {
             console.error(`Failed to fetch children for ${sourceId}:`, err);
-            this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes: [] });
+            this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes: [] });
         }
     }
 
@@ -8237,7 +8250,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         // Handle planning-html-folder: iframe-based HTML preview with localhost server
         if (sourceId === 'planning-html-folder') {
             if (!sourceFolder) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
+                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
                 return;
             }
             this._activePlanningHtmlPreview = { sourceFolder, docId, sourceId };
@@ -8257,7 +8270,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         // Handle local-folder directly without adapter
         if (sourceId === 'local-folder') {
             if (!sourceFolder) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
+                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
                 return;
             }
             const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
@@ -8281,7 +8294,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     if (result.content === lastContent) {
                         // Cache hit — notify frontend for user-initiated requests only
                         if (requestId >= 0) {
-                            this._panel?.webview.postMessage({
+                            this.postMessageToWebview({
                                 type: 'previewReady',
                                 sourceId,
                                 requestId,
@@ -8295,7 +8308,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     }
                     this._lastPreviewContentByPath.set(cacheKey, result.content || '');
 
-                    this._panel?.webview.postMessage({ 
+                    this.postMessageToWebview({ 
                         type: 'previewReady', 
                         sourceId, 
                         requestId, 
@@ -8305,18 +8318,18 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         filePath: resolvedPath
                     });
                 } else {
-                    this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' });
+                    this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' });
                 }
             } catch (err) {
                 console.error('[PlanningPanel] Error fetching local doc:', err);
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: String(err) });
+                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
             }
             return;
         }
 
         const adapter = this._researchImportService.getAdapter(sourceId);
         if (!adapter) {
-            this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'Adapter not found' });
+            this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'Adapter not found' });
             return;
         }
 
@@ -8349,7 +8362,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         this._setupActiveDocWatcher(resolvedPath);
                     }
 
-                    this._panel?.webview.postMessage({ 
+                    this.postMessageToWebview({ 
                         type: 'previewReady', 
                         sourceId, 
                         requestId, 
@@ -8375,7 +8388,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const docResult = await (adapter as any).fetchDocContent(cleanDocId, 'summary');
                 if (docResult.success) {
                     if (docResult.pages) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'previewReady',
                             sourceId,
                             requestId,
@@ -8390,7 +8403,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     content = docResult.content || '';
                     docName = docResult.docTitle;
                 } else {
-                    this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: docResult.error || 'Failed to fetch ClickUp document' });
+                    this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: docResult.error || 'Failed to fetch ClickUp document' });
                     return;
                 }
             } else if ('fetchContent' in adapter) {
@@ -8416,7 +8429,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
             }
 
-            this._panel?.webview.postMessage({ 
+            this.postMessageToWebview({ 
                 type: 'previewReady', 
                 sourceId, 
                 requestId, 
@@ -8429,7 +8442,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         } catch (err) {
             const currentRequestId = this._latestRequestIds.get(sourceId);
             if (currentRequestId === requestId) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: String(err) });
+                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
             }
         }
     }
@@ -8522,13 +8535,13 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     await (adapter as any).setDocumentImported(docId);
                 }
             }
-            this._panel?.webview.postMessage({ type: 'plannerPromptState', ...result });
+            this.postMessageToWebview({ type: 'plannerPromptState', ...result });
             // Send updated active design doc state after import
             if (result.success) {
 
             }
         } catch (err) {
-            this._panel?.webview.postMessage({ type: 'plannerPromptState', error: String(err) });
+            this.postMessageToWebview({ type: 'plannerPromptState', error: String(err) });
         }
     }
 
@@ -8595,10 +8608,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
             }
 
-            this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: allDocs });
+            this.postMessageToWebview({ type: 'importedDocsReady', docs: allDocs });
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching imported docs:', err);
-            this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: [], error: String(err) });
+            this.postMessageToWebview({ type: 'importedDocsReady', docs: [], error: String(err) });
         }
     }
 
@@ -8627,7 +8640,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }
 
             if (!filePath || !fs.existsSync(filePath)) {
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'previewError',
                     sourceId: 'local-folder',
                     requestId,
@@ -8689,7 +8702,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }
             this._lastPreviewContentByPath.set(cacheKey, displayContent);
 
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'previewReady',
                 sourceId: 'local-folder',
                 requestId,
@@ -8699,7 +8712,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             });
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching docs file:', err);
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'previewError',
                 sourceId: 'local-folder',
                 requestId,
@@ -8711,26 +8724,26 @@ Read the current content above. Determine what's missing. Produce a complete fea
     private async _handleSyncToSource(workspaceRoot: string, slugPrefix: string): Promise<void> {
         try {
             if (!this._cacheService) {
-                this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: 'Cache service not available' });
+                this.postMessageToWebview({ type: 'syncResult', slugPrefix, success: false, error: 'Cache service not available' });
                 return;
             }
 
             const workspaceId = await this._getWorkspaceId(workspaceRoot);
             const importEntry = await this._cacheService.getImportBySlugPrefix(slugPrefix, workspaceId);
             if (!importEntry) {
-                this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: 'Import entry not found' });
+                this.postMessageToWebview({ type: 'syncResult', slugPrefix, success: false, error: 'Import entry not found' });
                 return;
             }
 
             const adapter = this._researchImportService.getAdapter(importEntry.sourceId);
             if (!adapter || !adapter.updateContent) {
-                this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: 'Source does not support sync-to-source' });
+                this.postMessageToWebview({ type: 'syncResult', slugPrefix, success: false, error: 'Source does not support sync-to-source' });
                 return;
             }
 
             const localPath = await this._cacheService.resolveImportedDocPath(slugPrefix, workspaceId);
             if (!localPath) {
-                this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: 'Local file not found' });
+                this.postMessageToWebview({ type: 'syncResult', slugPrefix, success: false, error: 'Local file not found' });
                 return;
             }
 
@@ -8748,7 +8761,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         if (localContentHash === importEntry.contentHash) {
                             // Only remote changed — no push needed, just update the stored hash
                             await this._cacheService.updateLastSynced(slugPrefix, remoteContentHash, workspaceId);
-                            this._panel?.webview.postMessage({
+                            this.postMessageToWebview({
                                 type: 'syncResult', slugPrefix, success: true,
                                 message: 'Remote was updated. Local content is unchanged. Registry updated.'
                             });
@@ -8764,7 +8777,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             'Cancel'
                         );
                         if (choice === 'Keep Remote' || choice === 'Cancel' || !choice) {
-                            this._panel?.webview.postMessage({
+                            this.postMessageToWebview({
                                 type: 'syncResult', slugPrefix, success: false,
                                 error: choice === 'Keep Remote'
                                     ? 'Sync cancelled. Remote content preserved.'
@@ -8783,19 +8796,19 @@ Read the current content above. Determine what's missing. Produce a complete fea
             if (result.success) {
                 await this._cacheService.updateLastSynced(slugPrefix, localContentHash, workspaceId);
                 this._lastPanelWriteTimestamp = Date.now();
-                this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: true });
+                this.postMessageToWebview({ type: 'syncResult', slugPrefix, success: true });
             } else {
-                this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: result.error });
+                this.postMessageToWebview({ type: 'syncResult', slugPrefix, success: false, error: result.error });
             }
         } catch (err) {
-            this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: String(err) });
+            this.postMessageToWebview({ type: 'syncResult', slugPrefix, success: false, error: String(err) });
         }
     }
 
     private async _handleImportFullDoc(workspaceRoot: string, sourceId: string, docId: string, docName: string, sourceFolder?: string): Promise<void> {
         // Concurrency guard: prevent double-import
         if (this._importInProgress) {
-            this._panel?.webview.postMessage({ type: 'importFullDocResult', error: 'Import already in progress' });
+            this.postMessageToWebview({ type: 'importFullDocResult', error: 'Import already in progress' });
             return;
         }
 
@@ -8810,7 +8823,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             if (sourceId !== 'local-folder' && this._cacheService) {
                 const duplicateCheck = await this._cacheService.checkForDuplicate(docName, sourceId, workspaceId, safeDocId);
                 if (duplicateCheck.isDuplicate) {
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'duplicateDetected',
                         docName,
                         sourceId,
@@ -8827,7 +8840,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             // Handle local-folder directly without adapter
             if (sourceId === 'local-folder') {
                 if (!sourceFolder) {
-                    this._panel?.webview.postMessage({ type: 'importFullDocResult', error: 'sourceFolder is required' });
+                    this.postMessageToWebview({ type: 'importFullDocResult', error: 'sourceFolder is required' });
                     return;
                 }
                 const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
@@ -8835,7 +8848,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
                 const result = await localFolderService.fetchDocContent(cleanDocId, sourceFolder);
                 if (!result.success) {
-                    this._panel?.webview.postMessage({ type: 'importFullDocResult', error: result.error || 'Failed to fetch document' });
+                    this.postMessageToWebview({ type: 'importFullDocResult', error: result.error || 'Failed to fetch document' });
                     return;
                 }
                 const writeResult = await this._plannerPromptWriter.writeContentToDocsDir(
@@ -8846,7 +8859,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 );
                 this._lastPanelWriteTimestamp = Date.now();
                 if (writeResult.error) {
-                    this._panel?.webview.postMessage({ type: 'importFullDocResult', error: writeResult.error });
+                    this.postMessageToWebview({ type: 'importFullDocResult', error: writeResult.error });
                     return;
                 }
                 if (this._cacheService && writeResult.success && writeResult.savedPath) {
@@ -8870,13 +8883,13 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
                 await this._sendLocalDocsReady();
                 await this._handleFetchImportedDocs(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'importFullDocResult', success: true, message: 'Document imported', savedPath: writeResult.savedPath, docName });
+                this.postMessageToWebview({ type: 'importFullDocResult', success: true, message: 'Document imported', savedPath: writeResult.savedPath, docName });
                 return;
             }
 
             const adapter = this._researchImportService.getAdapter(sourceId);
             if (!adapter) {
-                this._panel?.webview.postMessage({ type: 'importFullDocResult', error: 'Adapter not found' });
+                this.postMessageToWebview({ type: 'importFullDocResult', error: 'Adapter not found' });
                 return;
             }
 
@@ -8955,7 +8968,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     
                     await this._sendLocalDocsReady();
                     await this._handleFetchImportedDocs(workspaceRoot);
-                    this._panel?.webview.postMessage({
+                    this.postMessageToWebview({
                         type: 'importFullDocResult',
                         success: errorCount === 0,
                         message: `Imported ${importedCount} pages (${errorCount} errors)`,
@@ -8976,7 +8989,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             );
 
             if (writeResult.error) {
-                this._panel?.webview.postMessage({ type: 'importFullDocResult', error: writeResult.error });
+                this.postMessageToWebview({ type: 'importFullDocResult', error: writeResult.error });
                 return;
             }
 
@@ -9002,7 +9015,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
             await this._sendLocalDocsReady();
             await this._handleFetchImportedDocs(workspaceRoot);
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'importFullDocResult',
                 success: true,
                 message: 'Document imported successfully',
@@ -9010,7 +9023,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 docName
             });
         } catch (err) {
-            this._panel?.webview.postMessage({ type: 'importFullDocResult', error: String(err) });
+            this.postMessageToWebview({ type: 'importFullDocResult', error: String(err) });
         } finally {
             this._importInProgress = false;
         }
@@ -9020,13 +9033,13 @@ Read the current content above. Determine what's missing. Produce a complete fea
         try {
             const adapter = this._researchImportService.getAdapter(sourceId);
             if (!adapter || !('fetchPageContent' in adapter)) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' });
+                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' });
                 return;
             }
 
             const result = await (adapter as any).fetchPageContent(docId, pageId);
             if (result.success) {
-                this._panel?.webview.postMessage({
+                this.postMessageToWebview({
                     type: 'previewReady',
                     sourceId,
                     requestId,
@@ -9034,10 +9047,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     docName: result.docName
                 });
             } else {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch page content' });
+                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch page content' });
             }
         } catch (err) {
-            this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: String(err) });
+            this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
         }
     }
 
@@ -9048,7 +9061,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
     private async _handleImportResearchDoc(workspaceRoot: string, docTitle?: string, folderPath?: string): Promise<void> {
         if (this._importInProgress) {
-            this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: 'Import already in progress' });
+            this.postMessageToWebview({ type: 'importResearchDocResult', error: 'Import already in progress' });
             return;
         }
 
@@ -9057,11 +9070,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
             const content = await vscode.env.clipboard.readText();
 
             if (!content || !content.trim()) {
-                this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: 'Clipboard is empty. Copy research markdown first.' });
+                this.postMessageToWebview({ type: 'importResearchDocResult', error: 'Clipboard is empty. Copy research markdown first.' });
                 return;
             }
             if (content.length > 200_000) {
-                this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: 'Clipboard content is too large (>200 KB). Aborting import.' });
+                this.postMessageToWebview({ type: 'importResearchDocResult', error: 'Clipboard content is too large (>200 KB). Aborting import.' });
                 return;
             }
 
@@ -9102,7 +9115,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             this._lastPanelWriteTimestamp = Date.now();
 
             if (writeResult.error) {
-                this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: writeResult.error });
+                this.postMessageToWebview({ type: 'importResearchDocResult', error: writeResult.error });
                 return;
             }
 
@@ -9127,7 +9140,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
             }
 
-            this._panel?.webview.postMessage({
+            this.postMessageToWebview({
                 type: 'importResearchDocResult', 
                 success: true, 
                 docTitle: finalDocTitle,
@@ -9140,7 +9153,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             await this._sendLocalDocsReady(true);
 
         } catch (err) {
-            this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: String(err) });
+            this.postMessageToWebview({ type: 'importResearchDocResult', error: String(err) });
         } finally {
             this._importInProgress = false;
         }
@@ -9309,7 +9322,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         this._projectContextSyncDebounce = setTimeout(() => {
             this._projectContextSyncDebounce = undefined;
             void this._kanbanProvider?.projectContextSyncNow(root, { auto: true })
-                .then(payload => { if (payload) { this._projectPanel?.webview.postMessage(payload); } })
+                .then(payload => { if (payload) { this.postMessageToProjectWebview(payload); } })
                 .catch(err => console.warn('[PlanningPanel] project-context auto-sync failed:', err));
         }, 5000);
     }
@@ -9474,7 +9487,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     const displayContent = this._rewriteLocalImagePaths(content, path.dirname(uri.fsPath));
                     // rawContent preserves original local paths for edit mode + push flow;
                     // content holds rewritten webview URIs for preview only.
-                    this._panel?.webview.postMessage({ type: 'ticketFileChanged', provider, id, title, content: displayContent, rawContent: content });
+                    this.postMessageToWebview({ type: 'ticketFileChanged', provider, id, title, content: displayContent, rawContent: content });
                 } catch { }
             }, 300));
         };
@@ -9541,7 +9554,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             'switchboard.pushTicketEdits',
                             { workspaceRoot, provider: provider as 'linear' | 'clickup', id }
                         );
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'pushTicketResult',
                             success: result?.success ?? false,
                             id,
@@ -9549,7 +9562,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             autoSync: true
                         });
                     } catch (e) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'pushTicketResult',
                             success: false,
                             id,
@@ -9630,7 +9643,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     // and the deleted ticket's card would linger until the next
                     // update-bearing tick.
                     if ((result.successCount || 0) > 0 || (result.deletedCount || 0) > 0) {
-                        this._panel?.webview.postMessage({
+                        this.postMessageToWebview({
                             type: 'importAllTicketsComplete',
                             success: true,
                             successCount: result.successCount,
@@ -9664,8 +9677,8 @@ Read the current content above. Determine what's missing. Produce a complete fea
     }
 
     public postMessage(message: any): void {
-        this._panel?.webview.postMessage(message);
-        this._projectPanel?.webview.postMessage(message);
+        this.postMessageToWebview(message);
+        this.postMessageToProjectWebview(message);
     }
 
     public dispose(): void {
@@ -9789,7 +9802,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             await this._handleMessage(message, true);
                         } catch (err) {
                             console.error('[ProjectPanel] Message handler error (re-registered):', err);
-                            this._projectPanel?.webview.postMessage({ type: 'error', message: String(err) });
+                            this.postMessageToProjectWebview({ type: 'error', message: String(err) });
                         }
                     }
                 )

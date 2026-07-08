@@ -281,30 +281,30 @@ export class DesignPanelProvider implements vscode.Disposable {
             this._themeListenersRegistered = true;
             this._disposables.push(
                 vscode.window.onDidChangeActiveColorTheme(() => {
-                    this._panel?.webview.postMessage({ type: 'themeChanged' });
+                    this.postMessage({ type: 'themeChanged' });
                 })
             );
             this._disposables.push(
                 vscode.workspace.onDidChangeConfiguration(e => {
                     if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
                         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-                        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+                        this.postMessage({ type: 'cyberAnimationSetting', disabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
                         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-                        this._panel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled });
+                        this.postMessage({ type: 'cyberScanlinesSetting', disabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                        this.postMessage({ type: 'switchboardThemeChanged', theme });
                     }
                     if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                        this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                        this.postMessage({ type: 'pixelFontSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                        this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
                         this._stopExternalFilePoll();
@@ -387,30 +387,30 @@ export class DesignPanelProvider implements vscode.Disposable {
             this._themeListenersRegistered = true;
             this._disposables.push(
                 vscode.window.onDidChangeActiveColorTheme(() => {
-                    this._panel?.webview.postMessage({ type: 'themeChanged' });
+                    this.postMessage({ type: 'themeChanged' });
                 })
             );
             this._disposables.push(
                 vscode.workspace.onDidChangeConfiguration(e => {
                     if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
                         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-                        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+                        this.postMessage({ type: 'cyberAnimationSetting', disabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
                         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-                        this._panel?.webview.postMessage({ type: 'cyberScanlinesSetting', disabled });
+                        this.postMessage({ type: 'cyberScanlinesSetting', disabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                        this.postMessage({ type: 'switchboardThemeChanged', theme });
                     }
                     if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                        this._panel?.webview.postMessage({ type: 'pixelFontSetting', enabled });
+                        this.postMessage({ type: 'pixelFontSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                        this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
                         this._stopExternalFilePoll();
@@ -425,7 +425,11 @@ export class DesignPanelProvider implements vscode.Disposable {
 
 
     public postMessage(message: any): void {
-        this._panel?.webview.postMessage(message);
+        if (this._broadcaster) {
+            this._broadcaster.push(message);
+        } else {
+            this._panel?.webview.postMessage(message);
+        }
     }
 
     public dispose(): void {
@@ -664,7 +668,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this._panel.webview.postMessage({
+                this.postMessage({
                     type: 'htmlDocsReady',
                     sourceId: 'html-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
@@ -672,7 +676,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     workspaceItems: this._buildKanbanWorkspaceItems()
                 });
             } catch (err) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'htmlDocsReady',
                     sourceId: 'html-folder',
                     folderPathsByRoot: {},
@@ -716,7 +720,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this._panel.webview.postMessage({
+                this.postMessage({
                     type: 'claudeDocsReady',
                     sourceId: 'claude-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
@@ -724,7 +728,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     workspaceItems: this._buildKanbanWorkspaceItems()
                 });
             } catch (err) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'claudeDocsReady',
                     sourceId: 'claude-folder',
                     folderPathsByRoot: {},
@@ -768,7 +772,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this._panel.webview.postMessage({
+                this.postMessage({
                     type: 'designDocsReady',
                     sourceId: 'design-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
@@ -776,7 +780,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     workspaceItems: this._buildKanbanWorkspaceItems()
                 });
             } catch (err) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'designDocsReady',
                     sourceId: 'design-folder',
                     folderPathsByRoot: {},
@@ -842,7 +846,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this._panel.webview.postMessage({
+                this.postMessage({
                     type: 'imagesDocsReady',
                     sourceId: 'images-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
@@ -850,7 +854,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     workspaceItems: this._buildKanbanWorkspaceItems()
                 });
             } catch (err) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'imagesDocsReady',
                     sourceId: 'images-folder',
                     folderPathsByRoot: {},
@@ -916,7 +920,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this._panel.webview.postMessage({
+                this.postMessage({
                     type: 'briefsDocsReady',
                     sourceId: 'briefs-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
@@ -924,7 +928,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                     workspaceItems: this._buildKanbanWorkspaceItems()
                 });
             } catch (err) {
-                this._panel?.webview.postMessage({
+                this.postMessage({
                     type: 'briefsDocsReady',
                     sourceId: 'briefs-folder',
                     folderPathsByRoot: {},
