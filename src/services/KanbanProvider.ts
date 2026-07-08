@@ -400,21 +400,23 @@ export class KanbanProvider implements vscode.Disposable {
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
             this._getScopedSetting<Record<string, number>>('kanban.orderOverrides', {})
         );
-        this._context.subscriptions.push(
-            vscode.workspace.onDidChangeWorkspaceFolders(() => {
-                this._allWorkspaceProjectsCache = null;
-            }),
-            vscode.workspace.onDidChangeConfiguration(e => {
-                if (e.affectsConfiguration('switchboard.theme.name')) {
-                    const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-                    this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
-                }
-                if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
-                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
-                    this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
-                }
-            })
-        );
+        if (this._context?.subscriptions) {
+            this._context.subscriptions.push(
+                vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                    this._allWorkspaceProjectsCache = null;
+                }),
+                vscode.workspace.onDidChangeConfiguration(e => {
+                    if (e.affectsConfiguration('switchboard.theme.name')) {
+                        const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                        this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                    }
+                    if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
+                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                        this._panel?.webview.postMessage({ type: 'ultracodeAnimationSetting', enabled });
+                    }
+                })
+            );
+        }
     }
 
     /** Check if a card matches any ID in the given array (planId-primary, sessionId-legacy). */
@@ -3813,7 +3815,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const subtaskWorktreePathMap = new Map<string, string>();
         const db = this._getKanbanDb(workspaceRoot);
         if (db && await db.ensureReady()) {
-            const wts = await db.getWorktrees();
+            const wts = typeof db.getWorktrees === 'function' ? await db.getWorktrees() : [];
             for (const wt of wts) {
                 if (wt.feature_id) {
                     worktreePathMap.set(String(wt.feature_id), wt.path);
