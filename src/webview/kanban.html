@@ -9193,7 +9193,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const orchDesc = document.createElement('div');
                 orchDesc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                orchDesc.textContent = 'A system-woken orchestrator batches plans into features, fans work out across per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Per-subtask feature worktrees are enabled automatically and restored on switching away.';
+                orchDesc.textContent = 'A system-woken orchestrator batches plans into features, fans work out across per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Per-feature worktrees are enabled automatically and restored on switching away.';
                 orchSection.appendChild(orchDesc);
 
                 const orch = state.orchestrationConfig || { enabled: false, intervalMinutes: 10, maxConcurrentSubtasks: 5 };

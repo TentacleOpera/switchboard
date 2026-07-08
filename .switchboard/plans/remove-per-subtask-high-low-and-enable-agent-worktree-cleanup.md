@@ -400,3 +400,7 @@ should grep-verify every call site after edits. Ship together with Plan B
 (`feature-worktree-per-feature-auto-mode.md`) for the coordinated release.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Deletions are clean: zero orphan references to `_provisionSubtaskWorktreeIfNeeded`, `_provisionHighLowTierWorktrees`, or the three removed directive exports; `validModes` trimmed to `['none','per-feature']` in both `setFeatureWorktreeMode` and the orchestration-restore path; and the guardrail split verified — all 12 `buildGitPolicyBlock` call sites thread `worktreePerPlanActive` (10 in agentPromptBuilder via `useWorktreesPerPlanEnabled || featureMode`, plus `buildCustomAgentPrompt` and `AgentSkillExporter` via `addons.useWorktreesPerPlan`), the plan's stated #1 risk. **Fixed** one stale UI string — `src/webview/kanban.html:9196` still read "Per-subtask feature worktrees are enabled automatically" (its sibling at ~8091 was already corrected); changed to "Per-feature" to match the rewired orchestration path. Files changed: `src/webview/kanban.html` (1 line). Remaining `per-subtask`/`high-low` matches are all benign — frozen `KanbanDatabase.ts` V42 migration-history comments (must not edit), still-valid descriptive test assertions, and explanatory "removed" comments. Validation: static grep audits (orphans, residue, call-site threading, positional signatures) pass; compile/tests skipped per directive; no material risks.
