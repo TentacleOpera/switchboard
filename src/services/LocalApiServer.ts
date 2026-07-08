@@ -801,11 +801,16 @@ export class LocalApiServer {
      * extracted `KanbanService` method over HTTP with the same host-agnostic
      * code path the webview `case '<name>':` arm takes. `<name>` is the
      * catalogued verb (the message `type`); the request body is the verb
-     * payload (the webview `postMessage` shape). Untrusted network input — the
-     * service method validates its own payload; the provider dispatch is an
-     * explicit allowlist (an unknown verb is rejected, never dynamically
-     * invoked). Every extracted verb returns `{ success, ... }`; the body is
-     * passed through with HTTP status derived from `success`.
+     * payload (the webview `postMessage` shape). Security model: this is
+     * untrusted network input gated by the server's localhost bind + `_checkAuth`
+     * token (above); the provider dispatch is an explicit allowlist by verb name
+     * (an unknown verb is rejected, never dynamically invoked) and the URL verb is
+     * authoritative (any body `type` is stripped below). Per-verb payload-shape
+     * validation is still owed as arms are properly extracted — many are thin
+     * `_handleMessage` shims that forward the payload unvalidated; a malformed
+     * payload is caught and returned as an error (500), never a crash. Every
+     * extracted verb returns `{ success, ... }`; the body is passed through with
+     * HTTP status derived from `success`.
      */
     private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -830,9 +835,15 @@ export class LocalApiServer {
         }
 
         try {
-            const body = await this._parseJsonBody(req);
+            const rawBody = await this._parseJsonBody(req);
+            // Strip any client-supplied `type` — the verb from the URL path is
+            // authoritative. Without this, a body `{ "type": "deleteFeature", ... }`
+            // would override the shim's `{ type: '<verb>', ...payload }` spread and
+            // dispatch a DIFFERENT action than the one the allowlist checked.
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
-            const result = await kanbanVerb(verb, body ?? {}, workspaceRoot);
+            const result = await kanbanVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
             res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result ?? { success: true }));
@@ -1154,7 +1165,16 @@ export class LocalApiServer {
     private async _handleGetCatalog(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
             if (this._options.catalogProvider) {
-                return await this._options.catalogProvider();
+                const data = await this._options.catalogProvider();
+                // The provider swallows read errors and returns null when the catalog
+                // file is absent — surface that as the plan-specified 404 rather than a
+                // misleading 200 {data:null}.
+                if (data == null) {
+                    const err: any = new Error('catalog not generated; run `node scripts/generate-protocol-catalog.js --write` and ship protocol-catalog.json');
+                    err.statusCode = 404;
+                    throw err;
+                }
+                return data;
             }
             // Fallback: load the checked-in protocol-catalog.json from the workspace root.
             const catalogPath = path.join(this._options.workspaceRoot, 'protocol-catalog.json');

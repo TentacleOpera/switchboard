@@ -1,5 +1,6 @@
 ---
-description: Switchboard management console — drive the board, plans, features, and dispatch from any agentic coding host (Claude Code, Codex, Zed, Antigravity) with VS Code minimised. Consultative persona: report state on entry, then wait for user direction. Automation is opt-in only, never the default.
+name: Switchboard Manage
+description: Switchboard management console to drive the board, plans, features, and dispatch.
 ---
 
 # Skill: Switchboard Manage — Host-Agnostic Management Console

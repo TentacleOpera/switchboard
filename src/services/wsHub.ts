@@ -102,22 +102,30 @@ export class WsHub {
         // All checks passed — complete the upgrade.
         this._wss!.handleUpgrade(req, socket, head, async (ws) => {
             const meta: ConnectionMeta = { ws, seq: 0 };
-            this._connections.add(meta);
 
-            // Full-state resync on connect.
+            // Subscribe-AFTER-snapshot. The full-state resync (seq 0) is sent BEFORE
+            // this connection joins `_connections`, so no broadcast can interleave
+            // ahead of the snapshot. If we added `meta` first, a broadcast() during
+            // the getFullState() await window would send a delta (seq 1) before the
+            // resync — whose hardcoded seq then clobbered the increment — and the
+            // client would apply the older snapshot last and go silently stale (the
+            // exact ordering hazard the plan flags). Every broadcast after this point
+            // increments strictly monotonically from the snapshot baseline.
             if (this._options.getFullState) {
                 try {
                     const state = await this._options.getFullState();
-                    meta.seq = 1;
                     this._safeSend(ws, {
                         type: '__resync',
-                        seq: meta.seq,
+                        seq: meta.seq, // 0 — the baseline; broadcasts increment from here
                         payload: state,
                     });
                 } catch (err) {
                     console.error('[wsHub] resync error:', err);
                 }
             }
+
+            // Join the broadcast set only now that the snapshot is on the wire.
+            this._connections.add(meta);
 
             ws.on('close', () => {
                 this._connections.delete(meta);

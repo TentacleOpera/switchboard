@@ -101,16 +101,70 @@ function extractHandlerArms(file, switchPattern) {
 }
 
 /**
- * Scan webview sources for postMessage call sites.
+ * 1-based line number of a character offset within `content`.
+ */
+function lineOf(content, index) {
+    let line = 1;
+    const end = Math.min(index, content.length);
+    for (let i = 0; i < end; i++) {
+        if (content[i] === '\n') line++;
+    }
+    return line;
+}
+
+/**
+ * Scan webview + provider sources for postMessage call sites.
  * - `postMessage({type: '...'})` → webview→host (direction: 'request')
  * - `*.postMessage({type: '...'})` where the receiver is a webview/panel
  *   → host→webview push (direction: 'push')
+ *
+ * Scans over FULL FILE CONTENT (not line-by-line). The `\s*` in the regex spans
+ * newlines, so multi-line-formatted calls — `postMessage({\n    type: '...'\n})` —
+ * are captured. A per-line scan silently drops every call whose `type:` sits on a
+ * line after `postMessage({`; that dropped ~572 multi-line sites / 112 push verbs.
  */
 function extractWebviewSites() {
     const sites = [];
     const manualReview = [];
-    const pushRe = /(\w[\w.]*\.)?postMessage\s*\(\s*\{\s*type\s*:\s*(['"])([^'"]+)\2/g;
-    const dynamicTypeRe = /(\w[\w.]*\.)?postMessage\s*\(\s*\{\s*type\s*:\s*(`|[^'"\s])/g;
+    // String-literal type; identifier/template-literal type flagged for manual review.
+    const litRe = /(\w[\w.?]*\.)?postMessage\s*\(\s*\{\s*type\s*:\s*(['"])([^'"]+)\2/g;
+    const dynRe = /(\w[\w.?]*\.)?postMessage\s*\(\s*\{\s*type\s*:\s*(`|[A-Za-z_$])/g;
+
+    function scanFile(full, fileRel, opts) {
+        const providerName = opts && opts.providerName;
+        const requireReceiver = !!(opts && opts.requireReceiver);
+        const content = readFile(full);
+        let m;
+        litRe.lastIndex = 0;
+        while ((m = litRe.exec(content)) !== null) {
+            const receiver = m[1] ? m[1].replace(/\.$/, '') : '';
+            // In webview JS, bare `postMessage(...)` (acquireVsCodeApi) and `vscode.postMessage`
+            // are webview→host. A `*.webview.postMessage` receiver is host→webview push.
+            const isWebviewToHost = !receiver || receiver === 'vscode';
+            if (requireReceiver && !receiver) continue; // bare postMessage in a provider is unusual; skip
+            const site = {
+                verb: m[3],
+                direction: (requireReceiver || !isWebviewToHost) ? 'push' : 'request',
+                file: fileRel,
+                line: lineOf(content, m.index),
+                receiver: receiver || null,
+            };
+            if (providerName) site.provider = providerName;
+            sites.push(site);
+        }
+        dynRe.lastIndex = 0;
+        while ((m = dynRe.exec(content)) !== null) {
+            const c = m[2][0];
+            if (c === '"' || c === "'") continue; // string literal — already caught above
+            const nl = content.indexOf('\n', m.index);
+            manualReview.push({
+                kind: 'dynamic-postMessage-type',
+                file: fileRel,
+                line: lineOf(content, m.index),
+                raw: content.slice(m.index, nl === -1 ? content.length : nl).trim(),
+            });
+        }
+    }
 
     function scanDir(dir) {
         let entries = [];
@@ -120,63 +174,14 @@ function extractWebviewSites() {
             const full = path.join(dir, ent.name);
             if (ent.isDirectory()) { scanDir(full); }
             else if (/\.(js|ts|html)$/.test(ent.name)) {
-                const src = readFile(full);
-                const lines = src.split('\n');
-                for (let i = 0; i < lines.length; i++) {
-                    let m;
-                    pushRe.lastIndex = 0;
-                    while ((m = pushRe.exec(lines[i])) !== null) {
-                        const receiver = m[1] ? m[1].replace(/\.$/, '') : '';
-                        // In webview JS, bare `postMessage(...)` (acquireVsCodeApi) is webview→host.
-                        // Receiver like `webview.postMessage` / `this._panel?.webview.postMessage` is host→webview push.
-                        const isWebviewToHost = !receiver || receiver === 'vscode';
-                        sites.push({
-                            verb: m[3],
-                            direction: isWebviewToHost ? 'request' : 'push',
-                            file: path.relative(REPO_ROOT, full),
-                            line: i + 1,
-                            receiver: receiver || null,
-                        });
-                    }
-                    dynamicTypeRe.lastIndex = 0;
-                    let dm;
-                    while ((dm = dynamicTypeRe.exec(lines[i])) !== null) {
-                        // Avoid double-counting entries the string-literal regex already caught.
-                        const col = dm.index;
-                        const prefix = lines[i].slice(0, col);
-                        if (pushRe.test(prefix + lines[i].slice(col).replace(/(`|[^'"\s])/, "'"))) continue;
-                        manualReview.push({
-                            kind: 'dynamic-postMessage-type',
-                            file: path.relative(REPO_ROOT, full),
-                            line: i + 1,
-                            raw: lines[i].trim(),
-                        });
-                    }
-                }
+                scanFile(full, path.relative(REPO_ROOT, full), {});
             }
         }
     }
 
-    // Also scan provider files for host→webview push sites.
+    // Provider files: host→webview push sites (receiver required).
     for (const p of PROVIDERS) {
-        const src = readFile(path.join(REPO_ROOT, p.file));
-        const lines = src.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-            let m;
-            const re = /(\w[\w.?]*\.)?postMessage\s*\(\s*\{\s*type\s*:\s*(['"])([^'"]+)\2/g;
-            while ((m = re.exec(lines[i])) !== null) {
-                const receiver = m[1] ? m[1].replace(/\.$/, '') : '';
-                if (!receiver) continue; // bare postMessage in a provider is unusual; skip
-                sites.push({
-                    verb: m[3],
-                    direction: 'push',
-                    file: p.file,
-                    line: i + 1,
-                    receiver,
-                    provider: p.name,
-                });
-            }
-        }
+        scanFile(path.join(REPO_ROOT, p.file), p.file, { providerName: p.name, requireReceiver: true });
     }
 
     for (const dir of WEBVIEW_DIRS) scanDir(path.join(REPO_ROOT, dir));
@@ -328,10 +333,14 @@ function main() {
     }
 
     const existingJson = JSON.parse(existing);
-    // Compare the structural fields (ignore generatedAt).
-    const strip = (o) => { const { generatedAt, ...rest } = o; return rest; };
-    const a = JSON.stringify(strip(existingJson), null, 2);
-    const b = JSON.stringify(strip(catalog), null, 2);
+    // Compare the CONTRACT only — ignore volatile metadata that churns without a
+    // protocol change: `generatedAt` (a timestamp) and every `line:` number (shifts
+    // whenever any code ABOVE an arm/push site moves). A drift gate keyed on line
+    // numbers is a false-positive treadmill that fails CI on unrelated edits — the
+    // committed tree was already red for exactly this reason.
+    const stripVolatile = (key, val) => (key === 'generatedAt' || key === 'line') ? undefined : val;
+    const a = JSON.stringify(existingJson, stripVolatile, 2);
+    const b = JSON.stringify(catalog, stripVolatile, 2);
     if (a !== b) {
         console.error(`[catalog] drift detected — regenerated catalog differs from checked-in`);
         console.error(`[catalog] run \`node scripts/generate-protocol-catalog.js --write\` and commit the result`);

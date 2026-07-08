@@ -1318,8 +1318,10 @@ export class KanbanProvider implements vscode.Disposable {
         this._pendingWebviewMessages = [];
         this._panel = panel;
         // A2b: initialize host seams + broadcast hub + kanban service for
-        // extracted verbs. The service is rebuilt when the workspace root
-        // changes (see _setCurrentWorkspaceRoot).
+        // extracted verbs. The service ctx reads `workspaceRoot` via a live getter
+        // over `_currentWorkspaceRoot`, so a later workspace switch is picked up
+        // without a rebuild (there is no `_setCurrentWorkspaceRoot` — an earlier
+        // comment referenced a method that never existed).
         this._initKanbanService();
         // Reset webview options to the CURRENT extensionUri before loading html. VS Code
         // persists the localResourceRoots from the original panel, but after an extension
@@ -6415,8 +6417,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
         }
+        const provider = this;
         const ctx: KanbanServiceContext = {
-            workspaceRoot,
+            // Live getter — the ctx must reflect the CURRENT workspace root, not the
+            // value captured at init. The service is built once, but the user can
+            // switch workspace afterward; a captured value made openPlanByPath /
+            // fileExists resolve against the OLD root (the promised
+            // `_setCurrentWorkspaceRoot` rebuild never existed). Seams below are still
+            // rebuilt only on `_initKanbanService` — no currently-extracted verb reads
+            // the root via a seam, but future extractions should prefer ctx.workspaceRoot.
+            get workspaceRoot() { return provider._currentWorkspaceRoot || ''; },
             seams: this._hostSeams,
             broadcaster: this._broadcaster,
             resolveSessionId: (planId?, sessionId?) => this._resolveSessionId(planId, sessionId),
@@ -6437,10 +6447,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * takes. Reached by `POST /kanban/verb/<name>` via the `kanbanVerb` callback
      * wired in `TaskViewerProvider`.
      *
-     * The `switch` is an explicit allowlist: untrusted network input must never
-     * reach an arbitrary service method by name. A bulk coder extends the
-     * burn-down by extracting the next arm into `KanbanService` and adding one
-     * `case` here — the endpoint, auth, and dispatch plumbing already exist.
+     * The `switch` is an explicit allowlist by verb NAME — an unknown / not-yet-
+     * extracted verb is rejected, never dynamically invoked. It is NOT a capability
+     * gate: every allowlisted verb (including state-changing ones like
+     * deleteProject / deleteFeature / moveSelected) is reachable, by design, for the
+     * remote-control API. The real security boundary is the LocalApiServer's
+     * localhost bind + `_checkAuth` token (enforced in `_handleKanbanVerb`, which
+     * also strips any body `type` so the URL verb is authoritative). Per-verb
+     * payload-shape validation is still owed as arms are properly extracted — most
+     * cases below are thin `_handleMessage` shims that forward the payload
+     * unvalidated; a malformed payload is caught and returned as an error, not a
+     * crash. A bulk coder extends the burn-down by extracting the next arm into
+     * `KanbanService` and adding one `case` here — the endpoint, auth, and dispatch
+     * plumbing already exist.
      *
      * Lazily constructs the service (a remote-control session drives verbs with
      * VS Code minimised and the kanban panel possibly never opened).
@@ -6461,6 +6480,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'scanFoldersNow':  return await svc.scanFoldersNow();
             case 'focusTerminal':   return await svc.focusTerminal(p);
             case 'fileExists':      return await svc.fileExists(p);
+            // NOTE: `default` is placed here for readability, but the `case`s BELOW it
+            // are still reachable — ECMAScript matches case labels regardless of order,
+            // and the `throw` only fires when NO label matches. Do not delete them.
             default:
                 throw new Error(`Unknown or not-yet-extracted Kanban verb: '${verb}'`);
             case 'abandonWorktree': return await svc['abandonWorktree'](p);
@@ -8238,6 +8260,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         topic: card.topic,
                         absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
                         sessionId: this._cardId(card),
+                        // Stamp the authoritative DB planId so the prompt carries PLAN_ID
+                        // uniformly (A3) — this path previously omitted it while the
+                        // execution-dispatch paths already carried it.
+                        planId: card.planId,
                     }));
                 }
 
@@ -11118,16 +11144,21 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
      *   - removes subtasks no longer in the desired set
      *   - creates inline-defined plans ({slug,title,body}) and links them
      *   - optionally deletes features not mentioned in the desired set
-     * Re-running the same reconcile is a no-op (converges to the same state) so an
-     * agent can retry safely. Every mutation is reported in the response.
+     * Re-running the same reconcile is a no-op: string refs resolve to existing
+     * plans and inline {slug,title,body} plans dedup on a deterministic
+     * `.switchboard/plans/<slug>.md` path, so a retry REUSES rather than re-mints
+     * (the old code minted a fresh UUID/file per run and orphaned the previous one).
+     * Every mutation is reported in the response.
      *
      * Atomicity note: the existing feature primitives (createFeatureFromPlanIds,
      * assignPlansToFeature, _removeSubtaskFromFeature) each bundle DB writes with
      * file regeneration, board refresh, and external-tracker sync, so a single
-     * cross-method BEGIN/COMMIT is not feasible without refactoring them. Idempotency
-     * is the practical safety net: a mid-way failure leaves a partial state that a
-     * retry converges. Refs are resolved BEFORE any mutation so an unresolvable ref
-     * fails fast with zero side effects.
+     * cross-method BEGIN/COMMIT is not feasible without refactoring them. Two
+     * guarantees stand in: (1) ALL refs resolve (Phase 1a) BEFORE ANY inline plan is
+     * created (Phase 1b), so an unresolvable ref fails fast with ZERO side effects;
+     * (2) inline plan files written this run are unlinked on failure (compensating
+     * action). A mid-Phase-2 failure leaves a partial-but-valid state an idempotent
+     * retry converges.
      */
     public async reconcileFeatures(
         workspaceRoot: string,
@@ -11158,13 +11189,20 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         }
         const workspaceId = (await db.getWorkspaceId()) || workspaceRoot;
 
-        // ── Phase 1: resolve every subtask ref BEFORE any mutation (fail fast) ──
-        // Each desired feature → { name, description, resolvedSubtasks: [{planId, planFile, topic, isNew}] }
+        // ── Phase 1a: resolve every subtask ref with ZERO side effects (fail fast) ──
+        // String refs resolve now. Inline {slug,title,body} refs dedup on a
+        // deterministic `.switchboard/plans/<slug>.md` path (an existing plan is
+        // REUSED so a retry is a no-op); genuinely-new inline plans are DEFERRED to
+        // Phase 1b — so an unresolvable ref in a LATER feature can never orphan an
+        // inline plan created for an EARLIER one.
         type ResolvedSubtask = { planId: string; planFile: string; topic: string; isNew: boolean };
+        type PendingInline = { slug: string; title: string; body: string; relPath: string; absPath: string; target: ResolvedSubtask };
         const resolvedFeatures: Array<{
             name: string; description?: string; subtasks: ResolvedSubtask[];
         }> = [];
         const newPlanFiles: string[] = [];
+        const pendingInline: PendingInline[] = [];
+        const pendingByPath = new Map<string, ResolvedSubtask>();
         for (const feat of desired) {
             const featureName = (feat.name || '').replace(/[\r\n]+/g, ' ').trim();
             if (!featureName) {
@@ -11183,39 +11221,76 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                         subtasks.push({ planId: plan.planId, planFile: plan.planFile, topic: plan.topic, isNew: false });
                     }
                 } else {
-                    // Inline new plan: { slug, title, body }
+                    // Inline plan: deterministic slug/path so a retry converges.
                     const slug = (ref.slug || ref.title || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'plan';
                     const title = (ref.title || ref.slug || 'New Plan').replace(/[\r\n]+/g, ' ').trim();
                     const body = typeof ref.body === 'string' ? ref.body : '';
-                    const planId = crypto.randomUUID();
-                    const relPath = path.join('.switchboard', 'plans', `${slug}-${planId}.md`);
-                    const absPath = path.join(workspaceRoot, relPath);
-                    const content = `# ${title}\n\n**Plan ID:** ${planId}\n\n${body}\n`;
-                    try {
-                        await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
-                        GlobalPlanWatcherService.registerPendingCreation(absPath);
-                        await fs.promises.writeFile(absPath, content, 'utf8');
-                    } catch (e) {
-                        return { success: false, error: `Failed to write inline plan "${slug}": ${e instanceof Error ? e.message : String(e)}` };
+                    const relPath = path.join('.switchboard', 'plans', `${slug}.md`);
+                    // Dedup: reuse an existing plan at this path (idempotent re-run = no-op)
+                    // instead of minting a second file/row as the old code did.
+                    const existing = await db.getPlanByPlanFile(relPath, workspaceId);
+                    if (existing) {
+                        if (!seenPlanIds.has(existing.planId)) {
+                            seenPlanIds.add(existing.planId);
+                            subtasks.push({ planId: existing.planId, planFile: existing.planFile, topic: existing.topic || title, isNew: false });
+                        }
+                        continue;
                     }
-                    newPlanFiles.push(relPath);
-                    // Import so the DB row exists, then resolve.
-                    try {
-                        await importPlanFiles(workspaceRoot);
-                    } catch (e) {
-                        return { success: false, error: `Failed to import inline plan "${slug}": ${e instanceof Error ? e.message : String(e)}` };
+                    // Genuinely new — reserve a slot; created in Phase 1b (no side effects yet).
+                    let target = pendingByPath.get(relPath);
+                    if (!target) {
+                        target = { planId: '', planFile: relPath, topic: title, isNew: true };
+                        pendingByPath.set(relPath, target);
+                        pendingInline.push({ slug, title, body, relPath, absPath: path.join(workspaceRoot, relPath), target });
                     }
-                    const plan = await db.getPlanByPlanFile(relPath, workspaceId);
-                    if (!plan) {
-                        return { success: false, error: `Inline plan "${slug}" was written but did not import — DB row not found.` };
-                    }
-                    if (!seenPlanIds.has(plan.planId)) {
-                        seenPlanIds.add(plan.planId);
-                        subtasks.push({ planId: plan.planId, planFile: plan.planFile, topic: plan.topic || title, isNew: true });
-                    }
+                    subtasks.push(target);
                 }
             }
             resolvedFeatures.push({ name: featureName, description: feat.description, subtasks });
+        }
+
+        // ── Phase 1b: create the genuinely-new inline plans (all refs already resolved) ──
+        // Files are written WITHOUT a `**Plan ID:**` line — plan IDs are DB-assigned on
+        // import and keyed by plan_file path (project rule: never write plan IDs to
+        // markdown). ONE hoisted importPlanFiles() covers every new file (the old code
+        // re-imported the whole plans dir once per inline plan — a refresh storm). On any
+        // failure, every file THIS run wrote is unlinked (compensating action) so a
+        // partial write leaves no orphan on disk.
+        if (pendingInline.length > 0) {
+            try {
+                for (const p of pendingInline) {
+                    await fs.promises.mkdir(path.dirname(p.absPath), { recursive: true });
+                    GlobalPlanWatcherService.registerPendingCreation(p.absPath);
+                    await fs.promises.writeFile(p.absPath, `# ${p.title}\n\n${p.body}\n`, 'utf8');
+                    newPlanFiles.push(p.relPath);
+                }
+                await importPlanFiles(workspaceRoot);
+                for (const p of pendingInline) {
+                    const plan = await db.getPlanByPlanFile(p.relPath, workspaceId);
+                    if (!plan) {
+                        throw new Error(`inline plan "${p.slug}" was written but did not import — DB row not found`);
+                    }
+                    p.target.planId = plan.planId;
+                    p.target.planFile = plan.planFile;
+                    p.target.topic = plan.topic || p.title;
+                }
+            } catch (e) {
+                for (const rel of newPlanFiles) {
+                    try { await fs.promises.unlink(path.join(workspaceRoot, rel)); } catch { /* best-effort compensating unlink */ }
+                }
+                return { success: false, error: `Failed to create inline plan(s): ${e instanceof Error ? e.message : String(e)}` };
+            }
+        }
+
+        // Collapse any intra-feature duplicates (an inline slug that also matched a
+        // string ref, or the same inline slug listed twice) — dedup by resolved planId.
+        for (const rf of resolvedFeatures) {
+            const seen = new Set<string>();
+            rf.subtasks = rf.subtasks.filter(s => {
+                if (!s.planId || seen.has(s.planId)) return false;
+                seen.add(s.planId);
+                return true;
+            });
         }
 
         // ── Phase 2: diff + apply ──

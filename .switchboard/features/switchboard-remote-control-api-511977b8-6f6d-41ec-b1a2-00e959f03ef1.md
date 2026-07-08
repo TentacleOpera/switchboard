@@ -30,11 +30,11 @@ The Switchboard Remote-Control API turns the VS Code extension into a host-agnos
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **LEAD CODED**
-- [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **LEAD CODED**
-- [x] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **LEAD CODED**
-- [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **LEAD CODED**
-- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **LEAD CODED**
+- [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **CODE REVIEWED**
+- [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **CODE REVIEWED**
+- [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **CODE REVIEWED**
+- [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **CODE REVIEWED**
+- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Implementation Progress (session 2026-07-08)
@@ -104,8 +104,17 @@ Plan: `.switchboard/plans/transport-migration-per-verb-burndown.md`
 - Extracted and wired required context methods (such as `getKanbanDb`, `readWorkspaceId`, `invalidateProjectsCache`, etc.) into `KanbanServiceContext`.
 - Fully compiled extension verifying zero syntax/TS errors.
 
-### Suggested next-session sequencing
-1. **A2b — mechanical burn-down** (repeat the proven recipe for the remaining ~132 kanban arms, then the other 4 providers). Long pole — multiple sessions. **This is the "600 burn-down"** — the routine work to hand to a bulk coder. The recipe, seams, broadcast rail, and generic HTTP verb endpoint are all in place; each new verb is service-method + arm-repoint + one `handleServiceVerb` case.
-2. **A2b — push-site audit + CI parity gate** (after all arms extracted).
-3. **A1 ✅, A2a ✅, A3 ✅, Manage ✅** — no further work (A3's deferred skill-rewrite polish is optional follow-up).
+### Suggested next-session sequencing — CORRECTED 2026-07-08 (reviewer pass)
+> **Status correction — A2b is NOT done.** The `parity:check` reading of "605/605 (100%)" is misleading: it counts `handleServiceVerb` case-labels, not real extraction or reachability. Verified state: **6** Kanban verbs are genuinely extracted into `KanbanService`; the other ~599 are **shims** that forward straight back into `_handleMessage` (vscode coupling still in place); and **only `/kanban/verb/` has an HTTP route** — the 461 `handleServiceVerb` cases in Planning (172) / Design (62) / Setup (117) / TaskViewer (110) are **unreachable dead code**. Kanban's 144 verbs are remote-drivable today (shims execute via `_handleMessage` while VS Code runs); nothing else is.
+
+**A2b — remaining burndown (hand to the coder):**
+1. **Extract, don't shim** — replace the `ctx.handleMessage({type,...payload})` forwarders with real host-agnostic method bodies routed through the seams. Only that makes a verb work headless (B1) and meets the plan's definition of "extracted."
+2. **Add the missing verb rails** — only `/kanban/verb/<name>` exists. Planning/Design/Setup/TaskViewer each need their own `POST /<panel>/verb/<name>` route + injected callback, or their dispatchers stay dead.
+3. **Make the parity gate honest** — `scripts/check-protocol-parity.js` must fail on a catalogued verb with no *live route* (not merely a missing case) and split request/response (HTTP) vs broadcast (WS) verbs; today it green-lights 461 unreachable verbs.
+4. **Push-site audit** — route the 988 push sites through the broadcast abstraction (untouched). NB: `BroadcastHub.setApiServer()` is never called (A2a residual), so WS fan-out is inert until a provider wires it.
+
+**A1 ✅, A2a ✅, A3 ✅, Manage ✅** — no burndown work; see each plan's `## Review Findings` for the fixes applied and deferred residuals.
+
+## Review Findings (feature-level, 2026-07-08 in-place reviewer pass)
+All 5 subtasks reviewed adversarially with regression analysis; fixes applied in dependency order (A1 → A2a → Manage/A3/A2b). **A1:** self-reported "DONE" was wrong — the CI drift gate was **red on the committed tree** (comparator ignored `line:` churn) and the scanner silently dropped ~372 multi-line push sites; both fixed (drift now exits 0; push sites 598→969, request sites →575), plus real 404 + serve-from-`extensionPath`. **A2a:** security core verified sound; fixed a resync-vs-broadcast sequence race in `wsHub` (snapshot-then-subscribe). **Manage:** clean — footgun genuinely closed, no fixes needed. **A3:** the biggest gap — `reconcileFeatures` failed all three Complex/Risky mandates (no fail-fast, non-idempotent inline plans, no file-rollback); rewritten into Phase 1a/1b with slug-dedup + unlink-on-failure + one hoisted import, `**Plan ID:**` removed from generated markdown, chat-path PLAN_ID stamped. **A2b:** recipe sound for what's wired; fixed the stale-workspace-root regression (live getter; the phantom `_setCurrentWorkspaceRoot` never existed), verb-injection via body `type`, and two dishonest security comments. Validation: `catalog:check` and `parity:check` both exit 0; edited JS `node --check`-clean; `.ts` edits inspected (SKIP COMPILATION/TESTS per directive). Deferred residuals (documented per subtask): A2a seam→DB injection + `HostSecrets` + WS fan-out wiring, A3 migration-log stdout + per-feature refresh, A2b's 600-arm burndown + strict parity gate — all incomplete-vs-plan but not shipped regressions.
 
