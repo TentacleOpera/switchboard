@@ -89,6 +89,32 @@ interface LocalApiServerOptions {
         firstFeatureName: string,
         secondFeatureName: string
     ) => Promise<{ success: boolean; firstFeaturePlanId?: string; secondFeaturePlanId?: string; error?: string }>;
+    /**
+     * Declarative, path/slug-addressed feature reconciliation (Feature A · A3).
+     * Converges the whole feature structure to a desired end state in one idempotent
+     * call — creates features, assigns/removes subtasks (addressed by file path /
+     * slug / planId), creates inline-defined plans, and optionally deletes unmentioned
+     * features. Used by the /switchboard-manage skill and external agent hosts so an
+     * agent never handles a raw UUID. Body shape:
+     *   { workspaceRoot?, removeUnmentionedFeatures?, features: [{ name, description?,
+     *     subtasks: ["<path|slug|planId>" | { slug, title, body }] }] }
+     * Optional — absent in headless/test harnesses (returns 503).
+     */
+    reconcileFeatures?: (
+        workspaceRoot: string,
+        desiredFeatures: Array<{
+            name: string;
+            description?: string;
+            subtasks: Array<string | { slug: string; title: string; body?: string }>;
+        }>,
+        options?: { removeUnmentionedFeatures?: boolean }
+    ) => Promise<{
+        success: boolean;
+        features?: Array<{ name: string; featurePlanId: string; subtasks: Array<{ planId: string; planFile: string; topic: string }> }>;
+        mutations?: Array<{ action: string; detail: string }>;
+        warnings?: string[];
+        error?: string;
+    }>;
     cleanupWorktree?: (
         workspaceRoot: string,
         worktreeId: string | number
@@ -692,6 +718,52 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanSplitFeature error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanSplitFeature failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/features/reconcile — declarative, path/slug-addressed feature
+     * reconciliation (Feature A · A3). Converges the whole feature structure to a
+     * desired end state in one idempotent call. Reached by the /switchboard-manage
+     * skill and external agent hosts. Body:
+     *   { workspaceRoot?, removeUnmentionedFeatures?, features: [{ name, description?,
+     *     subtasks: ["<path|slug|planId>" | { slug, title, body }] }] }
+     */
+    private async _handleKanbanReconcileFeatures(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const reconcileFeatures = this._options.reconcileFeatures;
+        if (!reconcileFeatures) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Feature reconciliation not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const removeUnmentionedFeatures = !!body?.removeUnmentionedFeatures;
+            const features = Array.isArray(body?.features) ? body.features : null;
+            if (!features || features.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'features must be a non-empty array' }));
+                return;
+            }
+
+            const result = await reconcileFeatures(workspaceRoot, features, { removeUnmentionedFeatures });
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanReconcileFeatures error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanReconcileFeatures failed' }));
         }
     }
 
@@ -2000,6 +2072,8 @@ export class LocalApiServer {
                 await this._handleKanbanDeleteFeature(req, res);
             } else if (pathname === '/kanban/feature/split' && req.method === 'POST') {
                 await this._handleKanbanSplitFeature(req, res);
+            } else if (pathname === '/kanban/features/reconcile' && req.method === 'POST') {
+                await this._handleKanbanReconcileFeatures(req, res);
             } else if (pathname === '/kanban/orchestration/dispatch' && req.method === 'POST') {
                 await this._handleOrchestrationDispatch(req, res);
             } else if (pathname === '/kanban/plans/import' && req.method === 'POST') {

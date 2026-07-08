@@ -21,7 +21,7 @@ Every op below is keyed on a **`planId`** (a UUID). Resolve it the cheap way —
   Columns: `created`, `backlog`, `plan-reviewed`, `lead-coded`, `coder-coded`, `intern-coded`, `code-reviewed`, `acceptance-tested`, `coded`, `completed`, plus custom columns.
 - **Whole board over HTTP (clean JSON):** `GET http://127.0.0.1:$(cat .switchboard/api-server-port.txt)/kanban/board` → `{ success, data: [{ planId, planFile, kanbanColumn, isFeature, featureId, … }] }`.
 
-> **The real fix is to not need IDs at all:** the path/slug-addressed feature API in `.switchboard/plans/feature-management-declarative-path-addressed.md` (planned) lets you reference plans by file path or slug and reconcile the whole feature structure in one idempotent call. Until it lands, use the two lookups above.
+> **The real fix is to not need IDs at all:** the path/slug-addressed feature API (`POST /kanban/features/reconcile`, Feature A · A3 — **landed**) lets you reference plans by file path or slug and reconcile the whole feature structure in one idempotent call. Use it (see "Reorganize Features" below) instead of the per-verb UUID choreography. The two lookups above remain useful for one-off card moves.
 
 ## Move a Card
 
@@ -163,3 +163,44 @@ node .agents/skills/kanban_operations/get-state.js /Users/patrickvuleta/Document
 # Move card in specific workspace
 node .agents/skills/kanban_operations/move-card.js <session_id> <column> "" /Users/patrickvuleta/Documents/Gitlab
 ```
+
+## Reorganize Features (declarative — preferred over the per-verb scripts)
+
+`reconcile-features.js` converges the whole feature structure to a desired end state in **one idempotent call**. Plans are addressed by **file path / slug / topic / planId** — never a raw UUID the agent must discover. New plans can be defined inline (`{slug,title,body}`) and reconcile writes + imports + links them. Re-running the same input is a no-op, so retry is safe.
+
+```bash
+node .agents/skills/kanban_operations/reconcile-features.js <workspace_root> '<reconcile_json>'
+```
+
+`reconcile_json`:
+```json
+{
+  "removeUnmentionedFeatures": false,
+  "features": [
+    {
+      "name": "My Feature",
+      "description": "optional feature description",
+      "subtasks": [
+        ".switchboard/plans/my-plan.md",
+        "my-plan-slug",
+        "eb75281d-...",
+        { "slug": "new-plan", "title": "New Plan", "body": "## Goal\n..." }
+      ]
+    }
+  ]
+}
+```
+
+- **Create a feature:** list it with its subtasks — the feature is created if no active feature has that name.
+- **Add subtasks to an existing feature:** include the existing feature name + the full desired subtask set — new entries are assigned, the rest are left in place.
+- **Remove a subtask from a feature:** omit it from the desired subtask set — it's detached (not tombstoned).
+- **Delete unmentioned features:** set `"removeUnmentionedFeatures": true` — every active feature NOT named in the input is deleted (subtasks detached, not tombstoned). Default `false` (safe — never deletes by accident).
+- **Inline new plan:** a subtask entry of the form `{slug,title,body}` writes a new plan file, imports it, and links it in one step.
+- **Cross-column warning:** assigning a `CREATED` plan to a feature in a later column produces a `warnings[]` entry (not a failure).
+
+Output: `{ ok, features: [{name, featurePlanId, subtasks:[{planId,planFile,topic}]}], mutations: [{action,detail}], warnings: [] }`.
+
+The equivalent HTTP endpoint (for non-shell hosts) is `POST /kanban/features/reconcile` on the local API server (port in `.switchboard/api-server-port.txt`).
+
+> **`get-state.js | jq` now works:** the `[KanbanDatabase] Resolved DB path…` diagnostic log was moved to stderr (Feature A · A3), so `node get-state.js <root> | jq .` emits parseable JSON on stdout.
+

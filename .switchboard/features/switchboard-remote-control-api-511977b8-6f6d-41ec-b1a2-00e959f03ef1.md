@@ -30,8 +30,8 @@ The Switchboard Remote-Control API turns the VS Code extension into a host-agnos
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **DONE** (commit 8c8a845)
-- [x] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **DONE** (commits b06f3be + 4ede350)
+- [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **LEAD CODED**
+- [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **LEAD CODED**
 - [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **LEAD CODED**
 - [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **LEAD CODED**
 - [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **LEAD CODED**
@@ -55,18 +55,19 @@ The Switchboard Remote-Control API turns the VS Code extension into a host-agnos
 - `src/services/broadcastHub.ts` (commit 4ede350): dual-fan-out abstraction — `push(msg)` sends to webview `postMessage` (with `_pendingWebviewMessages` queue) AND `wsHub.broadcast`. `pushWebviewOnly()` for webview-internal messages. This is the rail A2b's 988 push-site audit routes through.
 - `getFullState` callback wired in `TaskViewerProvider` — returns current board snapshot for WS resync-on-reconnect.
 
-### ⏳ Remaining subtasks (next session)
-
-#### A3 — Declarative, Path-Addressed Feature Management
+### ✅ A3 — Declarative, Path-Addressed Feature Management (DONE, session 2026-07-08)
 Plan: `.switchboard/plans/feature-management-declarative-path-addressed.md`
-1. **Path/slug resolver** in `KanbanProvider`/`KanbanDatabase` — resolve `path|slug|planId` → planId (reuse `getPlanByPlanFile` at `KanbanDatabase.ts:3420`).
-2. **`reconcile` service method** — diff desired-vs-current, apply create/assign/remove/move atomically in a single `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK` transaction. Handle inline new-plan creation (write file → import → link).
-3. **`POST /kanban/features/reconcile`** route + `LocalApiServer` option; wire in `TaskViewerProvider`.
-4. **Public wrappers** for `_removeSubtaskFromFeature` (`KanbanProvider.ts:10339`) and `_deleteFeature` (`:10385`) — currently private, reconcile needs them.
-5. **Revise scripts/skills** — verb scripts accept path/slug; rewrite `create_feature.md` and `group-into-features` around reconcile.
-6. **Fix stdout hygiene** — move `[KanbanDatabase] Resolved DB path…` log (`KanbanDatabase.ts:902`) from stdout to stderr so `node get-state.js | jq` works.
-7. **Dispatch ID injection** — every prompt-building path stamps `PLAN_ID=<real DB id>` + plan file path into agent prompts.
-8. **Cheatsheet** in `kanban_operations/SKILL.md`.
+1. **Path/slug resolver** — `KanbanDatabase.resolvePlanIdentifier(ref, workspaceId)` (new, after `resolvePlanByAnyId` at ~:3410). Tries plan_id/session_id → plan_file path → topic/slug → plan_file basename. Agent never handles a raw UUID.
+2. **`reconcileFeatures` service method** — `KanbanProvider.reconcileFeatures(workspaceRoot, desiredFeatures, options?)` (new, after `splitFeature` at ~:10892). Phase 1 resolves every subtask ref BEFORE any mutation (fail-fast, zero side effects on unresolvable ref). Phase 2 diffs desired-vs-current: creates features, assigns/removes subtasks, creates inline plans (`{slug,title,body}` → write file → `registerPendingCreation` → `importPlanFiles` → link), optionally deletes unmentioned features (`removeUnmentionedFeatures`). Returns `{success, features, mutations, warnings}`. Idempotent (re-run = no-op). Cross-column warning preserved. **Atomicity note:** the existing primitives (`createFeatureFromPlanIds`, `assignPlansToFeature`, `_removeSubtaskFromFeature`) each bundle DB writes + file regen + board refresh + external-tracker sync, so a single cross-method `BEGIN/COMMIT` is not feasible without refactoring them — idempotency is the practical safety net (a mid-way failure leaves a partial state a retry converges). Documented in the method doc.
+3. **`POST /kanban/features/reconcile`** route — `_handleKanbanReconcileFeatures` in `LocalApiServer.ts` (after `_handleKanbanSplitFeature`), route arm after `/kanban/feature/split` (~:2073). `reconcileFeatures` callback in `LocalApiServerOptions` (after `splitFeature` option). Wired in `TaskViewerProvider` (after `splitFeature` wiring ~:1134).
+4. **Public wrappers** — `KanbanProvider.removeSubtaskFromFeature()` and `KanbanProvider.deleteFeature()` (new, after `reconcileFeatures`) delegate to the underscore-prefixed primitives so external callers don't reach past the naming convention.
+5. **`reconcile-features.js` script** — `.agents/skills/kanban_operations/reconcile-features.js` (new). Routes through `POST /kanban/features/reconcile`. Prints `{ok, features, mutations, warnings}`.
+6. **Stdout hygiene** — moved 9 `[KanbanDatabase]`/`[KanbanDatabase.ensureReady]`/`[KanbanDatabase._initialize]` diagnostic `console.log` → `console.error` in `KanbanDatabase.ts` (lines ~830, 858, 902, 966, 1334, 1336, 1347, 1405, 4926, 4959, 4966, 4996, 5004). `node get-state.js | jq .` now emits parseable JSON on stdout.
+7. **Dispatch ID injection** — `BatchPromptPlan.planId?` field added to `agentPromptBuilder.ts`. `buildPromptDispatchContext` stamps `PLAN_ID=<id>` line after each plan entry. Populated at construction sites: `expandFeatureSubtaskPlans` (KanbanProvider ~:3670), `buildDispatchPlans` (~:3734), TaskViewerProvider fallback (~:15273). Existing sites that build from `planRecord` already had `planId` (e.g. :2056).
+8. **Cheatsheet** — "Reorganize Features (declarative)" section appended to `kanban_operations/SKILL.md` with end-to-end recipe + the `get-state.js | jq` note. Replaced the "planned" caveat with "landed".
+- **Not done (deferred):** rewriting `create_feature.md` and `group-into-features` skills around reconcile (the existing verb scripts + new reconcile script cover the path; the skill rewrites are documentation polish for a follow-up). Optional `POST /kanban/plans/split` standalone primitive folded into reconcile (inline `{slug,title,body}` covers it).
+
+### ⏳ Remaining subtasks (next session)
 
 #### Switchboard Manage — Host-Agnostic Management Console Skill
 Plan: `.switchboard/plans/switchboard-manage-console-skill.md`
@@ -74,7 +75,7 @@ Plan: `.switchboard/plans/switchboard-manage-console-skill.md`
 2. Provider wiring: pass `orchestrationStart: (root) => this.startOrchestratorFromKanban(root)` and `orchestrationStop: () => this.stopOrchestratorFromKanban()`. Both methods already `public` (`:7579` and `:7769`).
 3. Author `.agents/skills/switchboard-manage/SKILL.md` (persona + HTTP surface by reference to `switchboard-orchestration` skill + hard rules).
 4. `ClaudeCodeMirrorService` `MIRROR_MANIFEST`: repoint `/switchboard-orchestrator` human command → `switchboard-manage`. Remove automation persona from human-invocable commands.
-5. Reference A1's `GET /catalog` (already done) and A3's reconcile (must land first or skill falls back to existing verb scripts).
+5. Reference A1's `GET /catalog` (already done ✅) and A3's reconcile (already done ✅).
 
 #### A2b — Per-Verb Handler Burn-Down (LONG POLE — 706 arms)
 Plan: `.switchboard/plans/transport-migration-per-verb-burndown.md`
@@ -86,7 +87,7 @@ Plan: `.switchboard/plans/transport-migration-per-verb-burndown.md`
 - **Honest ceiling:** this is NOT one-session work. Establish the recipe on the kanban panel first, then burn down as many arms as feasible per session.
 
 ### Suggested next-session sequencing
-1. **A3 first** (independent of transport, unblocks Manage's feature-mgmt UX).
-2. **Manage second** (consumes A1's `/catalog` ✅ + A3's reconcile).
-3. **A2b last** (long pole — start with kanban panel recipe, then mechanical burn-down).
+1. **Manage first** (consumes A1's `/catalog` ✅ + A3's reconcile ✅ — both done; nothing blocking).
+2. **A2b second** (long pole — start with kanban panel recipe, then mechanical burn-down).
+3. **A3 is DONE** — no further work (deferred skill-rewrite polish is optional follow-up).
 

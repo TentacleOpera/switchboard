@@ -1142,6 +1142,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
+            reconcileFeatures: async (wsRoot, desiredFeatures, opts) => {
+                // Route the declarative reconcile endpoint through the provider (Feature A · A3).
+                if (!this._kanbanProvider) {
+                    return { success: false, error: 'Kanban provider not available' };
+                }
+                try {
+                    return await this._kanbanProvider.reconcileFeatures(wsRoot, desiredFeatures, opts);
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
             cleanupWorktree: async (wsRoot, worktreeId) => {
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
@@ -15259,7 +15270,7 @@ What would you like to find?`;
                 plans = await this._kanbanProvider.buildDispatchPlans(resolvedWorkspaceRoot, [planRecord]);
             } else {
                 const workingDir = resolveWorkingDir(resolvedWorkspaceRoot, planRecord?.repoScope || '');
-                plans = [{ topic, absolutePath: planFileAbsolute, workingDir, isFeature: !!planRecord?.isFeature, project: planRecord?.project || undefined }];
+                plans = [{ topic, absolutePath: planFileAbsolute, planId: planRecord?.planId, workingDir, isFeature: !!planRecord?.isFeature, project: planRecord?.project || undefined }];
             }
 
             // Use standard prompt generation

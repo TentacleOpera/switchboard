@@ -28,6 +28,10 @@ export function warnOnLegacyTicketUpdateMode(mode: string | undefined): void {
 export interface BatchPromptPlan {
     topic: string;
     absolutePath: string;
+    /** The plan's authoritative DB plan_id, stamped into dispatch prompts as
+     * PLAN_ID= so a dispatched agent acts on the exact plan with no lookup or
+     * fabrication (Feature A · A3 — push complement to the state-file planId index). */
+    planId?: string;
     complexity?: string;
     workingDir?: string;
     sessionId?: string;
@@ -345,13 +349,14 @@ export function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDisp
         workingDir: (plan.workingDir || '').trim()
     }));
     const planList = normalizedPlans.map(plan => {
+        const planIdLine = plan.planId ? `\nPLAN_ID=${plan.planId}` : '';
         if (plan.isSubtask && plan.featureTopic) {
-            return `  - [SUBTASK] ${plan.topic} Plan File: ${plan.absolutePath}`;
+            return `  - [SUBTASK] ${plan.topic} Plan File: ${plan.absolutePath}${planIdLine}`;
         }
         if (plan.featureTopic && !plan.isSubtask) {
-            return `- [FEATURE: ${plan.featureTopic}] Plan File: ${plan.absolutePath}`;
+            return `- [FEATURE: ${plan.featureTopic}] Plan File: ${plan.absolutePath}${planIdLine}`;
         }
-        return `- [${plan.topic}] Plan File: ${plan.absolutePath}`;
+        return `- [${plan.topic}] Plan File: ${plan.absolutePath}${planIdLine}`;
     }).join('\n');
     const distinctWorkingDirs = [...new Set(normalizedPlans.map(plan => plan.workingDir).filter(Boolean))];
     const allPlansShareDir =

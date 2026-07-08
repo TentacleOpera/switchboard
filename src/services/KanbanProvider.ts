@@ -3670,6 +3670,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             out.push({
                 topic: st.topic,
                 absolutePath: resolvedAbsolutePath,
+                planId: st.planId,
                 complexity: st.complexity,
                 workingDir: stWorkingDir,
                 sessionId: st.sessionId || st.planId,
@@ -3734,6 +3735,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 sessionId: rec.sessionId || rec.planId,
                 topic: rec.topic || planFileRel || 'Untitled',
                 absolutePath: resolvedAbsolutePath,
+                planId: rec.planId,
                 complexity: rec.complexity,
                 workingDir: resolvedWorkingDir,
                 worktreePath,
@@ -10866,6 +10868,230 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             firstFeaturePlanId: firstResult.featurePlanId,
             secondFeaturePlanId: secondResult.featurePlanId
         };
+    }
+
+    /**
+     * Declarative, path/slug-addressed feature reconciliation (Feature A · A3).
+     * Converges the feature structure to a desired end state in one idempotent call:
+     *   - creates features that don't exist
+     *   - assigns subtasks (addressed by file path / slug / planId) to their feature
+     *   - removes subtasks no longer in the desired set
+     *   - creates inline-defined plans ({slug,title,body}) and links them
+     *   - optionally deletes features not mentioned in the desired set
+     * Re-running the same reconcile is a no-op (converges to the same state) so an
+     * agent can retry safely. Every mutation is reported in the response.
+     *
+     * Atomicity note: the existing feature primitives (createFeatureFromPlanIds,
+     * assignPlansToFeature, _removeSubtaskFromFeature) each bundle DB writes with
+     * file regeneration, board refresh, and external-tracker sync, so a single
+     * cross-method BEGIN/COMMIT is not feasible without refactoring them. Idempotency
+     * is the practical safety net: a mid-way failure leaves a partial state that a
+     * retry converges. Refs are resolved BEFORE any mutation so an unresolvable ref
+     * fails fast with zero side effects.
+     */
+    public async reconcileFeatures(
+        workspaceRoot: string,
+        desiredFeatures: Array<{
+            name: string;
+            description?: string;
+            subtasks: Array<string | { slug: string; title: string; body?: string }>;
+        }>,
+        options?: { removeUnmentionedFeatures?: boolean }
+    ): Promise<{
+        success: boolean;
+        features?: Array<{
+            name: string;
+            featurePlanId: string;
+            subtasks: Array<{ planId: string; planFile: string; topic: string }>;
+        }>;
+        mutations?: Array<{ action: string; detail: string }>;
+        warnings?: string[];
+        error?: string;
+    }> {
+        const desired = Array.isArray(desiredFeatures) ? desiredFeatures : [];
+        if (desired.length === 0) {
+            return { success: false, error: 'No features provided in reconcile body.' };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban database not available.' };
+        }
+        const workspaceId = (await db.getWorkspaceId()) || workspaceRoot;
+
+        // ── Phase 1: resolve every subtask ref BEFORE any mutation (fail fast) ──
+        // Each desired feature → { name, description, resolvedSubtasks: [{planId, planFile, topic, isNew}] }
+        type ResolvedSubtask = { planId: string; planFile: string; topic: string; isNew: boolean };
+        const resolvedFeatures: Array<{
+            name: string; description?: string; subtasks: ResolvedSubtask[];
+        }> = [];
+        const newPlanFiles: string[] = [];
+        for (const feat of desired) {
+            const featureName = (feat.name || '').replace(/[\r\n]+/g, ' ').trim();
+            if (!featureName) {
+                return { success: false, error: 'A feature has an empty name.' };
+            }
+            const subtasks: ResolvedSubtask[] = [];
+            const seenPlanIds = new Set<string>();
+            for (const ref of (feat.subtasks || [])) {
+                if (typeof ref === 'string') {
+                    const plan = await db.resolvePlanIdentifier(ref, workspaceId);
+                    if (!plan) {
+                        return { success: false, error: `Could not resolve subtask reference: "${ref}" (feature "${featureName}"). Pass a plan file path, slug/topic, or planId.` };
+                    }
+                    if (!seenPlanIds.has(plan.planId)) {
+                        seenPlanIds.add(plan.planId);
+                        subtasks.push({ planId: plan.planId, planFile: plan.planFile, topic: plan.topic, isNew: false });
+                    }
+                } else {
+                    // Inline new plan: { slug, title, body }
+                    const slug = (ref.slug || ref.title || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'plan';
+                    const title = (ref.title || ref.slug || 'New Plan').replace(/[\r\n]+/g, ' ').trim();
+                    const body = typeof ref.body === 'string' ? ref.body : '';
+                    const planId = crypto.randomUUID();
+                    const relPath = path.join('.switchboard', 'plans', `${slug}-${planId}.md`);
+                    const absPath = path.join(workspaceRoot, relPath);
+                    const content = `# ${title}\n\n**Plan ID:** ${planId}\n\n${body}\n`;
+                    try {
+                        await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+                        GlobalPlanWatcherService.registerPendingCreation(absPath);
+                        await fs.promises.writeFile(absPath, content, 'utf8');
+                    } catch (e) {
+                        return { success: false, error: `Failed to write inline plan "${slug}": ${e instanceof Error ? e.message : String(e)}` };
+                    }
+                    newPlanFiles.push(relPath);
+                    // Import so the DB row exists, then resolve.
+                    try {
+                        await importPlanFiles(workspaceRoot);
+                    } catch (e) {
+                        return { success: false, error: `Failed to import inline plan "${slug}": ${e instanceof Error ? e.message : String(e)}` };
+                    }
+                    const plan = await db.getPlanByPlanFile(relPath, workspaceId);
+                    if (!plan) {
+                        return { success: false, error: `Inline plan "${slug}" was written but did not import — DB row not found.` };
+                    }
+                    if (!seenPlanIds.has(plan.planId)) {
+                        seenPlanIds.add(plan.planId);
+                        subtasks.push({ planId: plan.planId, planFile: plan.planFile, topic: plan.topic || title, isNew: true });
+                    }
+                }
+            }
+            resolvedFeatures.push({ name: featureName, description: feat.description, subtasks });
+        }
+
+        // ── Phase 2: diff + apply ──
+        const currentFeatures = await db.getFeaturePlans(workspaceId);
+        const currentByName = new Map<string, { planId: string; topic: string; kanbanColumn: string }>();
+        for (const f of currentFeatures) {
+            currentByName.set((f.topic || '').toLowerCase(), { planId: f.planId, topic: f.topic, kanbanColumn: f.kanbanColumn });
+        }
+        const mutations: Array<{ action: string; detail: string }> = [];
+        const warnings: string[] = [];
+        const resultFeatures: Array<{
+            name: string; featurePlanId: string;
+            subtasks: Array<{ planId: string; planFile: string; topic: string }>;
+        }> = [];
+        const desiredNamesLower = new Set(resolvedFeatures.map(f => f.name.toLowerCase()));
+
+        for (const feat of resolvedFeatures) {
+            const existing = currentByName.get(feat.name.toLowerCase());
+            const desiredIds = feat.subtasks.map(s => s.planId);
+            if (!existing) {
+                // Create new feature with the resolved subtasks.
+                const createResult = await this.createFeatureFromPlanIds(workspaceRoot, feat.name, desiredIds, feat.description);
+                if (!createResult.success || !createResult.featurePlanId) {
+                    return { success: false, error: `Failed to create feature "${feat.name}": ${createResult.error}`, mutations, warnings };
+                }
+                mutations.push({ action: 'created', detail: `feature "${feat.name}" with ${desiredIds.length} subtask(s)` });
+                resultFeatures.push({
+                    name: feat.name,
+                    featurePlanId: createResult.featurePlanId,
+                    subtasks: feat.subtasks.map(s => ({ planId: s.planId, planFile: s.planFile, topic: s.topic }))
+                });
+                continue;
+            }
+            // Existing feature — diff subtasks.
+            const currentSubtasks = await db.getSubtasksByFeatureId(existing.planId);
+            const currentIds = new Set(currentSubtasks.map(s => s.planId));
+            const desiredSet = new Set(desiredIds);
+            const toAdd = desiredIds.filter(id => !currentIds.has(id));
+            const toRemove = currentSubtasks.filter(s => !desiredSet.has(s.planId)).map(s => s.planId);
+            if (toAdd.length > 0) {
+                // Cross-column warning: assigning a CREATED plan to a feature in a later column.
+                const featureColumn = existing.kanbanColumn;
+                const lockColumnsRaw = await db.getConfig('feature_lock_columns');
+                const lockColumns = (lockColumnsRaw || 'IN PROGRESS,CODE REVIEW,REVIEWED,DONE').split(',').map((c: string) => c.trim());
+                if (lockColumns.includes(featureColumn)) {
+                    return { success: false, error: `Cannot modify subtasks of feature "${feat.name}" — it is in a locked column (${featureColumn}).`, mutations, warnings };
+                }
+                for (const id of toAdd) {
+                    const st = await db.getPlanByPlanId(id);
+                    if (st && st.kanbanColumn === 'CREATED' && featureColumn && featureColumn !== 'CREATED') {
+                        warnings.push(`Subtask "${st.topic || id}" is in CREATED but feature "${feat.name}" is in ${featureColumn}.`);
+                    }
+                }
+                const assignResult = await this.assignPlansToFeature(workspaceRoot, existing.planId, toAdd);
+                if (!assignResult.success) {
+                    return { success: false, error: `Failed to assign subtasks to feature "${feat.name}": ${assignResult.error}`, mutations, warnings };
+                }
+                mutations.push({ action: 'assigned', detail: `${toAdd.length} subtask(s) to feature "${feat.name}"` });
+            }
+            if (toRemove.length > 0) {
+                for (const id of toRemove) {
+                    const rmResult = await this._removeSubtaskFromFeature(workspaceRoot, id);
+                    if (!rmResult.success) {
+                        mutations.push({ action: 'remove-failed', detail: `subtask ${id} from feature "${feat.name}": ${rmResult.error}` });
+                    }
+                }
+                mutations.push({ action: 'removed', detail: `${toRemove.length} subtask(s) from feature "${feat.name}"` });
+            }
+            resultFeatures.push({
+                name: feat.name,
+                featurePlanId: existing.planId,
+                subtasks: feat.subtasks.map(s => ({ planId: s.planId, planFile: s.planFile, topic: s.topic }))
+            });
+        }
+
+        // Optionally delete features not mentioned in the desired set.
+        if (options?.removeUnmentionedFeatures) {
+            for (const [nameLower, info] of currentByName) {
+                if (!desiredNamesLower.has(nameLower)) {
+                    const delResult = await this._deleteFeature(workspaceRoot, info.planId, false);
+                    if (delResult.success) {
+                        mutations.push({ action: 'deleted', detail: `unmentioned feature "${info.topic}"` });
+                    } else {
+                        mutations.push({ action: 'delete-failed', detail: `unmentioned feature "${info.topic}": ${delResult.error}` });
+                    }
+                }
+            }
+        }
+
+        await this._refreshBoard(workspaceRoot);
+        return { success: true, features: resultFeatures, mutations, warnings };
+    }
+
+    /**
+     * Public wrapper for the underscore-prefixed remove-subtask primitive, so the
+     * reconcile HTTP handler and external callers don't reach past the naming
+     * convention. Delegates to _removeSubtaskFromFeature (Feature A · A3).
+     */
+    public async removeSubtaskFromFeature(
+        workspaceRoot: string,
+        subtaskPlanId: string
+    ): Promise<{ success: boolean; error?: string }> {
+        return this._removeSubtaskFromFeature(workspaceRoot, subtaskPlanId);
+    }
+
+    /**
+     * Public wrapper for the underscore-prefixed delete-feature primitive, so the
+     * reconcile HTTP handler and external callers don't reach past the naming
+     * convention. Delegates to _deleteFeature (Feature A · A3).
+     */
+    public async deleteFeature(
+        workspaceRoot: string,
+        featurePlanId: string,
+        deleteSubtasks: boolean
+    ): Promise<{ success: boolean; error?: string }> {
+        return this._deleteFeature(workspaceRoot, featurePlanId, deleteSubtasks);
     }
 
     /**

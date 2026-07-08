@@ -827,7 +827,7 @@ export class KanbanDatabase {
             }
             const pointerFile = path.join(switchboardDir, 'db-pointer');
             fs.writeFileSync(pointerFile, `${path.resolve(dbPath)}\n`, 'utf8');
-            console.log(`[KanbanDatabase] Wrote db-pointer to ${pointerFile} pointing to ${dbPath}`);
+            console.error(`[KanbanDatabase] Wrote db-pointer to ${pointerFile} pointing to ${dbPath}`);
         } catch (error) {
             console.error(`[KanbanDatabase] Failed to write db-pointer for parentFolder ${parentFolder}:`, error);
         }
@@ -855,7 +855,7 @@ export class KanbanDatabase {
     public async getWorkspaceMappings(): Promise<{ enabled: boolean; mappings: WorkspaceDatabaseMapping[] }> {
         try {
             const val = await this.getConfig('workspace_mappings');
-            console.log(`[KanbanDatabase] getWorkspaceMappings: dbPath=${this._dbPath}, hasVal=${!!val}, dbReady=${!!this._db}`);
+            console.error(`[KanbanDatabase] getWorkspaceMappings: dbPath=${this._dbPath}, hasVal=${!!val}, dbReady=${!!this._db}`);
             if (val) {
                 const parsed = JSON.parse(val);
                 if (parsed && typeof parsed === 'object') {
@@ -899,7 +899,7 @@ export class KanbanDatabase {
         const pointerPath = KanbanDatabase.readDbPointer(stable);
         if (pointerPath) {
             resolvedDbPath = pointerPath;
-            console.log(`[KanbanDatabase] Resolved DB path from db-pointer: ${stable} -> ${resolvedDbPath}`);
+            console.error(`[KanbanDatabase] Resolved DB path from db-pointer: ${stable} -> ${resolvedDbPath}`);
         }
 
         // Fallback to customDbPath, kanban.dbPath setting, or default
@@ -963,7 +963,7 @@ export class KanbanDatabase {
             // Also remove from dbPath cache to prevent stale instances
             KanbanDatabase._instancesByDbPath.delete(existing.dbPath);
             KanbanDatabase._instances.delete(stable);
-            console.log(`[KanbanDatabase] Invalidated cached instance for ${stable}`);
+            console.error(`[KanbanDatabase] Invalidated cached instance for ${stable}`);
             
             // Re-sync workspace identity to capture any database path changes
             try {
@@ -1331,9 +1331,9 @@ export class KanbanDatabase {
             return true;
         }
         if (!this._initPromise) {
-            console.log(`[KanbanDatabase.ensureReady] No _db and no _initPromise for ${this._dbPath}, calling _initialize()`);
+            console.error(`[KanbanDatabase.ensureReady] No _db and no _initPromise for ${this._dbPath}, calling _initialize()`);
             this._initPromise = this._initialize().then((ready) => {
-                console.log(`[KanbanDatabase.ensureReady] _initialize() returned ${ready} for ${this._dbPath}, lastError=${this._lastInitError}`);
+                console.error(`[KanbanDatabase.ensureReady] _initialize() returned ${ready} for ${this._dbPath}, lastError=${this._lastInitError}`);
                 // Always clear the in-flight marker once settled. On success this._db
                 // is set and the `if (this._db)` fast-path serves subsequent calls, so
                 // a lingering settled promise is never needed — and clearing it means
@@ -1344,7 +1344,7 @@ export class KanbanDatabase {
                 return ready;
             });
         } else {
-            console.log(`[KanbanDatabase.ensureReady] Reusing existing _initPromise for ${this._dbPath}`);
+            console.error(`[KanbanDatabase.ensureReady] Reusing existing _initPromise for ${this._dbPath}`);
         }
         return this._initPromise;
     }
@@ -1402,7 +1402,7 @@ export class KanbanDatabase {
             await this._persist();
 
             this._lastInitError = null;
-            console.log(`[KanbanDatabase] Explicitly created new DB at ${this._dbPath}`);
+            console.error(`[KanbanDatabase] Explicitly created new DB at ${this._dbPath}`);
 
             // V15: Trigger background migration from JSON registry if needed
             let wsId = await this.getWorkspaceId();
@@ -3407,6 +3407,47 @@ export class KanbanDatabase {
         return (await this.getPlanByPlanId(id)) ?? (await this.getPlanBySessionId(id));
     }
 
+    /**
+     * Resolve a plan by a path/slug/planId identifier — the agent-facing address
+     * form (Feature A · A3). Tries, in order:
+     *   1. plan_id (canonical DB key) — via resolvePlanByAnyId (also covers legacy session_id)
+     *   2. plan_file path (relative or absolute; imports are plan_file-path-keyed)
+     *   3. topic / slug (case-insensitive exact match on active plans)
+     *   4. plan_file basename (e.g. "my-plan.md" without the .switchboard/plans/ prefix)
+     * Returns the active record preferred over completed/archived/deleted. An agent
+     * never handles a raw UUID — it passes a file path or slug and the extension
+     * resolves it server-side.
+     */
+    public async resolvePlanIdentifier(
+        ref: string,
+        workspaceId: string
+    ): Promise<KanbanPlanRecord | null> {
+        if (!ref || !ref.trim()) return null;
+        const trimmed = ref.trim();
+        // 1. plan_id / session_id
+        const byId = await this.resolvePlanByAnyId(trimmed);
+        if (byId) return byId;
+        // 2. plan_file path (relative or absolute)
+        const byFile = await this.getPlanByPlanFile(trimmed, workspaceId);
+        if (byFile) return byFile;
+        // 3. topic / slug (case-insensitive exact match)
+        const byTopic = await this.getPlanByTopic(trimmed, workspaceId);
+        if (byTopic) return byTopic;
+        // 4. plan_file basename — agent may pass "my-plan.md" without the
+        //    .switchboard/plans/ prefix. Match against the stored plan_file basename.
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const basename = path.basename(trimmed);
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND (plan_file = ? OR plan_file LIKE ?)
+             ORDER BY updated_at DESC LIMIT 1`,
+            [workspaceId, basename, `%/${basename}`]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
     public async getFeaturePlans(workspaceId: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
@@ -4923,7 +4964,7 @@ export class KanbanDatabase {
     private async _initialize(): Promise<boolean> {
         try {
             const SQL = await KanbanDatabase._loadSqlJs();
-            console.log(`[KanbanDatabase._initialize] sql.js loaded, checking ${this._dbPath}, exists=${fs.existsSync(this._dbPath)}`);
+            console.error(`[KanbanDatabase._initialize] sql.js loaded, checking ${this._dbPath}, exists=${fs.existsSync(this._dbPath)}`);
 
             if (fs.existsSync(this._dbPath)) {
                 // Guard: only create directories within .switchboard or workspace root
@@ -4956,14 +4997,14 @@ export class KanbanDatabase {
                 this._loadedMtime = fileMtime;
                 const existing = await fs.promises.readFile(this._dbPath);
                 this._db = new SQL.Database(new Uint8Array(existing));
-                console.log(`[KanbanDatabase] Loaded existing DB from ${this._dbPath} (${existing.length} bytes)`);
+                console.error(`[KanbanDatabase] Loaded existing DB from ${this._dbPath} (${existing.length} bytes)`);
             } else {
                 // LAZY CHANGE: Don't create the DB file - just mark as unavailable
                 KanbanDatabase._lastLoadedMtimes.delete(this._dbPath);
                 this._loadedMtime = 0;
                 this._db = null;
                 this._lastInitError = 'Database file does not exist (not auto-creating)';
-                console.log(`[KanbanDatabase] No DB exists at ${this._dbPath} - not creating`);
+                console.error(`[KanbanDatabase] No DB exists at ${this._dbPath} - not creating`);
                 return false;  // <-- Key change: return false instead of creating
             }
 
@@ -4993,7 +5034,7 @@ export class KanbanDatabase {
                 const hasWs = cfgStmt.step();
                 if (hasWs) {
                     const wsId = String(cfgStmt.getAsObject().value);
-                    console.log(`[KanbanDatabase] Post-init: workspace_id=${wsId}`);
+                    console.error(`[KanbanDatabase] Post-init: workspace_id=${wsId}`);
                 } else {
                     console.warn(`[KanbanDatabase] Post-init: NO workspace_id in config table`);
                 }
@@ -5001,7 +5042,7 @@ export class KanbanDatabase {
                 // Count active plans
                 const countStmt = this._db.prepare("SELECT COUNT(*) as cnt FROM plans WHERE status = 'active'");
                 if (countStmt.step()) {
-                    console.log(`[KanbanDatabase] Post-init: ${countStmt.getAsObject().cnt} active plans`);
+                    console.error(`[KanbanDatabase] Post-init: ${countStmt.getAsObject().cnt} active plans`);
                 }
                 countStmt.free();
             } catch (e) {
