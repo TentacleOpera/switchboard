@@ -24,3 +24,4 @@ Fix terminal targeting reliability and improve the Implementation panel's Agents
 - [ ] [Right-Justify and Group the Per-Terminal Locate/Clear Buttons](../plans/feature_plan_20260626124053_terminal_locate_clear_buttons_right_justified.md) — **CODE REVIEWED**
 - [ ] [Make the Implementation Panel Agents Tab Track Extra Planner Terminals](../plans/feature_plan_20260626130005_implementation_tab_track_planner_terminals.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

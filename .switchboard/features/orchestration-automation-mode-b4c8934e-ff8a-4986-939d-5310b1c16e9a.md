@@ -7,7 +7,6 @@ description: 'Orchestration Automation Mode — unattended coding + code-review 
 **Complexity:** 7
 **Tags:** backend, feature, automation, ui
 
-
 ## Goal
 
 Add a fourth kanban automation mode — **Orchestration** — that runs a batch of work through the coding and code-review stages unattended, managed by an **orchestrator agent** that the *system* wakes on a fixed interval (never self-scheduling). The user picks Orchestration in the AUTOMATION tab, presses Start, and the orchestrator batches every eligible plan into features, fans the work out across per-feature worktrees and terminals, then sleeps. On each interval tick the system wakes it to check progress, triage agent requests, and advance or merge work — feature by feature — until the batch is done.

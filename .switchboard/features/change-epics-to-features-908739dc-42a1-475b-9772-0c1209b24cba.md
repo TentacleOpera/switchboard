@@ -51,3 +51,4 @@ Phase 1 (user-facing + routes + script filenames)
 - [ ] [Feature Operations Agent Clarity — Verb Scripts, API Endpoints & Intent→Action Cheatsheet](../plans/feature_plan_20260704232500_epic-operations-agent-clarity.md) — **CODE REVIEWED**
 - [ ] [Plan: Rename "Epics" → "Features" (Internal Identifiers + Persisted State — Phase 2)](../plans/rename-epics-to-features-internal-phase2.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

@@ -22,3 +22,4 @@ Bring the Planning panel HTML tab up to parity with the rest of the panel and th
 - [ ] [HTML Tab Sidebar Formatting Parity with Design Panel](../plans/feature_plan_20260629091056_html-tab-sidebar-formatting-parity.md) — **CODE REVIEWED**
 - [ ] [Remove Afterburner CRT Scanline Effects from HTML Tab in Planning Panel](../plans/feature_plan_20260629091057_remove-crt-scanlines-from-html-tab.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

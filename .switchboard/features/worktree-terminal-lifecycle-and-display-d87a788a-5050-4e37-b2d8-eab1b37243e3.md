@@ -22,3 +22,4 @@ Fix and improve the full lifecycle of worktree-spawned terminals from creation t
 - [ ] [Worktree "Open Terminals With Grid" Toggle — Make It Clear, Prominent, And On By Default](../plans/feature_plan_20260702140003_grid-terminals-toggle-clear-and-on-by-default.md) — **CODE REVIEWED**
 - [ ] [Worktree State Must Hydrate Automatically After A Window Reload](../plans/feature_plan_20260702140004_worktree-state-hydrate-on-reload.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

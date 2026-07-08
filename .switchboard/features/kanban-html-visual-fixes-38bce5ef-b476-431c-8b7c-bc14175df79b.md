@@ -22,3 +22,4 @@ Group of 2 kanban.html visual fixes: add accordion to Subagent Policy section in
 - [ ] [Feature Plan: Prompts Tab Accordion Consistency — Subagent Policy & Git Safety Guardrail](../plans/feature_plan_20260708120900_prompts-tab-accordion-consistency.md) — **CODER CODED**
 - [ ] [Feature Plan: Replace Pulsing Working Animation with Theme-Specific Static Highlight](../plans/feature_plan_20260708120901_kanban-card-coding-animation-claudify-override.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+

@@ -20357,6 +20357,8 @@ What would you like to find?`;
 
             fs.writeFileSync(filePath, content, 'utf8');
 
+            await this._removeOrphanTicketFiles(resolvedRoot, targetDir, provider, id, filename);
+
             try {
                 const cacheService = this._getCacheService(resolvedRoot);
                 // Hash the body only — the YAML frontmatter is local bookkeeping with
@@ -20555,6 +20557,45 @@ What would you like to find?`;
         return content.trim();
     }
 
+    private async _removeOrphanTicketFiles(
+        resolvedRoot: string,
+        targetDir: string,
+        provider: 'linear' | 'clickup',
+        id: string,
+        keepFilename: string
+    ): Promise<void> {
+        try {
+            const cacheService = this._getCacheService(resolvedRoot);
+            const dbTickets = await cacheService.getImportedTickets();
+            const slugPrefix = `${provider}_${id}`;
+            const dbEntry = dbTickets.find((t: any) => t.slugPrefix === slugPrefix);
+
+            const entries = fs.existsSync(targetDir) ? fs.readdirSync(targetDir) : [];
+            const filePrefix = `${provider}_${id}_`;
+            for (const fname of entries) {
+                if (!fname.endsWith('.md') || !fname.startsWith(filePrefix)) { continue; }
+                if (fname === keepFilename) { continue; }
+                const fullPath = path.join(targetDir, fname);
+                // Preserve locally-modified files.
+                if (dbEntry && dbEntry.lastSyncedAt) {
+                    try {
+                        if (fs.statSync(fullPath).mtimeMs > new Date(dbEntry.lastSyncedAt).getTime() + 1000) {
+                            continue; // modified — keep it
+                        }
+                    } catch { /* fall through to delete */ }
+                }
+                try {
+                    fs.unlinkSync(fullPath);
+                    await cacheService.deleteImportedTicket(slugPrefix);
+                } catch (e) {
+                    console.warn('[TaskViewerProvider] orphan cleanup: failed to delete', fullPath, e);
+                }
+            }
+        } catch (e) {
+            console.warn('[TaskViewerProvider] orphan cleanup skipped due to error:', e);
+        }
+    }
+
     private async _writeTaskDocument(
         resolvedRoot: string,
         provider: 'linear' | 'clickup',
@@ -20587,6 +20628,8 @@ What would you like to find?`;
             const filename = `${provider}_${id}_${slug}.md`;
             const filePath = path.join(targetDir, filename);
             fs.writeFileSync(filePath, content, 'utf8');
+
+            await this._removeOrphanTicketFiles(resolvedRoot, targetDir, provider, id, filename);
 
             // Record the fetch time as last_synced_at. Without this, the freshly
             // re-fetched file (mtime = now) would read as "modified" because the
@@ -20634,6 +20677,8 @@ What would you like to find?`;
         let deletedCount = 0;
         const errors: { id: string; error: string }[] = [];
 
+        let fetchComplete = false;
+
         // Fast path: bulk document import from already-fetched list data (no N+1 API calls)
         if (importMode === 'document' && !ids) {
             let items: any[] = [];
@@ -20642,19 +20687,15 @@ What would you like to find?`;
 
             if (provider === 'clickup' && listId) {
                 const clickup = this._getClickUpService(resolvedRoot);
-                // Bug 2 (double-click refresh): this provider owns a PlanningPanelCacheService
-                // instance distinct from the extension-singleton cache that the webview's
-                // `invalidateClickUpCache` / `clickupLoadProject` handlers clear. Without
-                // clearing it here, a refresh re-reads the stale 5-min list cache and writes
-                // stale data to disk, forcing a second refresh. Invalidate on the first page
-                // only (start of a fresh import/refresh) so the import pulls live data; later
-                // pages reuse the freshly-populated cache to avoid re-fetching the full list.
-                // Delta queries bypass the cache entirely (isSimpleQuery=false in getListTasks).
-                if (page === 1 && !append && !isDelta) {
-                    this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
+                if (isDelta) {
+                    const tasks = await clickup.getListTasks(listId, { dateUpdatedGt: deltaSince });
+                    items = tasks;
+                    fetchComplete = true;
+                } else {
+                    const result = await clickup.getListTasksLive(listId);
+                    items = result.tasks;
+                    fetchComplete = result.complete;
                 }
-                const tasks = await clickup.getListTasks(listId, deltaSince !== undefined ? { dateUpdatedGt: deltaSince } : {});
-                items = tasks;  // Process all tasks — getListTasks already paginates internally through ALL tasks
 
                 const h = clickup.getSelectedHierarchy();
                 segments.push(h.spaceName);
@@ -20680,6 +20721,7 @@ What would you like to find?`;
                     ...(deltaSinceIso ? { updatedAfter: deltaSinceIso } : {})
                 });
                 items = issues;
+                fetchComplete = !(issues as any).reachedPageCap;
 
                 const teamName = linear.getTeamName();
                 const projectName = (issues as any).resolutionFailed
@@ -20740,6 +20782,8 @@ What would you like to find?`;
             // Keep-set for the cleanup prune below (top-level tickets we're importing).
             const keepIds = new Set<string>(items.map(it => String(it?.id || '')).filter(Boolean));
 
+            const fetchIsAuthoritative = fetchComplete && !resolutionFailed && rawItemCount > 0;
+
             // For delta pulls, load the cache DB entries once to check conflict
             // status (file mtime > last_synced_at → locally modified → skip).
             let dbTickets: any[] = [];
@@ -20791,7 +20835,7 @@ What would you like to find?`;
             // Locally-modified files (mtime > last_synced_at) are preserved — never
             // destroy unpushed local edits.
             let pruned = 0;
-            if (!isDelta && targetDir && rawItemCount > 0 && !resolutionFailed) {
+            if (!isDelta && targetDir && fetchIsAuthoritative) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbBySlug = new Map<string, any>(
@@ -20845,7 +20889,7 @@ What would you like to find?`;
             // (which stores the provider name 'linear'/'clickup', not the task ID).
             // Gated on rawItemCount > 0 to match the prune's guard — a transient
             // empty fetch must not wipe all local files.
-            if (!isDelta && rawItemCount > 0 && !resolutionFailed) {
+            if (!isDelta && fetchIsAuthoritative) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbTicketsSweep = await cacheService.getImportedTickets();
@@ -20891,7 +20935,7 @@ What would you like to find?`;
                     if (provider === 'clickup' && listId) {
                         this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
                         const clickup = this._getClickUpService(resolvedRoot);
-                        const allTasks = await clickup.getListTasks(listId);
+                        const allTasks = await clickup.getListTasks(listId, { forceRefresh: true });
                         fullRemoteIds = new Set(allTasks.map((t: any) => String(t.id)));
                         fetchSucceeded = true;
                     } else if (provider === 'linear' && projectId) {

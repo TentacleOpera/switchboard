@@ -1131,7 +1131,7 @@ export class ClickUpSyncService {
     return parts.length > 0 ? parts.join('|') : 'default';
   }
 
-  public async getListTasks(
+  private async _fetchListTasksInternal(
     listId: string,
     options: {
       status?: string[];
@@ -1139,8 +1139,9 @@ export class ClickUpSyncService {
       archived?: boolean;
       includeClosed?: boolean;
       dateUpdatedGt?: number;
+      forceRefresh?: boolean;
     } = {}
-  ): Promise<ClickUpTask[]> {
+  ): Promise<{ tasks: ClickUpTask[]; complete: boolean }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
       throw new Error('ClickUp not configured');
@@ -1159,11 +1160,11 @@ export class ClickUpSyncService {
     const cacheKey = isSimpleQuery ? normalizedListId : `${normalizedListId}:${this._fingerprintListOptions(options)}`;
 
     // Try cache first for simple queries
-    if (isSimpleQuery && this._cacheService) {
+    if (isSimpleQuery && !options.forceRefresh && this._cacheService) {
       try {
         const cached = this._cacheService.getCachedTasks<ClickUpTask>('clickup', cacheKey);
         if (cached) {
-          return cached;
+          return { tasks: cached, complete: true };
         }
       } catch (e) {
         // Fail-open: continue to API fetch
@@ -1174,8 +1175,10 @@ export class ClickUpSyncService {
     const includeClosed = options.includeClosed !== false;
     const tasks: ClickUpTask[] = [];
     let page = 0;
+    let complete = false;
+    const maxPages = 100;
 
-    while (true) {
+    while (page < maxPages) {
       // ClickUp v2 API: date_updated_gt is Unix epoch milliseconds on
       // GET /list/{id}/task, with order_by=updated for sort order.
       const deltaParam = options.dateUpdatedGt ? `&date_updated_gt=${options.dateUpdatedGt}&order_by=updated` : '';
@@ -1192,7 +1195,13 @@ export class ClickUpSyncService {
         : [];
       tasks.push(...pageTasks);
 
-      if (pageTasks.length < 100) {
+      const isLastPage = result.data?.last_page === true;
+      if (isLastPage) {
+        complete = true;
+        break;
+      }
+
+      if (pageTasks.length === 0) {
         break;
       }
       page++;
@@ -1217,7 +1226,28 @@ export class ClickUpSyncService {
       }
     }
 
-    return dedupedTasks;
+    return { tasks: dedupedTasks, complete };
+  }
+
+  public async getListTasks(
+    listId: string,
+    options: {
+      status?: string[];
+      assignee?: string;
+      archived?: boolean;
+      includeClosed?: boolean;
+      dateUpdatedGt?: number;
+      forceRefresh?: boolean;
+    } = {}
+  ): Promise<ClickUpTask[]> {
+    const result = await this._fetchListTasksInternal(listId, options);
+    return result.tasks;
+  }
+
+  public async getListTasksLive(
+    listId: string
+  ): Promise<{ tasks: ClickUpTask[]; complete: boolean }> {
+    return this._fetchListTasksInternal(listId, { forceRefresh: true });
   }
 
   public async getTaskDetails(taskId: string): Promise<{

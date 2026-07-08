@@ -844,12 +844,16 @@ export class LinearSyncService {
       pageCount++;
       if (pageCount >= maxPages) {
         console.warn(`[LinearSync] Reached maximum page cap (${maxPages}) for queryIssues. Some issues may be omitted.`);
+        (issues as any).reachedPageCap = true;
       }
       await this.delay(200);
     }
 
     // Apply client-side project name filters
     const filteredIssues = options.projectScoped ? issues : this._applyProjectNameFilters(issues, config);
+    if ((issues as any).reachedPageCap) {
+      (filteredIssues as any).reachedPageCap = true;
+    }
 
     // Update cache and reverse map for simple queries
     if (isSimpleQuery && this._cacheService) {

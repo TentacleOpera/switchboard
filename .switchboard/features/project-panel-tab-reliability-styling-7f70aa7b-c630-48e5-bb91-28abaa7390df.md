@@ -27,3 +27,4 @@ Fix the Project panel's tab state synchronization, filter navigation, and visual
 - [ ] [Bug: Project Panel Projects Tab Missing Styling and Uses Wrong UX Pattern](../plans/feature_plan_20260626100860_projects_tab_styling_ux_inconsistency.md) — **CODE REVIEWED**
 - [ ] [Bug: Review Plan Button Opens Widest Filter Instead of Narrowest](../plans/feature_plan_20260626100856_review_plan_widest_filter.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

@@ -1729,6 +1729,7 @@
             stateFilter: document.getElementById('tickets-state-filter'),
             clickUpStatusFilter: document.getElementById('tickets-status-filter'),
             refreshButton: document.getElementById('tickets-refresh'),
+            refetchButton: document.getElementById('tickets-refetch'),
             emptyState: document.getElementById('tickets-empty-state'),
             issuesContainer: document.getElementById('tickets-issues-container'),
             loadMoreButton: document.getElementById('tickets-load-more'),
@@ -8466,7 +8467,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     function initTicketsTab() {
         const {
-            searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton,
+            searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, refetchButton, loadMoreButton,
             btnImportAllTickets, importAllKanbanButton, linkAllButton, syncAllButton,
             ticketsSourceBtn, ticketsSourceModal, btnCloseTicketsSourceModal, btnCloseTicketsSourceModalAction,
             ticketsAgentApiBtn, ticketsAgentApiModal, btnCloseTicketsAgentApiModal, btnCloseTicketsAgentApiModalAction
@@ -8903,6 +8904,37 @@ Instructions:
                         provider: 'clickup',
                         listId: clickUpSelectedListId,
                         workspaceRoot: ticketsWorkspaceRoot
+                    });
+                } else {
+                    loadClickUpSpaces();
+                }
+            }
+        });
+
+        // Refetch button — full pull (ignore/bypass the delta cursor).
+        refetchButton?.addEventListener('click', () => {
+            linearIssueDetailCache.clear();
+            clickUpTaskDetailCache.clear();
+            if (lastIntegrationProvider === 'linear') {
+                if (linearProjectPickerValue) {
+                    vscode.postMessage({
+                        type: 'refreshTicketsDelta',
+                        provider: 'linear',
+                        projectId: linearProjectPickerValue,
+                        workspaceRoot: ticketsWorkspaceRoot,
+                        forceFull: true
+                    });
+                } else {
+                    loadLinearProject(true);
+                }
+            } else if (lastIntegrationProvider === 'clickup') {
+                if (clickUpSelectedListId) {
+                    vscode.postMessage({
+                        type: 'refreshTicketsDelta',
+                        provider: 'clickup',
+                        listId: clickUpSelectedListId,
+                        workspaceRoot: ticketsWorkspaceRoot,
+                        forceFull: true
                     });
                 } else {
                     loadClickUpSpaces();

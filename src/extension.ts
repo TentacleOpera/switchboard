@@ -491,6 +491,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const globalPlanWatcher = new GlobalPlanWatcherService(
         (workspaceRoot: string) => (kanbanProvider as any)._getClickUpService(workspaceRoot),
+        (workspaceRoot: string) => (kanbanProvider as any)._getLinearService(workspaceRoot),
         outputChannel
     );
     await globalPlanWatcher.initialize();

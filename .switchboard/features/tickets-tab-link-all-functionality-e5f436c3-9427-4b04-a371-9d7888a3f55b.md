@@ -24,3 +24,4 @@ Make the "Link All" copy-paths feature reliable and move filter controls to thei
 - [ ] [Move Status/State Filter Out of the Tickets Source Modal](../plans/feature_plan_20260626152607_move-status-filter-out-of-source-modal.md) — **CODE REVIEWED**
 - [ ] [Fix "Link All" on Tickets Tab Not Fetching All Sidebar Tickets](../plans/feature_plan_20260626152608_fix-link-all-not-fetching-all-tickets.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

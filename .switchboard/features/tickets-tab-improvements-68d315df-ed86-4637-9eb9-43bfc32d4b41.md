@@ -15,3 +15,4 @@ The tickets tab needs to be actually usable for subtasks and better sidebar navi
 - [ ] [Sidebar Subtask Drill-Down When Parent Task is Selected in Tickets Tab](../plans/feature_plan_20260630100304_sidebar-subtask-drill-down.md) — **CODE REVIEWED**
 - [ ] [Replace Subtask Top-Row Buttons with "To Parent Task" Navigation in Tickets Tab](../plans/feature_plan_20260630100305_subtask-top-row-buttons-to-parent.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

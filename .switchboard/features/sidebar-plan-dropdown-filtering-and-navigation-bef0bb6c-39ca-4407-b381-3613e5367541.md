@@ -20,3 +20,4 @@ Fix the implementation.html plan-select dropdown so it correctly respects the ac
 - [ ] [Plan Select Dropdown Does Not Filter Out Project Plans in Base Workspace](../plans/feature_plan_20260702114251_plan-dropdown-filter-project-plans-in-base-workspace.md) — **CODE REVIEWED**
 - [ ] [Plan Select Dropdown Does Not Differentiate Epics From Subtask Plans](../plans/feature_plan_20260702114330_plan-dropdown-differentiate-epics-from-subtasks.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

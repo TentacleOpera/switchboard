@@ -9,6 +9,7 @@ import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import type { ClickUpSyncService } from './ClickUpSyncService';
+import type { LinearSyncService } from './LinearSyncService';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
     private _watchers = new Map<string, vscode.FileSystemWatcher>();
@@ -30,8 +31,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _lastScanTime = new Map<string, number>(); // Track last scan per workspace
     private _scanInProgress = false; // Guard against overlapping scans
     private _recentRenames = new Set<string>();
-    private _recentlyDeletedColumns = new Map<string, { column: string; ts: number }>();
     private _scanSeenPaths = new Map<string, Set<string>>();
+    private _gitWatchers = new Map<string, vscode.FileSystemWatcher>();
+    private _gitOpActiveUntil = new Map<string, number>();
+    private _recentEvents: { fsPath: string; ts: number }[] = [];
 
     // Deferred **Feature:** links: subtask plan-id → unresolved feature plan-id.
     // Retried when a feature file is imported or on the next watcher cycle.
@@ -41,6 +44,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
     // Paths currently being written by _createInitiatedPlan — skip watcher insert to avoid duplicates
     private static _pendingCreations = new Map<string, NodeJS.Timeout>();
+
+    // Tombstone map to preserve the kanban column of deleted files during atomic write DELETE->INSERT race.
+    // Keyed by `${relativePath}|${workspaceId}`
+    private _recentlyDeletedColumns = new Map<string, { column: string; ts: number }>();
 
     public static registerPendingCreation(absolutePath: string): void {
         const key = path.resolve(absolutePath);
@@ -86,6 +93,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
 
     constructor(
         private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
+        private readonly _getLinearService: (workspaceRoot: string) => LinearSyncService,
         outputChannel?: vscode.OutputChannel
     ) {
         this._outputChannel = outputChannel;
@@ -104,6 +112,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         // periodicScanEnabled only controls whether the scan *repeats*; the initial pass
         // must always happen so pre-startup files are not silently dropped.
         this._runStartupScan();
+        void this.runPurgeSweep();
         
         // Watch for configuration changes
         const configListener = vscode.workspace.onDidChangeConfiguration(async (e) => {
@@ -197,6 +206,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                             `[GlobalPlanWatcher] Activity-light timeout sweep failed for ${folder}: ${sweepErr}`
                         );
                     }
+                }
+                try {
+                    await this.runPurgeSweep();
+                } catch (purgeErr) {
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Purge sweep failed: ${purgeErr}`);
                 }
             } finally {
                 this._scanInProgress = false;
@@ -298,6 +312,13 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             if (!foldersToWatch.includes(folder)) {
                 watcher.dispose();
                 this._watchers.delete(folder);
+                
+                const gitWatcher = this._gitWatchers.get(folder);
+                if (gitWatcher) {
+                    gitWatcher.dispose();
+                    this._gitWatchers.delete(folder);
+                }
+                this._gitOpActiveUntil.delete(folder);
                 
                 const native = this._nativeWatchers.get(folder);
                 if (native) {
@@ -407,8 +428,128 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             this._outputChannel?.appendLine(`[GlobalPlanWatcher] Folder ${folder} is not a VS Code workspace folder, relying on native fs.watch`);
         }
 
+        const gitDir = this._resolveDotGitDir(folder);
+        if (gitDir && !this._gitWatchers.has(folder)) {
+            try {
+                const headPattern = new vscode.RelativePattern(vscode.Uri.file(gitDir), 'HEAD');
+                const headWatcher = vscode.workspace.createFileSystemWatcher(headPattern, false, false, false);
+                let lastBranchName = '';
+                const checkBranch = () => {
+                    try {
+                        const headPath = path.join(gitDir, 'HEAD');
+                        if (fs.existsSync(headPath)) {
+                            const content = fs.readFileSync(headPath, 'utf8').trim();
+                            if (content !== lastBranchName) {
+                                lastBranchName = content;
+                                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Git branch/HEAD changed for ${folder}: ${content}`);
+                                this._gitOpActiveUntil.set(folder, Date.now() + 15000);
+                            }
+                        }
+                    } catch (err) {
+                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Failed to check branch in Git watcher for ${folder}: ${err}`);
+                    }
+                };
+                headWatcher.onDidChange(checkBranch);
+                headWatcher.onDidCreate(checkBranch);
+                headWatcher.onDidDelete(checkBranch);
+                this._gitWatchers.set(folder, headWatcher);
+                this._disposables.push(headWatcher);
+                checkBranch();
+            } catch (gitWatchErr) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Failed to watch HEAD for ${folder}: ${gitWatchErr}`);
+            }
+        }
+
         // Native fs.watch fallback (handles non-workspace folders and .gitignore issues)
         this._setupNativeWatcher(folder);
+    }
+
+    public isGitOpActive(workspaceRoot: string): boolean {
+        const gitOpTime = this._gitOpActiveUntil.get(workspaceRoot) || 0;
+        return Date.now() < gitOpTime;
+    }
+
+    private _resolveDotGitDir(workspaceRoot: string): string | null {
+        try {
+            const dotGitPath = path.join(workspaceRoot, '.git');
+            if (!fs.existsSync(dotGitPath)) {
+                return null;
+            }
+            const stat = fs.statSync(dotGitPath);
+            if (stat.isDirectory()) {
+                return dotGitPath;
+            } else if (stat.isFile()) {
+                const content = fs.readFileSync(dotGitPath, 'utf8');
+                const match = content.match(/^gitdir:\s*(.+)$/m);
+                if (match) {
+                    const gitDirPointer = match[1].trim();
+                    return path.isAbsolute(gitDirPointer)
+                        ? gitDirPointer
+                        : path.resolve(workspaceRoot, gitDirPointer);
+                }
+            }
+        } catch (e) {
+            console.error(`[GlobalPlanWatcher] Failed to resolve .git for ${workspaceRoot}:`, e);
+        }
+        return null;
+    }
+
+    public async runPurgeSweep(): Promise<void> {
+        try {
+            const folders = await this._getAllMappedFolders();
+            for (const folder of folders) {
+                if (this.isGitOpActive(folder)) {
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping purge sweep for ${folder} because git operation is active.`);
+                    continue;
+                }
+                const db = KanbanDatabase.forWorkspace(folder);
+                await db.ensureReady();
+                const workspaceId = await db.getWorkspaceId();
+                if (!workspaceId) continue;
+
+                // 24 hour grace period
+                const cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+                const missingPlans = await db.getMissingPlansOlderThan(cutoffIso, workspaceId);
+                for (const plan of missingPlans) {
+                    // 1. External tracker archive:
+                    if (plan.clickupTaskId) {
+                        try {
+                            const clickup = this._getClickUpService(folder);
+                            const clickupConfig = await clickup.loadConfig();
+                            if (clickupConfig?.deleteSyncEnabled === true) {
+                                await clickup.archiveTask(plan.clickupTaskId);
+                            }
+                        } catch (clickUpErr) {
+                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] ClickUp archive failed for task ${plan.clickupTaskId} during purge: ${clickUpErr}`);
+                        }
+                    }
+                    if (plan.linearIssueId) {
+                        try {
+                            const linear = this._getLinearService(folder);
+                            const linearConfig = await linear.loadConfig();
+                            if (linearConfig?.deleteSyncEnabled === true) {
+                                await linear.archiveIssue(plan.linearIssueId);
+                            }
+                        } catch (linearErr) {
+                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Linear archive failed for issue ${plan.linearIssueId} during purge: ${linearErr}`);
+                        }
+                    }
+                    // 2. Real DB delete:
+                    await db.deletePlanByPlanFile(plan.planFile, plan.workspaceId);
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Purged missing plan: ${plan.planFile}`);
+                    
+                    if (plan.featureId && this._regenerateFeatureFile) {
+                        try {
+                            await this._regenerateFeatureFile(folder, plan.featureId);
+                        } catch (regenErr) {
+                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] regenerateFeatureFile failed for ${plan.featureId} during purge: ${regenErr}`);
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error in purge sweep: ${err}`);
+        }
     }
 
     private _setupNativeWatcher(folder: string): void {
@@ -452,7 +593,29 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         }
     }
 
+    private _registerEventForBulkCheck(fsPath: string, workspaceRoot: string): void {
+        const now = Date.now();
+        this._recentEvents.push({ fsPath, ts: now });
+        this._recentEvents = this._recentEvents.filter(e => now - e.ts <= 2000);
+        if (this._recentEvents.length >= 5) {
+            const count = this._recentEvents.length;
+            this._recentEvents = []; // reset
+            void (async () => {
+                try {
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                    await db.ensureReady();
+                    await db.writeDbBackup('bulk-change');
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] bulk change (${count}); snapshot written`);
+                    vscode.window.showInformationMessage(`Multiple cards (${count}) changed by a file sync. Backup snapshot created.`);
+                } catch (e) {
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Failed to write bulk-change backup: ${e}`);
+                }
+            })();
+        }
+    }
+
     private _debounceHandleFile(uri: vscode.Uri, workspaceRoot: string): void {
+        this._registerEventForBulkCheck(uri.fsPath, workspaceRoot);
         const key = uri.fsPath;
         const existing = this._debounceTimers.get(key);
         if (existing) clearTimeout(existing);
@@ -465,6 +628,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     private _debounceHandleDelete(uri: vscode.Uri, workspaceRoot: string): void {
+        this._registerEventForBulkCheck(uri.fsPath, workspaceRoot);
         const key = `delete:${uri.fsPath}`;
         const existing = this._debounceTimers.get(key);
         if (existing) clearTimeout(existing);
@@ -572,6 +736,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             let plan = await db.getPlanByPlanFile(relativePath, workspaceId);
+            if (plan && plan.status === 'missing') {
+                await db.reactivatePlanByPlanFile(plan.planFile, plan.workspaceId);
+                plan.status = 'active';
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Reactivated missing plan: ${plan.planFile}`);
+            }
 
             let fileMtime = new Date().toISOString();
             let fileBirthtime = fileMtime;
@@ -596,6 +765,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 const absolutePath = uri.fsPath.replace(/\\/g, '/');
                 plan = await db.getPlanByPlanFile(absolutePath, workspaceId);
                 if (plan) {
+                    if (plan.status === 'missing') {
+                        await db.reactivatePlanByPlanFile(plan.planFile, plan.workspaceId);
+                        plan.status = 'active';
+                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Reactivated missing plan (absolute fallback): ${plan.planFile}`);
+                    }
                     // Update to relative path for consistency
                     if (plan.sourceType === 'local') {
                         await db.movePlanByPlanFile(absolutePath, workspaceId, plan.kanbanColumn, relativePath);
@@ -923,31 +1097,14 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                         this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping delete for archived completed plan: ${plan.planFile}`);
                         return;
                     }
-                    // Capture feature_id BEFORE deletePlanByPlanFile destroys the row — the
-                    // parent link (plans.feature_id) is gone after the delete, so a post-delete
-                    // read cannot recover it. Mirrors the _removeSubtaskFromFeature pattern.
-                    const featureId = plan.featureId || '';
-                    const tombKey = `${relativePath}|${plan.workspaceId}`;
-                    this._recentlyDeletedColumns.set(tombKey, { column: plan.kanbanColumn, ts: Date.now() });
-                    setTimeout(() => this._recentlyDeletedColumns.delete(tombKey), 5000);
-                    this._outputChannel?.appendLine(
-                        `[GlobalPlanWatcher] Tombstoned column '${plan.kanbanColumn}' for ${relativePath} before hard delete`
-                    );
-                    await db.deletePlanByPlanFile(plan.planFile, plan.workspaceId);
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Deleted plan: ${plan.planFile}`);
+                    const tombKey = `${relativePath}|${workspaceId}`;
+                    this._recentlyDeletedColumns.set(tombKey, {
+                        column: plan.kanbanColumn || '',
+                        ts: Date.now()
+                    });
+                    await db.markPlanMissingByPlanFile(plan.planFile, plan.workspaceId);
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Soft-deleted (marked missing) plan: ${plan.planFile}`);
                     this._onPlanDiscovered.fire({ uri, workspaceRoot });
-                    // Regenerate the parent feature's ## Subtasks block now that the subtask
-                    // row is gone. No-op for non-subtask deletes (featureId === ''). For
-                    // in-app deletes the DB row is already gone before the .md is unlinked
-                    // (ordering rule), so getPlanByPlanFile above returned null and this
-                    // branch never ran — the callback only fires for true external deletions.
-                    if (featureId && this._regenerateFeatureFile) {
-                        try {
-                            await this._regenerateFeatureFile(workspaceRoot, featureId);
-                        } catch (regenErr) {
-                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] regenerateFeatureFile failed for ${featureId}: ${regenErr}`);
-                        }
-                    }
                 }
             }
         } catch (err) {

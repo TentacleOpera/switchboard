@@ -14,6 +14,7 @@ suite('GlobalPlanWatcherService', () => {
     let service: GlobalPlanWatcherService;
     let outputChannelStub: any;
     let getClickUpServiceStub: sinon.SinonStub;
+    let getLinearServiceStub: sinon.SinonStub;
 
     setup(() => {
         sandbox = sinon.createSandbox();
@@ -21,7 +22,8 @@ suite('GlobalPlanWatcherService', () => {
             appendLine: sandbox.stub()
         };
         getClickUpServiceStub = sandbox.stub();
-        service = new GlobalPlanWatcherService(getClickUpServiceStub, outputChannelStub);
+        getLinearServiceStub = sandbox.stub();
+        service = new GlobalPlanWatcherService(getClickUpServiceStub, getLinearServiceStub, outputChannelStub);
     });
 
     teardown(() => {

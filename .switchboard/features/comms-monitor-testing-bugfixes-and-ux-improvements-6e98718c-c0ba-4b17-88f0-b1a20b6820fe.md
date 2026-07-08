@@ -47,3 +47,4 @@ Web research was run and findings integrated into the plans. Of the 4 original u
 - [ ] [Comms Monitor: Stop Polling Kills the Terminal Instead of Just Stopping Polling](../plans/feature_plan_20260706092059_comms-monitor-stop-polling-sends-clear.md) — **PLAN REVIEWED**
 - [ ] [Comms Monitor: Reduce Delay Between Prompt Paste and Enter Submission](../plans/feature_plan_20260706092101_comms-monitor-reduce-paste-to-enter-delay.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+

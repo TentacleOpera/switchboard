@@ -24,3 +24,4 @@ Group of 3 worktree-tab fixes: abandon button lag (optimistic UI + N+1 query opt
 - [ ] [Feature Plan: Remove Autoban 5-Terminal Cap from Manual Worktree Creation](../plans/feature_plan_20260708120904_worktree-terminal-limit-manual-vs-autoban.md) — **CODER CODED**
 - [ ] [Feature Plan: Add Column Subheaders to Worktree Creation Dropdown](../plans/feature_plan_20260708120907_worktree-creation-dropdown-column-subheaders.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+

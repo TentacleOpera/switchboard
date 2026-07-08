@@ -32,7 +32,7 @@ export interface WorktreeRow {
     tier: string | null;
 }
 
-export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted';
+export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted' | 'missing';
 
 export interface KanbanPlanRecord {
     planId: string;
@@ -761,7 +761,7 @@ export const VALID_KANBAN_COLUMNS = new Set([
     'CODED',
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
-const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted']);
+const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted', 'missing']);
 
 // Allow built-in columns plus custom agent columns (alphanumeric, underscores, spaces)
 const SAFE_COLUMN_NAME_RE = /^[a-zA-Z0-9 _-]{1,128}$/;
@@ -2490,6 +2490,38 @@ export class KanbanDatabase {
         );
     }
 
+    public async markPlanMissingByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            "UPDATE plans SET status = 'missing', updated_at = ? WHERE plan_file = ? AND workspace_id = ? AND status = 'active'",
+            [new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
+    public async reactivatePlanByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        return this._persistedUpdate(
+            "UPDATE plans SET status = 'active', updated_at = ? WHERE plan_file = ? AND workspace_id = ? AND status = 'missing'",
+            [new Date().toISOString(), normalized, workspaceId]
+        );
+    }
+
+    public async purgeMissingPlansOlderThan(cutoffIso: string, workspaceId: string): Promise<boolean> {
+        return this._persistedUpdate(
+            "DELETE FROM plans WHERE status = 'missing' AND workspace_id = ? AND updated_at < ?",
+            [workspaceId, cutoffIso]
+        );
+    }
+
+    public async getMissingPlansOlderThan(cutoffIso: string, workspaceId: string): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans WHERE status = 'missing' AND workspace_id = ? AND updated_at < ?`,
+            [workspaceId, cutoffIso]
+        );
+        return this._readRows(stmt);
+    }
+
     /** @deprecated session_id is no longer the unique key; use deletePlanByPlanFile instead. */
     public async deletePlan(sessionId: string): Promise<boolean> {
         const plan = await this.getPlanBySessionId(sessionId);
@@ -3319,7 +3351,7 @@ export class KanbanDatabase {
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE workspace_id = ?
                AND clickup_task_id = ?
-               AND status != 'deleted'
+               AND status NOT IN ('deleted', 'missing')
               ORDER BY updated_at DESC
               LIMIT 1`,
             [workspaceId, normalizedTaskId]
@@ -3342,7 +3374,7 @@ export class KanbanDatabase {
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE workspace_id = ?
                AND linear_issue_id = ?
-               AND status != 'deleted'
+               AND status NOT IN ('deleted', 'missing')
              ORDER BY updated_at DESC
              LIMIT 1`,
             [workspaceId, normalizedIssueId]
@@ -3365,7 +3397,7 @@ export class KanbanDatabase {
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE workspace_id = ?
                AND notion_page_id = ?
-               AND status != 'deleted'
+               AND status NOT IN ('deleted', 'missing')
              ORDER BY updated_at DESC
              LIMIT 1`,
             [workspaceId, normalizedPageId]
@@ -3469,7 +3501,8 @@ export class KanbanDatabase {
                 WHEN 'completed' THEN 1
                 WHEN 'archived' THEN 2
                 WHEN 'deleted' THEN 3
-                ELSE 4
+                WHEN 'missing' THEN 4
+                ELSE 5
              END,
              updated_at DESC
              LIMIT 1`,
@@ -5195,14 +5228,15 @@ export class KanbanDatabase {
         console.log(`[KanbanDatabase] _convertAbsoluteToRelativePaths: converted ${toConvert.length} record(s)`);
     }
 
-    private async _writePreMigrationBackup(): Promise<void> {
+    public async writeDbBackup(reason: string): Promise<void> {
         if (!this._workspaceRoot || !this._db) return;
         try {
             const backupDir = path.join(this._workspaceRoot, '.switchboard', 'dbbackup');
             await fs.promises.mkdir(backupDir, { recursive: true });
 
             const ts = new Date().toISOString().replace(/[:.]/g, '-');
-            const backupPath = path.join(backupDir, `kanban.db.backup.${ts}`);
+            const cleanReason = reason.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const backupPath = path.join(backupDir, `kanban.db.backup.${cleanReason}.${ts}`);
             const data = this._db.export();
             await fs.promises.writeFile(backupPath, Buffer.from(data));
 
@@ -5214,8 +5248,12 @@ export class KanbanDatabase {
                 await fs.promises.unlink(path.join(backupDir, old)).catch(() => { /* best effort */ });
             }
         } catch (e) {
-            console.error('[KanbanDatabase] Failed to write pre-migration backup:', e);
+            console.error(`[KanbanDatabase] Failed to write DB backup (${reason}):`, e);
         }
+    }
+
+    private async _writePreMigrationBackup(): Promise<void> {
+        await this.writeDbBackup('pre-migration');
     }
 
     private async _runMigrations(): Promise<void> {
@@ -6790,7 +6828,7 @@ FROM plans
                 `SELECT plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                         repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
                         brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                        clickup_task_id, linear_issue_id` +
+                        clickup_task_id, linear_issue_id, feature_id, project, is_feature` +
                 ` FROM plans WHERE workspace_id = ? AND status = 'active'`,
                 [workspaceId]
             );
@@ -6887,7 +6925,9 @@ FROM plans
                     notionPageId: p.notion_page_id || p.notionPageId || '',
                     worktreeId: p.worktree_id ?? p.worktreeId ?? undefined,
                     workspaceName: p.workspace_name || p.workspaceName || '',
-                    projectId: p.project_id !== null && p.project_id !== undefined ? Number(p.project_id) : (p.projectId !== null && p.projectId !== undefined ? Number(p.projectId) : null)
+                    projectId: p.project_id !== null && p.project_id !== undefined ? Number(p.project_id) : (p.projectId !== null && p.projectId !== undefined ? Number(p.projectId) : null),
+                    isFeature: p.is_feature !== undefined ? Number(p.is_feature) : (p.isFeature !== undefined ? Number(p.isFeature) : 0),
+                    featureId: p.feature_id || p.featureId || ''
                 };
 
                 try {

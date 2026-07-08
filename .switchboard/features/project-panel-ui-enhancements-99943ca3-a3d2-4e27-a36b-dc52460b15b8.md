@@ -18,3 +18,4 @@ Add and refine UI in project.html. Reposition the Edit and AutoFetch buttons and
 - [ ] [project.html Kanban tab — reposition Edit button, AutoFetch modal, and fix Chat Prompt formatting](../plans/feature_plan_20260702083645_project-html-edit-autofetch-chatprompt-layout.md) — **CODE REVIEWED**
 - [ ] [Epics Tab — Add Project Filter Dropdown](../plans/feature_plan_20260702104217_epics-tab-project-filter.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

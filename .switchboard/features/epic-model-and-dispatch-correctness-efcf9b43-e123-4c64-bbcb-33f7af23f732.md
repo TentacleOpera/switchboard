@@ -26,3 +26,4 @@ Make the epic data model and its dispatch and routing behavior consistent and co
 - [ ] [Show Epic Complexity on the Epic Card (Replace the Timestamp)](../plans/feature_plan_20260629124815_epic-card-complexity-display.md) — **CODE REVIEWED**
 - [ ] [Remove the Worktree Chip from Epic Cards (Visual Noise)](../plans/feature_plan_20260629130000_remove-epic-worktree-chip.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

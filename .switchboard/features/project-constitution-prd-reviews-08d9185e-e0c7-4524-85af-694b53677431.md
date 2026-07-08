@@ -21,3 +21,4 @@ Two reinforcing workstreams:
 - [ ] [Rework the Acceptance Tester into an Intent-Conformance Reviewer](../plans/feature_plan_20260628212519_acceptance-tester-intent-conformance-rework.md) — **CODE REVIEWED**
 - [ ] [Bridge planning.html Docs → Project Context (Set as Requirements / Constitution)](../plans/feature_plan_20260628213500_docs-to-project-context-bridge.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

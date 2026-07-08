@@ -47,3 +47,4 @@ The context pipeline: **NotebookLM (get code into an analysis system) → author
 - [ ] [Project Context Hub — Dev Docs Tab + project.html Information Architecture](../plans/project-html-dev-docs-tab-and-ia.md) — **CODE REVIEWED**
 - [ ] [Project-Context Sync — project.html Content → Notion + Linear](../plans/project-context-sync-to-notion-and-linear.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

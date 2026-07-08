@@ -6024,14 +6024,14 @@ Please format the updated output document strictly as follows:
                     // triggered only by the explicit status-filter change, not the
                     // every-open path, so it does not reintroduce the target churn.
                     const includeClosed = !!msg.includeClosed;
-                    const forceFull = includeClosed;  // closed-status-filter needs the full set
+                    const forceFull = includeClosed || !!msg.forceFull;  // closed-status-filter or explicit force-full needs the full set
                     let lastPullIso: string | null = null;
                     if (!forceFull && kanbanDb) {
                         try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
                     }
                     const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
                     const deltaSinceIso = lastPullIso || undefined;
-                    const isDeltaRefresh = lastPullIso !== null;  // false when forceFull or first-open
+                    const isDeltaRefresh = lastPullIso !== null && !forceFull;  // false when forceFull or first-open
 
                     const result: any = await vscode.commands.executeCommand(
                         'switchboard.importAllTasks',

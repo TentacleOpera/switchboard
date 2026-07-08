@@ -20,3 +20,4 @@ Enable a repeatable loop for stakeholder document artifacts hosted on claude.ai:
 - [ ] [Claude.ai Artifact Round-Trip in the planning.html HTML Tab](../plans/feature_plan_20260629121023_artifact-roundtrip-in-html-tab.md) — **CODE REVIEWED**
 - [ ] ["Claude Artifacts" Terminal-Only Agent + Send-to-Terminal Buttons](../plans/feature_plan_20260629125310_claude-artifacts-agent-and-send-to-terminal.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

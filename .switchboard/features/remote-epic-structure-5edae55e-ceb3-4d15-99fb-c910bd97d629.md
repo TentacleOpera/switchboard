@@ -52,3 +52,4 @@ See the coordination plan `feature_plan_20260701_remote-control-production-seque
 - [ ] [Plan: Remote Control Epic-Aware State Mirroring](../plans/remote-control-epic-aware-mirroring.md) — **CODE REVIEWED**
 - [ ] [Plan: Notion Backup Epic Schema + Remote Agent Epic Orientation](../plans/notion-backup-epic-schema-and-remote-orientation.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

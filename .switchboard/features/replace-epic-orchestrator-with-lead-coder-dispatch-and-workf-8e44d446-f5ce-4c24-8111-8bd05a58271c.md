@@ -22,3 +22,4 @@ Retire the dedicated epic-orchestration lane — the orchestrator role, its term
 - [ ] [Sticky Epic Workflow Toggle Buttons (Ultracode / Goal) with Prompt Prepend](../plans/feature_plan_20260629113946_sticky-epic-workflow-toggle-buttons.md) — **CODE REVIEWED**
 - [ ] [Remove the Epic Orchestrator Role, ORCHESTRATING Column, and Orchestrate Buttons](../plans/feature_plan_20260629113947_remove-epic-orchestrator-role-and-column.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

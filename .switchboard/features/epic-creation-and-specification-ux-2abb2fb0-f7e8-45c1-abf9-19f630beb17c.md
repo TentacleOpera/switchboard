@@ -25,3 +25,4 @@ Make the journey of creating and fleshing out an epic coherent and correct, from
 - [ ] [Refine Epic Skill & Epics-Tab Button](../plans/feature_plan_20260628222343_refine-epic-skill-and-card-button.md) — **CODE REVIEWED**
 - [ ] [Extract the Suggest-Epics Orchestration Flow into a Model-Invocable Skill](../plans/feature_plan_20260629114530_extract-suggest-epics-flow-into-skill.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

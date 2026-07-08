@@ -286,7 +286,7 @@ export class ContinuousSyncService implements vscode.Disposable {
   }
 
   private async _handleFileChange(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
-    if (!this._serviceEnabled) {
+    if (!this._serviceEnabled || this._globalPlanWatcher.isGitOpActive(workspaceRoot)) {
       return;
     }
 

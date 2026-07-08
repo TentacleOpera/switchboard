@@ -18,3 +18,4 @@ Fix three reliability issues in the planning.html Tickets tab. Stale doc preview
 - [ ] [Comments Manager in Tickets Tab Does Not Show Replies After Refetch](../plans/feature_plan_20260701152252_comments-manager-replies-not-showing-after-refetch.md) — **CODE REVIEWED**
 - [ ] [Tickets: stale doc preview when switching list/project](../plans/feature_plan_20260702105126_tickets-stale-doc-preview-on-list-change.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+

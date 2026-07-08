@@ -209,3 +209,4 @@ No outstanding uncertainties remain.
 - [ ] [Kanban Startup Reconciler for Remote Plan Status Changes](../plans/kanban-startup-reconciler.md) — **CODE REVIEWED**
 - [ ] [Add /sw-remote Entry Skill for Remote Switchboard Sessions](../plans/sw-remote-entry-skill.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
