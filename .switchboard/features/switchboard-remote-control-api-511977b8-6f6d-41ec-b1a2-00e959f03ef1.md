@@ -32,7 +32,7 @@ The Switchboard Remote-Control API turns the VS Code extension into a host-agnos
 ## Subtasks
 - [ ] [Feature A · A1 — Protocol Catalog + Discovery Endpoint](../plans/extract-standalone-npx-01-protocol-core.md) — **LEAD CODED**
 - [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **LEAD CODED**
-- [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **LEAD CODED**
+- [x] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **LEAD CODED**
 - [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **LEAD CODED**
 - [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
@@ -67,27 +67,25 @@ Plan: `.switchboard/plans/feature-management-declarative-path-addressed.md`
 8. **Cheatsheet** — "Reorganize Features (declarative)" section appended to `kanban_operations/SKILL.md` with end-to-end recipe + the `get-state.js | jq` note. Replaced the "planned" caveat with "landed".
 - **Not done (deferred):** rewriting `create_feature.md` and `group-into-features` skills around reconcile (the existing verb scripts + new reconcile script cover the path; the skill rewrites are documentation polish for a follow-up). Optional `POST /kanban/plans/split` standalone primitive folded into reconcile (inline `{slug,title,body}` covers it).
 
-### ⏳ Remaining subtasks (next session)
-
-#### Switchboard Manage — Host-Agnostic Management Console Skill
+### ✅ Switchboard Manage — Host-Agnostic Management Console Skill (DONE, session 2026-07-08)
 Plan: `.switchboard/plans/switchboard-manage-console-skill.md`
-1. `LocalApiServer`: add `orchestrationStart`, `orchestrationStop` callbacks to options type; add `_handleOrchestrationStart` + `_handleOrchestrationStop` route arms mirroring `_handleOrchestrationDispatch` (`:791-839`).
-2. Provider wiring: pass `orchestrationStart: (root) => this.startOrchestratorFromKanban(root)` and `orchestrationStop: () => this.stopOrchestratorFromKanban()`. Both methods already `public` (`:7579` and `:7769`).
-3. Author `.agents/skills/switchboard-manage/SKILL.md` (persona + HTTP surface by reference to `switchboard-orchestration` skill + hard rules).
-4. `ClaudeCodeMirrorService` `MIRROR_MANIFEST`: repoint `/switchboard-orchestrator` human command → `switchboard-manage`. Remove automation persona from human-invocable commands.
-5. Reference A1's `GET /catalog` (already done ✅) and A3's reconcile (already done ✅).
+1. **`POST /orchestration/start` + `POST /orchestration/stop`** on `LocalApiServer` — `orchestrationStart`/`orchestrationStop` callbacks in `LocalApiServerOptions`; `_handleOrchestrationStart` + `_handleOrchestrationStop` handlers mirroring `_handleOrchestrationDispatch`. Wired in `TaskViewerProvider` (`orchestrationStart: (root) => this.startOrchestratorFromKanban(root)`, `orchestrationStop: () => this.stopOrchestratorFromKanban()` — both already `public`).
+2. **`.agents/skills/switchboard-manage/SKILL.md`** — consultative persona (report state on entry, then wait), HTTP surface by reference to `switchboard-orchestration` skill, automation opt-in only, hard rules (no confirm gates, no eager action, project pin, honest capability ceiling). Consumes A1's `GET /catalog` for self-discovery + A3's `POST /kanban/features/reconcile` for feature management.
+3. **Mirror repoint** — `ClaudeCodeMirrorService.MIRROR_MANIFEST`: `/switchboard-orchestrator` human command → `switchboard-manage` skill. Closes the footgun where a human slash command loaded the unattended automation persona. Engine still launches the persona by file path (`startOrchestratorFromKanban`), so the machine launch is unaffected.
+4. **AGENTS.md + CLAUDE.md** — registered `switchboard-manage` in the skills tables.
+- **Commit:** `ae520bf`.
 
-#### A2b — Per-Verb Handler Burn-Down (LONG POLE — 706 arms)
+### ⏳ A2b — Per-Verb Handler Burn-Down (IN PROGRESS — recipe established, long pole remains)
 Plan: `.switchboard/plans/transport-migration-per-verb-burndown.md`
-- **This is the mechanical grind.** 606 arms across 5 providers (per A1's catalog: Kanban 144, Planning 173, Design 62, TaskViewer 110, Setup 117).
-- Burn-down order: **kanban → planning → project → design/Stitch → setup → TaskViewer/sidebar**.
-- Per-verb recipe: (1) extract arm body into service method, (2) route vscode-coupled calls through A2a's seams, (3) arm becomes `case 'verb': return svc.verb(payload)`, (4) add HTTP/WS endpoint, (5) add parity-test row.
-- Push-site audit: 598 `postMessage` sites route through `BroadcastHub.push()`.
-- CI parity gate: catalogued verbs ⊆ live endpoints; missing verb fails build.
-- **Honest ceiling:** this is NOT one-session work. Establish the recipe on the kanban panel first, then burn down as many arms as feasible per session.
+- **Status:** Recipe proven on the kanban panel; 4 of 606 arms extracted. NOT one-session work (plan endorses this ceiling).
+- **`src/services/kanbanService.ts`** (new, uncommitted): host-agnostic service module. `KanbanServiceContext` interface (workspaceRoot, seams, broadcaster, resolveSessionId, selectSession, triggerPlanScan). `KanbanService` class with 4 extracted verbs: `selectPlan`, `openPlanByPath`, `refresh`, `scanFoldersNow`. Inline recipe documentation (the 7-step per-verb recipe from the plan).
+- **Recipe (proven):** (1) extract arm body → service method, (2) route vscode-coupled calls through `HostSeams` (commands/ui/editor/pathConfig/terminal), (3) route `postMessage` through `BroadcastHub.push()`, (4) arm becomes `case 'verb': return svc.verb(msg)`, (5) add `POST /kanban/verb/<name>` endpoint, (6) parity-test row, (7) if a NEW coupling surface is found, stop + add to `hostSeams.ts` (seam-growth protocol).
+- **Remaining:** 602 of 606 arms (Kanban 140, Planning 173, Design 62, TaskViewer 110, Setup 117). Burn-down order: kanban → planning → project → design/Stitch → setup → TaskViewer/sidebar. Then: 598 push-site audit through `BroadcastHub.push()`, CI parity gate (catalogued verbs ⊆ live endpoints).
+- **Not yet done:** wire `kanbanService` into `KanbanProvider` (construct + inject context + repoint the 4 extracted arms), add the 4 HTTP endpoints on `LocalApiServer`, add parity-test rows. The service module is the skeleton; the provider wiring is the next concrete step.
 
 ### Suggested next-session sequencing
-1. **Manage first** (consumes A1's `/catalog` ✅ + A3's reconcile ✅ — both done; nothing blocking).
-2. **A2b second** (long pole — start with kanban panel recipe, then mechanical burn-down).
-3. **A3 is DONE** — no further work (deferred skill-rewrite polish is optional follow-up).
+1. **A2b — wire the recipe** (construct `KanbanService` in `KanbanProvider`, repoint the 4 extracted arms, add `POST /kanban/verb/<name>` endpoints, add parity-test rows). This completes the proven recipe end-to-end.
+2. **A2b — mechanical burn-down** (repeat the recipe for the remaining 140 kanban arms, then the other 4 providers). Long pole — multiple sessions.
+3. **A2b — push-site audit + CI parity gate** (after all arms extracted).
+4. **A1 ✅, A2a ✅, A3 ✅, Manage ✅** — no further work (A3's deferred skill-rewrite polish is optional follow-up).
 
