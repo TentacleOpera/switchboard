@@ -1459,6 +1459,52 @@ export class ClickUpSyncService {
     return this._normalizeClickUpTask(updateResult.data);
   }
 
+  public async updateTaskAssignees(
+    taskId: string,
+    addIds: number[],
+    remIds: number[]
+  ): Promise<ClickUpTask | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) {
+      throw new Error('ClickUp task assignee updates require a task ID.');
+    }
+
+    const body = {
+      assignees: {
+        add: addIds,
+        rem: remIds
+      }
+    };
+
+    const updateResult = await this.retry(() =>
+      this.httpRequest('PUT', `/task/${normalizedTaskId}`, body)
+    );
+    if (updateResult.status !== 200) {
+      const detail = typeof updateResult.data === 'string'
+        ? updateResult.data
+        : JSON.stringify(updateResult.data);
+      throw new Error(`Failed to update ClickUp task assignees ${normalizedTaskId}. Status: ${updateResult.status} — ${detail}`);
+    }
+
+    // Invalidate cache for the list containing this task
+    if (this._cacheService) {
+      const listId = this._taskListIndex.get(normalizedTaskId);
+      if (listId) {
+        this._cacheService.invalidateTaskCache('clickup', listId);
+      } else {
+        // Fallback: invalidate all ClickUp cache if list unknown
+        this._cacheService.invalidateTaskCache('clickup');
+      }
+    }
+
+    return this._normalizeClickUpTask(updateResult.data);
+  }
+
   /**
    * Move a ClickUp task to a different HOME list.
    * Uses the v3 move endpoint: PUT /api/v3/workspaces/{workspace_id}/tasks/{task_id}/home_list/{list_id}

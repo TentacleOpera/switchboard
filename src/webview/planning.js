@@ -308,6 +308,12 @@
     let availableClickUpStatuses = [];
     let _tagsModalOpen = false;
     let _tagsCatalogLoading = false;
+    let _assignModalOpen = false;
+    let _assignMembersLoading = false;
+    let _assignMembers = [];
+    let _currentAssigneeIds = [];
+    let _openPriorityPopoverFor = null; // { provider, ticketId, preValue, dotEl }
+    let _pendingPriorityChange = null;  // { provider, ticketId, preValue }
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
@@ -475,6 +481,444 @@
             item.appendChild(label);
             availableList.appendChild(item);
         });
+    }
+
+    function openAssignModal() {
+        const modal = document.getElementById('assign-modal');
+        const availableList = document.getElementById('assign-available-list');
+        const searchInput = document.getElementById('assign-search');
+
+        if (!modal || !availableList) return;
+
+        if (searchInput) searchInput.value = '';
+
+        _assignModalOpen = true;
+
+        const provider = lastIntegrationProvider;
+        const ticketId = provider === 'linear'
+            ? selectedLinearIssue?.issue?.id
+            : selectedClickUpIssue?.task?.id;
+        const listId = provider === 'clickup'
+            ? selectedClickUpIssue?.task?.list?.id
+            : null;
+
+        if (!ticketId) {
+            showTicketsStatus('No ticket selected', true);
+            return;
+        }
+
+        if (provider === 'linear') {
+            const assigneeId = selectedLinearIssue?.issue?.assignee?.id;
+            _currentAssigneeIds = assigneeId ? [assigneeId] : [];
+        } else {
+            _currentAssigneeIds = (selectedClickUpIssue?.task?.assignees || []).map(a => String(a.id));
+        }
+
+        _assignMembersLoading = true;
+        availableList.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-secondary);">Loading members...</div>';
+        
+        vscode.postMessage({
+            type: 'loadTicketAssignees',
+            provider,
+            id: ticketId,
+            listId,
+            workspaceRoot: ticketsWorkspaceRoot
+        });
+
+        modal.style.display = 'flex';
+    }
+
+    function closeAssignModal() {
+        const modal = document.getElementById('assign-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
+        _assignModalOpen = false;
+        _assignMembersLoading = false;
+    }
+
+    function renderAssignModalList(filterText = '') {
+        const availableList = document.getElementById('assign-available-list');
+        if (!availableList) return;
+
+        if (_assignMembersLoading) return;
+
+        availableList.innerHTML = '';
+        const provider = lastIntegrationProvider;
+
+        const nobodyItem = document.createElement('div');
+        nobodyItem.style.display = 'flex';
+        nobodyItem.style.alignItems = 'center';
+        nobodyItem.style.gap = '8px';
+        nobodyItem.style.padding = '4px 0';
+
+        const nobodyInput = document.createElement('input');
+        nobodyInput.type = provider === 'linear' ? 'radio' : 'checkbox';
+        nobodyInput.name = 'assignee-selection';
+        nobodyInput.value = '__unassigned__';
+        nobodyInput.id = 'assignee-nobody';
+        nobodyInput.checked = (_currentAssigneeIds.length === 0);
+
+        const nobodyLabel = document.createElement('label');
+        nobodyLabel.htmlFor = 'assignee-nobody';
+        nobodyLabel.style.fontSize = '12px';
+        nobodyLabel.style.cursor = 'pointer';
+        nobodyLabel.style.color = 'var(--text-secondary)';
+        nobodyLabel.textContent = 'Nobody / Unassigned';
+
+        nobodyItem.appendChild(nobodyInput);
+        nobodyItem.appendChild(nobodyLabel);
+        availableList.appendChild(nobodyItem);
+
+        if (provider === 'linear') {
+            nobodyInput.addEventListener('change', () => {
+                if (nobodyInput.checked) {
+                    const radios = availableList.querySelectorAll('input[name="assignee-selection"]');
+                    radios.forEach(r => { if (r !== nobodyInput) r.checked = false; });
+                }
+            });
+        } else {
+            nobodyInput.addEventListener('change', () => {
+                if (nobodyInput.checked) {
+                    const checkboxes = availableList.querySelectorAll('input[name="assignee-selection"]');
+                    checkboxes.forEach(cb => { if (cb !== nobodyInput) cb.checked = false; });
+                }
+            });
+        }
+
+        const query = filterText.toLowerCase().trim();
+        const filtered = _assignMembers.filter(m => {
+            const name = String(m.name || m.username || '').toLowerCase();
+            const email = String(m.email || '').toLowerCase();
+            return name.includes(query) || email.includes(query);
+        });
+
+        filtered.forEach(m => {
+            const item = document.createElement('div');
+            item.style.display = 'flex';
+            item.style.alignItems = 'center';
+            item.style.gap = '8px';
+            item.style.padding = '4px 0';
+
+            const input = document.createElement('input');
+            input.type = provider === 'linear' ? 'radio' : 'checkbox';
+            input.name = 'assignee-selection';
+            input.value = m.id;
+            input.id = `assignee-${m.id}`;
+            input.checked = _currentAssigneeIds.includes(String(m.id)) && nobodyInput.checked === false;
+
+            const label = document.createElement('label');
+            label.htmlFor = `assignee-${m.id}`;
+            label.style.fontSize = '12px';
+            label.style.cursor = 'pointer';
+            label.style.color = 'var(--text-primary)';
+            label.textContent = m.name + (m.email ? ` (${m.email})` : '');
+
+            item.appendChild(input);
+            item.appendChild(label);
+            availableList.appendChild(item);
+
+            input.addEventListener('change', () => {
+                if (input.checked) {
+                    nobodyInput.checked = false;
+                    if (provider === 'linear') {
+                        const radios = availableList.querySelectorAll('input[name="assignee-selection"]');
+                        radios.forEach(r => { if (r !== input) r.checked = false; });
+                    }
+                }
+            });
+        });
+
+        if (filtered.length === 0 && query !== '') {
+            const empty = document.createElement('div');
+            empty.style.padding = '8px';
+            empty.style.fontSize = '12px';
+            empty.style.color = 'var(--text-secondary)';
+            empty.textContent = 'No members match search.';
+            availableList.appendChild(empty);
+        }
+    }
+
+    function saveAssign() {
+        const availableList = document.getElementById('assign-available-list');
+        if (!availableList) return;
+
+        const provider = lastIntegrationProvider;
+        const ticketId = provider === 'linear'
+            ? selectedLinearIssue?.issue?.id
+            : selectedClickUpIssue?.task?.id;
+
+        if (!ticketId) {
+            showTicketsStatus('No ticket selected', true);
+            return;
+        }
+
+        const nobodyInput = document.getElementById('assignee-nobody');
+        const checkboxes = availableList.querySelectorAll('input[name="assignee-selection"]:checked');
+        const selectedIds = Array.from(checkboxes).map(cb => cb.value).filter(val => val !== '__unassigned__');
+
+        if (nobodyInput?.checked || selectedIds.length === 0) {
+            if (provider === 'linear') {
+                vscode.postMessage({
+                    type: 'linearUpdateIssueAssignee',
+                    issueId: ticketId,
+                    assigneeId: null,
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+            } else {
+                vscode.postMessage({
+                    type: 'clickupUpdateTaskAssignees',
+                    taskId: ticketId,
+                    currentAssigneeIds: _currentAssigneeIds,
+                    desiredAssigneeIds: [],
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+            }
+        } else {
+            if (provider === 'linear') {
+                if (selectedIds.length > 1) {
+                    showTicketsStatus('Linear only supports a single assignee', true);
+                    return;
+                }
+                vscode.postMessage({
+                    type: 'linearUpdateIssueAssignee',
+                    issueId: ticketId,
+                    assigneeId: selectedIds[0],
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+            } else {
+                vscode.postMessage({
+                    type: 'clickupUpdateTaskAssignees',
+                    taskId: ticketId,
+                    currentAssigneeIds: _currentAssigneeIds,
+                    desiredAssigneeIds: selectedIds,
+                    workspaceRoot: ticketsWorkspaceRoot
+                });
+            }
+        }
+
+        closeAssignModal();
+    }
+
+    function _linearPriorityColor(priority) {
+        const colors = ['#95a2b3', '#eb5757', '#f2c94c', '#5e6ad2', '#95a2b3'];
+        return colors[priority] || '#95a2b3';
+    }
+
+    function _linearPriorityName(priority) {
+        const names = ['No priority', 'Urgent', 'High', 'Normal', 'Low'];
+        return names[priority] || 'No priority';
+    }
+
+    function _clickUpPriorityColor(task) {
+        if (task?.priority?.color) {
+            return task.priority.color;
+        }
+        const orderIndex = Number(task?.priority?.orderindex || 0);
+        const colors = {
+            1: '#f30000',
+            2: '#ffcc00',
+            3: '#6f85ff',
+            4: '#d3d3d3',
+        };
+        return colors[orderIndex] || '#95a2b3';
+    }
+
+    function _clickUpPriorityName(task) {
+        if (task?.priority?.priority) {
+            return task.priority.priority.charAt(0).toUpperCase() + task.priority.priority.slice(1);
+        }
+        const orderIndex = Number(task?.priority?.orderindex || 0);
+        const names = {
+            1: 'Urgent',
+            2: 'High',
+            3: 'Normal',
+            4: 'Low',
+        };
+        return names[orderIndex] || 'No priority';
+    }
+
+    function _availableClickUpPriorities() {
+        const prioritiesMap = new Map();
+        const defaultPriorities = [
+            { value: 0, name: 'No priority', color: '#95a2b3' },
+            { value: 1, name: 'Urgent', color: '#f30000' },
+            { value: 2, name: 'High', color: '#ffcc00' },
+            { value: 3, name: 'Normal', color: '#6f85ff' },
+            { value: 4, name: 'Low', color: '#d3d3d3' }
+        ];
+        defaultPriorities.forEach(p => prioritiesMap.set(p.value, p));
+
+        clickUpProjectIssues.forEach(t => {
+            if (t.priority && t.priority.orderindex) {
+                const val = Number(t.priority.orderindex);
+                if (val >= 1 && val <= 4) {
+                    prioritiesMap.set(val, {
+                        value: val,
+                        name: t.priority.priority.charAt(0).toUpperCase() + t.priority.priority.slice(1),
+                        color: t.priority.color
+                    });
+                }
+            }
+        });
+
+        return Array.from(prioritiesMap.values()).sort((a, b) => a.value - b.value);
+    }
+
+    function openPriorityPopover(dotEl, provider, ticketId, currentValue) {
+        const popover = document.getElementById('ticket-priority-popover');
+        if (!popover) return;
+
+        popover.innerHTML = '';
+        _openPriorityPopoverFor = { provider, ticketId, preValue: currentValue, dotEl };
+
+        const options = provider === 'linear'
+            ? [
+                { value: 0, name: 'No priority', color: '#95a2b3' },
+                { value: 1, name: 'Urgent', color: '#eb5757' },
+                { value: 2, name: 'High', color: '#f2c94c' },
+                { value: 3, name: 'Normal', color: '#5e6ad2' },
+                { value: 4, name: 'Low', color: '#95a2b3' }
+              ]
+            : _availableClickUpPriorities();
+
+        options.forEach(opt => {
+            const row = document.createElement('div');
+            row.className = 'ticket-priority-option' + (opt.value === currentValue ? ' selected' : '');
+            
+            const swatch = document.createElement('span');
+            swatch.className = 'priority-option-swatch' + (opt.value === 0 ? ' hollow' : '');
+            if (opt.value !== 0) {
+                swatch.style.backgroundColor = opt.color;
+            }
+            
+            const label = document.createElement('span');
+            label.textContent = opt.name;
+
+            row.appendChild(swatch);
+            row.appendChild(label);
+            popover.appendChild(row);
+
+            row.addEventListener('click', (e) => {
+                e.stopPropagation();
+                selectPriority(opt.value);
+            });
+        });
+
+        popover.style.display = 'block';
+        
+        const rect = dotEl.getBoundingClientRect();
+        const popoverWidth = 140;
+        const popoverHeight = popover.offsetHeight || 140;
+        
+        let left = window.scrollX + rect.right - popoverWidth;
+        let top = window.scrollY + rect.bottom + 4;
+        
+        if (rect.bottom + 4 + popoverHeight > window.innerHeight) {
+            top = window.scrollY + rect.top - popoverHeight - 4;
+        }
+        if (left < 0) left = 4;
+
+        popover.style.left = left + 'px';
+        popover.style.top = top + 'px';
+
+        document.addEventListener('click', outsideClickPriorityClose);
+        document.addEventListener('keydown', escPriorityClose);
+        const container = document.getElementById('tickets-issues-container');
+        if (container) {
+            container.addEventListener('scroll', closePriorityPopover);
+        }
+    }
+
+    function outsideClickPriorityClose(e) {
+        const popover = document.getElementById('ticket-priority-popover');
+        if (popover && !popover.contains(e.target) && !_openPriorityPopoverFor?.dotEl.contains(e.target)) {
+            closePriorityPopover();
+        }
+    }
+
+    function escPriorityClose(e) {
+        if (e.key === 'Escape') {
+            closePriorityPopover();
+        }
+    }
+
+    function closePriorityPopover() {
+        const popover = document.getElementById('ticket-priority-popover');
+        if (popover) {
+            popover.style.display = 'none';
+        }
+        _openPriorityPopoverFor = null;
+        document.removeEventListener('click', outsideClickPriorityClose);
+        document.removeEventListener('keydown', escPriorityClose);
+        const container = document.getElementById('tickets-issues-container');
+        if (container) {
+            container.removeEventListener('scroll', closePriorityPopover);
+        }
+    }
+
+    function selectPriority(value) {
+        if (!_openPriorityPopoverFor) return;
+        const { provider, ticketId, preValue, dotEl } = _openPriorityPopoverFor;
+        closePriorityPopover();
+
+        _pendingPriorityChange = { provider, ticketId, preValue };
+
+        if (dotEl) {
+            dotEl.classList.add('busy');
+        }
+
+        if (provider === 'linear') {
+            const issue = linearProjectIssues.find(i => i.id === ticketId);
+            if (issue) issue.priority = value;
+            if (selectedLinearIssue?.issue?.id === ticketId) {
+                selectedLinearIssue.issue.priority = value;
+            }
+            renderTicketsLinearList();
+
+            vscode.postMessage({
+                type: 'linearUpdateIssuePriority',
+                issueId: ticketId,
+                priority: value,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        } else {
+            const task = clickUpProjectIssues.find(t => t.id === ticketId);
+            if (task) {
+                if (value === 0) {
+                    task.priority = null;
+                } else {
+                    const opt = _availableClickUpPriorities().find(o => o.value === value) || { name: 'Normal', color: '#6f85ff' };
+                    task.priority = {
+                        id: String(value),
+                        priority: opt.name.toLowerCase(),
+                        color: opt.color,
+                        orderindex: String(value)
+                    };
+                }
+            }
+            if (selectedClickUpIssue?.task?.id === ticketId) {
+                if (value === 0) {
+                    selectedClickUpIssue.task.priority = null;
+                } else {
+                    const opt = _availableClickUpPriorities().find(o => o.value === value) || { name: 'Normal', color: '#6f85ff' };
+                    selectedClickUpIssue.task.priority = {
+                        id: String(value),
+                        priority: opt.name.toLowerCase(),
+                        color: opt.color,
+                        orderindex: String(value)
+                    };
+                }
+            }
+            renderTicketsClickUpList();
+
+            vscode.postMessage({
+                type: 'clickupUpdateTaskPriority',
+                taskId: ticketId,
+                priority: value,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
+        }
     }
 
     function openTagsModal() {
@@ -5342,6 +5786,103 @@
                 }
                 if (lastIntegrationProvider === 'linear') renderTicketsTab();
                 break;
+            case 'ticketAssigneesLoaded':
+                _assignMembers = msg.members || [];
+                _assignMembersLoading = false;
+                renderAssignModalList();
+                break;
+            case 'ticketAssigneesError':
+                _assignMembersLoading = false;
+                showTicketsStatus(msg.error || 'Failed to load assignees', true);
+                break;
+            case 'linearAssigneeUpdated': {
+                const assigneeId = msg.assigneeId;
+                const member = _assignMembers.find(m => String(m.id) === String(assigneeId));
+                if (selectedLinearIssue && selectedLinearIssue.issue?.id === msg.issueId) {
+                    selectedLinearIssue.issue.assignee = member ? { id: member.id, name: member.name, email: member.email } : null;
+                }
+                const issue = linearProjectIssues.find(i => i.id === msg.issueId);
+                if (issue) {
+                    issue.assignee = member ? { id: member.id, name: member.name, email: member.email } : null;
+                }
+                showTicketsStatus('Assignee updated successfully');
+                renderTicketsLinearList();
+                if (selectedLinearIssue && selectedLinearIssue.issue?.id === msg.issueId) {
+                    loadLinearTaskDetails(msg.issueId);
+                }
+                break;
+            }
+            case 'clickupAssigneesUpdated': {
+                const assigneeIds = msg.assigneeIds || [];
+                const members = _assignMembers.filter(m => assigneeIds.includes(String(m.id)));
+                if (selectedClickUpIssue && selectedClickUpIssue.task?.id === msg.taskId) {
+                    selectedClickUpIssue.task.assignees = members.map(m => ({ id: Number(m.id), username: m.username, email: m.email }));
+                }
+                const task = clickUpProjectIssues.find(t => t.id === msg.taskId);
+                if (task) {
+                    task.assignees = members.map(m => ({ id: Number(m.id), username: m.username, email: m.email }));
+                }
+                showTicketsStatus('Assignees updated successfully');
+                renderTicketsClickUpList();
+                if (selectedClickUpIssue && selectedClickUpIssue.task?.id === msg.taskId) {
+                    loadClickUpTaskDetails(msg.taskId);
+                }
+                break;
+            }
+            case 'linearPriorityUpdated': {
+                const issue = linearProjectIssues.find(i => i.id === msg.issueId);
+                if (issue) {
+                    issue.priority = msg.priority;
+                }
+                if (selectedLinearIssue && selectedLinearIssue.issue?.id === msg.issueId) {
+                    selectedLinearIssue.issue.priority = msg.priority;
+                }
+                _pendingPriorityChange = null;
+                document.querySelectorAll(`.ticket-priority-dot[data-ticket-id="${msg.issueId}"]`).forEach(el => el.classList.remove('busy'));
+                showTicketsStatus('Priority updated successfully');
+                renderTicketsLinearList();
+                if (selectedLinearIssue && selectedLinearIssue.issue?.id === msg.issueId) {
+                    loadLinearTaskDetails(msg.issueId);
+                }
+                break;
+            }
+            case 'clickupPriorityUpdated': {
+                const task = clickUpProjectIssues.find(t => t.id === msg.taskId);
+                if (task) {
+                    if (msg.priority === 0) {
+                        task.priority = null;
+                    } else {
+                        const opt = _availableClickUpPriorities().find(o => o.value === msg.priority) || { name: 'Normal', color: '#6f85ff' };
+                        task.priority = {
+                            id: String(msg.priority),
+                            priority: opt.name.toLowerCase(),
+                            color: opt.color,
+                            orderindex: String(msg.priority)
+                        };
+                    }
+                }
+                if (selectedClickUpIssue && selectedClickUpIssue.task?.id === msg.taskId) {
+                    if (msg.priority === 0) {
+                        selectedClickUpIssue.task.priority = null;
+                    } else {
+                        const opt = _availableClickUpPriorities().find(o => o.value === msg.priority) || { name: 'Normal', color: '#6f85ff' };
+                        selectedClickUpIssue.task.priority = {
+                            id: String(msg.priority),
+                            priority: opt.name.toLowerCase(),
+                            color: opt.color,
+                            orderindex: String(msg.priority)
+                        };
+                    }
+                }
+                _pendingPriorityChange = null;
+                document.querySelectorAll(`.ticket-priority-dot[data-ticket-id="${msg.taskId}"]`).forEach(el => el.classList.remove('busy'));
+                showTicketsStatus('Priority updated successfully');
+                renderTicketsClickUpList();
+                if (selectedClickUpIssue && selectedClickUpIssue.task?.id === msg.taskId) {
+                    loadClickUpTaskDetails(msg.taskId);
+                }
+                break;
+            }
             case 'clickupSpaceTagsLoaded':
                 availableClickUpTags = msg.tags || [];
                 if (_tagsModalOpen && lastIntegrationProvider !== 'linear') {
@@ -5550,12 +6091,43 @@
                         break;
                 }
                 setTicketsLoadingState(false);
+                if (_pendingPriorityChange && _pendingPriorityChange.provider === 'clickup' && _pendingPriorityChange.ticketId === msg.taskId) {
+                    const task = clickUpProjectIssues.find(t => t.id === msg.taskId);
+                    const preValue = _pendingPriorityChange.preValue;
+                    if (task) {
+                        if (preValue === 0) {
+                            task.priority = null;
+                        } else {
+                            const opt = _availableClickUpPriorities().find(o => o.value === preValue) || { name: 'Normal', color: '#6f85ff' };
+                            task.priority = {
+                                id: String(preValue),
+                                priority: opt.name.toLowerCase(),
+                                color: opt.color,
+                                orderindex: String(preValue)
+                            };
+                        }
+                    }
+                    if (selectedClickUpIssue?.task?.id === msg.taskId) {
+                        if (preValue === 0) {
+                            selectedClickUpIssue.task.priority = null;
+                        } else {
+                            const opt = _availableClickUpPriorities().find(o => o.value === preValue) || { name: 'Normal', color: '#6f85ff' };
+                            selectedClickUpIssue.task.priority = {
+                                id: String(preValue),
+                                priority: opt.name.toLowerCase(),
+                                color: opt.color,
+                                orderindex: String(preValue)
+                            };
+                        }
+                    }
+                    _pendingPriorityChange = null;
+                    document.querySelectorAll(`.ticket-priority-dot[data-ticket-id="${msg.taskId}"]`).forEach(el => el.classList.remove('busy'));
+                    renderTicketsClickUpList();
+                }
                 if (msg.scope === 'task' && selectedClickUpIssue?.localDescription) {
                     if (msg.kind === 'deleted') {
-                        // Local copy is a stale snapshot of a deleted ticket — warn visibly.
                         showTicketsError('This ticket was deleted from ClickUp. Showing the local copy, which may be out of date.');
                     } else {
-                        // Supplementary fetch (comments/attachments) failed — not a total failure.
                         showTicketsStatus('Could not load live comments/attachments — ' + (msg.error || 'ClickUp unavailable'), false);
                     }
                 } else {
@@ -5573,6 +6145,19 @@
                         break;
                 }
                 setTicketsLoadingState(false);
+                if (_pendingPriorityChange && _pendingPriorityChange.provider === 'linear' && _pendingPriorityChange.ticketId === msg.issueId) {
+                    const issue = linearProjectIssues.find(i => i.id === msg.issueId);
+                    const preValue = _pendingPriorityChange.preValue;
+                    if (issue) {
+                        issue.priority = preValue;
+                    }
+                    if (selectedLinearIssue?.issue?.id === msg.issueId) {
+                        selectedLinearIssue.issue.priority = preValue;
+                    }
+                    _pendingPriorityChange = null;
+                    document.querySelectorAll(`.ticket-priority-dot[data-ticket-id="${msg.issueId}"]`).forEach(el => el.classList.remove('busy'));
+                    renderTicketsLinearList();
+                }
                 if (msg.scope === 'task' && selectedLinearIssue?.localDescription) {
                     if (msg.kind === 'deleted') {
                         showTicketsError('This issue was deleted from Linear. Showing the local copy, which may be out of date.');
@@ -8370,6 +8955,19 @@ Instructions:
 
         // Issue card clicks (delegated)
         document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
+            const priorityDot = e.target.closest('.ticket-priority-dot');
+            if (priorityDot) {
+                e.stopPropagation();
+                closePriorityPopover();
+                openPriorityPopover(
+                    priorityDot,
+                    priorityDot.dataset.priorityProvider,
+                    priorityDot.dataset.ticketId,
+                    Number(priorityDot.dataset.priorityValue)
+                );
+                return;
+            }
+
             // Accordion status-group header toggle — checked first, so clicking a header
             // never selects a ticket. Re-renders only the list (cheap); selection intact.
             const statusHeader = e.target.closest('.ticket-status-group-header');
@@ -8581,6 +9179,23 @@ Instructions:
                 _tagsModalOpen = false;
             }
         });
+
+        // Assign button
+        document.getElementById('btn-assign-ticket')?.addEventListener('click', openAssignModal);
+
+        // Assign modal events
+        document.getElementById('btn-close-assign-modal')?.addEventListener('click', closeAssignModal);
+        document.getElementById('btn-cancel-assign')?.addEventListener('click', closeAssignModal);
+        document.getElementById('btn-save-assign')?.addEventListener('click', saveAssign);
+        document.getElementById('assign-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                closeAssignModal();
+            }
+        });
+        document.getElementById('assign-search')?.addEventListener('input', (e) => {
+            renderAssignModalList(e.target.value);
+        });
+
 
         // Submit form
         document.getElementById('btn-submit-create-ticket')?.addEventListener('click', () => {
@@ -9170,14 +9785,15 @@ Instructions:
     function _renderClickUpTicketCard(task) {
         const isSelected = selectedClickUpIssue && selectedClickUpIssue.task && selectedClickUpIssue.task.id === task.id;
         const syncBadge = _ticketSyncBadge(task.syncStatus);
-        const statusName = task.status || '';
-        const statusColor = task.statusColor || _ticketStatusLightColor(statusName);
-        const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
+        const priorityVal = Number(task.priority?.orderindex || 0);
+        const priorityColor = _clickUpPriorityColor(task);
+        const priorityName = _clickUpPriorityName(task);
+        const priorityDot = `<span class="ticket-priority-dot" style="background:${escapeAttr(priorityColor)}" data-priority-value="${priorityVal}" data-priority-provider="clickup" data-ticket-id="${escapeAttr(task.id)}" title="Priority: ${escapeAttr(priorityName)}"></span>`;
         const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
         const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
         return `
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
-            ${statusLight}
+            ${priorityDot}
             <div class="tickets-issue-title">${escapeHtml(task.title || task.name || task.identifier || task.id)}</div>
             <div class="tickets-issue-meta ticket-status-row">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
             <div class="tickets-issue-meta">${task.assignees && task.assignees.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
@@ -9197,14 +9813,15 @@ Instructions:
     function _renderLinearTicketCard(issue) {
         const isSelected = selectedLinearIssue && selectedLinearIssue.issue && selectedLinearIssue.issue.id === issue.id;
         const syncBadge = _ticketSyncBadge(issue.syncStatus);
-        const statusName = issue.state?.name || '';
-        const statusColor = issue.state?.color || _ticketStatusLightColor(statusName);
-        const statusLight = `<span class="ticket-status-light" style="background:${escapeAttr(statusColor)}" title="${escapeAttr(statusName || 'No status')}"></span>`;
+        const priorityVal = Number(issue.priority ?? 0);
+        const priorityColor = _linearPriorityColor(priorityVal);
+        const priorityName = _linearPriorityName(priorityVal);
+        const priorityDot = `<span class="ticket-priority-dot" style="background:${escapeAttr(priorityColor)}" data-priority-value="${priorityVal}" data-priority-provider="linear" data-ticket-id="${escapeAttr(issue.id)}" title="Priority: ${escapeAttr(priorityName)}"></span>`;
         const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
         const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
         return `
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
-            ${statusLight}
+            ${priorityDot}
             <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
             <div class="tickets-issue-meta ticket-status-row">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}</div>
             <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
@@ -9334,6 +9951,7 @@ Instructions:
     }
 
     function renderTicketsLinearList() {
+        closePriorityPopover();
         if (!isTicketsTabActive()) return;
 
         const { emptyState, issuesContainer, searchInput } = getTicketsTabElements();
@@ -9898,6 +10516,7 @@ Instructions:
     }
 
     function renderTicketsClickUpList() {
+        closePriorityPopover();
         if (!isTicketsTabActive()) return;
 
         const { issuesContainer, emptyState, loadMoreButton, searchInput } = getTicketsTabElements();

@@ -958,28 +958,24 @@
         .complexity-indicator.very-low { color: #00e5ff; }
         .complexity-indicator.unknown { color: #7f848e; }
 
-        /* Agent activity light — lit while a card is dispatched to an agent (within the
-           timeout window). Amber hue + subtle pulse keeps it distinct from the green
-           "done" badge and the green worktree "clean" dot. Low-key so a board with
-           several lit cards isn't visually overwhelming. */
-        .card-status-light {
-            display: inline-block;
-            margin-right: 5px;
-            font-size: 11px;
-            line-height: 1;
-            vertical-align: baseline;
-            color: transparent;
+        /* Agent activity light border glow ring — lit while a card is dispatched to an agent.
+           Amber hue + subtle pulse. Negative inset lets it sit outside the border. */
+        .kanban-card.is-working::after {
+            content: "";
+            position: absolute;
+            inset: -2px;
+            border-radius: 5px;
+            pointer-events: none;
+            z-index: 1;
+            box-shadow: 0 0 0 2px #e0a800, 0 0 14px color-mix(in srgb, #e0a800 45%, transparent);
+            animation: kanban-working-pulse 1.8s ease-in-out infinite;
         }
-        .card-status-light.is-on {
-            color: #e0a800;
-            animation: card-status-light-pulse 1.8s ease-in-out infinite;
-        }
-        @keyframes card-status-light-pulse {
+        @keyframes kanban-working-pulse {
             0%, 100% { opacity: 1; }
-            50% { opacity: 0.45; }
+            50% { opacity: 0.4; }
         }
         @media (prefers-reduced-motion: reduce) {
-            .card-status-light.is-on { animation: none; }
+            .kanban-card.is-working::after { animation: none; }
         }
 
         /* One-shot feedback when a card's operation completes (status light goes out
@@ -5885,12 +5881,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const featureClass = card.isFeature ? ' feature-card' : '';
             const featureBadge = ''; // Badge removed; feature identity shown via purple border + meta line
-            // Activity light: lit while an agent is dispatched to this card (and within the
-            // timeout window). Suppressed for completed cards (backend never sets working
-            // there). Distinct amber hue + pulse so it never reads as the green "done"/"clean" dots.
-            const workingLight = (!isCompleted && card.working)
-                ? '<span class="card-status-light is-on" title="Agent working…">●</span>'
-                : '';
+            // Activity light border glow: lit while an agent is dispatched to this card (and within the
+            // timeout window). Suppressed for completed cards (backend never sets working there).
+            const isWorking = !isCompleted && card.working;
+            const workingClass = isWorking ? ' is-working' : '';
+            const workingTitle = isWorking ? ' title="Agent working…"' : '';
             
             const cardMetaContent = card.isFeature
                 ? `<span class="feature-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
@@ -5903,8 +5898,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             const reviewTooltip = card.isFeature ? 'Review feature' : 'Review plan';
             return `
-                <div class="kanban-card${completedClass}${featureClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
-                    <div class="card-topic">${workingLight}${featureBadge}${escapeHtml(shortTopic)}</div>
+                <div class="kanban-card${completedClass}${featureClass}${workingClass}" draggable="true"${workingTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
+                    <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px; flex-wrap: wrap;">

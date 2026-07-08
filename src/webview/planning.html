@@ -2836,6 +2836,49 @@
             border: 1px solid color-mix(in srgb, var(--panel-bg) 40%, transparent);
         }
 
+        .ticket-priority-dot {
+            cursor: pointer;
+            border: 1px solid color-mix(in srgb, var(--panel-bg) 40%, transparent);
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+        }
+        .ticket-priority-dot:hover {
+            transform: scale(1.2);
+            box-shadow: 0 0 6px currentColor;
+        }
+        .ticket-priority-dot.busy {
+            pointer-events: none;
+            opacity: 0.5;
+        }
+
+        .ticket-priority-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            font-size: 12px;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background 0.1s ease;
+        }
+        .ticket-priority-option:hover {
+            background: var(--panel-bg2, #2a2a3e);
+        }
+        .ticket-priority-option.selected {
+            background: var(--accent-teal-dim, #113f3f);
+            font-weight: bold;
+        }
+        .priority-option-swatch {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .priority-option-swatch.hollow {
+            border: 1.5px dashed var(--text-muted, #555);
+            background: transparent !important;
+        }
+
+
         .ticket-status-group-header:hover,
         .sidebar-drilldown-header:hover {
             background: var(--panel-bg, #2a2a3e) !important;
@@ -3753,6 +3796,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 <span class="kanban-meta-label">Status:</span>
                                 <select id="select-status-ticket" class="kanban-meta-dropdown" style="display:inline-block; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 11px;"></select>
                             </div>
+                            <button id="btn-assign-ticket" class="strip-btn" title="Assign members">Assign</button>
                             <button id="tickets-tags" class="strip-btn" title="Edit tags">Tags</button>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
                             <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
@@ -4066,6 +4110,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
     </div>
+    <div class="folder-modal" id="assign-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="assign-modal-title">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 id="assign-modal-title">Assign Members</h3>
+                <button class="modal-close-btn" id="btn-close-assign-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <input id="assign-search" type="text" placeholder="Search members..." style="width: 100%; margin-bottom: 8px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; padding: 4px 8px; box-sizing: border-box; border-radius: 3px;">
+                    <div>
+                        <div id="assign-available-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                        <button id="btn-cancel-assign" class="strip-btn">Cancel</button>
+                        <button id="btn-save-assign" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="ticket-priority-popover" style="display: none; position: absolute; z-index: 1000; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); padding: 4px 0; min-width: 120px;"></div>
     <div class="folder-modal" id="tickets-source-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-source-modal-title">
         <div class="modal-content">
             <div class="modal-header">

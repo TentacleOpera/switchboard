@@ -268,3 +268,7 @@ by existing code in the same file.
 Complexity 2 (Routine). **Send to Intern.**
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Files changed: `src/webview/kanban.html` only — old `.card-status-light`/`is-on` block and `card-status-light-pulse` keyframe removed; new `.kanban-card.is-working::after` ring + `kanban-working-pulse` keyframe + reduced-motion fallback added; `createCardHtml()` swaps the inline `${workingLight}` span for a `${workingClass}`/`${workingTitle}` on the card root. Implementation matches the plan spec exactly (values: `inset:-2px`, `border-radius:5px`, `box-shadow 0 0 0 2px #e0a800, 0 0 14px …`, 1.8s pulse, `#e0a800` amber preserved). Validation (compile/tests skipped per directives): repo-wide orphan sweep confirms zero remaining refs to `card-status-light`, `card-status-light-pulse`, `workingLight`, or `.is-on`; single card renderer confirmed; regression trace shows `buildBoardSignature`, the optimistic-move guard, and finish-feedback all key off `card.working` at the data level and are unaffected by the render-only change. No CRITICAL/MAJOR findings; no code fixes required. Remaining risks are the two the plan already deferred as out-of-scope: the 14px bloom can bleed ~6px onto the adjacent card and can be clipped for ≤0.4s if a working card is optimistically completed (`.card-completing` sets `overflow:hidden`) — both cosmetic, invisible during the shrink/fade, single-knob tunable.

@@ -1126,6 +1126,76 @@ export class LinearSyncService {
     }
   }
 
+  public async updateIssueAssignee(issueId: string, assigneeId: string | null): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear assignee updates require an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $assigneeId: String) {
+        issueUpdate(id: $id, input: { assigneeId: $assigneeId }) { success }
+      }
+    `, { id: normalizedIssueId, assigneeId: assigneeId ? String(assigneeId).trim() : null });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested assignee update.`);
+    }
+
+    // Invalidate cache for the project containing this issue
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        // Fallback: invalidate all Linear cache if project unknown
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
+  public async updateIssuePriority(issueId: string, priority: number): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear priority updates require an issue ID.');
+    }
+
+    if (!Number.isInteger(priority) || priority < 0 || priority > 4) {
+      throw new Error('Linear priority must be an integer between 0 and 4.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $priority: Int!) {
+        issueUpdate(id: $id, input: { priority: $priority }) { success }
+      }
+    `, { id: normalizedIssueId, priority });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested priority update.`);
+    }
+
+    // Invalidate cache for the project containing this issue
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        // Fallback: invalidate all Linear cache if project unknown
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
   public async updateIssueLabels(issueId: string, labelIds: string[]): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {

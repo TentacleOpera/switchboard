@@ -5170,6 +5170,217 @@ Please format the updated output document strictly as follows:
                 }
                 break;
             }
+            case 'loadTicketAssignees': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider;
+                const id = String(msg.id || '').trim();
+                let listId = msg.listId ? String(msg.listId).trim() : '';
+
+                if (!workspaceRoot || !id || !provider) {
+                    this._panel?.webview.postMessage({
+                        type: 'ticketAssigneesError',
+                        id,
+                        provider,
+                        error: 'Invalid request parameters.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                try {
+                    let members: any[] = [];
+                    if (provider === 'linear') {
+                        const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        members = await linear.getTeamMembers();
+                    } else if (provider === 'clickup') {
+                        const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        if (!listId) {
+                            const task = await clickup.getTaskDetails(id);
+                            if (task?.list?.id) {
+                                listId = task.list.id;
+                            }
+                        }
+                        if (listId) {
+                            members = await clickup.getListMembers(listId);
+                        }
+                    }
+                    this._panel?.webview.postMessage({
+                        type: 'ticketAssigneesLoaded',
+                        provider,
+                        id,
+                        members,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'ticketAssigneesError',
+                        provider,
+                        id,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'linearUpdateIssueAssignee': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const issueId = String(msg.issueId || '').trim();
+                const assigneeId = msg.assigneeId === null ? null : String(msg.assigneeId || '').trim();
+
+                if (!workspaceRoot || !issueId) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: 'Invalid issue ID or workspace.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                try {
+                    const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                    await linear.updateIssueAssignee(issueId, assigneeId);
+                    this._panel?.webview.postMessage({
+                        type: 'linearAssigneeUpdated',
+                        issueId,
+                        assigneeId,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'clickupUpdateTaskAssignees': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const taskId = String(msg.taskId || '').trim();
+                const currentAssigneeIds = Array.isArray(msg.currentAssigneeIds) ? msg.currentAssigneeIds.map(String) : [];
+                const desiredAssigneeIds = Array.isArray(msg.desiredAssigneeIds) ? msg.desiredAssigneeIds.map(String) : [];
+
+                if (!workspaceRoot || !taskId) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        taskId,
+                        error: 'Invalid task ID or workspace.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                const addIds = desiredAssigneeIds.filter((id: string) => !currentAssigneeIds.includes(id)).map(Number).filter((n: number) => !isNaN(n));
+                const remIds = currentAssigneeIds.filter((id: string) => !desiredAssigneeIds.includes(id)).map(Number).filter((n: number) => !isNaN(n));
+
+                if (addIds.length === 0 && remIds.length === 0) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupAssigneesUpdated',
+                        taskId,
+                        assigneeIds: desiredAssigneeIds,
+                        noChange: true,
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                try {
+                    const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                    await clickup.updateTaskAssignees(taskId, addIds, remIds);
+                    this._panel?.webview.postMessage({
+                        type: 'clickupAssigneesUpdated',
+                        taskId,
+                        assigneeIds: desiredAssigneeIds,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        taskId,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'linearUpdateIssuePriority': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const issueId = String(msg.issueId || '').trim();
+                const priority = Number(msg.priority);
+
+                if (!workspaceRoot || !issueId || isNaN(priority)) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: 'Invalid issue ID, priority, or workspace.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                try {
+                    const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                    await linear.updateIssuePriority(issueId, priority);
+                    this._panel?.webview.postMessage({
+                        type: 'linearPriorityUpdated',
+                        issueId,
+                        priority,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
+            case 'clickupUpdateTaskPriority': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const taskId = String(msg.taskId || '').trim();
+                const priority = Number(msg.priority);
+
+                if (!workspaceRoot || !taskId || isNaN(priority)) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        taskId,
+                        error: 'Invalid task ID, priority, or workspace.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+
+                try {
+                    const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                    await clickup.updateTask(taskId, { priority });
+                    this._panel?.webview.postMessage({
+                        type: 'clickupPriorityUpdated',
+                        taskId,
+                        priority,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        taskId,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
             case 'linearLoadAutomationCatalog': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
