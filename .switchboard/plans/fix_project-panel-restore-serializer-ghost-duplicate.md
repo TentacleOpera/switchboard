@@ -39,24 +39,33 @@ Add a boolean field that is set to `true` when the serializer registration happe
 private _projectPanelRestoring = false;
 ```
 
-**Change 2: Add `markProjectPanelRestoring()` — called from extension.ts after serializer registration**
+**Change 2: Add `markProjectPanelRestoring()` — called from extension.ts only when a ghost tab exists**
 
-The extension knows whether `persistPanels` is enabled and whether the PROJECT panel was in the previous layout. VS Code does not expose a "tabs pending deserialization" API, but we can use a pragmatic heuristic: if serializers are registered, set the flag, and clear it either when `deserializeProjectPanel` fires or after a timeout (VS Code must call the serializer within a bounded window — typically within the first few seconds of activation; the lazy restoration case is handled by checking the editor layout).
+The extension calls this after registering the `switchboard-project` serializer, but **only if a `switchboard-project` tab actually exists in the current editor layout.** VS Code's `TabGroups` API (stable since 1.77; engine minimum is `^1.93.0`) lets us check this precisely via `vscode.window.tabGroups.all` — each `Tab` has an `input` property that is a `TabInputWebview` with a `viewType` string for webview tabs. If no matching tab exists, the flag is never set and `openProject()` incurs zero delay.
 
 ```typescript
+/**
+ * Signal that a project-panel serializer restore may be in-flight.
+ * Called from extension.ts ONLY after confirming a switchboard-project
+ * tab exists in the editor layout (via TabGroups API). openProject()
+ * will wait briefly for the serializer before creating a duplicate.
+ */
 public markProjectPanelRestoring(): void {
     this._projectPanelRestoring = true;
-    // Safety net: if VS Code never calls the serializer (e.g., the panel was
-    // closed externally, or the layout was corrupted), clear the flag after
-    // a generous timeout so openProject() isn't permanently blocked.
+    // Safety net: if VS Code never calls the serializer (e.g., the tab was
+    // closed externally after layout save, or lazy-restored in a background
+    // group), clear the flag after a generous timeout so openProject()
+    // isn't permanently blocked.
     setTimeout(() => {
         if (this._projectPanelRestoring) {
-            console.warn('[ProjectPanel] Restore flag still set after 10s — clearing (serializer may not fire for this session).');
+            console.warn('[ProjectPanel] Restore flag still set after 8s — clearing (serializer may not fire for this session).');
             this._projectPanelRestoring = false;
         }
-    }, 10000);
+    }, 8000);
 }
 ```
+
+The companion tab-detection helper lives in `extension.ts` (see Change 6).
 
 **Change 3: `deserializeProjectPanel` clears the restoring flag**
 
@@ -127,7 +136,9 @@ public async openProject(): Promise<void> {
 private _waitForRestore(): Promise<void> {
     return new Promise<void>(resolve => {
         const checkInterval = 50; // ms
-        const maxWait = 3000; // ms — generous; serializer usually fires < 1s
+        const maxWait = 1500; // ms — tight; serializer fires within ~200-800ms
+                               // in practice. 1.5s is generous enough to absorb
+                               // slow extension hosts without noticeable delay.
         let elapsed = 0;
         const timer = setInterval(() => {
             elapsed += checkInterval;
@@ -151,9 +162,9 @@ If the panel is disposed (user closes tab) while the restoring flag is set, clea
 
 ### File: `src/extension.ts`
 
-**Change 6: Call `markProjectPanelRestoring()` after serializer registration**
+**Change 6: Check TabGroups for a ghost tab, then conditionally call `markProjectPanelRestoring()`**
 
-After registering the `switchboard-project` serializer, immediately tell the provider that a restore might be incoming. This must happen before any command or message handler could call `openProject()`.
+After registering the `switchboard-project` serializer, use the `TabGroups` API to check whether a `switchboard-project` tab actually exists in the restored editor layout. Only set the restoring flag if a ghost tab is found. This eliminates the wait penalty for sessions where no PROJECT panel was previously open.
 
 ```typescript
 if (persistPanels) {
@@ -163,9 +174,20 @@ if (persistPanels) {
             await planningPanelProvider.deserializeProjectPanel(panel, state);
         }
     });
-    // Signal that a project panel restore may be in-flight. openProject()
-    // will wait briefly for the serializer before creating a duplicate.
-    planningPanelProvider.markProjectPanelRestoring();
+
+    // Only set the restore guard if a switchboard-project tab is actually
+    // present in the editor layout (ghost tab from previous session).
+    // This avoids a 1.5s wait penalty on first openProject() in sessions
+    // that never had a PROJECT panel open.
+    const hasProjectGhost = vscode.window.tabGroups.all.some(group =>
+        group.tabs.some(tab =>
+            tab.input instanceof vscode.TabInputWebview &&
+            tab.input.viewType === 'switchboard-project'
+        )
+    );
+    if (hasProjectGhost) {
+        planningPanelProvider.markProjectPanelRestoring();
+    }
     // ... other serializer registrations ...
 }
 ```
@@ -180,7 +202,7 @@ A new test file (matching the existing suite idiom) that asserts:
 3. `_waitForRestore` method exists.
 4. `deserializeProjectPanel` contains `this._projectPanelRestoring = false`.
 5. `openProject` contains `if (this._projectPanelRestoring)`.
-6. `extension.ts` contains `markProjectPanelRestoring()` after the `switchboard-project` serializer registration.
+6. `extension.ts` contains the `TabInputWebview` / `viewType === 'switchboard-project'` ghost-tab check before `markProjectPanelRestoring()`.
 7. All three `onDidDispose` handlers that clear `_projectPanelOpening` also clear `_projectPanelRestoring`.
 
 ## Edge-Case & Dependency Audit
@@ -191,9 +213,9 @@ A new test file (matching the existing suite idiom) that asserts:
 
 3. **`openProject()` called during the wait, serializer fires mid-wait:** The `_waitForRestore` poll detects `_projectPanel` truthy and resolves early. `openProject()` reveals the restored panel — correct, no duplicate.
 
-4. **Serializer never fires (ghost tab was closed externally, layout corrupted):** The 10s safety timeout in `markProjectPanelRestoring` clears the flag. If `openProject()` is called during the 10s window, `_waitForRestore` times out after 3s and falls through to create a fresh panel. The 3s wait is the user-visible delay — acceptable for a rare edge case.
+4. **Serializer never fires (ghost tab was closed externally, layout corrupted):** The 8s safety timeout in `markProjectPanelRestoring` clears the flag. If `openProject()` is called during the 8s window, `_waitForRestore` times out after 1.5s and falls through to create a fresh panel. The 1.5s wait is the worst-case user-visible delay — acceptable for this rare edge case and imperceptible in practice since the serializer almost always fires within ~500ms.
 
-5. **Lazy restoration (background tab):** The serializer doesn't fire until the user focuses the ghost tab, which could be hours later. The 10s timeout clears `_projectPanelRestoring`, so `openProject()` creates a fresh panel after at most a 3s wait on first call. When the user eventually focuses the ghost tab, the serializer fires and overwrites `_projectPanel` with the ghost — but the ghost's `onDidDispose` isn't wired to our provider (the dispose handler was registered on the *new* panel). **Risk:** two panels coexist, one managed and one unmanaged ghost. **Mitigation:** in `deserializeProjectPanel`, if `_projectPanel` is already set (a new panel was created), dispose the incoming ghost panel instead of adopting it. Add:
+5. **Lazy restoration (background tab):** The serializer doesn't fire until the user focuses the ghost tab, which could be hours later. The 8s timeout clears `_projectPanelRestoring`, so `openProject()` creates a fresh panel after at most a 1.5s wait on first call. When the user eventually focuses the ghost tab, the serializer fires and overwrites `_projectPanel` with the ghost — but the ghost's `onDidDispose` isn't wired to our provider (the dispose handler was registered on the *new* panel). **Risk:** two panels coexist, one managed and one unmanaged ghost. **Mitigation:** in `deserializeProjectPanel`, if `_projectPanel` is already set (a new panel was created), dispose the incoming ghost panel instead of adopting it. Add:
 
     ```typescript
     public async deserializeProjectPanel(
@@ -233,15 +255,13 @@ A new test file (matching the existing suite idiom) that asserts:
 
 1. **Enable `persistPanels`:** Set `switchboard.persistPanels: true` in user settings.
 
-2. **Repro — reload with PROJECT panel open:** Open the Project panel. Run `Developer: Reload Window`. **Before** the panel finishes loading, immediately click "Review plan" on a Kanban card (or trigger `switchboard.openProjectPanel`). **Expected:** At most a brief delay (~1-3s) while the restore guard waits, then the restored panel is revealed — NO duplicate tab.
+2. **Repro — reload with PROJECT panel open:** Open the Project panel. Run `Developer: Reload Window`. **Before** the panel finishes loading, immediately click "Review plan" on a Kanban card (or trigger `switchboard.openProjectPanel`). **Expected:** At most a brief delay (~1-1.5s) while the restore guard waits for the serializer, then the restored panel is revealed — NO duplicate tab.
 
 3. **Repro — lazy restoration:** Open the Project panel in a secondary tab group (not the active one). Close VS Code and reopen. The PROJECT tab should be visible but in the background. Click "Review plan" on a Kanban card. **Expected:** A single PROJECT panel appears (either the restored one or a fresh one); no duplicate. If a fresh one is created, focusing the background ghost tab should NOT produce a second live panel (the serializer should dispose the ghost if a fresh panel already exists).
 
 4. **Regression — `persistPanels: false` (default):** With `persistPanels` disabled, verify all existing behavior is unchanged: rapid "Review plan" clicks, command palette open, dispose-then-reopen. No delays, no duplicates.
 
-5. **Regression — normal open with `persistPanels: true` but no prior panel:** Enable `persistPanels`, ensure no PROJECT panel was open in the previous session. Open the Project panel. **Expected:** Opens immediately (no 3s delay — `_projectPanelRestoring` is only set if serializers are registered AND the extension calls `markProjectPanelRestoring()`; if no panel was in the previous layout, the serializer is registered but never called, and the 10s timeout clears the flag).
-
-    > **Note on edge case 5:** The current design calls `markProjectPanelRestoring()` unconditionally when `persistPanels` is true. This means the first `openProject()` after a reload will always wait up to 3s even if no PROJECT panel was in the previous layout. To avoid this UX penalty, consider gating the `markProjectPanelRestoring()` call on VS Code's `getState()` or a lightweight "was the project panel open last session" flag persisted in `workspaceState`. This is a refinement — the 3s delay on first open is acceptable for v1 but should be improved if users report it.
+5. **Regression — normal open with `persistPanels: true` but no prior panel:** Enable `persistPanels`, ensure no PROJECT panel was open in the previous session. Open the Project panel. **Expected:** Opens immediately with zero delay — the `TabGroups` API ghost-tab check finds no `switchboard-project` tab in the layout, so `markProjectPanelRestoring()` is never called and `_projectPanelRestoring` stays `false`. This is the key UX improvement over a naive "always wait" approach.
 
 ---
 
