@@ -193,7 +193,8 @@ export class AgentSkillExporter {
             commit: addons.gitCommitStrategy,
             push: addons.gitPushStrategy,
             guardrail: addons.gitProhibitionEnabled,
-            worktreeActive: false
+            worktreeActive: false,
+            worktreePerPlanActive: addons.useWorktreesPerPlan === true
         });
         if (gitPolicyBlock) {
             lines.push('### Git Safety Guardrail');

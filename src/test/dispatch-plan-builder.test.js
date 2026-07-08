@@ -60,12 +60,6 @@ function readFile(rel) {
  */
 function matchWorktreePath(worktrees, plan) {
     const active = worktrees.filter(w => w.status === 'active');
-    if (plan.planId) {
-        const subtaskWt = active.find(w => w.subtask_plan_id && String(w.subtask_plan_id) === String(plan.planId));
-        if (subtaskWt) {
-            return subtaskWt.path;
-        }
-    }
     if (plan.featureId) {
         const featureWt = active.find(w => String(w.feature_id) === String(plan.featureId));
         if (featureWt) {
@@ -90,17 +84,7 @@ function wt(row) {
 }
 
 async function runWorktreeResolverTests() {
-    await test('matchWorktreePath: subtask_plan_id wins over feature_id and project (record mode top tier)', () => {
-        const worktrees = [
-            wt({ path: '/subtask-wt', subtask_plan_id: 'plan-sub-1', feature_id: 'feature-9', project: 'Acme' }),
-            wt({ path: '/feature-wt', feature_id: 'feature-9', project: 'Acme' }),
-            wt({ path: '/project-wt', project: 'Acme' }),
-        ];
-        const result = matchWorktreePath(worktrees, { planId: 'plan-sub-1', featureId: 'feature-9', project: 'Acme' });
-        assert.strictEqual(result, '/subtask-wt', 'per-subtask dedicated worktree must win');
-    });
-
-    await test('matchWorktreePath: feature_id wins when no subtask_plan_id match', () => {
+    await test('matchWorktreePath: feature_id wins over project', () => {
         const worktrees = [
             wt({ path: '/feature-wt', feature_id: 'feature-9', project: 'Acme' }),
             wt({ path: '/project-wt', project: 'Acme' }),
@@ -109,12 +93,12 @@ async function runWorktreeResolverTests() {
         assert.strictEqual(result, '/feature-wt', 'feature_id match must win over project');
     });
 
-    await test('matchWorktreePath: project wins when no subtask/feature match', () => {
+    await test('matchWorktreePath: project wins when no feature match', () => {
         const worktrees = [
             wt({ path: '/project-wt', project: 'Acme' }),
         ];
         const result = matchWorktreePath(worktrees, { planId: 'plan-other', featureId: 'feature-other', project: 'Acme' });
-        assert.strictEqual(result, '/project-wt', 'project match must win when no higher tier matches');
+        assert.strictEqual(result, '/project-wt', 'project match must win when no feature matches');
     });
 
     await test('matchWorktreePath: returns undefined when nothing matches', () => {
@@ -127,19 +111,11 @@ async function runWorktreeResolverTests() {
 
     await test('matchWorktreePath: filters to active status only', () => {
         const worktrees = [
-            wt({ path: '/merged-wt', subtask_plan_id: 'plan-sub-1', status: 'merged' }),
+            wt({ path: '/merged-wt', feature_id: 'feature-9', status: 'merged' }),
             wt({ path: '/active-wt', feature_id: 'feature-9', status: 'active' }),
         ];
         const result = matchWorktreePath(worktrees, { planId: 'plan-sub-1', featureId: 'feature-9' });
-        assert.strictEqual(result, '/active-wt', 'merged subtask worktree must be skipped; active feature worktree wins');
-    });
-
-    await test('matchWorktreePath: planId-only subtask match (lone subtask dispatch)', () => {
-        const worktrees = [
-            wt({ path: '/subtask-wt', subtask_plan_id: 'plan-sub-1' }),
-        ];
-        const result = matchWorktreePath(worktrees, { planId: 'plan-sub-1' });
-        assert.strictEqual(result, '/subtask-wt', 'a subtask dispatched on its own resolves to its dedicated worktree');
+        assert.strictEqual(result, '/active-wt', 'merged feature worktree must be skipped; active feature worktree wins');
     });
 }
 
@@ -204,15 +180,14 @@ async function runStaticSourceTests() {
         assert.ok(!/generateUnifiedPrompt/.test(chatBlock), 'chatCopyPrompt must NOT call generateUnifiedPrompt');
     });
 
-    await test('worktreeResolver.ts exports matchWorktreePath with the three-tier precedence and TaskViewerProvider delegates to it', () => {
+    await test('worktreeResolver.ts exports matchWorktreePath with the two-tier precedence and TaskViewerProvider delegates to it', () => {
         const resolverSrc = readFile('src/services/worktreeResolver.ts');
         assert.ok(/export function matchWorktreePath/.test(resolverSrc), 'worktreeResolver.ts must export matchWorktreePath');
-        // Verify the three-tier precedence is present in source in the right order.
-        const subtaskIdx = resolverSrc.indexOf('subtask_plan_id');
-        const featureIdx = resolverSrc.indexOf('w.feature_id', subtaskIdx);
+        // Verify the two-tier precedence is present in source in the right order.
+        const featureIdx = resolverSrc.indexOf('w.feature_id');
         const projectIdx = resolverSrc.indexOf('w.project', featureIdx);
-        assert.ok(subtaskIdx >= 0 && featureIdx > subtaskIdx && projectIdx > featureIdx,
-            'matchWorktreePath source must check subtask_plan_id → feature_id → project in that order');
+        assert.ok(featureIdx >= 0 && projectIdx > featureIdx,
+            'matchWorktreePath source must check feature_id → project in that order');
         assert.ok(/w\.status === 'active'/.test(resolverSrc), 'matchWorktreePath must filter to active worktrees');
         assert.ok(/matchWorktreePath/.test(taskViewerSrc), 'TaskViewerProvider must import matchWorktreePath');
         assert.ok(/return matchWorktreePath\(worktrees, plan\)/.test(taskViewerSrc), 'resolveWorktreePathForPlan must delegate to matchWorktreePath');
