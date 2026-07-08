@@ -1174,6 +1174,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 } catch {
                     return null;
                 }
+            },
+            getFullState: async () => {
+                // Full-state resync for WS reconnects — return the current board
+                // snapshot so a dropped WS connection converges rather than going stale.
+                try {
+                    const db = await this._getKanbanDb(effectiveRoot);
+                    if (!db) return null;
+                    const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+                    const board = await db.getBoard(wsId);
+                    return board;
+                } catch {
+                    return null;
+                }
             }
         });
 

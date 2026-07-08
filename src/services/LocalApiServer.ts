@@ -239,6 +239,15 @@ export class LocalApiServer {
         return this._isListening && this._server !== null;
     }
 
+    /**
+     * Broadcast a push message to all connected WS clients. This is the
+     * wsHub fan-out target for the broadcast abstraction (A2a) that A2b's
+     * push-site audit routes through. No-op when no WS clients are connected.
+     */
+    public broadcastWs(verb: string, payload?: any): void {
+        this._wsHub?.broadcast(verb, payload);
+    }
+
     public getPort(): number {
         return this._port;
     }
@@ -248,6 +257,10 @@ export class LocalApiServer {
      */
     async stop(): Promise<void> {
         this._isListening = false;
+        if (this._wsHub) {
+            this._wsHub.close();
+            this._wsHub = null;
+        }
         if (this._server) {
             return new Promise((resolve) => {
                 this._server?.close(() => {
