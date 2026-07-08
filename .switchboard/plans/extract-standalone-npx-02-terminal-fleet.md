@@ -2,7 +2,7 @@
 description: "Standalone npx Switchboard, subtask 2 of 4: node-pty terminal fleet with name-keyed registry replacing the VS Code integrated-terminal fleet, plus the @xterm/xterm v6 browser grid streamed over WebSocket with DOM-default/focused-pane-WebGL rendering (Phase 2)"
 ---
 
-# Standalone Switchboard 2/4 — `node-pty` Terminal Fleet + xterm Browser Grid
+# Feature B · B3 — `node-pty` Terminal Fleet + xterm Browser Grid
 
 ## Goal
 
@@ -10,10 +10,13 @@ Replace the VS Code integrated-terminal fleet with a service-owned **`node-pty` 
 
 **Context (parent architecture):** Subtask 2 of the feature decomposing `.switchboard/plans/extract-standalone-npx-browser-service.md` (Plan ID `81299C8F-E2FA-4F93-881D-83231E1798A1`). Switchboard's execution model is a message router over a terminal fleet: it enumerates `vscode.window.terminals`, finds the terminal named for an agent, and injects text (name-based find at `src/services/TaskViewerProvider.ts:7768`; fleet create/find/route in `src/extension.ts:381`, `src/extension.ts:2269–2795` — "Jules Monitor"/"MCP Monitor"/per-agent-grid terminals; 41 `window.terminals` sites, 41 `sendText`/`sendRobustText` sites, 9 `createTerminal` sites, 3 `onDidCloseTerminal` sites). This subtask builds the standalone equivalent. Parent hard constraint applies: the extension keeps its `vscode.Terminal` path untouched — shared routing logic goes behind a `TerminalBackend` interface, it is not rewritten in place. This subtask covers the parent's Phase 2.
 
+> **Renumbering (2026-07-08):** the original 4-subtask feature was split into Feature A + Feature B. Old numbers used below map as: **subtask 1 → A1** (protocol catalog); **subtask 2 → B3** (this plan); **subtask 3 → A2a** (wsHub/auth/seams) + **A2b** (endpoints/extraction); **subtask 4 → B4**.
+
 ## Metadata
 - **Plan ID:** 341ac949-57bf-4223-847d-0ba8876771dc
 - **Tags:** backend, frontend, infrastructure
 - **Complexity:** 8
+- **Release phase:** **Post-release / headless.** The node-pty fleet + xterm browser grid is the standalone execution engine and live in-browser terminals — a post-release capability, **NOT** foundational. Extension-as-engine mode keeps VS Code's integrated terminals; browser terminal streaming lands only with this subtask. See the feature file's "Execution order & release phasing."
 
 ## User Review Required
 - None — the deliberate product change (Switchboard-owned browser terminals instead of editor `` Ctrl+` `` terminals) was accepted in the parent plan's review.
@@ -75,7 +78,7 @@ Replace the VS Code integrated-terminal fleet with a service-owned **`node-pty` 
 - **Coordinates with subtask 3** (`extract-standalone-npx-03-transport-migration.md`): shares the WS server; agree the message envelope early.
 
 ## Dependencies
-- **Session dependencies:** subtask 1 (`eb75281d-d8f3-4e50-b396-f7626abed020` — protocol inventory + core service) must land first; WS envelope coordinated with subtask 3 (`aaeafbeb-f4f0-40b4-a335-53e69febc8f7`).
+- **Session dependencies:** **A2a** (`aaeafbeb-f4f0-40b4-a335-53e69febc8f7` — `TerminalBackend` seam interface + wsHub) and **B1** (`cffd3a43-964b-4e7f-b530-469f8c3f0a76` — standalone bootstrap) must land first; WS envelope coordinated with A2a. A1 (`eb75281d-d8f3-4e50-b396-f7626abed020`) provides the catalog.
 - Parent architecture reference: `.switchboard/plans/extract-standalone-npx-browser-service.md`.
 
 ## Adversarial Synthesis

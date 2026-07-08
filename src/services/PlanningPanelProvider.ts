@@ -147,6 +147,7 @@ export class PlanningPanelProvider {
     // Type-only reference (avoids a runtime circular import with KanbanProvider).
     private _kanbanProvider?: import('./KanbanProvider').KanbanProvider;
     private _planAutoFetchService?: PlanAutoFetchService;
+    private _fullKanbanPlansSent = false;
     // Type-only reference (avoids a runtime circular import with TaskViewerProvider).
     // Used to dispatch constitution builder/updater + system builder prompts through the planner rotation.
     private _taskViewerProvider?: import('./TaskViewerProvider').TaskViewerProvider;
@@ -349,6 +350,9 @@ export class PlanningPanelProvider {
 
         if (this._projectPanel) {
             this._projectPanel.reveal(vscode.ViewColumn.One);
+            if (this._projectPanelReady) {
+                this._projectPanel.webview.postMessage({ type: 'refreshKanbanPlans' });
+            }
             return;
         }
 
@@ -422,6 +426,16 @@ export class PlanningPanelProvider {
                 }
                 this._projectPanelConfigDisposable?.dispose();
                 this._projectPanelConfigDisposable = undefined;
+            },
+            null,
+            this._disposables
+        );
+
+        this._projectPanel.onDidChangeViewState(
+            (e) => {
+                if (e.webviewPanel.visible) {
+                    this._projectPanel?.webview.postMessage({ type: 'refreshKanbanPlans' });
+                }
             },
             null,
             this._disposables
@@ -737,6 +751,16 @@ export class PlanningPanelProvider {
                 this._projectPanelConfigDisposable?.dispose();
                 this._projectPanelConfigDisposable = undefined;
             }, null, this._disposables);
+
+            panel.onDidChangeViewState(
+                (e) => {
+                    if (e.webviewPanel.visible) {
+                        this._projectPanel?.webview.postMessage({ type: 'refreshKanbanPlans' });
+                    }
+                },
+                null,
+                this._disposables
+            );
         } else {
             panel.onDidDispose(() => {
                 this.dispose();
@@ -3474,6 +3498,7 @@ Start by checking which documents exist, then present the menu.`;
                 const guardKey = 'kanban-plans';
                 if (requestId <= (this._latestRequestIds.get(guardKey) || 0)) { break; }
                 this._latestRequestIds.set(guardKey, requestId);
+                this._fullKanbanPlansSent = false;
                 try {
                     const allRoots = Array.from(this._getAllowedRoots());
                     const allPlans: any[] = [];
@@ -3521,7 +3546,23 @@ Start by checking which documents exist, then present the menu.`;
                             }
                         } catch (err) { /* root has no kanban DB, skip */ }
                     }
-                    if (requestId !== this._latestRequestIds.get(guardKey)) { break; }
+                    if (requestId !== this._latestRequestIds.get(guardKey)) {
+                        if (!this._fullKanbanPlansSent) {
+                            allPlans.sort((a, b) => b.mtime - a.mtime);
+                            mergedColumns.sort((a, b) => a.order - b.order);
+                            this._postToBothPanels({
+                                type: 'kanbanPlansReady',
+                                plans: allPlans,
+                                workspaceItems,
+                                allWorkspaceProjects,
+                                columns: mergedColumns,
+                                kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
+                                requestId
+                            });
+                            this._fullKanbanPlansSent = true;
+                        }
+                        break;
+                    }
                     allPlans.sort((a, b) => b.mtime - a.mtime);
                     mergedColumns.sort((a, b) => a.order - b.order);
                     this._postToBothPanels({
@@ -3533,6 +3574,7 @@ Start by checking which documents exist, then present the menu.`;
                         kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                         requestId
                     });
+                    this._fullKanbanPlansSent = true;
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(guardKey)) {
                         this._postToBothPanels({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err) });

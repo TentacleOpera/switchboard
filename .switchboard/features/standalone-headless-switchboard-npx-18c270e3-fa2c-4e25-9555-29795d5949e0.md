@@ -1,0 +1,11 @@
+# Standalone Headless Switchboard (npx)
+
+**Complexity:** 8
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Feature B · B3 — `node-pty` Terminal Fleet + xterm Browser Grid](../plans/extract-standalone-npx-02-terminal-fleet.md) — **CREATED**
+- [ ] [Feature B · B4 — `npx` Distribution + Launcher](../plans/extract-standalone-npx-04-npx-distribution.md) — **CREATED**
+- [ ] [Feature B · B1 — Host-Agnostic Core Service / Standalone Bootstrap](../plans/standalone-headless-core-service-bootstrap.md) — **CREATED**
+- [ ] [Feature B · B2 — Transport Shim (run the real webview UI in a browser)](../plans/standalone-headless-transport-shim.md) — **CREATED**
+<!-- END SUBTASKS -->

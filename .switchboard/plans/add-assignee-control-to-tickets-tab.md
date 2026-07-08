@@ -240,4 +240,8 @@ Both original API-semantics questions are resolved via web research (see **Resol
 - [ ] `saveAssign` branches id coercion per provider (Linear string/null, ClickUp ids stay strings over the wire; backend `.map(Number)`).
 - [ ] ClickUp no-change case (empty `add` + empty `rem`) short-circuits without an API call.
 
+## Review Findings
+
+Reviewed against commit `c09cba8`. **Fixed (MAJOR):** `saveAssign` in `src/webview/planning.js` could silently unassign a ticket when Save was clicked before the member list rendered (still loading, or after a load error) — an empty selection fell into the unassign branch; added a guard that blocks Save until the real list (incl. the "Nobody" row) exists. Service (`updateTaskAssignees` delta form), provider handlers (3 cases), modal markup, Linear single-assignee enforcement, and per-provider id coercion all match the plan. Validation: `node --check src/webview/planning.js` passes; compilation/tests skipped per session directive; live-API assignee round-trip not exercised. **Remaining risks:** last-write-wins on the ClickUp delta if another actor edits assignees mid-modal (accepted, matches Status/Tags); a task-scoped assignee error can surface the shared "comments/attachments" message text when a local copy exists (pre-existing, inherited from the tags flow).
+
 **Stage Complete:** PLAN REVIEWED

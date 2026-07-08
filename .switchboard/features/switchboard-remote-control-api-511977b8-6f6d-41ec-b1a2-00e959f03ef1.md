@@ -34,5 +34,5 @@ The Switchboard Remote-Control API turns the VS Code extension into a host-agnos
 - [ ] [Feature A · A2a — Transport Infrastructure: wsHub, Auth, Seams](../plans/extract-standalone-npx-03-transport-migration.md) — **PLAN REVIEWED**
 - [ ] [Switchboard Manage — Host-Agnostic Management Console Skill](../plans/switchboard-manage-console-skill.md) — **PLAN REVIEWED**
 - [ ] [Feature A · A3 — Declarative, Path-Addressed Feature Management](../plans/feature-management-declarative-path-addressed.md) — **PLAN REVIEWED**
-- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **CREATED**
+- [ ] [Feature A · A2b — Per-Verb Handler Burn-Down (All Panels)](../plans/transport-migration-per-verb-burndown.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->

@@ -32,6 +32,7 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 
 <!-- switchboard:agents-protocol:start -->
 <!-- switchboard:agents-protocol:start -->
+<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
@@ -55,6 +56,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/switchboard-split` | **`switchboard-split.md`** | Split one plan into a Complex/Risky file + a Routine companion so the tiers can be coded separately. Remote-safe (file writes). |
 | `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
+| `/switchboard-orchestrator` *(system-launched)* | **`switchboard-orchestrator.md`** | Orchestration-mode batch manager — system-woken persona that groups plans into features (confirm gate off + `Miscellaneous` sweep), fans out to per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Launched by the AUTOMATION tab's Start orchestrator; not for ad-hoc use. |
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -100,7 +102,7 @@ All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
 ```
 
-Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query_switchboard_kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill.
+Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query_switchboard_kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill. The **orchestrator persona** is the sanctioned exception — it moves cards via `move-card.js`/`POST /kanban/move` (the API path a human's click takes), never via SQL.
 
 ### 📚 Available Skills
 
@@ -108,7 +110,6 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 | Skill | When to Use |
 |-------|-------------|
-| `switchboard` | User types `/switchboard` or doesn't know which skill they need — front door that detects local vs remote and routes the request to the right skill. |
 | `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
 | `clickup_api` | Direct ClickUp API access via LocalApiServer proxy (replaces call_clickup_api) |
 | `clickup_attach` | Attach files to ClickUp tasks via LocalApiServer (replaces clickup_attach) |
@@ -129,12 +130,19 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
+| `switchboard` | User types `/switchboard` or doesn't know which skill they need — front door that detects local vs remote and routes the request to the right skill. |
 | `switchboard-chat` | Local consultative planning mode. Reached via `/switchboard` in local mode (the `/sw` alias was retired). Reads kanban state so you can reference columns and chain workflows. |
+| `improve-feature` | User runs `/improve-feature` on a feature. Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
+| `switchboard-split` | User runs `/switchboard-split` on one plan — splits it into a Complex/Risky file + a Routine companion. Remote-safe file writes; the local splitter's remote equivalent. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
+| `refine_feature` | User clicks "Refine" on a selected feature in the Features tab to copy a prompt that fleshes out the feature description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_feature"`) |
+| `group-into-features` | User asks to "group plans into a feature", "organise loose plans into features", or "suggest feature groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates features via create-feature.js (model-invocable; also sourced by the Suggest Features board button) |
 | `create-feature` | Create a Switchboard feature from a remote session by writing the feature file directly to `.switchboard/features/` — use when the VS Code extension is not running and `create-feature.js` is unreachable |
+| `create-feature-from-plans` | Create a Switchboard feature from a known set of plans when the extension is running — runs create-feature.js |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
-| `improve-feature` | User runs `/improve-feature` on a feature (or improve-plan detects a feature). Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
-| `switchboard-split` | User runs `/switchboard-split` on one plan — splits it into a Complex/Risky file + a Routine companion (`<stem>_routine.md`) along its Complexity Audit. Remote-safe file writes; the local splitter's remote equivalent. |
+| `worktree_cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
+| `switchboard-orchestrator` | Launched by the Orchestration automation mode (Start orchestrator button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). Manual `/switchboard-orchestrator` is for deliberate resume/debug only. |
+| `switchboard-orchestration` | Fleet coding/review agents working inside orchestration worktrees — discover the API port, read board/features/plans/worktrees, file requests to the orchestrator, and read the session log via HTTP endpoints. |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 
@@ -171,12 +179,15 @@ When creating plan files in multi-workspace setups, use this decision tree to de
 When creating any plan file:
 1. If the user named a target project in their request, pin that: write `**Project:** <name>` in the metadata block. The user's words always beat board state.
 2. Otherwise, resolve the active project **once, at the start of the task** (read `kanban.activeProjectFilter` from the workspace's `kanban.db` config table) and pin that snapshot in every plan file written for the task. Do not re-read it at file-write time — the user may browse other boards while you work.
-   - **Remote / DB-less sessions:** a remote agent cannot read `kanban.activeProjectFilter`. If the user named a project, pin it. Otherwise **ask** whether there's a project to stamp. If the user doesn't specify one (or the session can't ask), **write no `**Project:**` line** — never guess, never substitute the workspace/repo name, never leave a literal `<project>` placeholder. The plan lands unassigned and can be reassigned on the board.
+   - **Remote / DB-less sessions:** a remote agent cannot read `kanban.activeProjectFilter`. If the user named a project, pin it. Otherwise **write no `**Project:**` line — do not ask the user.** Never guess, never substitute the workspace/repo name, never leave a literal `<project>` placeholder. The plan lands unassigned and can be reassigned on the board.
 3. State the pin in your reply ("Pinning to *<name>*") so a wrong snapshot is visible immediately.
 4. If neither exists (no named project, empty config), omit the line — the plan lands unassigned and can be reassigned on the board.
 
-Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both parse. No manifest is needed for project pinning — the .md metadata is the carrier.
+Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both parse. The .md metadata is the carrier — the plan watcher reads it directly on import.
 
+> **System backstop:** the importer is resolve-only. An unknown pin (or one equal to a workspace name / a literal `<...>` placeholder) leaves the plan unassigned instead of auto-creating a `projects` row. Only the user creates projects (on the board). The protocol above is the first line of defense; the import guard is the non-negotiable backstop.
+
+<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:claude-protocol:end -->

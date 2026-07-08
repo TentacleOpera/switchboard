@@ -512,13 +512,6 @@ export const BATCH_EXECUTION_RULES = `CRITICAL INSTRUCTIONS:
 2. Execute each plan fully before moving to the next (if sequential).
 3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
 
-/**
- * Activity-light OFF-switch. The exact label the agent appends to a plan file when it
- * finishes a stage; the watcher (planMetadataUtils) parses this same constant to clear the
- * card's `working` state. Shared so the emitter and parser cannot drift.
- */
-export const STAGE_COMPLETE_LABEL = 'Stage Complete';
-
 
 
 /** §8 — Shared PRD reference block builder from raw refs. Used by both buildPrdReferenceBlock and buildCustomAgentPrompt. */
@@ -568,6 +561,8 @@ export const WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE = `FEATURE DESCRIPTION
 If all three sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
+export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing the plan, append a brief summary (3-5 sentences) to the END of the original plan file. Include: what you implemented, files changed, and any issues encountered. This edit signals task completion to the kanban board — the file watcher detects it and clears the card's working-state light. Do NOT skip this step.`;
+
 
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
@@ -710,6 +705,7 @@ export function PROJECT_LINE_DIRECTIVE(project: string): string {
 }
 
 const DEFAULT_PLANNER_WORKFLOW = '.agents/workflows/improve-plan.md';
+const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/workflows/improve-feature.md';
 
 /** Roles that touch code and should receive the git safety guardrail. */
 const CODE_TOUCHING_ROLES = new Set(['lead', 'coder', 'intern', 'reviewer', 'tester']);
@@ -871,7 +867,10 @@ export function buildKanbanBatchPrompt(
     const executionDirective = `AUTHORIZATION: These plans are pre-approved — begin implementation immediately; do not produce a separate planning document first.`;
 
     if (role === 'planner') {
-        const workflowPath = options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW;
+        const isFeatureTarget = options?.featureMode === true || plans.some(p => p.isFeature);
+        const workflowPath = isFeatureTarget
+            ? DEFAULT_FEATURE_PLANNER_WORKFLOW
+            : (options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW);
         const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? false;
         // §Git — planner is non-code-touching; strategies resolve to `undefined`/`notSpecified`
         // so only the guardrail clause can fire. Resolved here for symmetry with the outer
@@ -1127,6 +1126,8 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
+        baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
@@ -1175,6 +1176,8 @@ For each plan:
             if (cavemanOutputEnabled) {
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
+            baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
             // no subagent block, no feature directive (replaced by featureExecutionBlock).
@@ -1215,6 +1218,8 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
+        baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
@@ -1251,6 +1256,8 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
+        baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 

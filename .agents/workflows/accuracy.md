@@ -9,7 +9,7 @@ description: Implement with high accuracy and self-review (optimized for per-pro
 - When creating files in `.switchboard/`, always use `IsArtifact: false` to prevent path validation errors.
 
 ## No-Artifact Rule
-- `/accuracy` is a solo, in-conversation workflow. Do NOT write out artifacts to disk as part of execution — no `task.md`, no plan files, no Red Team Findings file, no progress logs. All planning, progress tracking, and review output belongs in your reply to the user. The only files you create or modify are the actual code files required by the task itself.
+- `/accuracy` is a solo, in-conversation workflow. Do NOT write out artifacts to disk as part of execution — no `task.md`, no plan files, no Red Team Findings file, no progress logs. All progress tracking and review output belongs in your reply to the user; planning itself is internal (see Step 3) and is NOT presented as a plan-in-reply. The only files you create or modify are the actual code files required by the task itself.
 
 ## Quick Reference
 - **Valid Actions**: None (solo workflow, no cross-agent delegation)
@@ -25,12 +25,13 @@ description: Implement with high accuracy and self-review (optimized for per-pro
    - **WHY**: Missing context causes mistakes. Mistakes cause rework. Rework costs extra prompts.
    - Mark Phase 1 complete in your reply (a brief checklist is fine) or via the Kanban UI if available. Do NOT create any tracking files on disk.
 
-3. **Thorough Plan**:
-   - MUST produce a detailed plan in your reply listing every change, which files are affected, and how to verify each. Do NOT write a plan file to disk — plan files are the domain of `/improve-plan`, not `/accuracy`.
-   - MUST map dependencies between changes — which must happen first?
+3. **Internal Planning** (think before you code, but do NOT present a plan-in-reply):
+   - MUST map dependencies between changes internally — which must happen first?
    - MUST identify risks: what could break? What edge cases exist?
    - **DESTRUCTION CHECK**: If deleting files, MUST run `grep_search` to confirm nothing depends on them.
-   - **RULE**: Spend more time planning. A plan that prevents 1 rework cycle saves an entire prompt.
+   - **RULE**: Spend more time thinking. A thought-through approach that prevents 1 rework cycle saves an entire prompt.
+   - Do NOT produce a plan-in-reply or present a plan for approval — proceed directly to Step 4 (implementation).
+   - Do NOT write a plan file to disk — plan files are the domain of `/improve-plan`, not `/accuracy` (enforced by the No-Artifact Rule above).
 
 4. **Implement in verified groups**:
    - Group related changes together — if 3 files need coordinated changes, do all 3 in one pass.

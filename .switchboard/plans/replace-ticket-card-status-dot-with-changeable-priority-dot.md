@@ -239,4 +239,8 @@ N/A — automated tests and project compilation are skipped per session directiv
 
 **Recommendation:** Complexity 5 (Mixed) → **Send to Coder.** Majority of the work is routine pattern-mirroring (Linear mutation, message-switch cases, card markup swap, CSS); the moderate risks are the novel optimistic+revert path, popover lifecycle vs. re-render, and the ClickUp `priority: 0` API behavior (resolve via research before coding).
 
+## Review Findings
+
+Reviewed against commit `c09cba8`. **Fixed (MAJOR):** the in-flight double-update guard in `selectPriority` (`src/webview/planning.js`) was ineffective — it added a `.busy` class to the dot, then the optimistic `renderTickets*List()` rebuilt the dot without it, so a second selection could fire a duplicate write; replaced with a state-based gate on `_pendingPriorityChange` (one priority write at a time, survives re-render). Card markup swap, popover lifecycle (closed at top of both list renderers), optimistic+revert on `linear/clickupError`, status-group header dot preserved, and the new Linear `updateIssuePriority` all match the plan; no orphaned `statusLight`/`statusColor` refs remain. Validation: `node --check src/webview/planning.js` passes; compilation/tests skipped per directive. **Remaining risks:** ClickUp "No priority" sends `{priority: 0}` and whether the API clears vs. no-ops on `0` is still unverified (Uncertain Assumption #2 — needs a live-API check; if it no-ops, send the documented clear value); `_availableClickUpPriorities` reads `t.priority.priority` guarded only by `orderindex` (would throw on a name-less priority object, near-impossible after normalization).
+
 **Stage Complete:** PLAN REVIEWED

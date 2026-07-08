@@ -2,7 +2,7 @@
 description: "Standalone npx Switchboard, subtask 4 of 4: npm bin packaging, launcher that boots the service and opens the browser with a one-time-token handoff, engines>=22 floor, and the clean-machine smoke matrix across OS x arch x package manager (Phase 4)"
 ---
 
-# Standalone Switchboard 4/4 — `npx` Distribution + Launcher
+# Feature B · B4 — `npx` Distribution + Launcher
 
 ## Goal
 
@@ -10,10 +10,13 @@ Package the standalone service for `npx switchboard`: the `bin` entry + launcher
 
 **Context (parent architecture):** Subtask 4 of the feature decomposing `.switchboard/plans/extract-standalone-npx-browser-service.md` (Plan ID `81299C8F-E2FA-4F93-881D-83231E1798A1`). This is the parent's Phase 4 (~1–2 wks, overlaps subtask 2's prebuild verification). `npx` is the chosen distribution — Electron packaging was explicitly rejected for now; extension-as-launcher and Open VSX publish are separate follow-ups outside the feature.
 
+> **Renumbering (2026-07-08):** the original 4-subtask feature was split into Feature A + Feature B. Old numbers used below map as: **subtask 1 → A1**; **subtask 2 → B3**; **subtask 3 → A2a** (wsHub/auth) + **A2b** (endpoints); **subtask 4 → B4** (this plan).
+
 ## Metadata
 - **Plan ID:** 5674b039-5c6b-4787-b061-390d3a790093
 - **Tags:** devops, cli, infrastructure, security
 - **Complexity:** 5
+- **Release phase:** **Post-release / headless.** npx packaging + launcher is the no-VS-Code distribution; not needed while the extension is the engine. See the feature file's "Execution order & release phasing."
 
 ## User Review Required
 - None — distribution choice fixed in the parent plan's review.
@@ -64,11 +67,11 @@ Package the standalone service for `npx switchboard`: the `bin` entry + launcher
 - `npm pack` size guard — prebuild-bearing transitive deps are the expected bulk; our own tarball stays lean.
 
 ### Dependencies & Conflicts
-- **Depends on subtasks 1–3** (`eb75281d-d8f3-4e50-b396-f7626abed020`, `341ac949-57bf-4223-847d-0ba8876771dc`, `aaeafbeb-f4f0-40b4-a335-53e69febc8f7`): packages what they built; the smoke matrix can start overlapping subtask 2 (prebuild legs) before subtask 3 completes.
+- **Depends on all of Feature A + B1/B2/B3** (`eb75281d` A1, `aaeafbeb` A2a, `c05762a3` A2b, `cffd3a43` B1, `a5de2ce9` B2, `341ac949` B3): packages what they built; the smoke matrix can start overlapping B3 (prebuild legs) before the transport work completes.
 - npm registry publish access for the `switchboard` package name (verify availability/ownership early — rename fallback if squatted).
 
 ## Dependencies
-- **Session dependencies:** subtasks 1–3 of this feature (see plan IDs above); smoke-matrix legs overlap subtask 2.
+- **Session dependencies:** A1, A2a, A2b, B1, B2, B3 (plan IDs above); smoke-matrix legs overlap B3.
 - Parent architecture reference: `.switchboard/plans/extract-standalone-npx-browser-service.md`.
 
 ## Adversarial Synthesis

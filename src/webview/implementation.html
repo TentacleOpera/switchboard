@@ -1917,6 +1917,7 @@
         let lastPlannerTarget = null;  // current rotation-cursor target terminal name, from terminalStatuses
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
+        let lastAgentNames = {}; // role -> startup-command-derived display name (e.g. 'AGY CLI'); from 'terminalAgentNames' message
         let lastJulesAutoSyncEnabled = undefined;
         // Autoban engine state (received from backend)
         let autobanState = {
@@ -2471,6 +2472,25 @@
                     }
                     break;
                 }
+                case 'terminalAgentNames':
+                    lastAgentNames = message.agentNames || {};
+                    renderAgentList();
+                    break;
+                case 'visibleAgents':
+                    lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS, ...(message.agents || {}) };
+                    renderAgentList();
+                    break;
+                case 'startupCommands':
+                    lastStartupCommands = message.commands || {};
+                    if (message.visibleAgents) {
+                        lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS, ...message.visibleAgents };
+                    }
+                    renderAgentList();
+                    break;
+                case 'customAgents':
+                    lastCustomAgents = Array.isArray(message.customAgents) ? message.customAgents : [];
+                    renderAgentList();
+                    break;
             }
         });
 
@@ -2783,20 +2803,15 @@
                 const isWtTerm = (dispatchInfo && dispatchInfo.isWorktreeTerminal) ||
                     (resolvedTermName && lastTerminals[resolvedTermName]?.worktreePath);
 
-                // Name segment resolution order:
-                //   1. explicitTermName (PLANNER's user-selected target)
-                //   2. worktree-routed terminal name (dispatchInfo.terminalName when isWorktreeTerminal)
-                //   3. the terminal name key resolved by findTerminalByRole (resolvedTermName)
-                //   4. fallback to startup command -> "<CMD> CLI"
-                //   5. bare role label
                 const worktreeRouteName = (dispatchInfo && dispatchInfo.isWorktreeTerminal && dispatchInfo.terminalName)
                     ? dispatchInfo.terminalName : null;
-                const displayName = explicitTermName || worktreeRouteName || resolvedTermName || null;
-                const fallbackCmdName = lastStartupCommands[roleId]
-                    ? `${lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase()} CLI`
+                const agentDisplayName = lastAgentNames[roleId] || null;
+                const _cmd0 = (lastStartupCommands[roleId] || '').trim().split(/\s+/)[0] || '';
+                const fallbackCmdName = _cmd0
+                    ? `${_cmd0.split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '').toUpperCase()} CLI`
                     : null;
+                const displayName = explicitTermName || worktreeRouteName || agentDisplayName || fallbackCmdName || null;
 
-                // Escape plain-text segments before joining into innerHTML (the worktree span is the only literal HTML).
                 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 const wtSegment = isWtTerm
                     ? ' - <span style="font-size:9px; opacity:0.6;">worktree</span>'
@@ -2804,8 +2819,6 @@
 
                 if (displayName) {
                     name.innerHTML = `${esc(label)} - ${esc(displayName)}${wtSegment}`;
-                } else if (fallbackCmdName) {
-                    name.innerHTML = `${esc(label)} - ${esc(fallbackCmdName)}${wtSegment}`;
                 } else {
                     name.innerHTML = esc(label) + wtSegment;
                 }
@@ -3398,14 +3411,14 @@ Work through all plans in the list, using the marker format above.`;
             const wtSegmentAnalyst = isWtTermAnalyst
                 ? ' - <span style="font-size:9px; opacity:0.6;">worktree</span>'
                 : '';
-            const analystDisplayName = termName || null;
-            const analystFallbackName = lastStartupCommands['analyst']
-                ? `${lastStartupCommands['analyst'].trim().split(/\s+/)[0].toUpperCase()} CLI`
+            const analystAgentName = lastAgentNames['analyst'] || null;
+            const _analystCmd0 = (lastStartupCommands['analyst'] || '').trim().split(/\s+/)[0] || '';
+            const analystFallbackName = _analystCmd0
+                ? `${_analystCmd0.split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '').toUpperCase()} CLI`
                 : null;
+            const analystDisplayName = analystAgentName || analystFallbackName || null;
             if (analystDisplayName) {
                 name.innerHTML = `ANALYST - ${esc(analystDisplayName)}${wtSegmentAnalyst}`;
-            } else if (analystFallbackName) {
-                name.innerHTML = `ANALYST - ${esc(analystFallbackName)}${wtSegmentAnalyst}`;
             } else {
                 name.innerHTML = `ANALYST${wtSegmentAnalyst}`;
             }

@@ -24,7 +24,10 @@ A target plan file path (the plan to split). If none is given, ask which plan.
 
 5. **Do not lose anything.** Every implementation step, code block, and edge case in the source must land in exactly one of the two files (shared context in both). This is the split's core guarantee.
 
-6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should be linked to a feature or carry a project, add `**Feature:** <feature-plan-id>` and/or `**Project:** <name>` lines to the new plan file's frontmatter (applied on import with apply-if-empty semantics). For a column move, use the Notion/Linear provider or MCP. Commit both files.
+6. **Register the new file (remote).** The new `_routine.md` imports as a new plan card on the next local pull (the plan watcher picks up new `.md` files). If it should be linked to a feature or carry a project, add `**Feature:** <feature-plan-id>` and/or `**Project:** <name>` lines to the new plan file's frontmatter (applied on import with apply-if-empty semantics). After the file is written, you MUST move the newly created companion card to `PLAN REVIEWED` using the session-appropriate mechanism:
+   - **Local (extension running — `.switchboard/api-server-port.txt` present):** Use the `kanban_operations` skill (move-card.js) to move the card to `PLAN REVIEWED`.
+   - **Remote (no extension — `.switchboard/api-server-port.txt` absent):** Use the Notion/Linear provider or MCP to move the card to `PLAN REVIEWED`.
+   The original (Complex) file is rewritten in place and retains its existing column (no move needed for it). Commit both files.
 
 ## Guardrails
 

@@ -654,6 +654,14 @@
         }
 
         const nobodyInput = document.getElementById('assignee-nobody');
+        // Guard: if the member list has not rendered yet (still loading, or a load
+        // error left the "Loading members..." placeholder in place), the selection
+        // set is empty and Save would fall into the unassign branch and silently
+        // clear the assignee. Block Save until a real list (incl. the Nobody row) exists.
+        if (_assignMembersLoading || !nobodyInput) {
+            showTicketsStatus('Members are still loading — please try again in a moment', true);
+            return;
+        }
         const checkboxes = availableList.querySelectorAll('input[name="assignee-selection"]:checked');
         const selectedIds = Array.from(checkboxes).map(cb => cb.value).filter(val => val !== '__unassigned__');
 
@@ -859,6 +867,10 @@
 
     function selectPriority(value) {
         if (!_openPriorityPopoverFor) return;
+        // In-flight guard: the optimistic re-render below rebuilds the dot without the
+        // `.busy` class, so the DOM-class disable cannot prevent a duplicate update.
+        // Gate on the pending-change state instead — one priority write at a time.
+        if (_pendingPriorityChange) { closePriorityPopover(); return; }
         const { provider, ticketId, preValue, dotEl } = _openPriorityPopoverFor;
         closePriorityPopover();
 

@@ -34,6 +34,10 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
       - **Complexity:** 1-10
       - **Repo:** Bare sub-repo folder name if applicable
    3. **## User Review Required**
+
+   ### Project Pinning
+   When creating or updating a plan, include `**Project:** <name>` in the Metadata section if a project is active or the user named one. The workspace/repo name is NOT a project — never pin it (the importer silently drops workspace-name pins to unassigned). If no project is active and the user didn't name one, omit the line — never ask the user which project to use. See AGENTS.md "Plan Project Pinning" for the full protocol.
+
    4. **## Complexity Audit**
       - **### Routine** — bullet points or plain text listing routine aspects
       - **### Complex / Risky** — bullet points or plain text listing complex/risky aspects (or "- None" if empty)
@@ -90,52 +94,10 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
      - If complexity is 4-6 → "Send to Coder"
      - If complexity is 7-10 → "Send to Lead Coder"
 
-## Plan-Import Manifest (Trigger A — column transition)
+## Post-Review Board State
 
-After updating the plan `.md` file(s), the reviewed plan should land in the "PLAN REVIEWED" kanban column.
+1. **Trigger Model**: This `improve-plan` workflow is triggered automatically when a card arrives in the "PLAN REVIEWED" column (which has `autobanEnabled: true` and `role: 'planner'`). The card is already in the "PLAN REVIEWED" column when this workflow runs. Do NOT instruct the user to move it there.
+2. **Review Complete**: After completing the adversarial review and plan update, the card stays in the "PLAN REVIEWED" column. The activity light clears on the next plan-file edit. The user advances the card to the next pipeline stage (e.g. dispatches a coder) manually when ready.
+3. **Plan Metadata**: Do NOT write a `**Plan ID:**` line — it is never parsed. The importer assigns the ID (a fresh UUID, or a feature's filename UUID) and keys plan identity by the file **path**; a hand-written Plan ID is ignored and drifts from the real DB-assigned one.
+4. **Feature Relationships**: Feature relationships are carried by `**Feature:** <feature-plan-id>` and `**Project:** <name>` lines written directly in each plan `.md` — the plan watcher applies these on import with apply-if-empty semantics. If you restructured plans into a feature during review, recommend invoking the `create-feature-from-plans` skill (which runs `create-feature.js` to handle DB update, subtask linking, feature file write, and board refresh atomically) AFTER the review is finished and the user has approved. Do NOT invoke it mid-review.
 
-**Local agents (Switchboard extension running):** Do NOT write a manifest for the column transition. Simply update the plan file and inform the user that the review is complete. The user will move the card to "PLAN REVIEWED" in the extension UI when ready — that card move is what triggers the next pipeline stage.
-
-**Remote agents (no Switchboard extension access):** Emit a **plan-import manifest** so the extension ingests the column transition on its next scan. To determine if you are remote: check whether `.switchboard/api-server-port.txt` exists in the workspace root (walk up from your current directory). If it does not exist, you are remote.
-
-**When to emit:**
-- **Trigger A (remote only):** you have adversarially reviewed a plan → set `kanbanColumn: "PLAN REVIEWED"`.
-- **Trigger B (all agents):** if you restructured plans into a feature during review → include `isFeature`/`featureId` links for the feature + subtask set. Trigger B applies regardless of local/remote — feature relationships span multiple files and cannot be expressed via a single card move. **Local agents writing a Trigger B-only manifest:** set `kanbanColumn: "CREATED"` (or omit the field) so the ingestor does not auto-move the card — the user moves it manually.
-  **Creating the feature:** When Trigger B applies (you restructured plans into a feature), the recommended creation path is the `create-feature-from-plans` skill (runs `create-feature.js`: DB upsert, subtask linking, feature-file write, board refresh — atomic). Run it AFTER the review is complete and the user has approved moving forward; do NOT invoke it mid-review, as this workflow's NO-IMPLEMENTATION constraint forbids side-effecting writes. The manifest path (below) remains this workflow's in-band mechanism for declaring feature relationships to the watcher.
-- Pure plan creation with no review and no grouping → no manifest.
-
-**Location:** per-plan frontmatter in each `.md` file — `**Feature:** <feature-plan-id>` and `**Project:** <name>` lines written directly in the plan file (applied on import with apply-if-empty semantics). No batch manifest file — each plan carries its own durable facts.
-
-**v1 schema:**
-```json
-{
-  "version": 1,
-  "plans": [
-    {
-      "planFile": ".switchboard/plans/feature_plan_20260630_foo.md",
-      "planId": "550e8400-e29b-41d4-a716-446655440000",
-      "kanbanColumn": "PLAN REVIEWED",
-      "status": "active",
-      "isFeature": false,
-      "featureId": "",
-      "project": "Switchboard"
-    }
-  ]
-}
-```
-
-**Field rules:**
-- `planFile` (**required**): path relative to workspace root, as stored in the DB.
-  Must be `.switchboard/plans/<name>.md` for plans or `.switchboard/features/<name>.md` for features.
-  Bare filenames (e.g. `foo.md`) are auto-resolved to `.switchboard/plans/foo.md` but the
-  full path is preferred. No `..` or absolute paths.
-- `planId` (recommended): must match the `**Plan ID:** <uuid>` embedded in the `.md` so identity is stable and `featureId` references resolve.
-- `kanbanColumn`: validated against the board's column set. Invalid → skipped (plan stays `CREATED`).
-- `fromColumn` (optional): the column the plan must currently be in for the `kanbanColumn` move to apply. Defaults to `CREATED` (the import-upgrade case). Set it to make a **forward transition from a later stage** — e.g. a remote coding agent advancing a plan `"fromColumn": "PLAN REVIEWED", "kanbanColumn": "CODED"`. If the plan is no longer in `fromColumn` (a human/host already moved it), the move is skipped by the stale-manifest guard.
-- `status`: `active` | `archived` | `completed` | `deleted`.
-- `isFeature` / `featureId`: `featureId` references another entry's `planId` (in-batch) or an existing DB feature. Process features before subtasks (the ingestor sorts automatically).
-- `project`: project name; resolved to `project_id` at ingest (unknown project → kept as denormalized string).
-
-**Stale-manifest guard:** the ingestor overrides the column only when the row is currently in the entry's `fromColumn` (default `CREATED`); if the card is anywhere else — because a human/host already moved it — the column override is skipped (feature/project still applied). This lets a fresh manifest make a legitimate forward transition (e.g. `PLAN REVIEWED` → `CODED`) while a stale one is ignored. The manifest is deleted after all entries apply; idempotent if a delete is missed.
-
-**`**Plan ID:**` embedding:** each plan `.md` must embed `**Plan ID:** <uuid>` (and features use the `feature-<uuid>.md` filename) so `featureId` links resolve and identity is stable across re-imports. Required for Trigger B, recommended for Trigger A.

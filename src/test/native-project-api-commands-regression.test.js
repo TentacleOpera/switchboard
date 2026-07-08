@@ -104,12 +104,12 @@ function run() {
     );
     assert.match(
         linearSource,
-        /public async addIssueComment\(issueId: string, comment: string\): Promise<void>/m,
+        /public async addIssueComment\(issueId: string, comment: string, options\?: \{ parentId\?: string; mentions\?: Array<\{ id: string; name: string \}> \}\): Promise<\{ success: boolean; error\?: string \}>/m,
         'Expected LinearSyncService to expose addIssueComment for native commands.'
     );
     assert.match(
         linearSource,
-        /public async updateIssueDescription\(issueId: string, description: string\): Promise<void>/m,
+        /public async updateIssueDescription\(issueId: string, description: string, title\?: string\): Promise<void>/m,
         'Expected LinearSyncService to expose updateIssueDescription for native commands.'
     );
 

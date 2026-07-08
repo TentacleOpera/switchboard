@@ -36,7 +36,7 @@ Build the transport infrastructure that A2b's per-verb burn-down rides on: a tok
 - **`ws` npm dependency:** add `ws` + `@types/ws` to `package.json`. Net-new to the published extension (~4,000 installs).
 
 ### ⚙️ OUT OF SCOPE
-- **Handler extraction (706 arms) + per-verb endpoints + push-site audit + CI parity gate** → **A2b** (`4310ac0a-...`).
+- **Handler extraction (706 arms) + per-verb endpoints + push-site audit + CI parity gate** → **A2b** (`c05762a3-...`).
 - **Transport shim** (running the real webview UI in a browser) → **B2**.
 - `node-pty` `TerminalBackend` implementation + xterm browser grid → **B3**.
 - Standalone composition root / keyring / config-file / Memento→config → **B1**. npx packaging → **B4**.
@@ -62,12 +62,12 @@ Build the transport infrastructure that A2b's per-verb burn-down rides on: a tok
 - **Race:** push during WS reconnect → covered by full resync on connect. Two browser tabs → both get full fan-out; last-writer-wins.
 - **Security:** unauthenticated WS upgrade → `socket.destroy()` before upgrade completes. Bad `Origin` → rejected. DNS-rebinding → `Origin` check catches it. HTTP routes without token → 401 (but existing webview-driven flow doesn't use HTTP routes, so no regression).
 - **Side effects:** `_checkAuth` rewrite touches every existing route's auth path. Must be behavior-preserving for the existing token-less localhost flow.
-- **Dependencies:** **A1** (`eb75281d-...`) — catalog informs the seam inventory (which vscode-coupled surfaces exist in arm bodies). **New npm dep:** `ws`. Does NOT depend on B1. A2b (`4310ac0a-...`) depends on this.
+- **Dependencies:** **A1** (`eb75281d-...`) — catalog informs the seam inventory (which vscode-coupled surfaces exist in arm bodies). **New npm dep:** `ws`. Does NOT depend on B1. A2b (`c05762a3-...`) depends on this.
 
 ## Dependencies
 - **A1** (`eb75281d-d8f3-4e50-b396-f7626abed020`) — protocol catalog identifies the vscode-coupled surfaces that need seams.
 - **New npm dependency:** `ws` + `@types/ws` — NOT currently in `package.json`. Must be added before wsHub work begins.
-- **Consumed by:** A2b (`4310ac0a-f93f-4c6c-b973-416f998bc39b`) — A2b's per-verb burn-down rides on A2a's wsHub + auth + seams + broadcast abstraction.
+- **Consumed by:** A2b (`c05762a3-8aef-4502-9b91-f72c2a2b2b81`) — A2b's per-verb burn-down rides on A2a's wsHub + auth + seams + broadcast abstraction.
 - Does NOT depend on B1's standalone bootstrap. Coordinates the WS envelope with B3 (terminal streams ride wsHub).
 
 ## Adversarial Synthesis

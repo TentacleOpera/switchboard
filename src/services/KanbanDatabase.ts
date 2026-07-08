@@ -3385,6 +3385,18 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
+    public async getPlansByPlanIds(planIds: string[]): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db || planIds.length === 0) return [];
+        const placeholders = planIds.map(() => '?').join(', ');
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE plan_id IN (${placeholders})`,
+            planIds
+        );
+        return this._readRows(stmt);
+    }
+
+
     /**
      * Resolve a plan by an identifier of ambiguous vintage: plan_id first (the
      * canonical key), then session_id (legacy sess_* rows from released versions).

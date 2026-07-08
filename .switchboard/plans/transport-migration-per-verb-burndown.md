@@ -11,7 +11,7 @@ Mechanically extract all **706 handler `case` arms** out of the five Provider fi
 **Context:** Split 2026-07-08 from A2 during improve-feature. A2 bundled infrastructure + burn-down — two distinct units with a clean prerequisite line. A2a built wsHub + auth + seams + broadcast abstraction. A2b uses them mechanically. Parent hard constraint applies with maximum force: every handler-body lift changes code the shipped extension (~4,000 installs) runs. The contract surface (2026-07-07): 432 verbs, 706 arms, 988 push sites, 575 UI call sites.
 
 ## Metadata
-- **Plan ID:** 4310ac0a-f93f-4c6c-b973-416f998bc39b
+- **Plan ID:** c05762a3-8aef-4502-9b91-f72c2a2b2b81
 - **Feature:** 511977b8-6f6d-41ec-b1a2-00e959f03ef1
 - **Tags:** refactor, backend, api
 - **Complexity:** 8

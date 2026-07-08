@@ -13,8 +13,8 @@ Make the Tickets sidebar a first-class ticket-management surface by adding two m
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add Assignee Control to Tickets Tab](../plans/add-assignee-control-to-tickets-tab.md) — **CODER CODED**
-- [ ] [Replace Sidebar Card Status Dot with a Changeable Priority Dot](../plans/replace-ticket-card-status-dot-with-changeable-priority-dot.md) — **CODER CODED**
+- [ ] [Add Assignee Control to Tickets Tab](../plans/add-assignee-control-to-tickets-tab.md) — **CODE REVIEWED**
+- [ ] [Replace Sidebar Card Status Dot with a Changeable Priority Dot](../plans/replace-ticket-card-status-dot-with-changeable-priority-dot.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

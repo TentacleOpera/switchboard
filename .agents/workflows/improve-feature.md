@@ -20,7 +20,10 @@ Restructuring is expected — but bounded:
 - **Git is the undo.** Commit before any destructive op (delete/merge) so it is trivially reversible. Deletion of a plan file on a branch is cheap — it is a working document, not shipped user data. Do not treat it with production-data caution.
 - **Never hand-edit the auto-generated subtasks block** (`<!-- BEGIN/END SUBTASKS -->`) — Switchboard regenerates it from the DB.
 - **Route set changes through the real mechanisms**, not the block:
-  - *Remote (no extension):* `git rm` the removed subtask `.md` files (the plan watcher hard-deletes their rows on the next local pull), create any new consolidated plan file with an embedded `**Plan ID:** <uuid>`, and add a `**Feature:** <feature-plan-id>` line to the new plan file's frontmatter (the feature's Plan ID; applied on import with apply-if-empty semantics). For a column move, use the Notion/Linear provider or MCP — column is no longer a file-carried field. Detect remote by the absence of `.switchboard/api-server-port.txt`.
+  - *Remote (no extension):* `git rm` the removed subtask `.md` files (the plan watcher hard-deletes their rows on the next local pull), create any new consolidated plan file (do NOT write a `**Plan ID:**` line — it is never read; the importer assigns the ID and keys by file path), and add a `**Feature:** <feature-plan-id>` line to the new plan file's frontmatter (the feature's UUID, taken from its `feature-<uuid>.md` filename; applied on import with apply-if-empty semantics). For column moves, you MUST move newly created cards to `PLAN REVIEWED` using the session-appropriate mechanism:
+    - **Local (extension running — `.switchboard/api-server-port.txt` present):** Use the `kanban_operations` skill (move-card.js) to move the card to `PLAN REVIEWED`.
+    - **Remote (no extension — `.switchboard/api-server-port.txt` absent):** Use the Notion/Linear provider or MCP to move the card to `PLAN REVIEWED`.
+    In-place rewrites keep their existing column. Detect remote by the absence of `.switchboard/api-server-port.txt`.
   - *Local (extension running):* use `assign-to-feature.js` / the feature's create path for card-set changes.
 - **Report the restructure** — what merged into what, what was deleted, what survived — so the diff is legible. End with the reconciled subtask list.
 
@@ -29,6 +32,10 @@ Restructuring is expected — but bounded:
 1. **Expand the feature into its subtasks.** Read the feature and collect every linked subtask plan (and the code they touch). If a link is broken, say so.
 
 2. **Improve every subtask (run improve-plan on each).** For each subtask plan file, execute the `improve-plan` workflow's per-plan Steps in full (Load → all Required Sections → adversarial critique → write back → complexity-based recommendation). Improve each in place, with sibling context in hand. This is the same behaviour as dispatching improve-plan across a feature's subtasks locally. Report a per-subtask summary (complexity, routing, key changes).
+
+   ### Project Pinning
+   When updating subtask plans, ensure each has `**Project:** <name>` in Metadata if a project is active; if none is active, omit the line — never ask the user. The workspace/repo name is NOT a project — never pin it (the importer silently drops workspace-name pins to unassigned). See AGENTS.md "Plan Project Pinning" for the full protocol.
+
 
 3. **Cross-subtask reconciliation audit — the real value.** For every file/symbol touched by more than one subtask, classify each finding:
    - **Overlap** — two+ subtasks doing duplicate work.
@@ -44,6 +51,8 @@ Restructuring is expected — but bounded:
    - **Split** a subtask that is really two units of work.
    - **Reorder** — record the execution sequence.
    Apply session-scope directives here (e.g. "unreleased → clean break, no migration shims"; "single-repo").
+   
+   After restructuring, you MUST move each **newly created** plan file (merges, splits) to `PLAN REVIEWED` using the session-appropriate mechanism (e.g., `kanban_operations` skill / move-card.js locally, Notion/Linear provider/MCP remotely). In-place rewrites keep their existing columns. Do not move deleted plans.
 
 5. **Backfill the feature file's own description.** Ensure the feature has `## Goal`, `## How the Subtasks Achieve This`, and `## Dependencies & sequencing` (backfill from the subtasks if missing; don't overwrite existing content; never touch the auto-block). Optionally record the reconciled merge map / end-state here so a coder implements to one design.
 
@@ -58,8 +67,8 @@ When the user asks to tier the feature by complexity — "high/low split", "spli
    - **HIGH** — every subtask scoring **≥ 5**, merged into one plan.
    - **LOW** — every subtask scoring **≤ 4**, merged into one plan.
    - If a tier is empty, still write its file and state there is no work for that tier (so a downstream two-tier executor has both).
-3. Give each new file a `**Complexity:**` for its tier and a `**Consolidated From:** <planIds>` metadata line for traceability; embed a fresh `**Plan ID:**`.
-4. `git rm` the original subtask files (their intent now lives in the two tier files) and add a `**Feature:** <feature-plan-id>` line to each new tier plan file's frontmatter (the feature's Plan ID). Locally this is `assign-to-feature.js`.
+3. Give each new file a `**Complexity:**` for its tier and a `**Consolidated From:** <planIds>` metadata line for traceability. Do NOT embed a `**Plan ID:**` — it is never read; the importer assigns the ID and keys by file path.
+4. `git rm` the original subtask files (their intent now lives in the two tier files) and add a `**Feature:** <feature-plan-id>` line to each new tier plan file's frontmatter (the feature's Plan ID). Locally this is `assign-to-feature.js`. After writing the files, you MUST move both new tier cards to `PLAN REVIEWED` using the session-appropriate mechanism (e.g., `kanban_operations` skill / move-card.js locally, Notion/Linear provider/MCP remotely).
 5. Report the two tier files, what merged into each, and the reconciled subtask list.
 
 Use this when the intent is parallel execution by complexity tier; use the default free-form Step 4 when the intent is just "make the set coherent".

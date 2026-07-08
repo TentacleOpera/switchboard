@@ -8,6 +8,12 @@ suite('agentPromptBuilder', () => {
             absolutePath: `/workspace/plan_${i + 1}.md`
         }));
 
+    const makeFeaturePlans = () => [
+        { topic: 'Test Feature', absolutePath: '/workspace/.switchboard/features/test-feature.md', isFeature: true, sessionId: 'feature-1' },
+        { topic: 'Subtask A', absolutePath: '/workspace/.switchboard/plans/sub-a.md', isSubtask: true, featureTopic: 'Test Feature', featureId: 'feature-1', sessionId: 'st-1' },
+        { topic: 'Subtask B', absolutePath: '/workspace/.switchboard/plans/sub-b.md', isSubtask: true, featureTopic: 'Test Feature', featureId: 'feature-1', sessionId: 'st-2' },
+    ];
+
     suite('buildKanbanBatchPrompt — coder role', () => {
         test('accurateCodingEnabled: true injects Accuracy Mode instructions', () => {
             const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
@@ -247,11 +253,7 @@ suite('agentPromptBuilder', () => {
     });
 
     suite('§9 regression — lean dispatch prompts', () => {
-        const makeFeaturePlans = () => [
-            { topic: 'Test Feature', absolutePath: '/workspace/.switchboard/features/test-feature.md', isFeature: true, sessionId: 'feature-1' },
-            { topic: 'Subtask A', absolutePath: '/workspace/.switchboard/plans/sub-a.md', isSubtask: true, featureTopic: 'Test Feature', featureId: 'feature-1', sessionId: 'st-1' },
-            { topic: 'Subtask B', absolutePath: '/workspace/.switchboard/plans/sub-b.md', isSubtask: true, featureTopic: 'Test Feature', featureId: 'feature-1', sessionId: 'st-2' },
-        ];
+
 
         test('no [SUBTASK] [SUBTASK] double-labelling in feature-mode planner prompt', () => {
             const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
@@ -285,6 +287,36 @@ suite('agentPromptBuilder', () => {
             const prompt = buildKanbanBatchPrompt('coder', plans, { gitProhibitionEnabled: false });
             const occurrences = (prompt.match(/\/workspace\/wt-a/g) || []).length;
             assert.strictEqual(occurrences, 1, `Worktree path should appear exactly once, found ${occurrences}`);
+        });
+    });
+
+    suite('feature-aware workflow routing', () => {
+        test('feature-mode planner prompt uses improve-feature workflow path', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
+            assert.ok(prompt.includes('Read .agents/workflows/improve-feature.md and follow it step-by-step'), 'Should route to improve-feature.md');
+            assert.ok(!prompt.includes('improve-plan.md'), 'Should NOT include improve-plan.md');
+        });
+
+        test('isFeature on plan (no subtasks) uses improve-feature workflow path', () => {
+            const prompt = buildKanbanBatchPrompt('planner', [{ topic: 'Lonely Feature', absolutePath: '/workspace/.switchboard/features/lonely.md', isFeature: true }], {});
+            assert.ok(prompt.includes('Read .agents/workflows/improve-feature.md and follow it step-by-step'), 'Should route to improve-feature.md');
+        });
+
+        test('feature-mode overrides custom plannerWorkflowPath', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, plannerWorkflowPath: '.custom/workflows/my-planner.md' });
+            assert.ok(prompt.includes('improve-feature.md'), 'Should use improve-feature.md');
+            assert.ok(!prompt.includes('.custom/workflows/my-planner.md'), 'Should override custom plannerWorkflowPath');
+        });
+
+        test('non-feature planner prompt still uses configured workflow path (regression)', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { plannerWorkflowPath: '.agents/workflows/improve-plan.md' });
+            assert.ok(prompt.includes('improve-plan.md'), 'Should use default/configured plan workflow');
+        });
+
+        test('workflowFilePathEnabled: false emits no workflow path for feature-mode (regression)', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, workflowFilePathEnabled: false });
+            assert.ok(!prompt.includes('improve-feature.md'), 'Should NOT include improve-feature.md when workflowFilePathEnabled is false');
+            assert.ok(!prompt.includes('improve-plan.md'), 'Should NOT include improve-plan.md when workflowFilePathEnabled is false');
         });
     });
 });

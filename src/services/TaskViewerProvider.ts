@@ -503,7 +503,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void this._startLocalApiServer();
         void this._validateNoSwitchboardPollution();
         void this._startMcpMonitorLoop();
-
+        this._initEventHandlers();
     }
 
     public getAutomationMode(): string | undefined {
@@ -8095,7 +8095,7 @@ Each plan file must include:
     }
 
     /** Ensure terminals exist for each active agent in the worktree, create-if-missing and capped. */
-    public async ensureWorktreeTerminals(worktreePath: string, roles: string[], reveal: boolean = true): Promise<void> {
+    public async ensureWorktreeTerminals(worktreePath: string, roles: string[], reveal: boolean = true, isManual: boolean = false): Promise<void> {
         const resolvedPath = path.resolve(worktreePath);
         const roleToName: Record<string, string> = {
             'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
@@ -8140,7 +8140,7 @@ Each plan file must include:
                     })
                     .map(([name]) => name);
 
-                if (worktreeTerminalsForRole.length >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
+                if (!isManual && worktreeTerminalsForRole.length >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
                     vscode.window.showWarningMessage(`Could not open ${agentName} terminal for ${path.basename(resolvedPath)}: worktree role terminal limit reached`);
                     continue;
                 }

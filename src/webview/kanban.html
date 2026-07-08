@@ -958,8 +958,7 @@
         .complexity-indicator.very-low { color: #00e5ff; }
         .complexity-indicator.unknown { color: #7f848e; }
 
-        /* Agent activity light border glow ring — lit while a card is dispatched to an agent.
-           Amber hue + subtle pulse. Negative inset lets it sit outside the border. */
+        /* Static, non-animated, theme-specific highlight border */
         .kanban-card.is-working::after {
             content: "";
             position: absolute;
@@ -967,15 +966,19 @@
             border-radius: 5px;
             pointer-events: none;
             z-index: 1;
-            box-shadow: 0 0 0 2px #e0a800, 0 0 14px color-mix(in srgb, #e0a800 45%, transparent);
-            animation: kanban-working-pulse 1.8s ease-in-out infinite;
+            /* Default fallback — only reachable if a future third theme clears both
+               cyber-theme-enabled and theme-claudify. Defensive only. */
+            box-shadow: 0 0 0 2px #e0a800;
         }
-        @keyframes kanban-working-pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+
+        /* Afterburner theme: cyan highlight */
+        body.cyber-theme-enabled .kanban-card.is-working::after {
+            box-shadow: 0 0 0 2px #00e5ff;
         }
-        @media (prefers-reduced-motion: reduce) {
-            .kanban-card.is-working::after { animation: none; }
+
+        /* Claudify theme: orange highlight */
+        body.theme-claudify .kanban-card.is-working::after {
+            box-shadow: 0 0 0 2px #D97757;
         }
 
         /* One-shot feedback when a card's operation completes (status light goes out
@@ -2652,6 +2655,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </button>
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
                 <button class="strip-btn" id="btn-suggest-features" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
+                <button class="strip-btn" id="btn-create-worktree" data-tooltip="Create a worktree for the selected feature, or for the active project / workspace">CREATE WORKTREE</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span style="opacity:0.6;">⎇</span>
@@ -3034,26 +3038,28 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   <span class="tooltip">When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file</span>
                 </label>
 
-                <div class="addon-radio-group" style="margin-top:8px;">
-                  <span class="addon-label" style="font-weight:600;margin-bottom:4px;display:block;">Subagent Policy</span>
-                  <label class="checkbox-item" title="Let the execution platform decide subagent behavior">
-                    <input type="radio" name="plannerSubagentPolicy" value="default" checked>
-                    <span>Not Specified</span>
-                  </label>
-                  <label class="checkbox-item" title="Explicitly instruct the agent not to spawn or invoke any subagents">
-                    <input type="radio" name="plannerSubagentPolicy" value="noSubagents">
-                    <span>No Subagents</span>
-                  </label>
-                  <label class="checkbox-item" title="Instruct the agent to use parallel subagents when handling multiple plans">
-                    <input type="radio" name="plannerSubagentPolicy" value="useSubagents">
-                    <span>Yes (Use Subagents)</span>
-                  </label>
-                  <label class="checkbox-item" title="Instruct the agent to use a specific custom subagent" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                    <input type="radio" name="plannerSubagentPolicy" value="customSubagent">
-                    <span>Custom Subagent</span>
-                    <input id="plannerAddonCustomSubagentName" type="text" placeholder="Custom subagent name..." style="margin-left:8px;padding:2px 6px;border-radius:4px;border:1px solid var(--vscode-input-border, #ccc);background:var(--vscode-input-background, #fff);color:var(--vscode-input-foreground, #000);display:none;font-size:11px;width:150px;">
-                  </label>
-                </div>
+                <details class="addon-subsection-accordion">
+                  <summary class="addon-subsection-header">Subagent Policy</summary>
+                  <div class="addon-subsection-body" style="display:flex;flex-direction:column;gap:8px;padding:8px 12px;">
+                    <label class="checkbox-item" title="Let the execution platform decide subagent behavior">
+                      <input type="radio" name="plannerSubagentPolicy" value="default" checked>
+                      <span>Not Specified</span>
+                    </label>
+                    <label class="checkbox-item" title="Explicitly instruct the agent not to spawn or invoke any subagents">
+                      <input type="radio" name="plannerSubagentPolicy" value="noSubagents">
+                      <span>No Subagents</span>
+                    </label>
+                    <label class="checkbox-item" title="Instruct the agent to use parallel subagents when handling multiple plans">
+                      <input type="radio" name="plannerSubagentPolicy" value="useSubagents">
+                      <span>Yes (Use Subagents)</span>
+                    </label>
+                    <label class="checkbox-item" title="Instruct the agent to use a specific custom subagent" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                      <input type="radio" name="plannerSubagentPolicy" value="customSubagent">
+                      <span>Custom Subagent</span>
+                      <input id="plannerAddonCustomSubagentName" type="text" placeholder="Custom subagent name..." style="margin-left:8px;padding:2px 6px;border-radius:4px;border:1px solid var(--vscode-input-border, #ccc);background:var(--vscode-input-background, #fff);color:var(--vscode-input-foreground, #000);display:none;font-size:11px;width:150px;">
+                    </label>
+                  </div>
+                </details>
               </div>
             </div>
           </div>
@@ -3656,6 +3662,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Helper to pretty-print group headers
             function prettyGroupLabel(g) {
                 if (g === 'git') return 'Git Strategy';
+                if (g === 'subagent') return 'Subagent Policy';
                 return g.charAt(0).toUpperCase() + g.slice(1);
             }
 
@@ -4061,6 +4068,47 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         document.getElementById('btn-suggest-features')?.addEventListener('click', () => {
             postKanbanMessage({ type: 'suggestFeatures', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: activeProjectFilter ?? null });
+        });
+
+        document.getElementById('btn-create-worktree')?.addEventListener('click', () => {
+            const btn = document.getElementById('btn-create-worktree');
+            if (btn) {
+                btn.disabled = true;
+                setTimeout(() => { updateCreateWorktreeButton(); }, 5000);
+            }
+
+            const size = selectedCards.size;
+            if (size === 0) {
+                if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
+                    postKanbanMessage({
+                        type: 'createWorktreeForProject',
+                        project: activeProjectFilter,
+                        workspaceRoot: currentWorkspaceRoot,
+                        repoName: selectedWorktreeRepo || undefined
+                    });
+                } else {
+                    postKanbanMessage({
+                        type: 'createWorktree',
+                        featureTopic: 'worktree',
+                        workspaceRoot: currentWorkspaceRoot,
+                        repoName: selectedWorktreeRepo || undefined
+                    });
+                }
+            } else if (size === 1) {
+                const [pid, val] = Array.from(selectedCards.entries())[0];
+                if (val && val.isFeature) {
+                    const feature = currentCards.find(c => (c.planId || c.sessionId) === pid);
+                    if (feature) {
+                        postKanbanMessage({
+                            type: 'createWorktreeForFeature',
+                            featureId: pid,
+                            featureTopic: feature.topic,
+                            workspaceRoot: currentWorkspaceRoot,
+                            repoName: selectedWorktreeRepo || undefined
+                        });
+                    }
+                }
+            }
         });
 
         btnDeleteProject?.addEventListener('click', () => {
@@ -5238,6 +5286,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // the worktree indicator so a deselected feature's worktree hides at once,
                     // without waiting for the next updateBoard broadcast.
                     recomputeWorktreeIndicator();
+                    updateCreateWorktreeButton();
                 });
             });
 
@@ -5514,6 +5563,42 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateWorktreeIndicator(null);
         }
 
+        function updateCreateWorktreeButton() {
+            const btn = document.getElementById('btn-create-worktree');
+            if (!btn) return;
+
+            const size = selectedCards.size;
+            if (size === 0) {
+                btn.disabled = false;
+                btn.removeAttribute('data-tooltip');
+                btn.title = '';
+                return;
+            }
+
+            if (size === 1) {
+                const [pid, val] = Array.from(selectedCards.entries())[0];
+                if (val && val.isFeature) {
+                    const hasWorktree = currentFeatureWorktrees[pid] || 
+                                       ((lastWorktreeConfig && lastWorktreeConfig.worktrees) || []).some(w => String(w.featureId) === String(pid));
+                    if (hasWorktree) {
+                        btn.disabled = true;
+                        btn.setAttribute('data-tooltip', 'Feature already has a worktree');
+                    } else {
+                        btn.disabled = false;
+                        btn.removeAttribute('data-tooltip');
+                        btn.title = '';
+                    }
+                } else {
+                    btn.disabled = true;
+                    btn.setAttribute('data-tooltip', 'Only feature cards can have worktrees');
+                }
+                return;
+            }
+
+            btn.disabled = true;
+            btn.setAttribute('data-tooltip', 'Select a single feature to create its worktree');
+        }
+
 
 
         function renderBoard(cards, justFinishedIds = new Set()) {
@@ -5669,6 +5754,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateReassignButtonVisibility();
                     updateFeatureActionButton();
                     recomputeWorktreeIndicator();
+                    updateCreateWorktreeButton();
                 });
 
                 // Re-apply selection state after re-render
@@ -5774,6 +5860,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
             updateFeatureActionButton();
+            updateCreateWorktreeButton();
 
             // After DOM is in place: completion feedback.
             if (justFinishedIds.size > 0) {
@@ -6154,6 +6241,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
                 recomputeWorktreeIndicator();
+                updateCreateWorktreeButton();
                 return;
             }
 
@@ -6608,6 +6696,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }
                     }
                     recomputeWorktreeIndicator();
+                    updateCreateWorktreeButton();
                     break;
                 }
                 case 'moveCards': {
@@ -6653,6 +6742,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const featureWorktreesChanged = JSON.stringify(currentFeatureWorktrees) !== JSON.stringify(nextFeatureWorktrees);
                     currentFeatureWorktrees = nextFeatureWorktrees;
                     recomputeWorktreeIndicator();
+                    updateCreateWorktreeButton();
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
 
                     // Detect working -> idle transitions (and completions) for finish feedback.
@@ -6750,6 +6840,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     lastWorktreeConfig = msg;
                     renderWorktreesTab();
                     recomputeWorktreeIndicator();
+                    updateCreateWorktreeButton();
                     break;
                 }
                 case 'worktreeStatuses': {
@@ -7383,6 +7474,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         function updateFeatureActionButton() {
             recomputeWorktreeIndicator();
+            updateCreateWorktreeButton();
             const btn = document.getElementById('btn-feature-action');
             if (!btn) return;
             const selected = Array.from(selectedCards.values());
@@ -10105,6 +10197,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (!root) return;
                 root.innerHTML = '';
                 root.appendChild(createWorktreesPanel(lastWorktreeConfig));
+
+                // Clean up completed abandonments from the in-flight set
+                if (window._removingWorktreeIds && lastWorktreeConfig) {
+                    const activeIds = new Set((lastWorktreeConfig.worktrees || []).map(w => w.id));
+                    for (const id of Array.from(window._removingWorktreeIds)) {
+                        if (!activeIds.has(id)) window._removingWorktreeIds.delete(id);
+                    }
+                }
             } catch (err) {
                 console.error('[kanban webview] error rendering worktrees tab:', err);
             }
@@ -10228,6 +10328,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             abandonBtn.style.cssText = 'padding: 3px 6px; font-size: 10px; font-family: inherit; margin-right:8px;';
             abandonBtn.textContent = 'Abandon';
             abandonBtn.addEventListener('click', () => {
+                // Optimistic UI: disable button, show removing state, fade out row
+                abandonBtn.disabled = true;
+                abandonBtn.textContent = 'Removing...';
+                abandonBtn.style.opacity = '0.5';
+                if (row && row.style) {
+                    row.style.transition = 'opacity 0.3s ease';
+                    row.style.opacity = '0.4';
+                }
+                // Track in-flight abandonment so re-render skips it
+                if (!window._removingWorktreeIds) window._removingWorktreeIds = new Set();
+                window._removingWorktreeIds.add(w.id);
                 abandonWorktree(w.id, w.branch, w.path);
             });
             mainLine.appendChild(abandonBtn);
@@ -10298,7 +10409,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     listDiv.innerHTML = `<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">${emptyMessage}</div>`;
                     return listDiv;
                 }
-                worktreeSubset.forEach(w => listDiv.appendChild(renderWorktreeRow(w, false)));
+                worktreeSubset.forEach(w => {
+                    // Skip worktrees that are being optimistically removed (in-flight abandon)
+                    if (window._removingWorktreeIds && window._removingWorktreeIds.has(w.id)) return;
+                    listDiv.appendChild(renderWorktreeRow(w, false));
+                });
                 return listDiv;
             }
 
@@ -10410,64 +10525,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // ==========================================
             const featuresSection = createSubsection('FEATURES');
 
-            // FEATURES -> Auto Mode
-            const autoModeHeader = document.createElement('div');
-            autoModeHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 0;';
-            autoModeHeader.textContent = 'Auto Mode';
-            featuresSection.appendChild(autoModeHeader);
-
-            const featuresDesc = document.createElement('div');
-            featuresDesc.style.cssText = 'padding:4px 8px 0; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            featuresDesc.textContent = 'Auto Mode controls whether worktrees are provisioned automatically as features and subtasks are created. This never affects the manual "Create Feature Worktree" button below.';
-            featuresSection.appendChild(featuresDesc);
-
-            const autoModeGroup = document.createElement('div');
-            autoModeGroup.className = 'radio-group';
-            autoModeGroup.style.cssText = 'padding:8px; margin-top:0;';
-
-            const currentFeatureWorktreeMode = (config && config.featureWorktreeMode) || 'none';
-            const AUTO_MODE_OPTIONS = [
-                { value: 'none', label: 'None', desc: 'No automatic worktrees — use the manual creation buttons below to create an individual worktree for a single project or feature to keep work isolated.' },
-                { value: 'per-feature', label: 'Per Feature', desc: 'Automatically create ONE shared worktree for the whole feature at creation. Every subtask runs inside it — one branch, one working copy, one merge back to main. The isolation of a worktree without fragmenting the feature across many checkouts. For within-feature parallelism, agents can create their own worktrees via git.' }
-            ];
-            AUTO_MODE_OPTIONS.forEach(opt => {
-                const label = document.createElement('label');
-                label.className = 'radio-option';
-                label.style.alignItems = 'flex-start';
-
-                const radio = document.createElement('input');
-                radio.type = 'radio';
-                radio.name = 'featureWorktreeAutoMode';
-                radio.value = opt.value;
-                radio.checked = currentFeatureWorktreeMode === opt.value;
-                radio.addEventListener('change', () => {
-                    if (!radio.checked) return;
-                    postKanbanMessage({
-                        type: 'setFeatureWorktreeMode',
-                        mode: opt.value,
-                        workspaceRoot: currentWorkspaceRoot
-                    });
-                });
-
-                const textWrap = document.createElement('span');
-                textWrap.style.cssText = 'display:flex; flex-direction:column; gap:2px;';
-                const titleSpan = document.createElement('span');
-                titleSpan.textContent = opt.label;
-                const descSpan = document.createElement('span');
-                descSpan.style.cssText = 'font-size:10px; color:var(--text-secondary); font-weight:normal;';
-                descSpan.textContent = opt.desc;
-                textWrap.appendChild(titleSpan);
-                textWrap.appendChild(descSpan);
-
-                label.appendChild(radio);
-                label.appendChild(textWrap);
-                autoModeGroup.appendChild(label);
-            });
-            featuresSection.appendChild(autoModeGroup);
-
             // FEATURES -> Manual Creation
             const manualFeatureHeader = document.createElement('div');
-            manualFeatureHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px; border-top: 1px solid var(--border-subtle);';
+            manualFeatureHeader.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted); padding: 8px 8px 4px;';
             manualFeatureHeader.textContent = 'Manual Creation';
             featuresSection.appendChild(manualFeatureHeader);
 
@@ -10482,14 +10542,48 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             featureDefaultOpt.value = '';
             featureDefaultOpt.textContent = '-- Choose a Feature --';
             featureSelect.appendChild(featureDefaultOpt);
-            const featureCards = (Array.isArray(currentCards) ? currentCards : []).filter(c => c.isFeature);
-            featureCards.forEach(feature => {
-                if (currentFeatureWorktrees[feature.planId]) return; // exclude features that already have a worktree
-                const opt = document.createElement('option');
-                opt.value = feature.planId;
-                opt.textContent = feature.topic;
-                featureSelect.appendChild(opt);
+
+            // Build column ID → label map from columnDefinitions
+            const colIdMap = new Map();
+            (columnDefinitions || []).forEach((col, index) => {
+                const normId = (col.id || '').trim().toUpperCase();
+                colIdMap.set(normId, { index, label: col.label || col.id });
             });
+
+            // Group feature cards by column, sorted by column order
+            const featureCards = (Array.isArray(currentCards) ? currentCards : [])
+                .filter(c => c.isFeature)
+                .filter(c => !currentFeatureWorktrees[c.planId]); // exclude features that already have a worktree
+
+            const groups = new Map();
+            for (const feature of featureCards) {
+                const col = (feature.column || 'CREATED').trim().toUpperCase();
+                if (!groups.has(col)) groups.set(col, []);
+                groups.get(col).push(feature);
+            }
+
+            // Sort groups by column order (using columnDefinitions index)
+            const sortedGroupKeys = Array.from(groups.keys()).sort((a, b) => {
+                const aIdx = colIdMap.has(a) ? colIdMap.get(a).index : 999;
+                const bIdx = colIdMap.has(b) ? colIdMap.get(b).index : 999;
+                return aIdx - bIdx;
+            });
+
+            for (const colId of sortedGroupKeys) {
+                const features = groups.get(colId);
+                if (features.length === 0) continue;
+                const info = colIdMap.get(colId);
+                const displayLabel = info ? info.label : colId;
+                const group = document.createElement('optgroup');
+                group.label = displayLabel.toUpperCase();
+                for (const feature of features) {
+                    const opt = document.createElement('option');
+                    opt.value = feature.planId;
+                    opt.textContent = feature.topic;
+                    group.appendChild(opt);
+                }
+                featureSelect.appendChild(group);
+            }
             const createFeatureBtn = document.createElement('button');
             createFeatureBtn.className = 'worktree-primary-btn';
             createFeatureBtn.style.padding = '4px 8px';

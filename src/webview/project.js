@@ -448,6 +448,9 @@
             case 'cyberScanlinesSetting':
                 document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
                 break;
+            case 'refreshKanbanPlans':
+                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                break;
             case 'kanbanPlansReady':
                 if (btnCreateKanbanPlan) {
                     btnCreateKanbanPlan.disabled = false;
@@ -482,7 +485,7 @@
                 }
                 if (msg.workspaceItems) _kanbanWorkspaceItems = msg.workspaceItems;
                 if (msg.columns) _kanbanAvailableColumns = msg.columns;
-                if (msg.kanbanWorkspaceRoot && _kanbanWorkspaceItems.some(ws => ws.workspaceRoot === msg.kanbanWorkspaceRoot)) {
+                if (!_pendingKanbanSelection && msg.kanbanWorkspaceRoot && _kanbanWorkspaceItems.some(ws => ws.workspaceRoot === msg.kanbanWorkspaceRoot)) {
                     if (!kanbanFilters.workspaceRoot) {
                         kanbanFilters.workspaceRoot = msg.kanbanWorkspaceRoot;
                     }
@@ -496,12 +499,14 @@
                 // built from the correct workspace.
                 if (_pendingKanbanFilterIntent) {
                     const intent = _pendingKanbanFilterIntent;
+                    let workspaceIntentApplied = false;
                     if (intent.workspaceRoot && kanbanWorkspaceFilter) {
                         const opts = Array.from(kanbanWorkspaceFilter.options).map(o => o.value);
                         const intentNorm = normalizeRoot(intent.workspaceRoot);
                         if (opts.some(o => normalizeRoot(o) === intentNorm)) {
                             kanbanFilters.workspaceRoot = intent.workspaceRoot;
                             kanbanWorkspaceFilter.value = intent.workspaceRoot;
+                            workspaceIntentApplied = true;
                         }
                     }
                     // Apply features workspace filter intent (from feature Review Plan navigation).
@@ -514,6 +519,7 @@
                         }
                         intent.featureWorkspaceRoot = null;  // consume
                     }
+                    intent._workspaceIntentApplied = workspaceIntentApplied;
                 }
                 populateKanbanFilters();
                 // Apply project/column filter intent from a Review Plan navigation.
@@ -521,14 +527,14 @@
                 // built from the (possibly just-changed) workspace filter.
                 if (_pendingKanbanFilterIntent) {
                     const intent = _pendingKanbanFilterIntent;
-                    if (intent.project && kanbanProjectFilter) {
+                    if (intent._workspaceIntentApplied !== false && intent.project && kanbanProjectFilter) {
                         const opts = Array.from(kanbanProjectFilter.options).map(o => o.value);
                         if (opts.includes(intent.project)) {
                             kanbanFilters.project = intent.project;
                             kanbanProjectFilter.value = intent.project;
                         }
                     }
-                    if (intent.column && kanbanColumnFilter) {
+                    if (intent._workspaceIntentApplied !== false && intent.column && kanbanColumnFilter) {
                         const opts = Array.from(kanbanColumnFilter.options).map(o => o.value);
                         if (opts.includes(intent.column)) {
                             kanbanFilters.column = intent.column;

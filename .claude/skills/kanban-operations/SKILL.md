@@ -11,6 +11,20 @@ disable-model-invocation: true
 
 Move cards and query kanban state by running the provided scripts.
 
+## Resolving Plan IDs (do this FIRST — offline, no script)
+
+Every op below is keyed on a **`planId`** (a UUID). Resolve it the cheap way — do **not** make the user supply UUIDs, and do **not** parse `get-state.js` stdout (it interleaves a `[KanbanDatabase] Resolved DB path…` log line that breaks `JSON.parse`/`jq`):
+
+- **Per-column index (fastest, offline):** `.switchboard/kanban-state-<column>.md`. Every plan line ends with `<!-- planId:<uuid> … -->`; subtasks also carry `subtask-of:"<feature>"` and feature cards carry `feature`. One `grep` gives you the ID **and** its feature membership:
+  ```bash
+  grep -i "my-plan-slug-or-title" .switchboard/kanban-state-*.md
+  #  → …plans/my-plan.md](…) — My Plan Title <!-- planId:eb75281d-… subtask-of:"Some Feature" -->
+  ```
+  Columns: `created`, `backlog`, `plan-reviewed`, `lead-coded`, `coder-coded`, `intern-coded`, `code-reviewed`, `acceptance-tested`, `coded`, `completed`, plus custom columns.
+- **Whole board over HTTP (clean JSON):** `GET http://127.0.0.1:$(cat .switchboard/api-server-port.txt)/kanban/board` → `{ success, data: [{ planId, planFile, kanbanColumn, isFeature, featureId, … }] }`.
+
+> **The real fix is to not need IDs at all:** the path/slug-addressed feature API in `.switchboard/plans/feature-management-declarative-path-addressed.md` (planned) lets you reference plans by file path or slug and reconcile the whole feature structure in one idempotent call. Until it lands, use the two lookups above.
+
 ## Move a Card
 
 ```bash

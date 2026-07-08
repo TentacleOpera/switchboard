@@ -2,7 +2,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { deriveComplexityFromContent } from './complexityScale';
-import { STAGE_COMPLETE_LABEL } from './agentPromptBuilder';
 
 export const ALLOWED_TAGS = new Set([
     'frontend', 'backend', 'auth', 'authentication', 'database', 'api', 'ui', 'ux',
@@ -54,13 +53,7 @@ export interface PlanMetadata {
     project?: string;
     /** Durable fact: the feature plan-id (filename UUID) this subtask belongs to. */
     feature?: string;
-    /**
-     * Activity-light OFF-switch. Present (possibly empty) when the agent appended a
-     * `**Stage Complete: <COLUMN>**` marker. The watcher clears the card's `working`
-     * state (nulls dispatched_at) when this is set. Empty string = marker present but
-     * no column echoed (clear without the stale-marker column guard).
-     */
-    stageComplete?: string[];
+
 }
 
 /**
@@ -122,18 +115,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         }
     }
 
-    // Activity-light OFF-switch: `**Stage Complete: <COLUMN>**` (or `> **…**`).
-    // Tolerant of a bare `**Stage Complete:**` (no column) — yields '' so the watcher
-    // clears without the stale-marker column guard. undefined when the marker is absent.
-    let stageComplete: string[] | undefined;
-    const stageRegex = new RegExp(
-        `^(?:>\\s+)?\\*\\*${STAGE_COMPLETE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\*\\*\\s*(.*)$`,
-        'gim'
-    );
-    const stageMatches = [...content.matchAll(stageRegex)];
-    if (stageMatches.length > 0) {
-        stageComplete = stageMatches.map(m => m[1].trim());
-    }
+
 
     return {
         topic,
@@ -141,8 +123,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         complexity,
         tags,
         project,
-        feature,
-        stageComplete
+        feature
     };
 }
 

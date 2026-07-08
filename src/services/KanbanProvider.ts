@@ -382,6 +382,8 @@ export class KanbanProvider implements vscode.Disposable {
                     .setConfig('kanban.activeProjectFilter', activeName)
                     .catch(e => console.warn('[KanbanProvider] constructor: failed to sync restored project filter to DB config:', e));
             }
+            void this._reconcileStaleWorktreeMode(this._currentWorkspaceRoot)
+                .catch(e => console.warn('[KanbanProvider] constructor: failed to reconcile stale worktree mode:', e));
         }
         this._cliTriggersEnabled = this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
         this._dynamicComplexityRoutingEnabled = this._getScopedSetting<boolean>(
@@ -1048,6 +1050,8 @@ export class KanbanProvider implements vscode.Disposable {
         if (this._currentWorkspaceRoot !== resolved) {
             this._currentWorkspaceRoot = resolved;
             this._onWorkspaceChangeEmitter.fire(resolved);
+            void this._reconcileStaleWorktreeMode(resolved)
+                .catch(e => console.warn('[KanbanProvider] setCurrentWorkspaceRoot: failed to reconcile stale worktree mode:', e));
 
             // Persist selection for next activation
             if (this._workspaceSaveTimeout) {
@@ -1283,6 +1287,16 @@ export class KanbanProvider implements vscode.Disposable {
             await this.applyLiveSyncConfig(workspaceRoot);
         }
 
+        this._panel.onDidChangeViewState(
+            (e) => {
+                if (e.webviewPanel.visible && this._currentWorkspaceRoot) {
+                    this._refreshBoard(this._currentWorkspaceRoot);
+                }
+            },
+            null,
+            this._disposables
+        );
+
         // No initial data push needed here — the webview sends 'ready' when mounted,
         // which triggers a full sync to populate the board from DB.
 
@@ -1334,6 +1348,17 @@ export class KanbanProvider implements vscode.Disposable {
             void this._getKanbanDb(workspaceRoot).ensureReady();
             await this.applyLiveSyncConfig(workspaceRoot);
         }
+
+        this._panel.onDidChangeViewState(
+            (e) => {
+                if (e.webviewPanel.visible && this._currentWorkspaceRoot) {
+                    this._refreshBoard(this._currentWorkspaceRoot);
+                }
+            },
+            null,
+            this._disposables
+        );
+
         this._setupSessionWatcher();
     }
 
@@ -1784,6 +1809,25 @@ export class KanbanProvider implements vscode.Disposable {
         const created = new SessionActionLog(resolvedRoot);
         this._sessionLogs.set(resolvedRoot, created);
         return created;
+    }
+
+    private async _reconcileStaleWorktreeMode(workspaceRoot: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!await db.ensureReady()) {
+            return;
+        }
+        const PRIOR_KEY = 'orchestration_prior_feature_worktree_mode';
+        const mode = (await db.getConfig('feature_worktree_mode')) || 'none';
+        const savedPrior = await db.getConfig(PRIOR_KEY);
+        if (mode === 'per-feature' && savedPrior) {
+            // Guard: skip the reset if an active orchestrator session is detected
+            if (this._taskViewerProvider && this._taskViewerProvider.getAutomationMode() === 'orchestration') {
+                return;
+            }
+            const validModes = ['none', 'per-feature'];
+            await db.setConfig('feature_worktree_mode', validModes.includes(savedPrior) ? savedPrior : 'none');
+            await db.setConfig(PRIOR_KEY, ''); // consume the stale prior
+        }
     }
 
     private _getKanbanDb(workspaceRoot: string): KanbanDatabase {
@@ -8388,7 +8432,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // plans with. Guards against the empty data-workspace-root
                     // fallback in kanban.html and child-workspace selections.
                     const reviewRawRoot = msg.workspaceRoot || this.getCurrentWorkspaceRoot() || '';
-                    const reviewEffectiveRoot = reviewRawRoot ? this.resolveEffectiveWorkspaceRoot(reviewRawRoot) : '';
+                    let reviewEffectiveRoot = reviewRawRoot ? this.resolveEffectiveWorkspaceRoot(reviewRawRoot) : '';
+                    if (!reviewEffectiveRoot && reviewRawRoot) {
+                        reviewEffectiveRoot = path.resolve(reviewRawRoot);
+                    }
                     this._planningPanelProvider.postMessageToProjectWebview({
                         type: 'activateKanbanTabAndSelectPlan',
                         planId: msg.planId || '',
@@ -9122,7 +9169,7 @@ ${FOCUS_DIRECTIVE}`;
                         const activeAgents = Object.entries(visibleAgents)
                             .filter(([_, enabled]) => enabled)
                             .map(([role]) => role);
-                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, true, true);
                     }
 
                     vscode.window.showInformationMessage(`Worktree created: ${branch}`);
@@ -9159,7 +9206,7 @@ ${FOCUS_DIRECTIVE}`;
                         const activeAgents = Object.entries(visibleAgents)
                             .filter(([_, enabled]) => enabled)
                             .map(([role]) => role);
-                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, true, true);
                     }
 
                     vscode.window.showInformationMessage(`Worktree created for feature: ${branch}`);
@@ -9195,7 +9242,7 @@ ${FOCUS_DIRECTIVE}`;
                         const activeAgents = Object.entries(visibleAgents)
                             .filter(([_, enabled]) => enabled)
                             .map(([role]) => role);
-                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+                        await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, true, true);
                     }
 
                     vscode.window.showInformationMessage(`Worktree created for project: ${branch}`);
@@ -9274,7 +9321,7 @@ ${FOCUS_DIRECTIVE}`;
                     const activeAgents = Object.entries(visibleAgents)
                         .filter(([_, enabled]) => enabled)
                         .map(([role]) => role);
-                    await this._taskViewerProvider.ensureWorktreeTerminals(wt.path, activeAgents);
+                    await this._taskViewerProvider.ensureWorktreeTerminals(wt.path, activeAgents, true, true);
                     await this._taskViewerProvider.revealWorktreeTerminal(wt.path);
                 }
                 break;
@@ -9832,7 +9879,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                 const activeAgents = Object.entries(visibleAgents)
                     .filter(([_, enabled]) => enabled)
                     .map(([role]) => role);
-                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents);
+                await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, false, true);
             }
             return await db.getWorktreeByBranch(branch);
         } catch (e: any) {
@@ -10032,11 +10079,15 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
 
         // Map worktrees and resolve featureTopic + featureProject
         const mappedWorktrees = [];
+        const featureIds = worktrees.map(w => w.feature_id).filter((id): id is string => !!id);
+        const plans = featureIds.length > 0 ? await db.getPlansByPlanIds(featureIds) : [];
+        const planMap = new Map(plans.map(p => [p.planId, p]));
+
         for (const w of worktrees) {
             let featureTopic: string | undefined = undefined;
             let featureProject: string | undefined = undefined;
             if (w.feature_id) {
-                const featurePlan = await db.getPlanByPlanId(w.feature_id);
+                const featurePlan = planMap.get(w.feature_id);
                 if (featurePlan) {
                     featureTopic = featurePlan.topic;
                     featureProject = featurePlan.project || undefined;
