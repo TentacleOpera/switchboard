@@ -9,7 +9,14 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 
 ## Critical Constraints
 - **NO IMPLEMENTATION**: You are strictly FORBIDDEN from modifying any project source files. Your ONLY permissible write action is updating the existing Feature Plan document.
-- **CONTENT PRESERVATION**: You are FORBIDDEN from deleting original implementation details, code blocks, prose, or goal statements. Append and refine; do not truncate. This includes product scope explicitly stated in the plan's Goal or Problem Description — you must not narrow or remove supported scenarios (e.g. multi-root workspaces) even if the current session is single-repo.
+- **CONTENT PRESERVATION (two-tier)**:
+  - **Factual context — NEVER delete.** Goal statements, product scope, requirements, constraints, environment details, and problem/background analysis must be preserved verbatim. This includes product scope explicitly stated in the plan's Goal or Problem Description — you must not narrow or remove supported scenarios (e.g. multi-root workspaces) even if the current session is single-repo. If you believe a goal or scope statement is wrong, flag it in chat for the user — do not unilaterally correct it.
+  - **Reasoning outputs — correct with audit marking.** Conclusions, chosen approaches, design decisions, and code examples may be corrected or replaced when the improve pass produces a better alternative. Every correction MUST be marked with a superseded callout so the change is auditable:
+    > **Superseded:** <original conclusion or approach>
+    > **Reason:** <why it was wrong or inferior>
+    > **Replaced with:** <new conclusion or approach>
+
+    Never silently delete a conclusion and write a new one in its place. The callout is the audit trail — without it, the change is a protocol violation.
 - **SESSION vs PRODUCT SCOPE**: Session directives (e.g. "single-repo", "skip compilation", "skip tests") constrain HOW you verify and organize the plan, not WHAT the plan covers. Do not conflate repo structure constraints with product feature requirements. If the plan targets multi-root workspaces, you must preserve and improve that scope regardless of the current session's repo configuration.
 - **SINGLE PASS**: Complete enhancement, dependency checks, adversarial critique, balanced synthesis, and plan update in one continuous response.
 
@@ -84,7 +91,7 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
 
 4. **Update the original plan file**
    - Write the improvement findings back into the same feature plan file.
-   - Preserve all existing implementation steps, code blocks, and goal statements.
+   - Preserve all factual context (goal statements, requirements, constraints, scope) per the CONTENT PRESERVATION rule. Correct superseded conclusions and approaches using superseded callout blocks — never silently delete.
    - Mark completed checklist items when appropriate.
    - End with a recommendation based on complexity:
      - If complexity is 1-3 → "Send to Intern"
@@ -98,3 +105,27 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
 3. **Plan Metadata**: Do NOT write a `**Plan ID:**` line — it is never parsed. The importer assigns the ID (a fresh UUID, or a feature's filename UUID) and keys plan identity by the file **path**; a hand-written Plan ID is ignored and drifts from the real DB-assigned one.
 4. **Feature Relationships**: Feature relationships are carried by `**Feature:** <feature-plan-id>` and `**Project:** <name>` lines written directly in each plan `.md` — the plan watcher applies these on import with apply-if-empty semantics. If you restructured plans into a feature during review, recommend invoking the `create-feature-from-plans` skill (which runs `create-feature.js` to handle DB update, subtask linking, feature file write, and board refresh atomically) AFTER the review is finished and the user has approved. Do NOT invoke it mid-review.
 
+## The Superseded Callout — Format Specification
+
+**Placement:** Inline, at the location of the original conclusion being corrected.
+
+**Format:**
+```markdown
+> **Superseded:** <original conclusion, approach, or code snippet>
+> **Reason:** <concise explanation of why it was wrong or inferior>
+> **Replaced with:** <new conclusion or approach>
+```
+
+**Rules:**
+1. The `**Superseded:**` line must contain the original text (or a faithful summary if it was long). Do not paraphrase in a way that hides what was actually said.
+2. The `**Reason:**` line is mandatory. A correction without a stated reason is a silent deletion with extra steps.
+3. The `**Replaced with:**` line must immediately follow. If the replacement is long (e.g. a code block), it may continue below the callout.
+4. Multiple corrections in the same plan are fine — each gets its own callout.
+5. The callout replaces the original text in the document body. Do not leave the original text outside the callout AND inside it — that duplicates the contradiction.
+
+**Example:**
+```markdown
+> **Superseded:** Use a polling loop with 500ms interval to detect file changes.
+> **Reason:** Polling wastes CPU and introduces up to 500ms latency. The codebase already has a file watcher utility (`src/utils/watcher.ts`) that uses native FS events.
+> **Replaced with:** Use `watchFileChanges()` from `src/utils/watcher.ts` — subscribes to native FS events, zero polling overhead, sub-10ms latency.
+```

@@ -24,6 +24,7 @@ export interface CustomAgentAddons {
     complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
     suppressWalkthrough?: boolean;
+    staggeredImplementation?: boolean;
     cavemanOutput?: boolean;
     useSubagents?: boolean;
     subagentPolicy?: 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
@@ -200,6 +201,7 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
         a.ticketUpdateMode = 'disabled';
     }
     if (s.suppressWalkthrough === true) a.suppressWalkthrough = true;
+    if (s.staggeredImplementation === true) a.staggeredImplementation = true;
     if (s.cavemanOutput === true) a.cavemanOutput = true;
     if (s.useSubagents === false) a.useSubagents = false;
     if (s.subagentPolicy && ['default', 'noSubagents', 'useSubagents', 'customSubagent'].includes(s.subagentPolicy as string)) {

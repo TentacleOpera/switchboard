@@ -122,3 +122,33 @@ This keeps column state DB-owned (no file-carried column metadata) and uses the 
 
 ---
 *Note: Implemented on 2026-07-08.*
+
+## Post-Implementation Review (2026-07-09)
+
+### Findings
+
+| Severity | ID | File | Description |
+|---|---|---|---|
+| CRITICAL | C-1 | `.claude/skills/improve-feature/SKILL.md:24,47,63` | Mirror not synced — all three column-move injection points (Guardrails Remote, Step 4, high/low Step 4) still had old passive text. Claude Code agents read this mirror, not `.agents/workflows/`, making the fix unreachable from that host. |
+| CRITICAL | C-2 | `.claude/skills/switchboard-split/SKILL.md:28` | Mirror not synced — Step 6 still had old passive column-move text without mandatory language or local/remote split. |
+| MAJOR | M-1 | `.claude/skills/improve-feature/SKILL.md` (missing section) | `### Project Pinning` subsection under Step 2 exists in `.agents/workflows/` but not in `.claude/skills/` mirror. Out of scope for this plan — deferred. |
+| NIT | N-1 | `.claude/skills/switchboard-split/SKILL.md:10` | "an feature" → "a feature" (pre-existing grammar from epic→feature rename). |
+| NIT | N-2 | `.claude/skills/switchboard-split/SKILL.md:33` | "an feature" → "a feature" (pre-existing grammar from epic→feature rename). |
+
+### Files Changed (review fixes)
+
+| File | Change |
+|---|---|
+| `.claude/skills/switchboard-split/SKILL.md` | Synced Step 6 with mandatory PLAN REVIEWED column-move instruction + local/remote split. Fixed two "an feature" grammar errors. |
+| `.claude/skills/improve-feature/SKILL.md` | Synced Guardrails Remote block, Step 4 column-move sub-step, and high/low Step 4 column-move instruction with `.agents/workflows/` source. |
+
+### Validation
+
+- **Grep verification:** All 4 files (2 `.agents/workflows/` + 2 `.claude/skills/`) now contain `MUST move` mandatory language — confirmed via `grep -n "MUST move"` across all four.
+- **Grammar verification:** `grep -n "an feature"` returns zero matches in `.claude/skills/switchboard-split/SKILL.md` — confirmed fixed.
+- **Commit:** `22d874d` — review-fix: sync .claude skill mirrors with patched .agents/workflows.
+
+### Remaining Risks
+
+1. ~~**MAJOR-1 (deferred):**~~ **Resolved** in `d5cd8fc` — `### Project Pinning` subsection added to `.claude/skills/improve-feature/SKILL.md`.
+2. **Periodic-scan race (pre-existing, acknowledged in plan):** If native watcher event is missed, 10s delay before import → move fails → card lands at CREATED. Visible failure, manual-drag fallback. No change from plan's assessment.

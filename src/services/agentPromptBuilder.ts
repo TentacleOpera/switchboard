@@ -219,6 +219,8 @@ export interface PromptBuilderOptions {
     writeFeatureDescriptionIfEmpty?: boolean;
     /** When true, instructs the agent to skip walkthrough.md artifact generation at task completion. */
     suppressWalkthroughEnabled?: boolean;
+    /** When true, instructs the agent to append implementation notes to the feature file after each subtask (feature mode only). */
+    staggeredImplementationEnabled?: boolean;
     /** When true, injects caveman communication style directive to reduce token usage. */
     cavemanOutputEnabled?: boolean;
     /** When true (default), uses parallel sub-agent instruction for multi-plan batches. When false, uses sequential-only instruction. */
@@ -566,6 +568,7 @@ export const WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE = `FEATURE DESCRIPTION
 If all three sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
+export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion report (which still goes to each subtask's own plan file); do not skip either. Do NOT skip this step.`;
 export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing the plan, append a brief summary (3-5 sentences) to the END of the original plan file. Include: what you implemented, files changed, and any issues encountered. This edit signals task completion to the kanban board — the file watcher detects it and clears the card's working-state light. Do NOT skip this step.`;
 
 
@@ -772,6 +775,7 @@ export function buildKanbanBatchPrompt(
     const adviseResearchIfUnsure = options?.adviseResearchIfUnsure ?? true;
     const writeFeatureDescriptionIfEmpty = options?.writeFeatureDescriptionIfEmpty ?? true;
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
+    const staggeredImplementationEnabled = options?.staggeredImplementationEnabled ?? false;
     const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? false;
     const noSubagentsEnabled = options?.noSubagentsEnabled ?? false;
@@ -1146,6 +1150,7 @@ For each plan:
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
 
+        const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
             buildExecutionIntro('execute', plans, options?.featureMode),
@@ -1156,6 +1161,7 @@ For each plan:
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             phoneAFriendBlock,
+            staggeredImplementationBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1196,6 +1202,7 @@ For each plan:
                 dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
             });
 
+            const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
             const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
             const promptParts = [
                 buildExecutionIntro('execute', plans, options?.featureMode),
@@ -1204,6 +1211,7 @@ For each plan:
                 suffixBlock,
                 featureFileBlock,
                 phoneAFriendBlock,
+                staggeredImplementationBlock,
                 suppressWalkthroughBlock
             ].filter(Boolean).join('\n\n');
 
@@ -1279,6 +1287,7 @@ For each plan:
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
 
+        const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
         const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
             buildExecutionIntro('process', plans, options?.featureMode),
@@ -1288,6 +1297,7 @@ For each plan:
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             phoneAFriendBlock,
+            staggeredImplementationBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 

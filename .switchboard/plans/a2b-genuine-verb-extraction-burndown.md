@@ -1,83 +1,93 @@
 ---
-description: "Feature A · A2b follow-on: convert the ~593 shim verbs (which forward back into the vscode-coupled _handleMessage) into genuinely host-agnostic service methods behind A2a's seams — the real handler extraction the plan specified, and the prerequisite for B1 headless. Plan only; do NOT start."
+description: "Feature A · A2b follow-on: make the extension's verb handlers genuinely host-agnostic for B1 (headless, no VS Code). REVISED after a design audit — the original shim→twin-method recipe is the wrong vehicle; this plan uses INVERT-AND-INJECT (the provider becomes the host-agnostic engine; seams are injected in-place) plus a generic dispatch fallback. Plan only; do NOT start."
 ---
 
-# Feature A · A2b — Genuine Host-Agnostic Verb Extraction (Shim Burn-Down)
+# Feature A · A2b — Host-Agnostic Verb Engine (INVERT-AND-INJECT)
 
-> **Status: PLAN ONLY — do not begin extraction. This documents the remaining work and how to execute it.**
+> **Status: PLAN ONLY — do not begin. Supersedes the earlier shim-extraction approach (see "Why the shim approach was rejected").**
 
 ## Goal
 
-Convert the **~593 shim verbs** across the five panel services into **genuinely host-agnostic** service methods — moving each `_handleMessage` arm's real logic into its service method and routing every `vscode.*` call through A2a's seams — so every catalogued verb runs **without VS Code** (the B1 headless prerequisite), not just reachably-over-HTTP-while-VS-Code-runs.
+Make the extension's message handlers run **without VS Code** (the B1 headless prerequisite) — not just reachable-over-HTTP-while-VS-Code-runs. Achieve this by **injecting the host behind seams into the providers in-place**, so `_handleMessage` *becomes* the host-agnostic engine, rather than copying 605 handlers into a parallel service layer.
 
-### Problem & root cause
+## Why the shim approach was rejected (design audit, 2026-07-08)
 
-A2b's per-verb rail currently exposes all **605 verbs** over HTTP (`POST /{kanban,planning,design,setup,taskViewer}/verb/<name>`), and the honest parity gate reports the true breakdown: **12 genuinely extracted, 593 shims** (Kanban 10 real / 134 shim, Setup 2 / 115, Planning 0 / 172, Design 0 / 62, TaskViewer 0 / 110). A **shim** is a service method whose body is `return this._ctx.handleMessage({ type: '<verb>', ...payload })` — it forwards straight back into the provider's `_handleMessage`, where the `vscode.*` coupling still lives.
+The prior approach exposed all 605 verbs over HTTP, but ~593 as **shims** — service methods that forward `ctx.handleMessage({type, ...payload})` back into the vscode-coupled `_handleMessage`. A design audit found this is the wrong vehicle:
 
-Shims made the surface **reachable** (an external client can drive every verb while VS Code runs minimised — Feature A's stated model). They did **not** make it **decoupled**: a shim still transitively requires `vscode`, so it cannot run in a headless standalone process. Reachable ≠ host-agnostic. Root cause: the per-verb recipe was proven on ~12 Kanban verbs and the rest were stubbed to light up the surface quickly; genuine extraction (the plan's literal "each case arm's body moves to a shared host-agnostic service module") is the deferred long pole.
+- **The `ctx.handleMessage` back-door defeats decoupling.** A "host-agnostic service" that calls back into `_handleMessage` (229 `vscode.*` refs, ~53 `executeCommand`) is not decoupled — a shim can *never* run headless; it dead-ends in vscode.
+- **Write-only reads.** `_handleMessage` arms `break` (never `return`), so a shim resolves to `{success:true}` with no data; the result escapes only as a webview/WS push. A remote HTTP client can *invoke* `get*`/`fetch*`/`load*` verbs but **cannot read the result** — incoherent for a remote-control API.
+- **Negative-value work + recursion trap.** Each shim is written now and thrown away later; and the moment an arm is repointed to a same-named shim, `_handleMessage → svc.verb → ctx.handleMessage → _handleMessage` stack-overflows. That landmine would be armed ~593 times.
+- **Shallow command seam.** Routing `executeCommand('switchboard.fullSync')` through `HostCommands` relocates coupling; a headless host must still reimplement ~26 `switchboard.*` commands.
+- **Untyped, unvalidated, unmaintainable at scale.** `payload: any`, no per-verb schema, and a hand-maintained 605-case `switch` (with `default` mid-switch) across 5 providers.
+
+The seam interfaces (`hostSeams.ts`) + `broadcastHub` foundation are sound and are kept; the ~10 genuinely-extracted Kanban verbs prove a testable target. Only the shim *vehicle* is replaced.
 
 ## Metadata
-- **Tags:** refactor, backend, api
+- **Tags:** refactor, backend, api, architecture
 - **Complexity:** 8
-- **Release phase:** Extension-as-engine (Feature A) is satisfied by shims; this plan is the **B1 (headless standalone) prerequisite**. See `standalone-headless-core-service-bootstrap.md`.
-- **Relates to:** parent A2b (`transport-migration-per-verb-burndown.md`), A2a seams (`extract-standalone-npx-03-transport-migration.md`), A1 catalog (`extract-standalone-npx-01-protocol-core.md`).
+- **Release phase:** B1 (headless standalone) prerequisite — NOT a Feature A release blocker (shims already satisfy Feature A's "VS Code minimised" model). Sequence with `standalone-headless-core-service-bootstrap.md`.
+- **Relates to:** parent A2b (`transport-migration-per-verb-burndown.md`), A2a seams, A1 catalog.
 
 ## User Review Required
-- **One genuine product call:** does full extraction gate the **Feature A** release, or is it **B1-scoped** (post-release)? **Recommendation: B1-scoped.** Shims satisfy Feature A's "VS Code stays the engine, minimised" model — external clients can already drive every verb. Genuine extraction is only *required* for a headless host with no VS Code. Sequence this plan with B1, not as a Feature A release blocker. (Decision stated; not hedged — flip only if a headless client is needed before B1.)
+- **Request/response contract (product call, needs a decision before build):** should every verb **return its result in the HTTP body** (recommended), with the webview push kept only as an optional live-UI update? Today reads are push-only, so an HTTP client can't read. **Recommendation: return-in-body is the contract; push is additive.** Decide this first — it shapes the arm-return refactor below.
+- Otherwise: None.
 
 ## Scope
 
 ### ✅ IN SCOPE
-- **Convert 593 shims → real extractions** across `kanbanService.ts` (134), `planningService.ts` (172), `designService.ts` (62), `setupService.ts` (115), `taskViewerService.ts` (110). For each verb: move the `_handleMessage` arm's real body into the service method, replacing every `vscode.*` reference with the corresponding A2a seam call (`HostCommands` / `HostUI` / `HostEditor` / `HostPathConfigProvider` / `TerminalBackend`).
-- **Extract-BEFORE-repoint ordering** (hard rule — see Risks): a repointed webview arm that delegates to a *shim* self-recurses (`_handleMessage → svc.verb → handleMessage → _handleMessage`). Every verb must be genuinely extracted before its arm is repointed.
-- **Seam-growth protocol:** when a verb hits a vscode surface not covered by the existing seams, stop, add the interface + vscode impl to `hostSeams.ts`, wire it into each `_initXService` ctx, then resume. Add the missing **`HostSecrets`** seam (A2a residual) when the first secret-reading verb is reached.
-- **Tighten the parity gate incrementally:** once a panel reaches zero shims, flip `check-protocol-parity.js` to *fail* if a shim reappears in that panel (ratchet toward 605 genuinely-extracted).
-- **Restore push discoverability** (see design item below): extend the catalog scanner to enumerate routed push helpers (partially done for `_pushTo`), or add a runtime push-enumeration path. Today `pushSites` is a lower bound (969 → 630) because routing hides pushes from the static `postMessage` scanner.
+1. **Inject the host into the providers in-place.** Each provider already builds seams + broadcaster in `_initXService`. Replace direct `vscode.*` / `this._panel.webview.postMessage` / `executeCommand` calls **inside the existing `_handleMessage` arms** with the seam / broadcaster equivalents. The arm keeps its logic; only the host coupling is swapped. `_handleMessage` then runs unchanged under a headless seam bundle.
+2. **Deepen the command seam.** Extract the shared logic behind the ~26 `switchboard.*` commands the verbs invoke into **host-agnostic domain services** (e.g. `SyncService.fullSync()`), and have arms call those directly instead of `HostCommands.executeCommand('switchboard.X')`. `HostUI`/`HostEditor`/`HostPathConfigProvider`/`TerminalBackend` stay as-is (genuine host side-effects).
+3. **Fix the request/response contract.** Make each arm **return** its result (per the product decision above) in addition to any live-UI push. The HTTP handler returns that value; a remote client can read.
+4. **Replace the 605-case switches + 593 shims with a generic, allowlist-gated dispatch.** `handleServiceVerb(verb, payload)` → validate `verb` against an **allowlist `Set`/registry** (data, not control flow) → validate `payload` against the verb's **schema** → `return this._handleMessage({ type: verb, ...payload })`. Delete the per-verb shim methods and the string-keyed service twins. Un-migrated verbs are reachable through the same generic path with **zero per-verb code and no recursion risk** (the arm is never repointed to a same-named method).
+5. **Quarantine / remove the `ctx.handleMessage` back-door.** Once arms run on seams, the back-door is unnecessary; keep it (if at all) only as the single generic dispatch entry, never as a per-verb forwarder.
+6. **Per-verb input schema + validation** at the dispatch boundary (the network turns trusted postMessage input into untrusted input).
 
 ### ⚙️ OUT OF SCOPE
-- The standalone composition root / keyring / config-file / Memento→config / single-instance guard — that is **B1** (`standalone-headless-core-service-bootstrap.md`). This plan makes the verbs *extraction-ready*; B1 wires the headless host that consumes them.
-- `node-pty` terminal backend + xterm browser grid → **B3**. npx packaging → **B4**. Transport shim / browser board → **B2**.
-- Any new verb or behavior change. This is a **byte-compatible refactor** — reply timing, error shapes, and ack semantics must match the current webview path exactly (4,000 installs).
+- The standalone composition root / keyring / headless bootstrap itself → **B1**. This plan makes `_handleMessage` runnable headlessly; B1 supplies the headless seam bundle + entry point.
+- `node-pty` terminal backend → **B3**. Browser board → **B2**. npx → **B4**.
+- New verbs / behavior changes — this is a **byte-compatible in-place refactor** of shipped provider code (~4,000 installs).
 
-## Implementation Steps
-1. **Classify each panel's verbs into two tiers** (a static-analysis pass): **pure-logic** (zero `vscode.*` in the arm body — mechanically movable) vs **vscode-coupled** (needs seam routing). The pure-logic tier can be auto-migrated by a script; the coupled tier is hand-work.
-2. **Per verb (the proven recipe):** move arm body → service method → route `vscode.*` through the seam → keep the arm as `case '<verb>': return svc.<verb>(payload)` (**extract before repoint**) → parity-test byte-compat → add/confirm the `handleServiceVerb` case.
-3. **Panel order (smallest/least-coupled first to prove the batch machinery):** Design (62) → Setup (115) → Kanban remaining (134) → TaskViewer (110) → Planning (172).
-4. **Orchestration:** partition **one agent stream per provider file** (they are the shared-edit hot spots — parallel edits to the same provider collide). Batch ~20–30 verbs per run, `compile-tests` gate between batches, merge incrementally. Expect a dozen-plus agent runs across several passes; large token spend; multi-session.
-5. **Seam growth** as encountered (protocol above). Add `HostSecrets`.
-6. **Parity ratchet:** per-panel, flip to fail-on-shim once clean.
-7. **Push discovery fix** (design item): scanner enumerates routed pushes and/or a runtime endpoint; document `pushSites` as lower-bound until then.
+## Disposition of existing artifacts
+- **Shim service classes** (`kanbanService`/`planningService`/`designService`/`setupService`/`taskViewerService`): the string-keyed shim methods are **deleted** (unreleased dev work → clean break, no migration). Genuinely host-agnostic domain logic already extracted (e.g. `getSetting`, `saveSetting`) is **kept** — either as a domain-service method the arm calls, or folded back into the arm. The classes survive only if they hold real shared domain logic.
+- **The 605-case `handleServiceVerb` switches**: collapse to one generic allowlist-gated dispatcher per provider.
+- **`ctx.handleMessage`**: demoted to the single generic dispatch path, or removed.
+
+## Implementation Steps (per provider, orchestrated)
+1. **Domain-service extraction first:** pull the ~26 `switchboard.*` command bodies into host-agnostic domain services (`SyncService`, dispatch service, etc.). This unblocks arms that call `executeCommand`.
+2. **In-place arm migration:** per arm, replace `vscode.*`/`executeCommand`/raw `postMessage` with seam / domain-service / broadcaster calls, and add a `return` of the result. No twin method.
+3. **Collapse dispatch:** replace the per-provider switch with the allowlist+schema registry → generic `_handleMessage` dispatch that returns results. Delete shims.
+4. **Order:** Design (62) as the proving panel → Setup (117) → Kanban (144) → TaskViewer (110) → Planning (172).
+5. **Orchestration:** one agent stream **per provider file** (avoid same-file edit collisions), batch ~20–30 arms, `compile-tests` gate between batches, merge incrementally. Multi-session; large token spend — but **no double-work** (each arm touched once, in place) and **no recursion trap** (arms never repoint to twins), which is materially less effort than the shim-then-rewrite path.
+6. **Seam growth:** add a seam (incl. the missing `HostSecrets`) when an arm hits an uncovered host surface; stop, add, wire into every `_initXService` ctx, resume.
 
 ## Complexity Audit
 ### Routine
-- Pure-logic verb moves — mechanical; the recipe repeats.
-- Adding `handleServiceVerb` cases / route arms — already-patterned.
+- Mechanical `vscode.X → seam.X` swaps inside arms with no coupling beyond the 5 seams.
+- Collapsing the switch to a registry.
 ### Complex / Risky
-- **Volume:** ~20–30k LOC across 5 providers. The long pole; cannot be one session.
-- **Per-verb seam routing:** terminal/worktree, ClickUp/Linear sync, editor/window, and configuration verbs each need their vscode surface individually routed through a seam — not copy-paste.
-- **Recursion hazard:** repoint-before-extract on a shimmed verb = infinite loop. Enforce extract-first; a lint/parity check that flags "repointed arm whose service method is a shim" would catch regressions.
-- **Byte-compatibility for 4,000 installs:** reply timing, error shapes, ack semantics must not drift. Provider tests must pass unchanged per panel.
-- **Parallel edit collisions:** partition by provider file; never two agents in one provider.
-- **Catalog push-discovery degradation:** routing pushes through helpers (Gap A) hides them from the static `postMessage` scanner (969 → 630). Genuine extraction will move more pushes behind helpers, worsening this — the scanner must learn the helper forms, or push discovery must go runtime-based.
+- **Byte-compatibility on shipped providers** (4,000 installs): in-place edits to the live `_handleMessage` hot path. Reply timing, error/ack push shapes, and `workspaceRoot` resolution must not drift. Per-provider tests must pass unchanged.
+- **Command-seam deepening**: extracting ~26 `switchboard.*` command bodies into host-agnostic services is the genuinely hard part (terminal/worktree/dispatch, ClickUp/Linear sync).
+- **Arm-return refactor**: arms currently `break`; making them `return` their result must not change side-effect ordering.
+- **Parallel edit collisions**: partition strictly by provider file.
 
 ## Edge cases & risks
-- **Idempotency of the burn-down:** each verb conversion is independent and byte-compatible; a half-done panel still works (extracted verbs run host-agnostic, un-extracted stay shims — both reachable). No big-bang.
-- **Test seams:** each service method must run under a test seam bundle (no `require('vscode')`), proving genuine decoupling — this is the actual acceptance signal, stronger than "compiles."
-- **Do NOT let any verb assume readable terminal output** — that arrives only with B3's node-pty backend; the current `TerminalBackend` vscode adapter is write/lifecycle only.
+- **Test seams are the acceptance signal.** Each migrated arm must run under a test seam bundle with **no `vscode` import reachable** — this, not "compiles", proves host-agnosticism.
+- **Un-migrated verbs still work** via the generic dispatch (they run in-process while VS Code is the engine) — the burn-down is incremental and never breaks the board.
+- **Do NOT assume readable terminal output** — that arrives only with B3's node-pty backend.
+- **Push discoverability (catalog):** routing pushes through helpers already dropped the static catalog's `pushSites` (969→630); once arms return results, push discovery matters less, but treat `pushSites` as a lower bound and prefer runtime push enumeration.
 
 ## Dependencies
-- **A2a seams** (present: `HostPathConfigProvider`, `TerminalBackend`, `HostCommands`, `HostUI`, `HostEditor`; **`HostSecrets` still missing** — add on first use).
+- **A2a seams** (present; add `HostSecrets` on first use).
 - **A1 catalog** (present — the per-verb checklist).
-- **The proven recipe + generic verb rail** (present — all 5 panels routed).
-- **Unblocks B1** (headless standalone) — that feature cannot run verbs headlessly until the shims are gone.
+- **Unblocks B1** (headless standalone) — B1 cannot run verbs headlessly until arms are seam-injected.
 
 ## Verification Plan
 ### Automated
-- `compile-tests` green per batch. Parity gate genuinely-extracted count rises monotonically toward **605 / 605** (0 shims). Push-routing ratchet stays green.
+- `compile-tests` green per batch. Parity gate's genuinely-extracted count rises toward 605/605 (0 shims). Push-routing ratchet stays green.
 ### Manual / behavioral
-- Per panel, provider tests pass unchanged after burn-down (run per-panel, not batched).
-- **Headless smoke:** a sample of migrated verbs execute under a test seam bundle with NO `vscode` import reachable — the real proof of host-agnosticism (compiling is necessary, not sufficient).
-- A `POST /<panel>/verb/<name>` call and the equivalent webview `postMessage` produce byte-identical replies/acks/error shapes.
+- **Headless smoke:** a sample of migrated arms execute under a test seam bundle with no `vscode` — the real proof.
+- **Request/response:** `POST /<panel>/verb/<readVerb>` returns the data in the HTTP body (no second WS channel needed).
+- Per-panel provider tests pass unchanged (byte-compat). A `POST /<panel>/verb/<name>` and the equivalent webview `postMessage` produce equivalent effects/results.
 
 ## Effort note
-Multi-session, orchestration-driven. Not achievable in a single conversational pass (tool/context limits); it is achievable as batched parallel agent runs with compile gates. Estimate: a dozen-plus agent runs across several passes. Large token spend — schedule accordingly.
+Multi-session, orchestration-driven. **Cheaper than the shim approach** — each verb is touched once, in place; no twin methods, no rewrite-twice, no recursion landmines. Estimate: a handful of agent runs per provider across a few passes, with compile gates.

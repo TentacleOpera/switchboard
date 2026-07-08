@@ -110,7 +110,9 @@ export class KanbanService {
         }
         try {
             const fullPath = path.resolve(workspaceRoot, planPath);
-            if (!fullPath.startsWith(workspaceRoot)) {
+            // Containment check — a bare `startsWith(workspaceRoot)` admits sibling dirs
+            // that share a prefix (e.g. `/home/u/repo-secrets` when root is `/home/u/repo`).
+            if (fullPath !== workspaceRoot && !fullPath.startsWith(workspaceRoot + path.sep)) {
                 return { success: false, error: 'Path traversal denied' };
             }
             if (!fs.existsSync(fullPath)) {
@@ -181,7 +183,9 @@ export class KanbanService {
             return { success: false, exists: false };
         }
         const resolvedPath = path.resolve(workspaceRoot, filePath);
-        if (!resolvedPath.startsWith(workspaceRoot)) {
+        // Containment check — a bare `startsWith(workspaceRoot)` admits sibling dirs
+        // that share a prefix (e.g. `/home/u/repo-secrets` when root is `/home/u/repo`).
+        if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRoot + path.sep)) {
             this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false });
             return { success: false, exists: false };
         }

@@ -4360,6 +4360,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
             skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
             suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
+            staggeredImplementationEnabled: promptsConfig.staggeredImplementationByRole?.[role] ?? false,
             useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
             noSubagentsEnabled: promptsConfig.noSubagentsByRole?.[role] ?? false,
             customSubagentName: promptsConfig.customSubagentNameByRole?.[role] || undefined,
@@ -4748,6 +4749,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 lead: leadConfig?.addons?.suppressWalkthrough ?? false,
                 coder: coderConfig?.addons?.suppressWalkthrough ?? false,
                 intern: internConfig?.addons?.suppressWalkthrough ?? false,
+            },
+            staggeredImplementationByRole: {
+                lead: leadConfig?.addons?.staggeredImplementation ?? false,
+                coder: coderConfig?.addons?.staggeredImplementation ?? false,
+                intern: internConfig?.addons?.staggeredImplementation ?? false,
             },
             ticketUpdateMode: ticketUpdaterConfig?.addons?.ticketUpdateMode
                 ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
