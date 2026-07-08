@@ -18,7 +18,7 @@ A target plan file path (the plan to split). If none is given, ask which plan.
 
 2. **Identify the shared context.** The sections both output files must carry verbatim: `## Goal` (incl. problem/root-cause), `## Metadata`, any Current State / background, `## Edge-Case & Dependency Audit`, and `## Dependencies`. Both files are self-contained.
 
-3. **Write the Routine companion** — `<stem>_routine.md` in the **same directory** as the original (e.g. `feature_plan_..._foo.md` → `feature_plan_..._foo_routine.md`). It contains the shared context + only the **Routine** implementation steps (from `### Routine` and the routine parts of `## Proposed Changes`). Give it a `**Complexity:**` reflecting the routine tier (typically ≤4) and a `**Split From:** <original filename>` metadata line. Embed a fresh `**Plan ID:** <uuid>`.
+3. **Write the Routine companion** — `<stem>_routine.md` in the **same directory** as the original (e.g. `feature_plan_..._foo.md` → `feature_plan_..._foo_routine.md`). It contains the shared context + only the **Routine** implementation steps (from `### Routine` and the routine parts of `## Proposed Changes`). Give it a `**Complexity:**` reflecting the routine tier (typically ≤4) and a `**Split From:** <original filename>` metadata line. Do NOT write a `**Plan ID:**` line — it is never read; the importer assigns the ID and keys by file path.
 
 4. **Rewrite the original** to hold only the **Complex / Risky** work: the shared context + the complex/risky steps. Add a note under the Goal: *"Routine items are split into `<stem>_routine.md` — assume they are implemented by the Coder agent."* Keep its existing `**Plan ID:**`. Bump/keep its `**Complexity:**` to the complex tier.
 

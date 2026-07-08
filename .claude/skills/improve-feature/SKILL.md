@@ -59,7 +59,7 @@ When the user asks to tier the feature by complexity — "high/low split", "spli
    - **HIGH** — every subtask scoring **≥ 5**, merged into one plan.
    - **LOW** — every subtask scoring **≤ 4**, merged into one plan.
    - If a tier is empty, still write its file and state there is no work for that tier (so a downstream two-tier executor has both).
-3. Give each new file a `**Complexity:**` for its tier and a `**Consolidated From:** <planIds>` metadata line for traceability. Do NOT embed a `**Plan ID:**` — it is never read; the importer assigns the ID and keys by file path.
+3. Give each new file a `**Complexity:**` for its tier and a `**Consolidated From:** <source plan filenames>` metadata line for traceability (reference the merged files by name — never by plan ID, which you cannot know). Do NOT embed a `**Plan ID:**` — it is never read; the importer assigns the ID and keys by file path.
 4. `git rm` the original subtask files (their intent now lives in the two tier files) and add a `**Feature:** <feature-plan-id>` line to each new tier plan file's frontmatter (the feature's Plan ID). Locally this is `assign-to-feature.js`.
 5. Report the two tier files, what merged into each, and the reconciled subtask list.
 
