@@ -952,7 +952,7 @@ export class PlanningPanelProvider {
                     await this._handleMessage(msg, isProject);
                 } catch (err) {
                     console.error(`[${isProject ? 'ProjectPanel' : 'PlanningPanel'}] Message handler error:`, err);
-                    panel.webview.postMessage({ type: 'error', message: String(err) });
+                    this._pushTo(panel, 'planning', { type: 'error', message: String(err) });
                 }
             },
             null,
@@ -996,11 +996,11 @@ export class PlanningPanelProvider {
         }
 
         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
-        panel.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+        this._pushTo(panel, 'planning', { type: 'switchboardThemeChanged', theme });
         const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
-        panel.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
+        this._pushTo(panel, 'planning', { type: 'cyberAnimationSetting', disabled });
         const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
-        panel.webview.postMessage({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
+        this._pushTo(panel, 'planning', { type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
 
         // For the Planning (non-Project) panel, replicate the live-update listeners and file
         // watchers that open() registers, so a RESTORED panel auto-refreshes on external
@@ -1087,9 +1087,24 @@ export class PlanningPanelProvider {
 
     public postMessageToWebview(message: any): void {
         if (this._broadcaster) {
-            this._broadcaster.push(message);
+            this._broadcaster.push(message, 'planning');
         } else {
             this._panel?.webview.postMessage(message);
+        }
+    }
+
+    /**
+     * Route a push to a SPECIFIC panel this provider owns (dev docs, notebook,
+     * project, save-target, etc.) — delivers to that panel's own webview AND mirrors
+     * to WS clients tagged with `surface`. A raw `panel.webview.postMessage` here would
+     * drop the push from every remote client (the Gap-A push-site audit). The bound
+     * broadcaster's `push()` cannot serve secondary panels — it targets the MAIN panel.
+     */
+    private _pushTo(panel: vscode.WebviewPanel | undefined, surface: string, message: any): void {
+        if (this._broadcaster) {
+            this._broadcaster.pushTo(panel?.webview, surface, message);
+        } else {
+            panel?.webview.postMessage(message).then(undefined, () => { /* panel closed */ });
         }
     }
 
@@ -1110,19 +1125,15 @@ export class PlanningPanelProvider {
     }
 
     public postMessageToProjectWebview(message: any): void {
-        if (this._broadcaster) {
-            this._broadcaster.push(message);
-            if (this._projectPanelReady) {
-                this._projectPanel?.webview.postMessage(message).then(undefined, () => {});
-            } else {
-                this._pendingProjectMessages.push(message);
-            }
+        // Mirror to WS clients tagged 'project'. NOT push() — the broadcaster is bound
+        // to the MAIN panel's webview, so push() would ALSO deliver project messages to
+        // the main planning panel (cross-delivery). The project webview is delivered
+        // below, preserving its own readiness queue.
+        this._broadcaster?.mirrorToWs('project', message);
+        if (this._projectPanelReady) {
+            this._projectPanel?.webview.postMessage(message).then(undefined, () => {});
         } else {
-            if (!this._projectPanelReady) {
-                this._pendingProjectMessages.push(message);
-                return;
-            }
-            this._projectPanel?.webview.postMessage(message);
+            this._pendingProjectMessages.push(message);
         }
     }
 
@@ -1770,7 +1781,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (this._activeDevDocWatchDebounce) { clearTimeout(this._activeDevDocWatchDebounce); }
                 this._activeDevDocPath = undefined; // stop reacting to the now-gone file
                 const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                devDocsPanel?.webview.postMessage({ type: 'devDocDeletedExternally', path: emitPath });
+                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeletedExternally', path: emitPath });
             });
 
             this._disposables.push(this._activeDevDocWatcher);
@@ -1787,7 +1798,7 @@ Start by checking which documents exist, then present the menu.`;
         try { content = await fs.promises.readFile(diskPath, 'utf8'); } catch { return; } // gone — leave the last view
         let renderedHtml = '';
         try { renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content); } catch { renderedHtml = ''; }
-        devDocsPanel.webview.postMessage({ type: 'devDocContent', path: emitPath, content, renderedHtml });
+        this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: emitPath, content, renderedHtml });
     }
 
     private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<void> {
@@ -2593,7 +2604,7 @@ Start by checking which documents exist, then present the menu.`;
         const allRoots = this._getWorkspaceRoots();
         if (allRoots.length === 0) {
             const errorPanel = isProject ? this._projectPanel : this._panel;
-            errorPanel?.webview.postMessage({ type: 'error', message: 'No workspace open' });
+            this._pushTo(errorPanel, 'planning', { type: 'error', message: 'No workspace open' });
             return;
         }
 
@@ -2608,7 +2619,7 @@ Start by checking which documents exist, then present the menu.`;
                 try {
                     const html = await vscode.commands.executeCommand<string>('markdown.api.render', msg.content || '');
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    targetPanel?.webview.postMessage({
+                    this._pushTo(targetPanel, 'planning', {
                         type: 'markdownLiveRendered',
                         requestId: msg.requestId,
                         html: html,
@@ -2616,7 +2627,7 @@ Start by checking which documents exist, then present the menu.`;
                     });
                 } catch (err) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    targetPanel?.webview.postMessage({
+                    this._pushTo(targetPanel, 'planning', {
                         type: 'markdownLiveRendered',
                         requestId: msg.requestId,
                         html: '',
@@ -2716,7 +2727,7 @@ Start by checking which documents exist, then present the menu.`;
                     defaultRoot = allowedRoots[0] || allRoots[0];
                 }
                 const nbPanel = isProject ? this._projectPanel : this._panel;
-                nbPanel?.webview.postMessage({ type: 'notebookDefaultRoot', root: defaultRoot || '' });
+                this._pushTo(nbPanel, 'notebook', { type: 'notebookDefaultRoot', root: defaultRoot || '' });
                 break;
             }
 
@@ -2724,14 +2735,14 @@ Start by checking which documents exist, then present the menu.`;
             case 'loadDevDocs': {
                 const docs = await this._listDevDocs(allRoots);
                 const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                devDocsPanel?.webview.postMessage({ type: 'devDocsList', docs });
+                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocsList', docs });
                 break;
             }
             case 'readDevDoc': {
                 const devDocsPanel = isProject ? this._projectPanel : this._panel;
                 const safePath = this._resolveDevDocPath(allRoots, msg.path);
                 if (!safePath) {
-                    devDocsPanel?.webview.postMessage({ type: 'devDocContent', path: msg.path, content: '', renderedHtml: '', error: 'Invalid dev doc path' });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: msg.path, content: '', renderedHtml: '', error: 'Invalid dev doc path' });
                     break;
                 }
                 let content = '';
@@ -2740,7 +2751,7 @@ Start by checking which documents exist, then present the menu.`;
                 try {
                     renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
                 } catch { renderedHtml = ''; }
-                devDocsPanel?.webview.postMessage({ type: 'devDocContent', path: msg.path, content, renderedHtml });
+                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: msg.path, content, renderedHtml });
                 // Watch this file for external edits so the tab never holds a stale buffer.
                 this._setupActiveDevDocWatcher(safePath, typeof msg.path === 'string' ? msg.path : safePath, isProject);
                 break;
@@ -2749,7 +2760,7 @@ Start by checking which documents exist, then present the menu.`;
                 const devDocsPanel = isProject ? this._projectPanel : this._panel;
                 const safePath = this._resolveDevDocPath(allRoots, msg.path);
                 if (!safePath || typeof msg.content !== 'string') {
-                    devDocsPanel?.webview.postMessage({ type: 'devDocSaved', path: msg.path, ok: false, error: 'Invalid dev doc path' });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocSaved', path: msg.path, ok: false, error: 'Invalid dev doc path' });
                     break;
                 }
                 let ok = false;
@@ -2762,7 +2773,7 @@ Start by checking which documents exist, then present the menu.`;
                 } catch (err) {
                     error = err instanceof Error ? err.message : String(err);
                 }
-                devDocsPanel?.webview.postMessage({ type: 'devDocSaved', path: msg.path, ok, error });
+                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocSaved', path: msg.path, ok, error });
                 if (ok) { this._onProjectContextContentChanged(msg.workspaceRoot); }
                 break;
             }
@@ -2778,7 +2789,7 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 if (!root && allRoots.length === 1) { root = allRoots[0]; }
                 if (!root) {
-                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: false, error: 'No workspace selected' });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocCreated', ok: false, error: 'No workspace selected' });
                     break;
                 }
                 const name = await vscode.window.showInputBox({
@@ -2799,9 +2810,9 @@ Start by checking which documents exist, then present the menu.`;
                     if (!fs.existsSync(docPath)) {
                         await fs.promises.writeFile(docPath, `# ${name}\n\n`, 'utf8');
                     }
-                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: true, path: docPath });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocCreated', ok: true, path: docPath });
                 } catch (err) {
-                    devDocsPanel?.webview.postMessage({ type: 'devDocCreated', ok: false, error: err instanceof Error ? err.message : String(err) });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocCreated', ok: false, error: err instanceof Error ? err.message : String(err) });
                 }
                 break;
             }
@@ -2809,7 +2820,7 @@ Start by checking which documents exist, then present the menu.`;
                 const devDocsPanel = isProject ? this._projectPanel : this._panel;
                 const targetRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || (allRoots.length === 1 ? allRoots[0] : '');
                 if (!targetRoot) {
-                    devDocsPanel?.webview.postMessage({ type: 'importDevDocResult', error: 'No workspace selected' });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'importDevDocResult', error: 'No workspace selected' });
                     break;
                 }
                 await this._importDevDocFromClipboard(targetRoot, this._devDocsFolder(targetRoot));
@@ -2846,16 +2857,16 @@ Start by checking which documents exist, then present the menu.`;
                 const devDocsPanel = isProject ? this._projectPanel : this._panel;
                 const safePath = this._resolveDevDocPath(allRoots, msg.path);
                 if (!safePath) {
-                    devDocsPanel?.webview.postMessage({ type: 'devDocDeleted', path: msg.path, ok: false, error: 'Invalid dev doc path' });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeleted', path: msg.path, ok: false, error: 'Invalid dev doc path' });
                     break;
                 }
                 try {
                     await fs.promises.unlink(safePath);
                     this._lastPanelWriteTimestamp = Date.now(); // suppress our own dev-doc delete-watcher fire
-                    devDocsPanel?.webview.postMessage({ type: 'devDocDeleted', path: msg.path, ok: true });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeleted', path: msg.path, ok: true });
                     this._onProjectContextContentChanged(msg.workspaceRoot);
                 } catch (err) {
-                    devDocsPanel?.webview.postMessage({ type: 'devDocDeleted', path: msg.path, ok: false, error: err instanceof Error ? err.message : String(err) });
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeleted', path: msg.path, ok: false, error: err instanceof Error ? err.message : String(err) });
                 }
                 break;
             }
@@ -3409,7 +3420,7 @@ Start by checking which documents exist, then present the menu.`;
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
                 const result = await vscode.commands.executeCommand('switchboard.importNotebookLMPlans', targetRoot) as { overwritten: number; created: number; errors: number } | undefined;
                 const nbTarget = isProject ? this._projectPanel : this._panel;
-                nbTarget?.webview.postMessage({ type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
+                this._pushTo(nbTarget, 'notebook', { type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
                 break;
             }
             case 'importResearchDoc': {
@@ -3421,7 +3432,7 @@ Start by checking which documents exist, then present the menu.`;
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
                 const result = await this._handleAirlockExport(targetRoot);
                 const airlockTarget = isProject ? this._projectPanel : this._panel;
-                airlockTarget?.webview.postMessage({ type: 'airlock_exportComplete', ...result });
+                this._pushTo(airlockTarget, 'notebook', { type: 'airlock_exportComplete', ...result });
                 break;
             }
             case 'airlock_openNotebookLM': {
@@ -3591,14 +3602,14 @@ Start by checking which documents exist, then present the menu.`;
             case 'copyArtifactPrompt': {
                 await vscode.env.clipboard.writeText(msg.prompt || '');
                 const targetPanel = isProject ? this._projectPanel : this._panel;
-                targetPanel?.webview.postMessage({ type: 'artifactPromptCopied', kind: msg.kind });
+                this._pushTo(targetPanel, 'planning', { type: 'artifactPromptCopied', kind: msg.kind });
                 break;
             }
             case 'sendArtifactPromptToTerminal': {
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.sendPromptToAgentTerminal('claude_artifacts', msg.prompt || '', msg.workspaceRoot);
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    targetPanel?.webview.postMessage({ type: 'artifactPromptSent', kind: msg.kind });
+                    this._pushTo(targetPanel, 'planning', { type: 'artifactPromptSent', kind: msg.kind });
                 }
                 break;
             }
@@ -3607,7 +3618,7 @@ Start by checking which documents exist, then present the menu.`;
                 const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot, msg.project);
                 if (prompt) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    targetPanel?.webview.postMessage({ type: 'chatPromptCopied' });
+                    this._pushTo(targetPanel, 'planning', { type: 'chatPromptCopied' });
                 }
                 break;
             }
@@ -4847,7 +4858,7 @@ Please format the updated output document strictly as follows:
                     if (wsRoot) {
                         resolved = path.resolve(wsRoot, filePath);
                     } else {
-                        saveDestPanel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: 'No workspace root to resolve relative path', tab });
+                        this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, error: 'No workspace root to resolve relative path', tab });
                         break;
                     }
                 } else {
@@ -4871,7 +4882,7 @@ Please format the updated output document strictly as follows:
                     }
                 }
                 if (!filePath || !isAllowed) {
-                    saveDestPanel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
+                    this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
                     break;
                 }
                 try {
@@ -4881,7 +4892,7 @@ Please format the updated output document strictly as follows:
                         diskContent = await fs.promises.readFile(resolved, 'utf8');
                     }
                     if (originalContent && diskContent !== originalContent) {
-                        saveDestPanel?.webview.postMessage({ type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
+                        this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
                         break;
                     }
 
@@ -4890,7 +4901,7 @@ Please format the updated output document strictly as follows:
                     if (saveExt === '.json') {
                         try { JSON.parse(content); }
                         catch (e: any) {
-                            saveDestPanel?.webview.postMessage({
+                            this._pushTo(saveDestPanel, 'planning', {
                                 type: 'saveFileContentResult',
                                 success: false,
                                 error: `Invalid JSON: ${e.message}`,
@@ -4903,7 +4914,7 @@ Please format the updated output document strictly as follows:
                         const yaml = require('js-yaml');
                         try { yaml.load(content); }
                         catch (e: any) {
-                            saveDestPanel?.webview.postMessage({
+                            this._pushTo(saveDestPanel, 'planning', {
                                 type: 'saveFileContentResult',
                                 success: false,
                                 error: `Invalid YAML: ${e.message}`,
@@ -4969,7 +4980,7 @@ Please format the updated output document strictly as follows:
                         }
                     }
 
-                    saveDestPanel?.webview.postMessage({
+                    this._pushTo(saveDestPanel, 'planning', {
                         type: 'saveFileContentResult',
                         success: true,
                         tab,
@@ -4980,7 +4991,7 @@ Please format the updated output document strictly as follows:
                             : undefined
                     });
                 } catch (err) {
-                    saveDestPanel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: String(err), tab });
+                    this._pushTo(saveDestPanel, 'planning', { type: 'saveFileContentResult', success: false, error: String(err), tab });
                 }
                 break;
             }
@@ -6956,7 +6967,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             return att;
                         });
                     }
-                    targetPanel?.webview.postMessage({
+                    this._pushTo(targetPanel, 'planning', {
                         type: 'attachmentsListResult',
                         success: true,
                         ticketId,
@@ -6965,7 +6976,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     });
                 } catch (error) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    targetPanel?.webview.postMessage({
+                    this._pushTo(targetPanel, 'planning', {
                         type: 'attachmentsListResult',
                         success: false,
                         ticketId,
@@ -9167,18 +9178,18 @@ Read the current content above. Determine what's missing. Produce a complete fea
     private async _importDevDocFromClipboard(workspaceRoot: string, targetDir: string): Promise<void> {
         const panel = this._projectPanel ?? this._panel;
         if (this._importInProgress) {
-            panel?.webview.postMessage({ type: 'importDevDocResult', error: 'Import already in progress' });
+            this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: 'Import already in progress' });
             return;
         }
         this._importInProgress = true;
         try {
             const content = await vscode.env.clipboard.readText();
             if (!content || !content.trim()) {
-                panel?.webview.postMessage({ type: 'importDevDocResult', error: 'Clipboard is empty. Copy markdown first.' });
+                this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: 'Clipboard is empty. Copy markdown first.' });
                 return;
             }
             if (content.length > 200_000) {
-                panel?.webview.postMessage({ type: 'importDevDocResult', error: 'Clipboard content is too large (>200 KB). Aborting import.' });
+                this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: 'Clipboard content is too large (>200 KB). Aborting import.' });
                 return;
             }
             let title = '';
@@ -9199,10 +9210,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
             const docPath = path.join(targetDir, `${slug}.md`);
             await fs.promises.writeFile(docPath, contentToWrite, 'utf8');
             this._lastPanelWriteTimestamp = Date.now();
-            panel?.webview.postMessage({ type: 'importDevDocResult', success: true, docTitle: title, savedPath: docPath });
+            this._pushTo(panel, 'planning', { type: 'importDevDocResult', success: true, docTitle: title, savedPath: docPath });
             this._onProjectContextContentChanged(workspaceRoot);
         } catch (err) {
-            panel?.webview.postMessage({ type: 'importDevDocResult', error: String(err) });
+            this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: String(err) });
         } finally {
             this._importInProgress = false;
         }

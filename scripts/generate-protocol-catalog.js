@@ -152,6 +152,24 @@ function extractWebviewSites() {
             if (providerName) site.provider = providerName;
             sites.push(site);
         }
+        // Routed push sites via the broadcast chokepoint:
+        //   `_pushTo(panel, 'surface', {type:'X'})` / `broadcaster.pushTo(webview, 'surface', {type:'X'})`
+        // These replace direct `panel.webview.postMessage({type:...})` (the Gap-A push-site
+        // audit) — still host→UI push sites, so keep enumerating them or the catalog
+        // silently under-counts every push that moved to the transport layer.
+        const pushToRe = /\b_?pushTo\s*\(\s*[^,]+,\s*(['"])([^'"]+)\1\s*,\s*\{\s*type\s*:\s*(['"])([^'"]+)\3/g;
+        pushToRe.lastIndex = 0;
+        while ((m = pushToRe.exec(content)) !== null) {
+            const site = {
+                verb: m[4],
+                direction: 'push',
+                file: fileRel,
+                line: lineOf(content, m.index),
+                receiver: `pushTo:${m[2]}`,
+            };
+            if (providerName) site.provider = providerName;
+            sites.push(site);
+        }
         dynRe.lastIndex = 0;
         while ((m = dynRe.exec(content)) !== null) {
             const c = m[2][0];

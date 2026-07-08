@@ -34,6 +34,9 @@ jobs:
       - name: Protocol parity check
         run: npm run parity:check
 
+      - name: Push-routing ratchet (Gap A)
+        run: npm run push-routing:check
+
       - name: Run integration suite
         run: npm run test:integration:all
 

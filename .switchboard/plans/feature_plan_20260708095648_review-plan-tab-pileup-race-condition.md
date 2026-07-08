@@ -208,3 +208,38 @@ This ensures that if the panel is disposed while a caller is awaiting the lock, 
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder** — but only after the *User Review Required* reproduction check passes. Treat the lock as a defensive guard; if reproduction points to the restore/serializer or stale-reference path, re-scope this plan before coding.
+
+---
+
+## Post-Implementation Review (2026-07-09)
+
+### Implementation Status: ✅ Complete — Plan-Compliant
+
+All three proposed changes implemented as specified. No code fixes required by the review.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/services/PlanningPanelProvider.ts` | Added `_projectPanelOpening` field (L306); refactored `openProject()` into wrapper + `_doOpenProject()` (L570-693); lock cleared in 3 `onDidDispose` handlers (L649, L973, L9784) and 1 defensive catch (L7936); `finally` block clears lock after creation (L591) |
+| `src/test/project-panel-opening-lock.test.js` | New static-source-assertion test — verifies field declaration, guard presence, and exactly 3 `onDidDispose` sites clearing the lock |
+
+### Code Review Findings
+
+| Severity | ID | Finding | Status |
+|----------|-----|---------|--------|
+| MAJOR | MAJOR-2 | `deserializeProjectPanel` (L922) does not consult or set `_projectPanelOpening` — the most plausible real-world duplicate scenario (restore/serializer ghost) is not addressed by the lock | **By design** — plan explicitly scopes this as a separate fix (see Root-Cause Reassessment) |
+| NIT | NIT-1 | Test uses whitespace-sensitive string matching; fragile to reformatting | **Deferred** — matches existing test suite idiom |
+| NIT | NIT-2 | Comments in `_hydratePanel` onDidDispose (L962-964) and `dispose()` re-registration (L9776) reference pre-refactor line numbers | **Deferred** — cosmetic, will drift with next change |
+| NIT | NIT-3 | Catch block in `_updateWebviewRoots` (L7931-7937) also clears `_projectPanelOpening` but test doesn't verify it | **Correct** — catch is a pre-existing stale-reference guard, not a new dispose site; test scope is accurate |
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive
+- **Automated tests:** Skipped per session directive
+- **Static review:** All 5 `_projectPanelOpening = undefined` sites verified correct (3 onDidDispose, 1 finally, 1 catch); lock/unlock invariant holds across all code paths; `openProject()` wrapper correctly short-circuits concurrent callers; `_doOpenProject()` double-checks `_projectPanel` after lock entry
+
+### Remaining Risks
+
+1. **Restore/serializer ghost (PRIMARY):** If `deserializeProjectPanel` is delayed (lazy restoration, slow activation), `_projectPanel` remains `undefined` during the gap. A `reviewPlan` click during this window creates a duplicate panel. The promise lock does not address this — a serializer-aware guard is needed (e.g., track pending deserialization or check `WebviewPanelSerializer` state). **Recommend filing as a separate plan.**
+2. **Stale line-number references in comments** will cause confusion for future readers tracing the dispose chain. Low priority but should be corrected in the next touch of these files.
