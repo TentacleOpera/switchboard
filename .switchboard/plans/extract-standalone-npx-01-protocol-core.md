@@ -1,19 +1,20 @@
 ---
-description: "Standalone npx Switchboard, subtask 1 of 4: build the machine-readable protocol catalog (Phase 0) and stand up the host-agnostic core service — bin skeleton, LocalApiServer bootstrap with real callbacks, KanbanDatabase vscode-seam injection, config/secret/state replacements, single-instance guard (Phase 1)"
+description: "Feature A (Remote Control), subtask A1: build the machine-readable protocol catalog of the full webview↔host message contract and expose it over HTTP as GET /catalog — the foundational fixture every later remote-control subtask (and the CI parity gate) burns down against."
 ---
 
-# Standalone Switchboard 1/4 — Protocol Inventory + Host-Agnostic Core Service
+# Feature A · A1 — Protocol Catalog + Discovery Endpoint
 
 ## Goal
 
-Deliver the two prerequisites every later subtask builds on: (1) a **machine-readable protocol catalog** of the full webview↔host message contract, and (2) a **bootable host-agnostic core service** — the `switchboard` bin skeleton that constructs `LocalApiServer` with real (non-VS Code) callback implementations, with config/secret/state replacements and a mandatory single-instance guard.
+Produce a **machine-readable catalog** of the entire webview↔host message contract, and serve it over HTTP as **`GET /catalog`** so external clients (the `/switchboard-manage` skill, custom UIs) can self-discover the surface without reading skill docs. This is the foundational fixture the transport-migration subtask (A2) burns down against and the CI parity gate checks.
 
-**Context (parent architecture):** This is subtask 1 of the feature decomposing `.switchboard/plans/extract-standalone-npx-browser-service.md` (Plan ID `81299C8F-E2FA-4F93-881D-83231E1798A1`) — an editor-independent Switchboard distributed via `npx`, with a browser board and a `node-pty` terminal fleet. The parent plan holds the full problem analysis (Zed infeasibility, fork rejection, why-standalone) and the hard constraint that applies to ALL subtasks: **do not regress the shipped VS Code extension (~4,000 installs)** — shared code must stay behavior-preserving, and `.switchboard/` + `kanban.db` stay format-compatible between run modes. This subtask covers the parent's Phase 0 + Phase 1.
+**Context:** Split 2026-07-08 from the original `extract-standalone-npx-01-protocol-core.md`, which bundled this catalog (Phase 0) with the standalone-service bootstrap (Phase 1). The bootstrap is now a **post-release** plan, `standalone-headless-core-service-bootstrap.md` (Feature B, B1). This subtask is the near-term, foundational half. Parent hard constraint still applies: **do not regress the shipped VS Code extension (~4,000 installs)** — catalog generation is read-only tooling; the only runtime change is an additive `GET /catalog` route.
 
 ## Metadata
 - **Plan ID:** eb75281d-d8f3-4e50-b396-f7626abed020
-- **Tags:** refactor, backend, cli, infrastructure
-- **Complexity:** 7
+- **Tags:** refactor, backend, api
+- **Complexity:** 5
+- **Release phase:** Near-term / foundational (Feature A — Switchboard Remote-Control API). Everything in Feature A depends on this.
 
 ## User Review Required
 - None — decisions inherited from the reviewed parent plan.
@@ -21,96 +22,74 @@ Deliver the two prerequisites every later subtask builds on: (1) a **machine-rea
 ## Scope
 
 ### ✅ IN SCOPE
-- **Protocol catalog (Phase 0):** enumerate the full message contract — measured 2026-07-07: **432 distinct message `type:` values** from `src/webview/*`, **706 handler `case` arms** across the five Providers (TaskViewer 191, Kanban 168, Planning 168, Setup 117, Design 62), **988 host→webview push sites**, **575 `postMessage` call sites** in the UI. Output: a checked-in machine-readable catalog (JSON) mapping verb → direction → payload shape → owning provider → target service method. This is subtask 3's burn-down checklist AND its CI parity-test fixture.
-- **`switchboard` bin + bootstrap:** `src/standalone/cli.ts` (flag parsing, single-instance guard, boot) and `src/standalone/bootstrap.ts` composing `LocalApiServer` with real callback implementations mirroring `LocalApiServerOptions` (`src/services/LocalApiServer.ts:9–80`) exactly — peers of the extension's implementations, not forks.
-- **Single-instance guard:** before opening the DB, probe `.switchboard/api-server-port.txt` + `/health` (`src/services/LocalApiServer.ts:1320`); live peer → refuse to start (or read-only) with a clear message; stale port file (no `/health` answer) → overwrite. This is mandatory: sql.js persists by full-file write-back with no locking — two live writers silently clobber each other.
-- **KanbanDatabase seam injection:** abstract the **6 lazy `require('vscode')` sites** in `src/services/KanbanDatabase.ts` behind an injected `HostPathConfigProvider` (workspace root, config reads). Default behavior when no provider is passed = today's guarded lazy-require, so existing extension call sites need no change.
-- **Config replacement:** standalone equivalents of the **80** `switchboard.*` settings in `package.json` via a JSON/YAML config file + env overrides.
-- **Secret storage replacement:** the **6 secret keys** (`switchboard.apiToken`, `switchboard.clickup.apiToken`, `switchboard.linear.apiToken`, `switchboard.notion.apiToken`, `switchboard.stitch.apiKey`, `switchboard.stitch.accessToken`, ~10 call sites) via **`@napi-rs/keyring`** (keytar is archived; `@napi-rs/keyring` ships prebuilds as `optionalDependencies`, zero postinstall, D-Bus direct on Linux). Headless fallback: AES-256-GCM-encrypted `0600` file under `.switchboard/`, key from env/master passphrase.
-- **State replacement:** `Memento` (10 distinct keys across 6 files) migrates to the **`kanban.db` `config` table** — the blessed home for cross-surface state. No new JSON state store.
-- Reuse vscode-free modules as-is: `agentPromptBuilder.ts` (108 KB, 0 vscode refs), sync services, `KanbanMigration.ts`, `SessionActionLog.ts`.
+- **Protocol catalog:** enumerate the full contract — measured 2026-07-07: **432 distinct message `type:` values**, **706 handler `case` arms** across the five Providers (TaskViewer 191, Kanban 168, Planning 168, Setup 117, Design 62), **988 host→webview push sites**, **575 `postMessage` call sites**. Output: a checked-in `protocol-catalog.json` mapping verb → direction (request/response vs fire-and-forget vs broadcast) → payload shape → owning provider → target service method. This is A2's burn-down checklist AND its CI parity-test fixture.
+- **`GET /catalog` endpoint** on `LocalApiServer` — serves the catalog JSON so any client discovers every verb/endpoint/payload at runtime (the MCP-free discoverability layer). Auto-tracks the surface as A2 fills endpoints in. Follows the existing route pattern; `127.0.0.1` bind + auth unchanged.
+- Regenerable: a scanner script emits the catalog; CI diffs regenerated vs checked-in to catch drift.
 
 ### ⚙️ OUT OF SCOPE
-- Terminal fleet (subtask 2), handler extraction/transport (subtask 3), npx packaging/launcher (subtask 4).
+- Standalone bootstrap / keyring / config-file / Memento→config / single-instance guard → **B1** (`standalone-headless-core-service-bootstrap.md`, post-release).
+- Handler extraction + endpoints + wsHub + parity gate → **A2**. Transport shim → **B2**. Terminal fleet → **B3**. npx → **B4**.
 - Any UI/webview change.
 
 ## Implementation Steps
-
-1. **Catalog generation** — script scans `src/webview/*` for `postMessage({type: ...})` and the five Providers for `case '...'` arms; emit `protocol-catalog.json` (verb, direction, payload keys, provider, proposed service module). Manual pass to classify request/response pairs vs fire-and-forget.
-2. **`src/standalone/cli.ts`** — bin entry: parse flags, run single-instance guard, boot bootstrap, print served URL.
-3. **`src/standalone/bootstrap.ts`** — construct `KanbanDatabase` (injected provider), sync services, `LocalApiServer` with real callbacks.
-4. **`src/standalone/hostServices.ts`** — config-file loader (80 settings), `@napi-rs/keyring` secret store (6 keys) + encrypted-file fallback, `config`-table Memento replacement (10 keys).
-5. **`KanbanDatabase.ts` seam injection** — constructor/init-time `HostPathConfigProvider`; extension passes vscode-backed impl; absent provider → current lazy-require fallback (behavior-preserving; bare test harnesses unchanged).
-6. **Guard tests** — live-peer probe refuses second start; stale port file overwritten.
+1. **Catalog scanner** — scan `src/webview/*` for `postMessage({type: ...})` and the five Providers for `case '...'` arms; emit `protocol-catalog.json` (verb, direction, payload keys, provider, proposed service module). Manual pass to classify request/response pairs vs fire-and-forget and to flag dynamically-constructed `type:` strings (template literals) as explicit entries rather than silently missing them.
+2. **`GET /catalog`** — add the route to `LocalApiServer` (interim: current route table; canonical: serve `protocol-catalog.json`).
+3. **CI drift check** — regenerated catalog must equal the checked-in catalog.
 
 ## Complexity Audit
-
 ### Routine
-- Catalog scan scripting (grep-shaped, verified counts already exist).
-- Reusing the vscode-free modules in the bootstrap.
-- Config-file loader.
-
+- Grep-shaped catalog scan (counts already verified).
+- The `GET /catalog` route (additive, follows existing pattern).
 ### Complex / Risky
-- **Touching `KanbanDatabase.ts` (356 KB, shipped code)** — the seam injection must be a no-op for the extension path; regressions here hit all ~4,000 installs.
-- **Secret/state substitution correctness** — 6 keys and 10 Memento keys must resolve identically in both run modes; a missed key silently breaks sync integrations in standalone mode.
-- **Single-instance guard** — data-loss prevention, not hardening; false-negative peer detection (stale file treated as live, or vice versa) either blocks legitimate starts or permits clobbering.
+- **Dynamic `type:` strings** — template-literal message types won't be caught by a naive scan; they must be hand-added to the catalog or A2's parity gate will have blind spots. Flag them explicitly.
 
 ## Edge-Case & Dependency Audit
-
-### Race Conditions
-- Guard TOCTOU: peer could start between probe and DB open — acceptable residual risk locally; keep window minimal (probe immediately before open).
-- Stale `api-server-port.txt` with a *different* service answering `/health` on a recycled port → validate the health payload identifies Switchboard, not just HTTP 200.
-
-### Security
-- Encrypted-file secret fallback: `0600`, under `.switchboard/`, AES-256-GCM, key never written to disk.
-- No secrets in the config file; config loader must reject secret-shaped keys with a pointer to the keyring.
-
-### Side Effects
-- All `KanbanDatabase.ts` edits run in the shipped extension — existing tests (`src/services/__tests__/`, `src/test/`) must pass unchanged.
-- New `config`-table keys namespaced (`standalone.*`) so old extension versions ignore them safely.
-
-### Dependencies & Conflicts
-- New deps this subtask: `@napi-rs/keyring`. (`node-pty`/`@xterm`/`ws` land in subtasks 2–3.)
-- Node floor `>=22` (engines enforced in subtask 4's packaging; honored here in code).
+- **Race conditions:** Catalog regeneration is a build-time script (not runtime) — no concurrent-write risk. The `GET /catalog` route serves a static file; no race.
+- **Security:** `GET /catalog` is read-only and localhost-bound (`127.0.0.1`). The current `_checkAuth` (`LocalApiServer.ts:255-258`) is a no-op that trusts the localhost boundary check at `_handleRequest` line 1862 — acceptable for a read-only route, but A2 must build real auth before any write/WS endpoint rides the same server.
+- **Side effects:** The scanner script is read-only (grep/AST over `src/`). The `GET /catalog` route is additive — one new `else if` arm in `_handleRequest` (lines 1889-1980). No existing route is modified.
+- **Dependencies & conflicts:** No new npm dependencies. The scanner may use the TypeScript compiler API (already in devDependencies) for AST-based extraction, or a regex approach for the initial pass. No conflict with existing tooling — the scout confirmed no existing scanner/catalog tool exists in `scripts/` or `.agents/skills/`.
 
 ## Dependencies
-- **Session dependencies:** None (first subtask of the feature; no upstream sibling).
-- Parent architecture reference: `.switchboard/plans/extract-standalone-npx-browser-service.md`.
+- **Session dependencies:** None (first subtask of Feature A).
+- Consumed by: A2 (fixture + gate), `/switchboard-manage` (Manage, via `GET /catalog`).
 
 ## Adversarial Synthesis
 
-Key risks: seam injection regressing the shipped extension's DB behavior, the single-instance guard mis-detecting peers, and secret/state key drift between run modes. Mitigations: default-fallback injection keeps extension call sites untouched and provider tests green; guard validates Switchboard-identifying health payloads; the 6+10 key inventories in this plan are the checklist, tested per key.
+Key risks: (1) dynamic `type:` template literals missed by a naive grep scanner create parity-gate blind spots — a manual review pass is required even though the scout found no dynamic types in an initial scan. (2) The catalog file path was unspecified — must be a checked-in repo artifact (repo root `protocol-catalog.json`), NOT `.switchboard/` runtime state. (3) The `GET /catalog` route must follow the `_handleReadEndpoint` helper pattern (lines 843-866), not inline the response logic. Mitigations: scanner includes a manual-review step for template-literal types; catalog path pinned to repo root; route uses the existing read-endpoint helper.
 
 ## Proposed Changes
 
-### `src/standalone/cli.ts`, `src/standalone/bootstrap.ts`, `src/standalone/hostServices.ts` (new)
-- **Context:** No standalone composition root exists; `extension.ts` is the only one.
-- **Logic:** As per Implementation Steps 2–4.
-- **Implementation:** Mirror `LocalApiServerOptions` contracts exactly.
-- **Edge Cases:** keyring unavailable → encrypted-file fallback; guard failure modes above.
+### `scripts/generate-protocol-catalog.js` (new file)
+- **Context:** No existing scanner/catalog tool exists in the repo. The catalog must enumerate 432 verbs, 706 handler arms, 988 push sites, and 575 `postMessage` call sites across the five providers and `src/webview/*`.
+- **Logic:** Scan `src/services/{TaskViewer,Kanban,Planning,Setup,Design}Provider.ts` for `case '...'` arms in `switch(message.type)` blocks. Scan `src/webview/*` for `postMessage({type: '...'})` (webview→host) and `webview.postMessage({type: '...'})` (host→webview push sites). Classify each verb: direction (request/response vs fire-and-forget vs broadcast), payload keys (best-effort from handler body), owning provider, proposed service module.
+- **Implementation:** Initial pass with regex (`/case\s+'([^']+)'/g` for arms, `/postMessage\(\s*\{\s*type:\s*['"]([^'"]+)['"]/g` for call sites). Optionally upgrade to TypeScript AST (compiler API already in devDependencies) for payload-shape extraction. Output: `protocol-catalog.json` at **repo root** (checked in, NOT `.switchboard/` which is runtime state). Include `version`, `generatedAt`, per-provider message arrays, and an `apiEndpoints` section enumerating existing LocalApiServer routes.
+- **Edge cases:** Template-literal `type:` strings (e.g. `` type: `foo_${x}` ``) won't be caught by regex — the scout's initial scan found none, but `planning.js` is large and the scan may not be exhaustive. The scanner must emit a "manual review" warning for any `switch`/`postMessage` block where the `type` field is not a string literal. Flag unclassified entries explicitly so A2's parity gate has no silent gaps.
 
-### `src/services/KanbanDatabase.ts`
-- **Context:** 6 lazy `require('vscode')` sites; otherwise host-agnostic (sql.js).
-- **Logic:** Injected `HostPathConfigProvider` consumed at those 6 sites.
-- **Implementation:** Optional constructor param, lazy-require fallback when absent.
-- **Edge Cases:** provider absent + vscode absent (test harness) → identical to today.
+### `src/services/LocalApiServer.ts`
+- **Context:** Routes are registered as a sequential `if/else if` chain in `_handleRequest` (lines 1889-1980), not a route table. GET read endpoints use the `_handleReadEndpoint` helper (lines 843-866) which wraps auth check, error handling, and `{ success: true, data }` JSON response.
+- **Logic:** Add a `catalogProvider?: () => Promise<any>` optional callback to `LocalApiServerOptions` (lines 11-136). Add `_handleGetCatalog` private method using `_handleReadEndpoint` — loads `protocol-catalog.json` from the workspace root and returns it. Add route arm: `else if (pathname === '/catalog' && req.method === 'GET') { await this._handleGetCatalog(req, res); }` in the `_handleRequest` chain.
+- **Implementation:** Interim (before scanner lands): `catalogProvider` returns a hardcoded enumeration of the current route arms (the if-else chain at lines 1889-1980). Canonical (after scanner lands): serves the checked-in `protocol-catalog.json`. The callback is wired in `TaskViewerProvider` where the LocalApiServer is constructed (lines 1039-1167), alongside the existing `orchestrationDispatch` callback at line 1164.
+- **Edge cases:** Catalog file missing → return 404 with a clear message ("catalog not generated; run `node scripts/generate-protocol-catalog.js`"). Catalog stale (drift from code) → the CI drift check catches this at build time, not at serve time; the served catalog is always the checked-in version.
 
-### `protocol-catalog.json` (new, checked in)
-- **Context:** No machine-readable contract exists; 432 verbs / 706 arms live only in code.
-- **Logic:** Scanner script + manual request/response classification.
-- **Implementation:** Regenerable; CI can diff regenerated vs checked-in to catch drift.
-- **Edge Cases:** dynamically-constructed `type:` strings (template literals) need manual entries — flag them in the catalog rather than silently missing them.
+### `.github/workflows/integration-tests.yml`
+- **Context:** CI runs `npm ci` → `npm run compile-tests` → `npm run compile` → `npm run test:integration:all`. No catalog/parity test step exists.
+- **Logic:** Add a "Protocol catalog drift check" step after compile: run `node scripts/generate-protocol-catalog.js --check` which regenerates the catalog to a temp file and diffs against the checked-in `protocol-catalog.json`. Exit non-zero on drift.
+- **Implementation:** Add a new step in the `integration-tests` job. The `--check` flag is a scanner option (write to stdout/temp, compare, exit code). This is A1's drift gate; A2's parity gate (catalogued verbs ⊆ live endpoints) builds on top of this.
+- **Edge cases:** First run after scanner creation — the checked-in catalog must be generated by the scanner itself (not hand-written) so the drift check has a valid baseline.
+
+### `package.json`
+- **Context:** No `generate:catalog` script exists.
+- **Logic:** Add `"generate:catalog": "node scripts/generate-protocol-catalog.js"` to the `scripts` section.
+- **Implementation:** Single line addition. No new dependencies (TypeScript compiler API is already in devDependencies if AST approach is used).
+- **Edge cases:** None.
 
 ## Verification Plan
-
 ### Automated Tests
-- Existing provider/DB tests pass unchanged (extension behavior preserved).
-- Guard tests: live peer → refused; stale file → overwritten; non-Switchboard responder → treated as stale.
-- Secret-store round-trip per key (keyring + fallback paths); Memento-replacement round-trip per key.
-- Catalog completeness: regenerated catalog matches checked-in catalog.
-
-### Manual
-- `node dist/standalone/cli.js` boots against a copy of a real `.switchboard/` workspace; `/health` answers; `.agents/skills/kanban_operations/get-state.js` reads board state through it.
-- Start it while VS Code extension is running → refuses with clear message.
+- Skipped per session directive — no automated test run required. The CI drift check (`--check` mode) serves as the automated gate when implemented.
+### Manual Verification
+- Regenerated catalog matches the checked-in `protocol-catalog.json` (run `node scripts/generate-protocol-catalog.js --check` → exit 0).
+- `GET /catalog` returns the catalog JSON; a client can enumerate every verb/endpoint/payload from it (curl `http://127.0.0.1:<port>/catalog` with auth header).
+- No dynamic `type:` template literals missed — review the scanner's "manual review" warnings and confirm each is either classified or explicitly flagged.
+- Existing extension behavior unchanged — only an additive route was added.
 
 **Stage Complete:** PLAN REVIEWED
