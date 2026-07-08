@@ -75,6 +75,7 @@ export class PlanningPanelProvider {
     private _projectPanelConfigDisposable: vscode.Disposable | undefined;
     private _pendingProjectMessages: any[] = [];
     private _projectPanelReadyTimer: NodeJS.Timeout | undefined;
+    private _projectPanelOpening: Promise<void> | undefined;
     private _disposables: vscode.Disposable[] = [];
     private _latestRequestIds: Map<string, number> = new Map();
     private _registeredRootsKey: string | null = null;
@@ -338,6 +339,28 @@ export class PlanningPanelProvider {
     }
 
     public async openProject(): Promise<void> {
+        if (this._projectPanelOpening) {
+            await this._projectPanelOpening;
+            if (this._projectPanel) {
+                this._projectPanel.reveal(vscode.ViewColumn.One);
+            }
+            return;
+        }
+
+        if (this._projectPanel) {
+            this._projectPanel.reveal(vscode.ViewColumn.One);
+            return;
+        }
+
+        this._projectPanelOpening = this._doOpenProject();
+        try {
+            await this._projectPanelOpening;
+        } finally {
+            this._projectPanelOpening = undefined;
+        }
+    }
+
+    private async _doOpenProject(): Promise<void> {
         this._lastWebviewRootsSignature = '';
         if (this._projectPanel) {
             this._projectPanel.reveal(vscode.ViewColumn.One);
@@ -391,6 +414,7 @@ export class PlanningPanelProvider {
             () => {
                 this._projectPanel = undefined;
                 this._projectPanelReady = false;
+                this._projectPanelOpening = undefined;
                 this._pendingProjectMessages = [];
                 if (this._projectPanelReadyTimer) {
                     clearTimeout(this._projectPanelReadyTimer);
@@ -424,8 +448,6 @@ export class PlanningPanelProvider {
                 });
             }
         }
-
-
     }
 
     private _registerProjectPanelConfigListener(): void {
@@ -706,6 +728,7 @@ export class PlanningPanelProvider {
             panel.onDidDispose(() => {
                 this._projectPanel = undefined;
                 this._projectPanelReady = false;
+                this._projectPanelOpening = undefined;
                 this._pendingProjectMessages = [];
                 if (this._projectPanelReadyTimer) {
                     clearTimeout(this._projectPanelReadyTimer);
@@ -7627,6 +7650,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 // closed first, removing the onDidDispose listener that clears this).
                 // Clear the stale reference so openProject() creates a fresh panel.
                 this._projectPanel = undefined;
+                this._projectPanelOpening = undefined;
             }
         }
     }
@@ -9369,6 +9393,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
         this._ticketsAutoSyncTimers.set(workspaceRoot, timer);
     }
 
+    public postMessage(message: any): void {
+        this._panel?.webview.postMessage(message);
+        this._projectPanel?.webview.postMessage(message);
+    }
+
     public dispose(): void {
         this.stopPeriodicSync();
         if (this._activeDocWatchDebounce) {
@@ -9469,6 +9498,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 this._projectPanel.onDidDispose(() => {
                     this._projectPanel = undefined;
                     this._projectPanelReady = false;
+                    this._projectPanelOpening = undefined;
                     this._pendingProjectMessages = [];
                     if (this._projectPanelReadyTimer) {
                         clearTimeout(this._projectPanelReadyTimer);

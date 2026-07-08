@@ -396,6 +396,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _kanbanProvider?: KanbanProvider;
     private _setupPanelProvider?: SetupPanelProvider;
+    private _designPanelProvider?: { postMessage(message: any): void };
+    private _planningPanelProvider?: { postMessage(message: any): void };
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _lastKanbanDbWarnings = new Map<string, string | null>();
     private _lastPlanIngestionValidationWarning: string | null = null;
@@ -502,6 +504,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void this._validateNoSwitchboardPollution();
         void this._startMcpMonitorLoop();
 
+    }
+
+    public getAutomationMode(): string | undefined {
+        return this._autobanState.automationMode;
+    }
+
+    private _initEventHandlers() {
         this._terminalOpenDisposable = vscode.window.onDidOpenTerminal((terminal) => {
             void this._waitWithTimeout(terminal.processId, 1000, undefined).then(pid => {
                 if (pid) { this._setCachedPid(terminal, pid); }
@@ -2239,6 +2248,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setSetupPanelProvider(provider: SetupPanelProvider) {
         this._setupPanelProvider = provider;
+    }
+
+    public setDesignPanelProvider(provider: { postMessage(message: any): void }) {
+        this._designPanelProvider = provider;
+    }
+
+    public setPlanningPanelProvider(provider: { postMessage(message: any): void }) {
+        this._planningPanelProvider = provider;
     }
 
     /**
@@ -4661,6 +4678,8 @@ Each plan file must include:
     public broadcastToWebviews(message: any): void {
         this._postSharedWebviewMessage(message);
         this._kanbanProvider?.postMessage(message);
+        this._designPanelProvider?.postMessage(message);
+        this._planningPanelProvider?.postMessage(message);
     }
 
     private async _postSidebarConfigurationState(workspaceRoot?: string): Promise<void> {
@@ -7240,7 +7259,7 @@ Each plan file must include:
         return true;
     }
 
-    private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string, skipStatePoolUpdate: boolean = false): Promise<{ role: string; name: string } | undefined> {
+    private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string, skipStatePoolUpdate: boolean = false, reveal: boolean = true): Promise<{ role: string; name: string } | undefined> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showErrorMessage('No workspace folder found. Cannot create an autoban terminal.');
@@ -7283,7 +7302,9 @@ Each plan file must include:
             cwd: cwd || workspaceRoot
         });
         this._registeredTerminals?.set(suffixedUniqueName, terminal);
-        terminal.show();
+        if (reveal) {
+            terminal.show();
+        }
 
         // Resolve PID asynchronously in the background
         const suffixedNameForPid = suffixedUniqueName;
@@ -8074,7 +8095,7 @@ Each plan file must include:
     }
 
     /** Ensure terminals exist for each active agent in the worktree, create-if-missing and capped. */
-    public async ensureWorktreeTerminals(worktreePath: string, roles: string[]): Promise<void> {
+    public async ensureWorktreeTerminals(worktreePath: string, roles: string[], reveal: boolean = true): Promise<void> {
         const resolvedPath = path.resolve(worktreePath);
         const roleToName: Record<string, string> = {
             'planner': 'Planner', 'lead': 'Lead Coder', 'coder': 'Coder',
@@ -8131,7 +8152,7 @@ Each plan file must include:
         // Create all terminals in parallel
         const results = await Promise.all(
             rolesToCreate.map(({ role, agentName }) =>
-                this._createAutobanTerminal(role, agentName, resolvedPath, true)
+                this._createAutobanTerminal(role, agentName, resolvedPath, true, reveal)
             )
         );
 

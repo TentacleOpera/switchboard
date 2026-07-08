@@ -951,6 +951,9 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(designPanelProvider);
 
+    taskViewerProvider.setDesignPanelProvider(designPanelProvider);
+    taskViewerProvider.setPlanningPanelProvider(planningPanelProvider);
+
     // Migration: Remove dead Stitch OAuth auth mode (shipped in prior releases).
     // Reset any stale 'oauth' authMode to 'apiKey' and delete the dead accessToken secret.
     {

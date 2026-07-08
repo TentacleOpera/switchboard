@@ -469,20 +469,15 @@
             border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
         }
 
-        /* Claudify: flat neutral surface + grey grid (no glass) */
         body.theme-claudify {
-            background-color: #1C1C1C;
+            background-color: #0a0a0a;
             background-image:
                 linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
                 linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
             background-size: 40px 40px, 40px 40px;
         }
         body.theme-claudify .shared-tab-content {
-            background-color: #1C1C1C;
-            background-image:
-                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
+            background: var(--panel-bg);
         }
     </style>
     <style>
