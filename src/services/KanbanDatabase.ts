@@ -999,15 +999,58 @@ export class KanbanDatabase {
         }
 
         const created = new KanbanDatabase(stable, archiveDbPath);
+        created._isArchiveInstance = true;
         KanbanDatabase._archiveInstances.set(stable, created);
         KanbanDatabase._archiveInstancesByDbPath.set(archiveDbPath, created);
         return created;
     }
 
-    /** Whether a cold (archive) store has been created/opened for this workspace. */
+    /**
+     * Resolve the on-disk path of the cold store for a workspace (sibling of hot DB
+     * when a hot instance is cached; otherwise `<ws>/.switchboard/kanban-archive.db`).
+     */
+    public static resolveArchiveDbPath(workspaceRoot: string): string {
+        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(workspaceRoot));
+        const hot = KanbanDatabase._instances.get(stable);
+        if (hot && hot.dbPath) {
+            return path.join(path.dirname(hot.dbPath), 'kanban-archive.db');
+        }
+        // Prefer db-pointer parent when present so cold lives next to a redirected hot DB.
+        const pointerPath = KanbanDatabase.readDbPointer(stable);
+        if (pointerPath) {
+            return path.join(path.dirname(pointerPath), 'kanban-archive.db');
+        }
+        return path.join(stable, '.switchboard', 'kanban-archive.db');
+    }
+
+    /** Whether a cold (archive) store is currently open in-process. */
     public static hasArchiveInstance(workspaceRoot: string): boolean {
         const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(workspaceRoot));
         return KanbanDatabase._archiveInstances.has(stable);
+    }
+
+    /**
+     * Whether the cold store should be consulted for exhaustive reads. True when an
+     * archive instance is already open OR the archive file exists on disk (post-V55
+     * restart — hasArchiveInstance alone is false until something opens it).
+     */
+    public static archiveAvailable(workspaceRoot: string): boolean {
+        if (KanbanDatabase.hasArchiveInstance(workspaceRoot)) return true;
+        try {
+            return fs.existsSync(KanbanDatabase.resolveArchiveDbPath(workspaceRoot));
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Open the cold store when it is already cached or the archive file exists.
+     * Does NOT create a new empty archive file (use getArchiveInstance for that).
+     * Exhaustive readers / reconcile must use this so cold plans stay visible after restart.
+     */
+    public static getArchiveInstanceIfPresent(workspaceRoot: string): KanbanDatabase | null {
+        if (!KanbanDatabase.archiveAvailable(workspaceRoot)) return null;
+        return KanbanDatabase.getArchiveInstance(workspaceRoot);
     }
 
     /**
@@ -1381,18 +1424,37 @@ export class KanbanDatabase {
     // Provider's instance and the watcher's instance is visible in one repro run.
     public readonly instanceId: string;
 
+    // True when this instance is the cold (kanban-archive.db) store. Exhaustive readers
+    // on a cold instance must not recurse into another archive.
+    private _isArchiveInstance: boolean = false;
+
     private constructor(private readonly _workspaceRoot: string, resolvedDbPath: string) {
         this._dbPath = resolvedDbPath;
         this.instanceId = `#${KanbanDatabase._nextInstanceId++}(${path.basename(resolvedDbPath)})`;
     }
 
     public dispose(): void {
-        // Final flush on deactivation — clears any pending debounce timer and writes
-        // immediately. flushPersist() guarantees the last in-memory write reaches disk
-        // before we close the DB image (Workstream B + A teardown discipline).
-        void this.flushPersist();
-        void this.exportStateToFile();
-        void this._writeKanbanStateBackup();
+        // Final flush on deactivation — dispose() is sync, so we cannot await
+        // flushPersist(). Clear the debounce timer and write the dirty image
+        // synchronously so a pending coalesced mutation is never lost on close.
+        if (this._persistDebounceTimer) {
+            clearTimeout(this._persistDebounceTimer);
+            this._persistDebounceTimer = null;
+        }
+        if (this._dirty && this._db) {
+            try {
+                const data = this._db.export();
+                const suffix = crypto.randomBytes(4).toString('hex');
+                const tmpPath = `${this._dbPath}.${suffix}.tmp`;
+                fs.writeFileSync(tmpPath, Buffer.from(data));
+                fs.renameSync(tmpPath, this._dbPath);
+                this._dirty = false;
+            } catch (e) {
+                console.error('[KanbanDatabase] dispose sync flush failed:', e);
+            }
+        }
+        try { void this.exportStateToFile(); } catch { /* best-effort */ }
+        try { void this._writeKanbanStateBackup(); } catch { /* best-effort */ }
         if (this._onColumnChanged) {
             try {
                 this._onColumnChanged.dispose();
@@ -1405,6 +1467,10 @@ export class KanbanDatabase {
         this._initPromise = null;
         KanbanDatabase._instancesByDbPath.delete(this._dbPath);
         KanbanDatabase._instances.delete(this._workspaceRoot);
+        if (this._isArchiveInstance) {
+            KanbanDatabase._archiveInstancesByDbPath.delete(this._dbPath);
+            KanbanDatabase._archiveInstances.delete(this._workspaceRoot);
+        }
     }
 
     /**
@@ -1489,6 +1555,9 @@ export class KanbanDatabase {
     public static async evictAll(): Promise<void> {
         const keys = Array.from(KanbanDatabase._instances.keys());
         await Promise.all(keys.map(k => KanbanDatabase._evictKey(k)));
+        // Also drain cold (archive) instances — they share the same WASM heap.
+        const archiveKeys = Array.from(KanbanDatabase._archiveInstances.keys());
+        await Promise.all(archiveKeys.map(k => KanbanDatabase._evictArchiveKey(k)));
     }
 
     private static async _runEvictionSweep(): Promise<void> {
@@ -1500,10 +1569,23 @@ export class KanbanDatabase {
                 await KanbanDatabase._evictKey(stable);
             }
         }
+        // Cold stores: always eligible for TTL eviction (never "active board" — opened on demand).
+        for (const [stable, inst] of Array.from(KanbanDatabase._archiveInstances)) {
+            if (now - inst._lastAccessMs > KanbanDatabase.EVICTION_TTL_MS) {
+                await KanbanDatabase._evictArchiveKey(stable);
+            }
+        }
         // Size-gate: if summed resident size still over budget, aggressively evict idle
         // non-active instances (oldest first) until under budget or none left to evict.
+        // Prefer cold instances first (they're never the live board), then idle hot.
         let guard = 0;
         while (KanbanDatabase._summedResidentDbBytes() > KanbanDatabase._residentDbBudgetBytes && guard++ < 32) {
+            const coldCandidates = Array.from(KanbanDatabase._archiveInstances.entries())
+                .sort((a, b) => a[1]._lastAccessMs - b[1]._lastAccessMs);
+            if (coldCandidates.length > 0) {
+                await KanbanDatabase._evictArchiveKey(coldCandidates[0][0]);
+                continue;
+            }
             const candidates = Array.from(KanbanDatabase._instances.entries())
                 .filter(([stable]) => !KanbanDatabase._isActiveRoot(stable))
                 .sort((a, b) => a[1]._lastAccessMs - b[1]._lastAccessMs);
@@ -1524,6 +1606,9 @@ export class KanbanDatabase {
     private static _summedResidentDbBytes(): number {
         let total = 0;
         for (const inst of KanbanDatabase._instances.values()) {
+            total += inst._residentDbBytes();
+        }
+        for (const inst of KanbanDatabase._archiveInstances.values()) {
             total += inst._residentDbBytes();
         }
         return total;
@@ -1553,28 +1638,62 @@ export class KanbanDatabase {
         if (existing) return existing;
         const inst = KanbanDatabase._instances.get(stable);
         if (!inst) return;
-        const p = (async () => {
+        // Register the in-flight promise BEFORE any await so concurrent ensureReady()
+        // (including a forWorkspace()-created replacement) waits for flush+close.
+        let resolve!: () => void;
+        const gate = new Promise<void>(r => { resolve = r; });
+        KanbanDatabase._evictingKeys.set(stable, gate);
+        try {
             try {
-                // Drain in-flight writes before flushing/closing.
                 try { await inst._writeTail; } catch { /* swallow — chain keeps alive */ }
                 await inst.flushPersist();
                 void inst.exportStateToFile();
                 void inst._writeKanbanStateBackup();
-                // Remove from caches BEFORE closing so a concurrent sync forWorkspace()
-                // creates a fresh instance instead of grabbing the being-closed one. The
-                // close+null happen in the same synchronous tick (no await between them),
-                // so no caller can interleave and see a half-closed _db.
-                KanbanDatabase._instancesByDbPath.delete(inst._dbPath);
-                KanbanDatabase._instances.delete(stable);
+                // Close+null first while still mapped so a concurrent forWorkspace() that
+                // still sees this entry gets a dead _db and re-inits after awaiting the gate.
+                // Then remove from caches. A brand-new forWorkspace() mid-evict creates a
+                // fresh instance whose ensureReady() awaits this same gate before load —
+                // so it never races the old flush onto the same file.
                 inst._closeDb(inst._db);
                 inst._db = null;
                 inst._initPromise = null;
+                KanbanDatabase._instancesByDbPath.delete(inst._dbPath);
+                KanbanDatabase._instances.delete(stable);
             } catch (e) {
                 console.warn(`[KanbanDatabase] Eviction of ${stable} failed:`, e);
             }
-        })();
-        KanbanDatabase._evictingKeys.set(stable, p);
-        try { await p; } finally { KanbanDatabase._evictingKeys.delete(stable); }
+        } finally {
+            KanbanDatabase._evictingKeys.delete(stable);
+            resolve();
+        }
+    }
+
+    /** Evict a cold (archive) store instance by stable workspace root. */
+    private static async _evictArchiveKey(stable: string): Promise<void> {
+        const key = `archive:${stable}`;
+        const existing = KanbanDatabase._evictingKeys.get(key);
+        if (existing) return existing;
+        const inst = KanbanDatabase._archiveInstances.get(stable);
+        if (!inst) return;
+        let resolve!: () => void;
+        const gate = new Promise<void>(r => { resolve = r; });
+        KanbanDatabase._evictingKeys.set(key, gate);
+        try {
+            try {
+                try { await inst._writeTail; } catch { /* swallow */ }
+                await inst.flushPersist();
+                inst._closeDb(inst._db);
+                inst._db = null;
+                inst._initPromise = null;
+                KanbanDatabase._archiveInstancesByDbPath.delete(inst._dbPath);
+                KanbanDatabase._archiveInstances.delete(stable);
+            } catch (e) {
+                console.warn(`[KanbanDatabase] Archive eviction of ${stable} failed:`, e);
+            }
+        } finally {
+            KanbanDatabase._evictingKeys.delete(key);
+            resolve();
+        }
     }
 
     public get lastInitError(): string | null {
@@ -1588,6 +1707,13 @@ export class KanbanDatabase {
     public async ensureReady(forceReload: boolean = false): Promise<boolean> {
         // Bump last-access so the idle-eviction sweep sees this instance as active.
         this._lastAccessMs = Date.now();
+        // Await any in-flight eviction for this workspace (hot or cold) so a lazy reopen
+        // never races a flush/close onto the same file (Workstream A race discipline).
+        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(this._workspaceRoot));
+        const hotEvict = KanbanDatabase._evictingKeys.get(stable);
+        if (hotEvict) await hotEvict;
+        const coldEvict = KanbanDatabase._evictingKeys.get(`archive:${stable}`);
+        if (coldEvict) await coldEvict;
         if (this._db) {
             // Check if another IDE has modified the DB file since we loaded it
             await this._reloadIfStale(forceReload);
@@ -2035,10 +2161,15 @@ export class KanbanDatabase {
         const normalized = this._ensureRelativePlanFile(planFile);
         const stmt = this._db.prepare('SELECT 1 FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1', [normalized, workspaceId]);
         try {
-            return stmt.step();
+            if (stmt.step()) return true;
         } finally {
             stmt.free();
         }
+        // Phase 2: exhaustive existence check must see cold (prevents re-import of archived plans).
+        if (this._isArchiveInstance) return false;
+        const cold = KanbanDatabase.getArchiveInstanceIfPresent(this._workspaceRoot);
+        if (!cold) return false;
+        return cold.hasPlanByPlanFile(planFile, workspaceId);
     }
 
     /** @deprecated session_id is no longer the unique key; use hasPlanByPlanFile instead. */
@@ -2054,10 +2185,15 @@ export class KanbanDatabase {
         // Fallback: sessionId might actually be a planId
         const stmt2 = this._db.prepare('SELECT 1 FROM plans WHERE plan_id = ? LIMIT 1', [sessionId]);
         try {
-            return stmt2.step();
+            if (stmt2.step()) return true;
         } finally {
             stmt2.free();
         }
+        // Phase 2: exhaustive existence check must see cold.
+        if (this._isArchiveInstance) return false;
+        const cold = KanbanDatabase.getArchiveInstanceIfPresent(this._workspaceRoot);
+        if (!cold) return false;
+        return cold.hasPlan(sessionId);
     }
 
     public async reassignWorkspaceByPlanFile(
@@ -3719,21 +3855,15 @@ export class KanbanDatabase {
      */
     public async reconcileHotCold(): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
-        if (!KanbanDatabase.hasArchiveInstance(this._workspaceRoot)) return 0;
-        const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
+        // Open cold when the archive file exists even if no instance is cached yet
+        // (post-restart — hasArchiveInstance alone is false until something opens it).
+        const cold = KanbanDatabase.getArchiveInstanceIfPresent(this._workspaceRoot);
+        if (!cold) return 0;
         if (!(await cold.ensureReady()) || !cold._db) return 0;
         // Find plan_ids present in BOTH stores. Hot wins → delete from cold.
-        const hotIds = await this.getPlanFileSet();
-        // cold ids:
-        const coldIds = await cold.getPlanFileSet();
-        // We need plan_ids, not plan_files. Use a direct query on cold for hot-resident ids.
+        // Query each store locally (do not use getPlanFileSet which unions both).
         let removed = 0;
-        if (hotIds.size === 0) return 0;
-        // Query cold for plan_ids whose plan_file is in the hot set (proxy for same plan).
-        // The authoritative key is plan_id; query cold plan_ids that exist in hot.
         try {
-            const hotIdList = Array.from(hotIds);
-            // Build a set of hot plan_ids via a single query.
             const hotPlanIds = new Set<string>();
             const hStmt = this._db.prepare('SELECT plan_id FROM plans');
             try { while (hStmt.step()) hotPlanIds.add(String(hStmt.getAsObject().plan_id)); } finally { hStmt.free(); }
@@ -3775,25 +3905,28 @@ export class KanbanDatabase {
             // to a feature that has any recent/in-flight subtask, OR are a subtask of a
             // recent/in-flight feature. Feature cohesion keeps the whole unit hot if any
             // member is hot.
+            // In-flight pin: active worktree row OR live dispatched_at (activity light).
+            // worktree_id IS NOT NULL alone is wrong — stale ids after close would pin forever.
+            const inFlight = `(worktree_status = 'active' OR dispatched_at IS NOT NULL OR (worktree_id IS NOT NULL AND worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
             const hotSetSql = `
                 SELECT plan_id FROM plans
                 WHERE workspace_id = ? AND updated_at >= ?
                 UNION
                 SELECT plan_id FROM plans
-                WHERE workspace_id = ? AND (worktree_id IS NOT NULL OR dispatched_at IS NOT NULL)
+                WHERE workspace_id = ? AND ${inFlight}
                 UNION
                 -- subtasks of hot features
                 SELECT p.plan_id FROM plans p
                 WHERE p.workspace_id = ? AND p.feature_id IS NOT NULL AND p.feature_id != ''
                   AND p.feature_id IN (
                     SELECT plan_id FROM plans WHERE workspace_id = ? AND is_feature = 1
-                    AND (updated_at >= ? OR worktree_id IS NOT NULL OR dispatched_at IS NOT NULL))
+                    AND (updated_at >= ? OR ${inFlight}))
                 UNION
                 -- features of hot subtasks
                 SELECT plan_id FROM plans
                 WHERE workspace_id = ? AND is_feature = 1 AND plan_id IN (
                     SELECT feature_id FROM plans WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
-                    AND (updated_at >= ? OR worktree_id IS NOT NULL OR dispatched_at IS NOT NULL))
+                    AND (updated_at >= ? OR ${inFlight}))
             `;
             const hotStmt = this._db.prepare(hotSetSql, [
                 workspaceId, cutoffIso,
@@ -4072,9 +4205,17 @@ export class KanbanDatabase {
                 [sessionId]
             );
             const rows2 = this._readRows(stmt2);
-            return rows2.length > 0 ? rows2[0] : null;
+            if (rows2.length > 0) { return rows2[0]; }
         }
-        return null;
+        // Phase 2: plan only in cold → restore on access, consistent with the other
+        // cold-aware base readers (getPlanByPlanId/getPlanByPlanFile/hasPlan). Without
+        // this, a legacy session_id lookup of an archived plan reads as non-existent.
+        if (this._isArchiveInstance) return null;
+        const cold = KanbanDatabase.getArchiveInstanceIfPresent(this._workspaceRoot);
+        if (!cold) return null;
+        const coldRec = await cold.getPlanBySessionId(sessionId);
+        if (!coldRec) return null;
+        return (await this.restoreToHot(coldRec.planId)) ?? coldRec;
     }
 
     public async findPlanByClickUpTaskId(
@@ -4154,7 +4295,14 @@ export class KanbanDatabase {
             [planId]
         );
         const rows = this._readRows(stmt);
-        return rows.length > 0 ? rows[0] : null;
+        if (rows.length > 0) return rows[0];
+        // Phase 2: plan only in cold → restore on access (read/edit makes it hot again).
+        if (this._isArchiveInstance) return null;
+        const cold = KanbanDatabase.getArchiveInstanceIfPresent(this._workspaceRoot);
+        if (!cold) return null;
+        const coldRec = await cold.getPlanByPlanId(planId);
+        if (!coldRec) return null;
+        return (await this.restoreToHot(planId)) ?? coldRec;
     }
 
     public async getPlansByPlanIds(planIds: string[]): Promise<KanbanPlanRecord[]> {
@@ -4249,7 +4397,15 @@ export class KanbanDatabase {
             [normalized, workspaceId]
         );
         const rows = this._readRows(stmt);
-        return rows.length > 0 ? rows[0] : null;
+        if (rows.length > 0) return rows[0];
+        // Phase 2: plan only in cold → restore on access so the watcher/edit paths
+        // never re-import a cold plan as a new hot row (single-home invariant).
+        if (this._isArchiveInstance) return null;
+        const cold = KanbanDatabase.getArchiveInstanceIfPresent(this._workspaceRoot);
+        if (!cold) return null;
+        const coldRec = await cold.getPlanByPlanFile(planFile, workspaceId);
+        if (!coldRec) return null;
+        return (await this.restoreToHot(coldRec.planId)) ?? coldRec;
     }
 
     public async getPlanByBrainSourcePath(brainSourcePath: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
@@ -4353,6 +4509,21 @@ export class KanbanDatabase {
             }
         } finally {
             stmt.free();
+        }
+        // Phase 2: exhaustive set must include cold so migrations/watchers never
+        // treat an archived plan file as "new" and re-insert it into hot.
+        if (!this._isArchiveInstance) {
+            const cold = KanbanDatabase.getArchiveInstanceIfPresent(this._workspaceRoot);
+            if (cold && (await cold.ensureReady()) && cold._db) {
+                const cStmt = cold._db.prepare('SELECT plan_file FROM plans');
+                try {
+                    while (cStmt.step()) {
+                        ids.add(String(cStmt.getAsObject().plan_file));
+                    }
+                } finally {
+                    cStmt.free();
+                }
+            }
         }
         return ids;
     }
@@ -5766,8 +5937,12 @@ export class KanbanDatabase {
             } catch (reloadErr) {
                 // Roll back to the last known-good image rather than serving null.
                 // Close the just-built (failed) instance so its MEMFS buffer is freed
-                // from the shared WASM heap (mechanism-6 leak discipline).
-                this._closeDb(this._db);
+                // from the shared WASM heap (mechanism-6 leak discipline). GUARD: if
+                // `new SQL.Database()` itself threw (WASM alloc failure — the exact
+                // memory-pressure case this feature targets), the assignment never ran
+                // and `this._db` is STILL `previousDb`; closing it here would wedge the
+                // instance on a closed DB. Only close when a distinct new image exists.
+                if (this._db !== previousDb) this._closeDb(this._db);
                 this._db = previousDb;
                 console.error('[KanbanDatabase] Reload from disk failed; kept previous in-memory image:', reloadErr);
                 return;
