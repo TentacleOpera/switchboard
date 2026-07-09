@@ -376,6 +376,18 @@ export class LocalApiServer {
         return diff === 0;
     }
 
+    // NOTE: Switchboard has no API-token setter UI today, so getAuthToken() is
+    // effectively always empty and auth is localhost-trust. This 401 only fires
+    // when a client sends an Authorization header at all. If a token-setter is
+    // ever added, revisit this wording.
+    private _sendUnauthorized(res: http.ServerResponse): void {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error: 'Unauthorized',
+            detail: 'Invalid Authorization header. Switchboard accepts unauthenticated requests over loopback (127.0.0.1) — retry without an Authorization header.'
+        }));
+    }
+
     private async _parseJsonBody(req: http.IncomingMessage): Promise<any> {
         return new Promise((resolve, reject) => {
             let body = '';
@@ -421,11 +433,7 @@ export class LocalApiServer {
      */
     private async _handlePostComment(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -476,11 +484,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanMove(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -523,11 +527,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanCreateFeature(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -573,11 +573,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanAssignFeature(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -623,11 +619,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanFeaturesAssign(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -676,11 +668,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanRemoveSubtaskFromFeature(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -718,11 +706,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanDeleteFeature(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -761,11 +745,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanSplitFeature(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -819,11 +799,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanReconcileFeatures(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -873,11 +849,7 @@ export class LocalApiServer {
      */
     private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -915,8 +887,7 @@ export class LocalApiServer {
 
     private async _handlePlanningVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            this._sendUnauthorized(res);
             return;
         }
         const planningVerb = this._options.planningVerb;
@@ -943,8 +914,7 @@ export class LocalApiServer {
 
     private async _handleDesignVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            this._sendUnauthorized(res);
             return;
         }
         const designVerb = this._options.designVerb;
@@ -971,8 +941,7 @@ export class LocalApiServer {
 
     private async _handleSetupVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            this._sendUnauthorized(res);
             return;
         }
         const setupVerb = this._options.setupVerb;
@@ -999,8 +968,7 @@ export class LocalApiServer {
 
     private async _handleTaskViewerVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized', detail: 'Configure token in VS Code' }));
+            this._sendUnauthorized(res);
             return;
         }
         const taskViewerVerb = this._options.taskViewerVerb;
@@ -1027,11 +995,7 @@ export class LocalApiServer {
 
     private async _handleWorktreeCleanup(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1071,11 +1035,7 @@ export class LocalApiServer {
      */
     private async _handlePhoneAFriend(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1117,11 +1077,7 @@ export class LocalApiServer {
 
     private async _handleOrchestratorRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1180,11 +1136,7 @@ export class LocalApiServer {
 
     private async _handleOrchestrationDispatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1236,11 +1188,7 @@ export class LocalApiServer {
      */
     private async _handleOrchestrationStart(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1271,11 +1219,7 @@ export class LocalApiServer {
      */
     private async _handleOrchestrationStop(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1305,11 +1249,7 @@ export class LocalApiServer {
         handler: () => Promise<any>
     ): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
         try {
@@ -1507,8 +1447,7 @@ export class LocalApiServer {
     /** POST /kanban/plans — create a plan file and import it (the canonical importer assigns the planId). */
     private async _handleCreatePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            this._sendUnauthorized(res);
             return;
         }
         try {
@@ -1587,8 +1526,7 @@ export class LocalApiServer {
     /** DELETE /kanban/plans?planId=[&deleteFile=true] — remove the DB row (optionally unlink the file). */
     private async _handleDeletePlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            this._sendUnauthorized(res);
             return;
         }
         try {
@@ -1644,8 +1582,7 @@ export class LocalApiServer {
 
     private async _handlePlanFieldUpdate(req: http.IncomingMessage, res: http.ServerResponse, field: 'project' | 'complexity'): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            this._sendUnauthorized(res);
             return;
         }
         try {
@@ -1685,8 +1622,7 @@ export class LocalApiServer {
     /** POST /kanban/plans/import — rescan .switchboard/plans/*.md and upsert into the DB. */
     private async _handleImportPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            this._sendUnauthorized(res);
             return;
         }
         try {
@@ -1709,11 +1645,7 @@ export class LocalApiServer {
 
     private async _handleClickUpApiProxy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, false)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1749,11 +1681,7 @@ export class LocalApiServer {
     private async _handleCreateClickUpTask(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         // CLARIFICATION: Strict auth enforcement for write operations
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
         
@@ -1830,11 +1758,7 @@ export class LocalApiServer {
 
     private async _handleUpdateClickUpTask(taskId: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
         
@@ -1892,11 +1816,7 @@ export class LocalApiServer {
 
     private async _handleMoveClickUpTask(taskId: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1939,11 +1859,7 @@ export class LocalApiServer {
 
     private async _handleMoveLinearIssue(issueId: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 
@@ -1977,11 +1893,7 @@ export class LocalApiServer {
 
     private async _handleAttachFile(taskId: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
         
@@ -2061,11 +1973,7 @@ export class LocalApiServer {
 
     private async _handleCreateDocPage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
         
@@ -2138,11 +2046,7 @@ export class LocalApiServer {
 
     private async _handleGenerateDiagram(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
         
@@ -2249,11 +2153,7 @@ export class LocalApiServer {
 
     private async _handleLinearApiProxy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, false)) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                error: 'Unauthorized',
-                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
-            }));
+            this._sendUnauthorized(res);
             return;
         }
 

@@ -107,3 +107,9 @@ Root cause: the token-setter UI the message assumes was either never built or wa
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern.**
+
+---
+
+## Completion Summary
+
+Implemented the centralized-helper approach: added `private _sendUnauthorized(res)` near `_checkAuth` in `src/services/LocalApiServer.ts` with corrected wording describing the loopback-trust reality (no phantom "Api Token setting"), then replaced all 34 inline 401 auth-gate blocks with calls to it — leaving the `if (!await this._checkAuth(...)) { ... return; }` control flow and auth decision untouched. One file changed. Note: 7 of the long-form blocks used a trailing-space variant (`JSON.stringify({ `) requiring a second replace pass; all 34 sites are now routed through the helper. Verified zero remaining occurrences of "Api Token setting" and "Configure token in VS Code", and only one `writeHead(401)` remains (the helper itself). No issues encountered.

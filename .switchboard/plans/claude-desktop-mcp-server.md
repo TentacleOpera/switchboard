@@ -76,6 +76,11 @@ These are **design decisions the plan commits to**, with rationale — not open 
   > Additionally ship a **README** (human-facing) and, **only for filesystem hosts using the npx bin** (Claude Code / Antigravity — which *do* honor `instructions`), an `.agents/skills/switchboard-mcp/SKILL.md` — which, for Claude Code, **must be added to `MIRROR_MANIFEST` in `ClaudeCodeMirrorService.ts` (46-159)** or it is never generated into `.claude/skills/` (the dynamic scan only auto-picks flat `switchboard-*.md` files, not directories).
 - **Distribution artifacts:** `.mcpb` bundle manifest + an `npx` bin entry; a documented `claude_desktop_config.json` snippet.
 - **Docs:** add the MCP host to the `AGENTS.md` / `CLAUDE.md` host tables and the `switchboard-manage` skill's capability notes ("Desktop reaches this surface via the MCP server, not shell").
+- **Discovery & onboarding — in-extension one-click "Connect Claude Desktop"** (the discovery surface; without it the ~4,000 existing VS Code users never learn the bridge exists — `AGENTS.md`/`CLAUDE.md` are agent-facing, and a README is circular). A button in the **Setup panel** (`SetupPanelProvider`/`setup.html`) backed by a `switchboard.connectClaudeDesktop` command that:
+  - resolves Claude Desktop's per-OS config path (macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json`), reads-or-creates the JSON, and **idempotently merges** an `mcpServers["switchboard-mcp"]` entry — overwriting only our own key, never clobbering other servers;
+  - writes `{ command: "npx", args: ["-y", "@switchboard/mcp"], env: { SWITCHBOARD_WORKSPACE_ROOT: "<resolved root>" } }`, **pre-filling the workspace root the extension already knows** (the no-download happy path); the env var reuses the exact `SWITCHBOARD_WORKSPACE_ROOT` name the old `connectMcp` templates used (commit 31c3937);
+  - tells the user to restart Claude Desktop, and also offers **"Reveal .mcpb"** for users who prefer Desktop's native extension-install UI.
+  This directly reuses the removed `connectMcp` precedent (commits 31c3937 / 76780bd; the old MCP also had buttons in `setup.html`). Distribution is **self-hosted only** — the `.mcpb` and npx bin are handed out directly (repo release / npm); **no submission to Claude Desktop's extension directory** (explicit user decision).
 
 ### ⚙️ OUT OF SCOPE
 - **Any change to `LocalApiServer` endpoints or handlers.** The MCP consumes today's surface (plus whatever the transport-parity work adds); it adds no routes.
@@ -99,6 +104,7 @@ These are **design decisions the plan commits to**, with rationale — not open 
 - **Persona delivery on Desktop** (new — the sharpest correctness risk): research-confirmed that Desktop **ignores `instructions`** and surfaces prompts **only on explicit user invocation**, so the console discipline must live in **tool descriptions** (the only passive channel) plus an opt-in `switchboard_console` prompt. Full persona fidelity on Desktop is inherently best-effort; the mutating-tool descriptions carry the load-bearing rules.
 - **Config-scrubber collision** (new): the activation-time scrubber deletes any `switchboard`-keyed MCP entry from six host configs. The server key/name must avoid the literal `switchboard` (use `switchboard-mcp`) or the npx-into-Cursor path self-destructs on the next VS Code reload.
 - **Workspace/token config UX** — Desktop users aren't in a repo; the config prompts (`workspaceRoot`, optional token) must be clear or the health check fails opaquely.
+- **Extension-side onboarding surface** (new — scope expansion): the "Connect Claude Desktop" command writes to **another app's global config file** (`claude_desktop_config.json`). Must be an idempotent merge (never clobber the user's other MCP servers), per-OS-path-correct, and multi-root-aware (one entry per root, keyed distinctly — see Side Effects). Precedented by the old `connectMcp` but it is genuine extension work, not part of the standalone bin.
 
 ## Edge-Case & Dependency Audit
 
@@ -115,6 +121,7 @@ These are **design decisions the plan commits to**, with rationale — not open 
 - **Config scrubber (`extension.ts` ~635-668).** On every activation the extension deletes any entry keyed `switchboard` from `.vscode/mcp.json` (key `servers`), `.cursor/mcp.json`, `.mcp.json`, `.kiro/settings/mcp.json`, `.gemini/settings.json`, `~/.codeium/windsurf/mcp_config.json` (key `mcpServers`). **`claude_desktop_config.json` is NOT in the list**, so the primary Desktop path is safe. The npx-into-a-scrubbed-host path is **not** safe under the key `switchboard`. Mitigation: register the server under **`switchboard-mcp`** and document it; call the scrubber out in the README so users don't reuse the doomed name.
 - **Orphan-PID killer (`extension.ts` ~612-633).** SIGKILLs any process whose PID is in `.switchboard/.mcp_server.pid`. The Desktop-launched MCP is owned by Desktop and must **not** write that file — doing so would arm the extension to kill it on the next activation. Implementation note: the MCP writes no PID file under `.switchboard/`.
 - **Deletes are immediate** — no confirm gate (project rule). `plan_delete` exposes `deleteFile` (a **query param**, `?deleteFile=true`, path-traversal-guarded to `.switchboard/plans/`, `LocalApiServer.ts:1619`); the tool description must warn about the re-import-on-next-scan gotcha (without `deleteFile`, the `.md` re-appears on the next `import_plans`).
+- **"Connect Claude Desktop" writes another app's global config.** The command edits `claude_desktop_config.json` (outside the workspace, in the user's home/AppData). It must: read-or-create; **merge** only the `mcpServers["switchboard-mcp"]` key (preserve all other servers and unknown keys — same non-destructive discipline the codebase applies to host configs); resolve the correct per-OS path; and, for a **multi-root** workspace, write one entry per root under distinct keys (e.g. `switchboard-mcp-<slug>`) rather than a single ambiguous entry. Claude Desktop reads this config at launch, so surface a "restart Claude Desktop" nudge. Note: Desktop's config is **not** touched by the extension's own `switchboard`-key scrubber, so no self-destruct — but still use the `switchboard-mcp` key for consistency with the scrubber-safe naming rule.
 
 ### Dependencies & Conflicts
 - **`LocalApiServer` HTTP surface** — the entire contract this MCP depends on. Every curated endpoint is verified present (see Proposed Changes). **No backend change required.**
@@ -127,7 +134,7 @@ These are **design decisions the plan commits to**, with rationale — not open 
 
 > **Superseded:** "Purely additive: no `LocalApiServer` change, no migration, no shipped-state change."
 > **Reason:** Additive at the *HTTP-API* layer is accurate, but "no shipped-state change" overstates it: the work interacts with **shipped activation-time state-cleanup code** — the config scrubber and orphan-PID killer in `extension.ts` — which will actively delete or kill a naively-named/placed MCP registration. The interaction is navigable (naming + not writing a PID file) but it is not "nothing to see here."
-> **Replaced with:** No backend/route/migration change. **One shipped-state interaction to navigate:** the extension's MCP-removal cleanup (scrubber + PID killer) — mitigated by using the server key `switchboard-mcp` and writing no `.switchboard/.mcp_server.pid`. The `@modelcontextprotocol/sdk` dependency is already declared; no new dep to add for the core.
+> **Replaced with:** No backend/route/migration change (`LocalApiServer` is untouched). **Two extension-side interactions to navigate:** (1) the MCP-removal cleanup (scrubber + PID killer) — mitigated by the server key `switchboard-mcp` and writing no `.switchboard/.mcp_server.pid`; (2) the **new "Connect Claude Desktop" onboarding command + Setup-panel button** — a deliberate, precedented (`connectMcp`) addition to the extension, not part of the standalone bin. The `@modelcontextprotocol/sdk` dependency is already declared; no new dep to add for the core.
 
 ## Adversarial Synthesis
 
@@ -135,7 +142,7 @@ These are **design decisions the plan commits to**, with rationale — not open 
 
 ## Proposed Changes
 
-**Build order:** (1) scaffold `src/mcp/` + own `package.json`/tsconfig → (2) bootstrap module → (3) curated tools → (4) passthrough + catalog → (5) persona via `instructions`/prompt → (6) packaging (`.mcpb` + npx) → (7) docs + manifest.
+**Build order:** (1) scaffold `src/mcp/` + own `package.json`/tsconfig → (2) bootstrap module → (3) curated tools → (4) passthrough + catalog → (5) persona via tool-descriptions + `switchboard_console` prompt → (6) packaging (`.mcpb` + npx) → (7) in-extension "Connect Claude Desktop" onboarding surface → (8) docs + manifest.
 
 ### `src/mcp/**` (new — entrypoint, bootstrap, tools, passthrough, persona)
 - **Context:** A standalone ESM Node entrypoint using `@modelcontextprotocol/sdk` stdio transport (`StdioServerTransport`). Kept **out** of the VS Code webpack bundle (single entry `./src/extension.ts`, `dist/extension.js`). Built via its own `tsconfig.mcp.json` (base `tsconfig.json` has `noEmit:true` — a dedicated emit config or bundler is required) or a self-contained bundle.
@@ -175,6 +182,16 @@ These are **design decisions the plan commits to**, with rationale — not open 
 - **Context/Logic:** `.mcpb` manifest (name **`switchboard-mcp`**, entrypoint, config prompts for `workspaceRoot` and optional token) for one-click Desktop install; a documented `claude_desktop_config.json` `mcpServers` snippet (`command`/`args`/`env`) for manual/other-host setup.
 - **Edge cases:** Server key/name must be `switchboard-mcp` (never `switchboard`) to dodge the config scrubber on non-Desktop hosts.
 
+### `src/services/SetupPanelProvider.ts` + `src/webview/setup.html` + `switchboard.connectClaudeDesktop` command (new — discovery surface)
+- **Context:** The only surface that lets the existing VS Code user base *discover* the bridge. Precedent: the removed MCP server had install buttons in `setup.html` and a `connectMcp` command that wrote host MCP configs (commits 31c3937 / 76780bd).
+- **Logic:** Register a `switchboard.connectClaudeDesktop` command (`contributes.commands` in `package.json` + handler in `extension.ts`), invoked by a "Connect Claude Desktop" button added to the Setup panel. The handler resolves Desktop's per-OS config path, reads-or-creates the JSON, and **idempotently merges** the `mcpServers["switchboard-mcp"]` entry.
+- **Implementation:**
+  - Entry written: `{ "command": "npx", "args": ["-y", "@switchboard/mcp"], "env": { "SWITCHBOARD_WORKSPACE_ROOT": "<resolved root>" } }` — root pre-filled from the extension's known workspace. (`.mcpb` is the alternative install; expose a "Reveal .mcpb" action alongside.)
+  - Per-OS path: macOS `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows `%APPDATA%\Claude\claude_desktop_config.json`; skip/inform on unsupported platforms.
+  - Preserve all other `mcpServers` and unknown top-level keys; write pretty-printed JSON + trailing newline (match the codebase's existing host-config write style).
+  - Post-write: info message with a "restart Claude Desktop" nudge.
+- **Edge Cases:** Multi-root workspace → one entry per root under distinct keys (`switchboard-mcp-<slug>`), never a single ambiguous entry. Config file missing → create with just our entry. Config file corrupt/unparseable → do not destroy it; surface an error and offer the manual snippet. No confirm gate (project rule) — the button acts immediately and is reversible by re-running/removing the entry.
+
 ### `src/services/ClaudeCodeMirrorService.ts` (conditional)
 - **Context/Logic:** *Only if* an `.agents/skills/switchboard-mcp/SKILL.md` is shipped for filesystem hosts — add a `MIRROR_MANIFEST` entry (directory-form skill; the dynamic scan won't auto-pick a directory). Not needed for the Desktop path.
 
@@ -184,7 +201,8 @@ These are **design decisions the plan commits to**, with rationale — not open 
 ## Verification Plan
 
 ### Manual (integration — inherently manual; Desktop + stdio can't be driven by unit tests)
-- Install the `.mcpb` (or add the `claude_desktop_config.json` snippet), open a Switchboard workspace in VS Code, minimise it. In Claude Desktop: the `switchboard_*` tools appear; `board_read` returns the live board; `plan_create` / `card_move` / `features_reconcile` / `orchestration_dispatch` each take effect on the board — all with VS Code minimised.
+- **Discovery/onboarding flow:** in the Setup panel, click **Connect Claude Desktop** → the command writes an idempotent `mcpServers["switchboard-mcp"]` entry into `claude_desktop_config.json` with the correct pre-filled `SWITCHBOARD_WORKSPACE_ROOT`, without disturbing other MCP servers already present; re-running is a no-op / clean overwrite of only our key. On a multi-root workspace, one distinctly-keyed entry per root is written. Corrupt config → clear error, no data loss.
+- Install the `.mcpb` (or add the `claude_desktop_config.json` snippet — or use the Connect button above), open a Switchboard workspace in VS Code, minimise it. In Claude Desktop (after restart): the `switchboard_*` tools appear; `board_read` returns the live board; `plan_create` / `card_move` / `features_reconcile` / `orchestration_dispatch` each take effect on the board — all with VS Code minimised.
 - **Persona check (the goal-vs-appearance guard):** on entry the agent reports board state and waits; no eager grouping/dispatch; never emits a confirm gate; never asks about project pinning — confirming the console discipline actually reached Desktop's model via the **tool descriptions** (Desktop ignores `instructions`), and that invoking the `switchboard_console` prompt loads the full persona. Best-effort on Desktop by design — verify the mutating-tool descriptions alone produce acceptable behaviour without the prompt.
 - With VS Code **closed**, every tool call returns the structured "not running" error and the MCP process stays alive; reopening VS Code restores function without restarting Desktop's subprocess (port re-read).
 - Restart VS Code (new `listen(0)` port) mid-session → next tool call succeeds against the new port.
