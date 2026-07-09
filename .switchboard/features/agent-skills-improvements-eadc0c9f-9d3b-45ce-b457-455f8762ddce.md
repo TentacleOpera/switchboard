@@ -1,6 +1,6 @@
 # Agent skills improvements
 
-**Complexity:** 3
+**Complexity:** 6
 
 ## Goal
 
@@ -15,15 +15,16 @@ registered, the other fixes *how one skill behaves* on entry.
 
 ## How the Subtasks Achieve This
 
-- **Audit and Restructure Agent Skills to Prevent Discovery Failures**: Reconciles the three
-  registries that define the skill set — the `.agents/` source, the generated Claude Code
-  mirror (`MIRROR_MANIFEST` → `.claude/skills/`), and the `AGENTS.md` skills table — fixing
-  concrete drift (e.g. `worktree_cleanup` advertised but unmirrored; `create-feature-from-plans`
-  mirrored but sourceless) and normalizing source frontmatter. Contributes the "which skills
-  exist / are they reachable everywhere" half of the goal. (Its original "flat files are ignored
-  by auto-discovery → move them to subdirectories" premise was corrected during review — the
-  Claude Code layer is manifest-driven, not auto-discovered, and blind file moves would break
-  generation.)
+- **Audit and Restructure Agent Skills to Prevent Discovery Failures**: Makes the skill set
+  discoverable across *both* hosts, whose discovery mechanisms differ: **Antigravity**
+  filesystem-auto-discovers `.agents/skills/<name>/SKILL.md` directories (flat files are
+  invisible; `name`+`description` frontmatter required), while **Claude Code** generates from a
+  hardcoded `MIRROR_MANIFEST` (layout-agnostic, but hardcodes `source:` paths). The subtask
+  restructures flat skills into directory form *and* updates each `MIRROR_MANIFEST` `source:` in
+  lockstep (a move without the manifest edit silently drops the skill from Claude Code), fixes
+  concrete drift (`worktree_cleanup` advertised but unreachable on both hosts;
+  `create-feature-from-plans` mirrored but sourceless), and normalizes frontmatter. Contributes
+  the "which skills exist / are they reachable everywhere" half of the goal.
 - **Fix `switchboard-manage` Entry: Local-Markdown-First, Workspace-Scoped, Low-Noise Console**:
   Rewrites `switchboard-manage/SKILL.md` so a consultative entry does one liveness check, then
   reads the *current workspace's* local markdown (structurally workspace-correct), and defers
@@ -44,11 +45,12 @@ registered, the other fixes *how one skill behaves* on entry.
   entry-fix first (self-contained, low-risk, doc-only, behind an explicit approval gate), then
   the skills audit (broader, edits control-plane `MIRROR_MANIFEST`, and carries a genuine
   product decision about `worktree_cleanup`'s fate).
-- **Prerequisites / guards:** The audit subtask must be gated on two things before execution —
-  (a) the user's decisions on `worktree_cleanup` (wire up vs retire) and `create-feature-from-plans`
-  (regularize vs accept Claude-only), and (b) resolving whether Antigravity auto-discovers
-  `.agents/skills/` or reads only `AGENTS.md` (see that plan's "Uncertain Assumptions"). The
-  entry-fix is gated only on the standard control-plane approval gate.
+- **Prerequisites / guards:** The audit subtask is gated on the user's decisions on
+  `worktree_cleanup` (wire up vs retire), `create-feature-from-plans` (regularize vs accept
+  Claude-only), and the set of backend-only skills that should stay flat. The Antigravity
+  discovery question is **resolved** (web research confirmed filesystem auto-discovery of
+  `SKILL.md` directories), so the restructure proceeds on that basis. The entry-fix is gated only
+  on the standard control-plane approval gate.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
