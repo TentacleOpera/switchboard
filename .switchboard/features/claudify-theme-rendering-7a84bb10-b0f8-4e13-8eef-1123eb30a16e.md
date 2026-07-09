@@ -14,11 +14,15 @@ Make the Claudify theme render with solid opaque panels and a dark immersive gro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Theme changes do not apply to already-open webviews (split theme on Design)](../plans/feature_plan_20260707124454_theme-not-applied-to-open-webviews.md) — **CODER CODED**
-- [ ] [Fix: Claudify theme — setup panel background boxes are transparent instead of black](../plans/feature_plan_20260707124454_claudify-setup-panel-transparent-background.md) — **CODER CODED**
-- [ ] [Fix: Claudify theme — webview background behind the grid is too light](../plans/feature_plan_20260707124454_claudify-webview-background-too-light.md) — **CODER CODED**
+- [ ] [Fix: Theme changes do not apply to already-open webviews (split theme on Design)](../plans/feature_plan_20260707124454_theme-not-applied-to-open-webviews.md) — **CODE REVIEWED**
+- [ ] [Fix: Claudify theme — setup panel background boxes are transparent instead of black](../plans/feature_plan_20260707124454_claudify-setup-panel-transparent-background.md) — **CODE REVIEWED**
+- [ ] [Fix: Claudify theme — webview background behind the grid is too light](../plans/feature_plan_20260707124454_claudify-webview-background-too-light.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
 
 The two CSS plans (setup panel opacity + body ground colour) are independent — they edit different selectors in `setup.html` and `design.html`. The panel plan sets `.shared-tab-content` to solid `#000000`; the ground plan sets `body.theme-claudify` to dark grey `#0a0a0a`. Coordinate so both edits to `setup.html` land cleanly. The theme-broadcast plan edits TypeScript (`TaskViewerProvider.ts`, `DesignPanelProvider.ts`, `PlanningPanelProvider.ts`) and is fully independent of the CSS plans. All three can be executed in parallel. The theme-broadcast fix is most visible when the CSS fixes are also present (a correctly-broadcast theme that renders washed-out panels is still a broken experience).
+
+## Review Findings
+
+Reviewed 2026-07-09. All three subtasks implemented correctly, no CRITICAL/MAJOR findings; no code fixes required. Files verified: `setup.html` (claudify `.shared-tab-content` now `background: var(--panel-bg)` = `#000000`, grid removed; body ground `#0a0a0a`), `design.html`/`planning.html`/`project.html` (all six `#1C1C1C` claudify grounds → `#0a0a0a`, zero `#1C1C1C` remaining), and TS wiring (`broadcastToWebviews` now reaches sidebar+setup+kanban+design+planning; `DesignPanelProvider.postMessage` and `PlanningPanelProvider.postMessage` are public and cover both their panels; `extension.ts:985-986` wires both providers after construction at 947/973 — init order safe). Regression analysis: the intentional double-delivery (direct broadcast + retained `onDidChangeConfiguration` listeners) is safe because all three webview handlers re-derive the desired class set with idempotent `classList.add/remove`/`toggle(cls, bool)`; no signature changes, no orphaned refs, no race (broadcast is synchronous, config event async, both converge to the same state). Remaining risk: purely visual — `#000000` panel vs `#0a0a0a` ground is a 10-unit separation relying on the `#333` border + grid-vs-solid contrast (per-plan User Review item), to be confirmed manually in an installed VSIX.
