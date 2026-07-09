@@ -47,24 +47,46 @@ Purely presentational: the rows are authored as one flat list with no grouping h
 
 ## Metadata
 
-- **Tags:** agents-tab, onboarding, kanban-ui, implementation-html, layout, presentational
+- **Tags:** ui, frontend, refactor
 - **Complexity:** 3 / 10
 - **Area:** `src/webview/kanban.html`, `src/webview/implementation.html`
 
+## User Review Required
+
+- **None.** The Core/Optional membership is defined by the existing default-checked state (the six default-on roles are Core), so no checkbox edits or product decisions are needed. The sub-label styling is specified in Proposed Changes (small mono uppercase, secondary colour).
+
 ## Complexity Audit
 
-**Routine.** HTML reordering plus two lightweight subheader elements in each of two webview files. No JS logic, no message-protocol, no state, no backend, no migration. The only care needed: preserve every row's attributes verbatim when moving Analyst (its `data-role`, checkbox class, ids, placeholder, and adjacent `.agent-description`) so the existing visibility/command wiring keyed on `data-role` continues to work. The Planner "Terminals" pool sub-row must stay attached to Planner.
+### Routine
+- HTML reordering plus two lightweight subheader elements in each of two webview files.
+- No JS logic, no message-protocol, no state, no backend, no migration.
+
+### Complex / Risky
+- **The one care point:** preserve every row's attributes verbatim when moving Analyst (its `data-role`, checkbox class, ids, placeholder, and adjacent `.agent-description`) so the existing visibility/command wiring keyed on `data-role`/id continues to work. The Planner "Terminals" pool sub-row must stay attached to Planner.
 
 ## Edge-Case & Dependency Audit
 
-- **Wiring is keyed on `data-role`, not DOM order:** the visibility toggles (`.agents-tab-visible-toggle` in kanban, `.onboard-agent-toggle` in onboarding) and the command inputs (ids like `agents-tab-cmd-analyst`, `onboard-cli-analyst`) are selected by attribute/id, not position. Reordering rows is therefore behaviour-preserving **provided each row's inner markup is moved intact**. Do not change any `data-role`, `id`, class, `checked` state, or `placeholder`.
-- **Planner pool sub-row:** in the kanban tab, Planner is followed by a `.planner-pool-row` terminal-count block (`kanban.html:2838-2851`) and its own `.agent-description`. These must remain directly under Planner inside the Core group.
-- **`.agent-description` rows:** each role row in the kanban tab is followed by an `.agent-description` div; keep each description immediately after its row when moving Analyst.
-- **Jules auto-sync checkboxes stay in Optional:** the kanban tab's `#agents-tab-jules-auto-sync` row (`kanban.html:2874-2877`) and onboarding's `#onboard-jules-auto-sync` row (`implementation.html:1485-1489`) belong with Jules → place them at the end of the Optional group.
-- **Custom Agents section unaffected:** the separate "Custom Agents" `.db-subsection` (`kanban.html:2882-2904`) is below and out of scope.
-- **Onboarding is a subset:** it only lists 6 core + Acceptance Tester + Jules. Core group = Planner, Lead Coder, Coder, Intern, Reviewer, Analyst; Optional group = Acceptance Tester, Jules (+ its auto-sync row). Roles absent from onboarding (Ticket Updater, Researcher, Claude Artifacts, Phone-a-Friend) are not added — onboarding stays intentionally minimal.
-- **Styling reuse:** kanban uses `.subsection-header` for the section title (`kanban.html:2835`); onboarding uses `.section-label` (`implementation.html:1431`). For the Core/Optional *sub*-headers, use a lightweight styled label (e.g. a small mono uppercase label matching existing patterns) so they read as sub-groups, not new top-level sections. A new minimal class (e.g. `.agents-group-label`) or inline styles consistent with the file's existing small-label styling is acceptable; do not restyle the parent section header.
-- **No default-state change:** grouping is visual only. Checkbox `checked` defaults are unchanged (Analyst stays `checked`; Acceptance Tester stays unchecked). "Core" is defined as "the six default-on roles" — that mapping already matches the current `checked` attributes, so no checkbox edits are required.
+- **Race Conditions:** None. Static markup reorder; no runtime timing.
+- **Security:** None.
+- **Side Effects:**
+  - **Wiring is keyed on `data-role`, not DOM order:** the visibility toggles (`.agents-tab-visible-toggle` in kanban, `.onboard-agent-toggle` in onboarding) and the command inputs (ids like `agents-tab-cmd-analyst`, `onboard-cli-analyst`) are selected by attribute/id, not position. The onboarding Save handler reads `onboard-jules-auto-sync` by id (`implementation.html:3637`), confirming id-based collection. Reordering rows is therefore behaviour-preserving **provided each row's inner markup is moved intact**. Do not change any `data-role`, `id`, class, `checked` state, or `placeholder`.
+  - **No default-state change:** grouping is visual only. Checkbox `checked` defaults are unchanged (Analyst stays `checked`; Acceptance Tester stays unchecked). "Core" is defined as "the six default-on roles" — that mapping already matches the current `checked` attributes, so no checkbox edits are required.
+- **Dependencies & Conflicts:**
+  - **Planner pool sub-row:** in the kanban tab, Planner is followed by a `.planner-pool-row` terminal-count block (`kanban.html:2838-2851`) and its own `.agent-description`. These must remain directly under Planner inside the Core group.
+  - **`.agent-description` rows:** each role row in the kanban tab is followed by an `.agent-description` div; keep each description immediately after its row when moving Analyst.
+  - **Jules auto-sync checkboxes stay in Optional:** the kanban tab's `#agents-tab-jules-auto-sync` row (`kanban.html:2874-2877`) and onboarding's `#onboard-jules-auto-sync` row (`implementation.html:1485-1489`) belong with Jules → place them at the end of the Optional group.
+  - **Custom Agents section unaffected:** the separate "Custom Agents" `.db-subsection` (`kanban.html:2882-2904`) is below and out of scope.
+  - **Onboarding is a subset:** it only lists 6 core + Acceptance Tester + Jules. Core group = Planner, Lead Coder, Coder, Intern, Reviewer, Analyst; Optional group = Acceptance Tester, Jules (+ its auto-sync row). Roles absent from onboarding (Ticket Updater, Researcher, Claude Artifacts, Phone-a-Friend) are not added — onboarding stays intentionally minimal.
+  - **Styling reuse:** kanban uses `.subsection-header` for the section title (`kanban.html:2835`); onboarding uses `.section-label` (`implementation.html:1431`, defined at `:150`, with a Claudify override at `:381`). For the Core/Optional *sub*-headers, use a lightweight styled label (small mono uppercase) so they read as sub-groups, not new top-level sections. A new minimal class `.agents-group-label` (confirmed absent from both files) is acceptable; do not restyle the parent section header.
+  - **Shared-file coordination (intra-feature):** the sibling subtask *"Create Worktree Button Has No Tooltip When Active"* also edits `kanban.html`, but in `updateCreateWorktreeButton()` (`~5566-5600`) and the tooltip overlay (`~3898-3960`) — disjoint from this plan's AGENTS tab (`~2834-2880`) and `<style>` block (`~1168-1253`). No overlap; edits are independent.
+
+## Dependencies
+
+- None (no cross-session dependencies). Shares `kanban.html` with the worktree-tooltip subtask but in disjoint regions (see above); no ordering constraint.
+
+## Adversarial Synthesis
+
+Key risks: (1) dropping, duplicating, or mangling a row's attributes while moving Analyst — silently breaking the `data-role`/id-keyed visibility and command wiring; (2) orphaning the Planner Terminals pool sub-row or an `.agent-description` from its row; (3) accidentally flipping a `checked` default and changing which agents ship visible. Mitigations: move each row's inner markup verbatim (checkbox + label + input + following description as a unit), keep the Planner pool block glued under Planner, change only enclosing order plus the two new label divs, and run the persistence + no-drop/no-duplicate regression checks in the Verification Plan across both Afterburner and Claudify themes.
 
 ## Proposed Changes
 
@@ -141,16 +163,24 @@ Resulting order:
 <!-- Save & Finish / Skip buttons (:1490-1500) unchanged -->
 ```
 
-Add a matching `.agents-group-label` style to implementation.html's `<style>` block (reuse the same rule as above; if a `.section-label` style already exists, model the sub-label on it but smaller/secondary-coloured so it reads as a sub-group).
+Add a matching `.agents-group-label` style to implementation.html's `<style>` block (reuse the same rule as above; model it on the existing `.section-label` at `:150` but smaller/secondary-coloured so it reads as a sub-group). Note the file already themes `.section-label` for Claudify at `:381` — confirm the new sub-label reads correctly in both themes.
 
 **All `onboard-agent-toggle` `data-role`s, `onboard-cli-*` input ids, `checked` states, and placeholders are preserved verbatim.**
 
 ## Verification Plan
 
-1. Rebuild/reinstall the VSIX.
+### Automated Tests
+- None. Per session directive (SKIP TESTS); this is presentational markup with no unit-test harness for webview DOM. Verification is manual (below).
+
+### Manual verification
+1. Load the change in an installed VSIX (no project compilation step is part of this plan).
 2. **Kanban AGENTS tab:** open it → two labelled groups appear. Core lists exactly Planner, Lead Coder, Coder, Intern, Reviewer, Analyst (in that order); Optional lists Acceptance Tester, Ticket Updater, Researcher, Jules, Claude Artifacts, Phone-a-Friend, then the Jules auto-sync checkbox.
 3. Confirm the Planner "Terminals" pool controls still sit directly under Planner and function.
 4. Toggle each visibility checkbox and set a command for Analyst and one Optional role → confirm the setting persists and the sidebar reflects it (proves `data-role`/id wiring survived the reorder).
 5. **Onboarding:** trigger the first-install flow (or reset onboarding state) → the CLI-config step shows Core (Planner, Lead Coder, Coder, Intern, Reviewer, Analyst) then Optional (Acceptance Tester, Jules + auto-sync). Save & Finish persists the same commands/toggles as before.
 6. Visual check: the "Core"/"Optional" sub-labels read as sub-groups (smaller/secondary) and are visually subordinate to the section header, in both Afterburner and Claudify themes.
 7. Regression: no role rows were dropped or duplicated; checkbox default states are unchanged from before (Analyst on, Acceptance Tester off, etc.).
+
+## Recommendation
+
+Complexity 3 → **Send to Intern.** Presentational reorder + two label elements in two files; the discipline is moving row markup verbatim and keeping the Planner pool block attached — no logic changes.

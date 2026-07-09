@@ -26,22 +26,44 @@ The configuration key is `switchboard.theme.colourKanbanIcons` (British "colour"
 
 ## Metadata
 
-- **Tags:** copy, i18n-spelling, theme, settings-ui, low-risk
+- **Tags:** ui, frontend
 - **Complexity:** 1 / 10
 - **Area:** `src/webview/setup.html`, `package.json`
 
+## User Review Required
+
+- **None.** The American spelling is the user's explicit request; the strings are fully specified in Proposed Changes.
+
 ## Complexity Audit
 
-**Routine.** Pure user-facing string edits in two files. No behaviour, no logic, no state, no message-protocol, no CSS, no migration. The only thing that requires care is *not* touching the config key or any identifier — which is a "leave it alone" instruction, not added work.
+### Routine
+- Pure user-facing string edits in two files.
+- No behaviour, no logic, no state, no message-protocol, no CSS, no migration.
+
+### Complex / Risky
+- None. The only thing that requires care is *not* touching the config key or any identifier — a "leave it alone" instruction, not added work.
 
 ## Edge-Case & Dependency Audit
 
-- **Config key untouched:** `switchboard.theme.colourKanbanIcons` stays British → no migration, no orphaned user settings. The `package.json` `"description"` value changes; the property **name** (line 724) does not.
-- **Message types / DOM ids / body class untouched:** e.g. `colourKanbanIconsChanged`, `colour-kanban-icons-toggle`, `kanban-icons-colour`, `getEffectiveColourKanbanIcons`. These are internal identifiers, never shown to the user, and are matched by exact string across webview↔backend — changing any of them would break the wiring. Do **not** touch them.
-- **Scope of "colour" → "color":** only the English words inside the two user-facing copy strings. In the `setup.html` description there are **two** occurrences of "colour" ("in colour at rest" and "colour click-flash"); in the `package.json` description there are also **two** ("in full colour at rest" and "a colour click-flash"). Replace each with "color".
-- **Code comments are not user-facing:** the CSS comment at `src/webview/kanban.html:101` ("Colour kanban icons opt-in …") and the section comment are developer-only. Out of scope per the request (title + description). May be left as-is; optionally aligned for tidiness, but not required.
-- **The subsection header "Kanban Icons"** (`setup.html:1308-1310`) contains no "colour" spelling — no change.
-- **No other user-facing occurrences:** a search for user-visible "colour"/"Colour" strings tied to this feature returns only `setup.html:1314-1315` (the CSS comment and the code-side identifiers are not user-facing). `package.json:727` is the third and final user-facing string.
+- **Race Conditions:** None. Static copy strings; no runtime path.
+- **Security:** None.
+- **Side Effects:**
+  - **Config key untouched:** `switchboard.theme.colourKanbanIcons` stays British → no migration, no orphaned user settings. The `package.json` `"description"` value changes; the property **name** (line 724) does not.
+  - **Message types / DOM ids / body class untouched:** e.g. `colourKanbanIconsChanged`, `colour-kanban-icons-toggle`, `kanban-icons-colour`, `getEffectiveColourKanbanIcons`. These are internal identifiers, never shown to the user, and are matched by exact string across webview↔backend — changing any of them would break the wiring. Do **not** touch them.
+  - **Code comments are not user-facing:** the CSS comment at `src/webview/kanban.html:101` ("Colour kanban icons opt-in …") and the section comment are developer-only. Out of scope per the request (title + description). May be left as-is; optionally aligned for tidiness, but not required.
+- **Dependencies & Conflicts:**
+  - **Scope of "colour" → "color":** only the English words inside the two user-facing copy strings. In the `setup.html` description there are **two** occurrences of "colour" ("in colour at rest" and "colour click-flash"); in the `package.json` description there are also **two** ("in full colour at rest" and "a colour click-flash"). Replace each with "color".
+  - **The subsection header "Kanban Icons"** (`setup.html:1308-1310`) contains no "colour" spelling — no change.
+  - **No other user-facing occurrences:** a search for user-visible "colour"/"Colour" strings tied to this feature returns only `setup.html:1314-1315` and `package.json:727`. The CSS comment and the code-side identifiers are not user-facing.
+  - **Cross-subtask coordination (intra-feature):** the sibling subtask *"Claudify Colour Kanban Board Icons Not Applied Live"* depends on the message type `colourKanbanIconsChanged` and the function `getEffectiveColourKanbanIcons` remaining spelled with British "colour". This plan explicitly preserves those identifiers, so the two are fully compatible and order-independent.
+
+## Dependencies
+
+- None (no cross-session dependencies). Explicitly compatible with the sibling live-apply subtask, which relies on the identifiers this plan leaves untouched.
+
+## Adversarial Synthesis
+
+Key risk: a careless find-replace of "colour" → "color" across the files would rename the config key, message types, body class, function, and DOM ids, breaking every webview↔backend binding and orphaning ~4,000 installs' saved settings. Mitigation: edit **only** the two display strings (`setup.html:1314-1315` and the `package.json:727` description value), leave the property **name** at `package.json:724` and all internal identifiers verbatim, and confirm via the grep checks that the key still reads `switchboard.theme.colourKanbanIcons`.
 
 ## Proposed Changes
 
@@ -78,9 +100,17 @@ Change **only** the `"description"` string value; leave the property name `switc
 
 ## Verification Plan
 
+### Automated Tests
+- None. Per session directive (SKIP TESTS); this is a copy-only change. Verification is by grep + manual UI check (below).
+
+### Manual / grep verification
 1. `grep -n "colour" src/webview/setup.html` → the two occurrences at lines 1314-1315 are gone (any remaining hits are unrelated CSS `color:` — note `color` has no "u").
 2. `grep -rn "colour" package.json` → only the **key** `switchboard.theme.colourKanbanIcons` remains; the description no longer contains "colour".
 3. Confirm the config key `switchboard.theme.colourKanbanIcons` is unchanged (`grep -n "colourKanbanIcons" package.json` still shows the property name).
-4. Rebuild/reinstall the VSIX; open Setup → Theme tab → the option reads "Color kanban board icons" with the "…in color…" description.
+4. Load the change in an installed VSIX; open Setup → Theme tab → the option reads "Color kanban board icons" with the "…in color…" description.
 5. Open VS Code Settings, search "colour kanban" and "color kanban" → the setting is found and its description reads "…in full color at rest…". Toggling it still works (proves the key and wiring are intact).
 6. Regression: toggling the option still colours/greys the Claudify icons (behaviour unchanged — only copy changed).
+
+## Recommendation
+
+Complexity 1 → **Send to Intern.** Trivial, well-bounded copy change; the only discipline required is leaving every identifier alone.
