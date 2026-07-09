@@ -313,6 +313,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'createDraftPlanTicket': return await svc['createDraftPlanTicket'](p);
             case 'deletePlan': return await svc['deletePlan'](p);
             case 'deregisterAllTerminals': return await svc['deregisterAllTerminals'](p);
+            case 'dispatchProjectManager': return await svc['dispatchProjectManager'](p);
             case 'editDbPath': return await svc['editDbPath'](p);
             case 'executeLocal': return await svc['executeLocal'](p);
             case 'executeRemote': return await svc['executeRemote'](p);
@@ -624,6 +625,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             void this._runPhase0Migration();
         }
         void this._migrateStartupCommandsToGlobalFile();
+
+        // One-time migration of the persisted planner workflowFilePath from the
+        // deprecated `.agent/` prefix to `.agents/` (the directory rename migrated
+        // hardcoded source defaults but never migrated persisted user config).
+        // Two-tier gating: a per-profile flag for the inherently per-profile tiers
+        // (globalState + VS Code setting), and a per-DB config-table marker for the
+        // per-workspace DB tiers (config + project_config) so a workspace opened
+        // later self-migrates its own DB on first constructor run.
+        const wfProfileMigrated = this._context.globalState.get<boolean>(
+            'switchboard.plannerWorkflowPathAgentToAgents.v1', false);
+        if (!wfProfileMigrated) {
+            void this._migratePlannerWorkflowPathProfileTiers();
+        }
+        // DB tiers are per-workspace and gated by a per-DB marker, so they run
+        // regardless of the profile flag — a workspace opened later self-migrates.
+        void this._migratePlannerWorkflowPathDbTiers();
         this._pipeline = new PipelineOrchestrator(
             () => this._postPipelineState(),
             async (role, sessionId, instruction) => {
@@ -1149,6 +1166,149 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._context.globalState.update('switchboard.agents.globalFileSeed.v2', true);
         } catch (e) {
             console.error('[TaskViewerProvider] agent-config global-file migration failed:', e);
+        }
+    }
+
+    // ── Planner workflowFilePath `.agent/` → `.agents/` migration ──
+    // The `.agent` → `.agents` directory rename updated every hardcoded source
+    // default but never migrated persisted user config. The planner's
+    // workflowFilePath is stored in four tiers (globalState, VS Code setting,
+    // workspace DB `config`, workspace DB `project_config`) and the stored value
+    // takes precedence over the source default at every read site, so the
+    // generated planner prompt still referenced the deprecated path. This
+    // migration rewrites the leading `.agent/` segment to `.agents/` in each
+    // tier, preserving every other key. Two-tier gating: a per-profile flag for
+    // the inherently per-profile tiers, and a per-DB config-table marker for the
+    // per-workspace DB tiers so a workspace opened later self-migrates.
+
+    /** Rewrite a leading `.agent/` segment to `.agents/`. Custom paths (anything
+     *  not starting with `.agent/` — e.g. `.custom/...`, absolute paths) are
+     *  returned unchanged. Pure function, no injection surface. */
+    private static _normalizeAgentToAgents(p: string): string {
+        return p.replace(/^\.agent\//, '.agents/');
+    }
+
+    /** Per-profile tiers: globalState role config + the VS Code setting. Gated
+     *  by `switchboard.plannerWorkflowPathAgentToAgents.v1` (globalState). The
+     *  flag is set only after both tiers are attempted (each in its own
+     *  try/catch) so a partial failure is retried on next activation. */
+    private async _migratePlannerWorkflowPathProfileTiers(): Promise<void> {
+        let globalStateOk = false;
+        let settingOk = false;
+
+        // 1. GlobalState tier — read via getRoleConfig, rewrite via saveRoleConfig.
+        try {
+            const cfg = this.getRoleConfig('roleConfig_planner') as any;
+            if (cfg && typeof cfg === 'object' && typeof cfg.workflowFilePath === 'string'
+                && cfg.workflowFilePath.startsWith('.agent/')) {
+                cfg.workflowFilePath = TaskViewerProvider._normalizeAgentToAgents(cfg.workflowFilePath);
+                await this.saveRoleConfig('roleConfig_planner', cfg);
+            }
+            globalStateOk = true;
+        } catch (e) {
+            console.error('[TaskViewerProvider] planner workflowFilePath globalState migration failed:', e);
+        }
+
+        // 2. VS Code setting tier — update to the scope `inspect` reports as the
+        //    source of the stale value (no blind Global promotion).
+        try {
+            const conf = vscode.workspace.getConfiguration('switchboard');
+            const inspect = conf.inspect<string>('planner.workflowPath');
+            const globalValue = inspect?.globalValue;
+            const workspaceValue = inspect?.workspaceValue;
+            if (typeof globalValue === 'string' && globalValue.startsWith('.agent/')) {
+                await conf.update(
+                    'planner.workflowPath',
+                    TaskViewerProvider._normalizeAgentToAgents(globalValue),
+                    vscode.ConfigurationTarget.Global
+                );
+            } else if (typeof workspaceValue === 'string' && workspaceValue.startsWith('.agent/')) {
+                await conf.update(
+                    'planner.workflowPath',
+                    TaskViewerProvider._normalizeAgentToAgents(workspaceValue),
+                    vscode.ConfigurationTarget.Workspace
+                );
+            }
+            settingOk = true;
+        } catch (e) {
+            console.error('[TaskViewerProvider] planner workflowFilePath VS Code setting migration failed:', e);
+        }
+
+        // 3. Set the per-profile flag only after both tiers attempted.
+        if (globalStateOk && settingOk) {
+            try {
+                await this._context.globalState.update(
+                    'switchboard.plannerWorkflowPathAgentToAgents.v1', true);
+            } catch (e) {
+                console.error('[TaskViewerProvider] planner workflowFilePath profile flag write failed:', e);
+            }
+        }
+    }
+
+    /** Per-DB tiers: workspace DB `config` + `project_config`. Gated per-DB by a
+     *  `switchboard.migrations.plannerWorkflowPathAgentToAgents.v1` row in each
+     *  kanban.db `config` table. Each visible workspace root is migrated
+     *  independently (own try/catch) so one DB failure doesn't block the others,
+     *  and the per-DB marker is written only after that DB's tiers attempt. */
+    private async _migratePlannerWorkflowPathDbTiers(): Promise<void> {
+        const ROLE_KEY = 'switchboard.prompts.roleConfig_planner';
+        const MARKER_KEY = 'switchboard.migrations.plannerWorkflowPathAgentToAgents.v1';
+
+        // Enumerate roots: active root first, then other open folders (de-duped) —
+        // the pattern from _migrateStartupCommandsToGlobalFile.
+        const roots: string[] = [];
+        const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
+        if (activeRoot) roots.push(activeRoot);
+        for (const folder of vscode.workspace.workspaceFolders ?? []) {
+            const r = folder.uri.fsPath;
+            if (r && !roots.includes(r)) roots.push(r);
+        }
+
+        for (const root of roots) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                if (!(await db.ensureReady())) continue;
+
+                // Skip this DB if its per-DB marker is already set.
+                const done = db.getConfigJsonSync<boolean>(MARKER_KEY, false);
+                if (done) continue;
+
+                // Workspace DB `config` tier.
+                try {
+                    const cfg = db.getConfigJsonSync<any>(ROLE_KEY, undefined);
+                    if (cfg && typeof cfg === 'object' && typeof cfg.workflowFilePath === 'string'
+                        && cfg.workflowFilePath.startsWith('.agent/')) {
+                        cfg.workflowFilePath = TaskViewerProvider._normalizeAgentToAgents(cfg.workflowFilePath);
+                        await db.setConfigJson(ROLE_KEY, cfg);
+                    }
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] planner workflowFilePath config-tier migration failed for ${root}:`, e);
+                }
+
+                // `project_config` tier — scan every project for the key.
+                try {
+                    const rows = await db.getProjectConfigRowsByKeySync<any>(ROLE_KEY);
+                    for (const row of rows) {
+                        const v = row.value;
+                        if (v && typeof v === 'object' && typeof v.workflowFilePath === 'string'
+                            && v.workflowFilePath.startsWith('.agent/')) {
+                            v.workflowFilePath = TaskViewerProvider._normalizeAgentToAgents(v.workflowFilePath);
+                            await db.setProjectConfigJson(row.project, ROLE_KEY, v);
+                        }
+                    }
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] planner workflowFilePath project_config-tier migration failed for ${root}:`, e);
+                }
+
+                // Set the per-DB marker only after both DB tiers attempted.
+                try {
+                    await db.setConfigJson(MARKER_KEY, true);
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] planner workflowFilePath per-DB marker write failed for ${root}:`, e);
+                }
+            } catch (e) {
+                console.error(`[TaskViewerProvider] planner workflowFilePath DB-tier migration failed for ${root}:`, e);
+            }
         }
     }
 
@@ -4416,6 +4576,12 @@ Each plan file must include:
             console.log(`[TaskViewerProvider] Applied claude_import fallback command: ${cmd}`);
         }
 
+        // Fallback: project_manager defaults to 'claude' when configured command is missing/blank
+        if (role === 'project_manager' && (!cmd || cmd.trim() === '')) {
+            cmd = 'claude';
+            console.log(`[TaskViewerProvider] Applied project_manager fallback command: ${cmd}`);
+        }
+
         return cmd;
     }
 
@@ -4447,7 +4613,8 @@ Each plan file must include:
             researcher: false,
             mcp_monitor: false,
             claude_artifacts: false,
-            phone_a_friend: false
+            phone_a_friend: false,
+            project_manager: false
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
@@ -10069,6 +10236,9 @@ Each plan file must include:
                         break;
                     case 'guidedSetup':
                         await this._handleGuidedSetup();
+                        break;
+                    case 'dispatchProjectManager':
+                        await this._handleDispatchProjectManager();
                         break;
                     case 'openKanban':
                         vscode.commands.executeCommand('switchboard.openKanban', data.tab);
@@ -22140,6 +22310,82 @@ What would you like to find?`;
             vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through advanced features and tips.');
         } catch (err: any) {
             vscode.window.showErrorMessage(`Couldn't copy to clipboard: ${err?.message || err}`);
+        }
+    }
+
+    /**
+     * Dispatch the switchboard-manage skill prompt to a registered/open Project
+     * Manager terminal, or copy it to the clipboard as a fallback (same pattern
+     * as Guided Setup). Pre-flights the LocalApiServer liveness — the manage
+     * skill hard-fails without it. Deliberately does NOT auto-spawn a terminal
+     * (unlike sendPromptToAgentTerminal) so the clipboard escape hatch stays
+     * available when no PM terminal is configured.
+     */
+    private async _handleDispatchProjectManager(): Promise<void> {
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace root open.');
+            return;
+        }
+
+        // 1. Pre-flight: API server liveness — the manage skill needs it.
+        const port = this.getLocalApiServerPort();
+        const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
+        if (!serverAlive || port === 0) {
+            vscode.window.showErrorMessage(
+                'Switchboard API server is not running. Open the Switchboard panel and try again.'
+            );
+            return;
+        }
+
+        // 2. Build the manage prompt (static string + port interpolation only).
+        const prompt = `Read .agents/skills/switchboard-manage/SKILL.md and follow its entry protocol. Report the board state for this workspace, then wait for my direction. The API server is running on port ${port}.`;
+
+        // 3. Resolve the PM terminal — two-stage lookup matching sendPromptToAgentTerminal
+        //    and the Phone-a-Friend dispatch: registered terminals first, then open
+        //    terminals by normalized name. Falls back to the literal 'Project Manager'
+        //    so the open-terminals scan has a stable name to match against even when
+        //    no agent name is configured.
+        const agentName = await this._getAgentNameForRole('project_manager', workspaceRoot)
+            || 'Project Manager';
+        const suffixedKey = this._suffixedName(agentName);
+        let terminal: vscode.Terminal | undefined;
+        if (this._registeredTerminals) {
+            terminal = this._registeredTerminals.get(agentName) ||
+                       this._registeredTerminals.get(suffixedKey);
+        }
+        if (!terminal) {
+            const openTerminals = vscode.window.terminals || [];
+            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(agentName));
+            terminal = openTerminals.find(t => this._normalizeAgentKey(t.name) === strippedTarget);
+        }
+
+        if (terminal && terminal.exitStatus === undefined) {
+            // Dispatch path: send prompt to the live PM terminal.
+            terminal.show();
+            const sendLockKey = this._normalizeAgentKey(
+                this._stripIdeSuffix(terminal.name || agentName)
+            ) || agentName;
+            await withTerminalSendLock(sendLockKey, async () => {
+                await sendRobustText(terminal!, prompt, true);
+            });
+            vscode.window.showInformationMessage(
+                'Manage prompt sent to Project Manager terminal.'
+            );
+        } else {
+            // Fallback path: copy to clipboard (same pattern as Guided Setup).
+            try {
+                await vscode.env.clipboard.writeText(prompt);
+                vscode.window.showInformationMessage(
+                    'No Project Manager terminal registered — manage prompt copied. ' +
+                    'Paste it into your agent chat (Cmd/Ctrl+V), or register a PM terminal ' +
+                    'in the Kanban agents tab.'
+                );
+            } catch (err: any) {
+                vscode.window.showErrorMessage(
+                    `Couldn't copy to clipboard: ${err?.message || err}`
+                );
+            }
         }
     }
 

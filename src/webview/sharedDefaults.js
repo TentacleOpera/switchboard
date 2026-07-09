@@ -12,7 +12,8 @@ const DEFAULT_VISIBLE_AGENTS = {
     researcher: false,
     mcp_monitor: false,
     claude_designer: false,
-    phone_a_friend: false
+    phone_a_friend: false,
+    project_manager: false
 };
 
 // CRITICAL: DO NOT CHANGE DEFAULTS UNLESS SPECIFICALLY ASKED
@@ -30,7 +31,8 @@ const DEFAULT_ROLE_CONFIG = {
     ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateMode: 'disabled', clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
     researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, researchEnabled: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
     claude_designer: { prompt: 'Import a design from claude.ai/design into the target folder, writing the implementation into the designated workspace folder, built with the repo\'s existing components and styles.', addons: { switchboardSafeguards: true, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    phone_a_friend: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } }
+    phone_a_friend: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
+    project_manager: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } }
 };
 
 // Role key/label pairs for UI rendering
@@ -47,7 +49,8 @@ const BUILT_IN_AGENT_LABELS = [
     { key: 'claude_designer', label: 'Claude Designer' },
     { key: 'jules', label: 'Jules' },
     { key: 'mcp_monitor', label: 'Comms Monitor' },
-    { key: 'phone_a_friend', label: 'Phone-a-Friend' }
+    { key: 'phone_a_friend', label: 'Phone-a-Friend' },
+    { key: 'project_manager', label: 'Project Manager' }
 ];
 
 // Derivable helper

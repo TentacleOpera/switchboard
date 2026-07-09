@@ -4859,6 +4859,34 @@ export class KanbanDatabase {
         return this._persist();
     }
 
+    /** Return all project_config rows for a given key, across every project.
+     *  Used by one-time migrations that must rewrite a key in every project.
+     *  Unlike the per-project accessors above, this scans by key regardless of
+     *  project. Unparseable rows are skipped. Returns [] when the DB is not
+     *  ready or no rows match. */
+    public async getProjectConfigRowsByKeySync<T>(
+        key: string
+    ): Promise<Array<{ project: string; value: T }>> {
+        const out: Array<{ project: string; value: T }> = [];
+        if (!(await this.ensureReady()) || !this._db) return out;
+        const stmt = this._db.prepare(
+            'SELECT project, value FROM project_config WHERE key = ?',
+            [key]
+        );
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject() as any;
+                const project = String(row.project ?? '');
+                try {
+                    out.push({ project, value: JSON.parse(String(row.value ?? '')) as T });
+                } catch { /* skip unparseable row */ }
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
     /** Reads a legacy .switchboard JSON file, writes selected keys to the config
      *  table, then archives the file as `<name>.migrated.bak` so upgrading
      *  users keep a recoverable copy. No-op if the file is absent. A corrupt

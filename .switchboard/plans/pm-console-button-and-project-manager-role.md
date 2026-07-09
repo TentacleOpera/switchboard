@@ -425,3 +425,7 @@ Complexity 4 → **Send to Coder**. This is a multi-file wiring change (5 files)
 existing patterns throughout — no new architecture, no data consistency risk, no breaking
 changes. The two corrections (open-terminals scan, routing placement) keep it within the
 routine-to-moderate band.
+
+## Completion Summary
+
+Implemented the PM Console Quick Action button and the `project_manager` agent role. Added `project_manager` to `DEFAULT_VISIBLE_AGENTS`, `DEFAULT_ROLE_CONFIG` (minimal addon set, no coding-specific flags), and `BUILT_IN_AGENT_LABELS` in `src/webview/sharedDefaults.js`; added the `project_manager: false` default to `getVisibleAgents` and a `claude` startup-command fallback in `getAgentStartupCommand` in `src/services/TaskViewerProvider.ts`. Added the `dispatchProjectManager` routing case (alphabetically placed between `deregisterAllTerminals` and `editDbPath`), the switch case (alongside `guidedSetup`), and the `_handleDispatchProjectManager` handler (pre-flight API-server liveness, two-stage terminal lookup, dispatch-vs-clipboard fallback) to `TaskViewerProvider.ts`; added the `dispatchProjectManager` service method to `src/services/taskViewerService.ts`. Added the Project Manager agents-tab row to `src/webview/kanban.html` (after Phone-a-Friend, before the Jules auto-sync label) and the full-width teal Manage button + click listener to `src/webview/implementation.html`. No issues encountered; compilation and automated tests skipped per session directives.

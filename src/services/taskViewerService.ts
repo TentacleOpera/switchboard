@@ -131,6 +131,10 @@ export class TaskViewerService {
         return this._ctx.handleMessage({ type: 'deregisterAllTerminals', ...payload });
     }
 
+    async "dispatchProjectManager"(payload: any): Promise<any> {
+        return this._ctx.handleMessage({ type: 'dispatchProjectManager', ...payload });
+    }
+
     async "editDbPath"(payload: any): Promise<any> {
         return this._ctx.handleMessage({ type: 'editDbPath', ...payload });
     }

@@ -1529,6 +1529,9 @@
                 <button id="btn-quick-design" class="secondary-btn is-teal">Design</button>
                 <button id="btn-quick-project" class="secondary-btn is-teal">Project</button>
             </div>
+            <button id="btn-quick-manage" class="secondary-btn is-teal w-full"
+              style="margin-top: 6px;"
+              title="Activate the Switchboard management console in a terminal agent (or copy the prompt if no PM terminal is registered)">Manage</button>
             <button id="btn-quick-setup" class="secondary-btn w-full" style="margin-top: 6px;">Setup</button>
             <button id="btn-guided-setup" class="secondary-btn w-full" style="margin-top: 6px;"
                 title="Copy a tutorial prompt tailored to your next setup step, then paste it into an agent chat">Guided Setup</button>
@@ -1793,6 +1796,8 @@
         if (btnQuickKanban) btnQuickKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
         const btnQuickPlanning = document.getElementById('btn-quick-planning');
         if (btnQuickPlanning) btnQuickPlanning.addEventListener('click', () => vscode.postMessage({ type: 'openPlanningPanel' }));
+        const btnQuickManage = document.getElementById('btn-quick-manage');
+        if (btnQuickManage) btnQuickManage.addEventListener('click', () => vscode.postMessage({ type: 'dispatchProjectManager' }));
         const btnQuickSetup = document.getElementById('btn-quick-setup');
         if (btnQuickSetup) btnQuickSetup.addEventListener('click', () => vscode.postMessage({ type: 'openSetupPanel' }));
         const btnGuidedSetup = document.getElementById('btn-guided-setup');
