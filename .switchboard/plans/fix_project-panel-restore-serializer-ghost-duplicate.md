@@ -1,7 +1,5 @@
 # Fix: Project panel duplicate on window restore (serializer ghost)
 
-**Plan ID:** d3c42b71-a9f8-4e5c-b7f0-69e8f8c54a12
-
 ## Goal
 
 **Problem:** When `switchboard.persistPanels` is enabled and a VS Code window is reloaded (Developer: Reload Window, crash recovery, extension host restart), a duplicate PROJECT panel tab can appear if a `reviewPlan` click, `switchboard.openProjectPanel` command, or `activatePlanInProjectPanel` call arrives before VS Code's serializer has called `deserializeProjectPanel`.
@@ -23,8 +21,27 @@ VS Code may **lazily restore** background (non-visible) tabs — the serializer 
 
 ## Metadata
 
-- **Tags:** bugfix, ui, reliability, restore
+- **Tags:** bugfix, ui, reliability
 - **Complexity:** 4
+- **Feature:** Project panel fixes (`6f30b8c5-74d4-4246-9c03-53469640eb8d`)
+
+> Tags normalized to the allowed improve-plan tag set (dropped `restore`, which is not in the list).
+
+## User Review Required
+
+- **None.** The restore-race root cause and the flag-based mitigation are well-defined and testable; there is no product decision outstanding. The `_waitForRestore` polling vs. promise-rendezvous choice was evaluated during improve and resolved in favour of polling (see Adversarial Synthesis) — not a user call.
+
+## Complexity Audit
+
+### Routine
+- One new boolean field (`_projectPanelRestoring`), one new public method (`markProjectPanelRestoring`), one new private helper (`_waitForRestore`), and guards inside two existing methods — all localized to `PlanningPanelProvider.ts`.
+- One conditional call site in `extension.ts` behind the existing `persistPanels` branch.
+- Zero behavioral change when `persistPanels` is `false` (the default) — no serializer, flag never set.
+
+### Complex / Risky
+- **Serializer-vs-`openProject()` timing race** is the core difficulty — the flag, the bounded wait, and the multiple clear-sites must all agree or `openProject()` either blocks needlessly or duplicates the panel. The flag MUST be cleared on **every** path that nulls `_projectPanel`/`_projectPanelOpening` — including the non-`onDidDispose` catch block at `PlanningPanelProvider.ts:7946-7947` (see Change 5, item 4), which the original plan missed.
+- **Lazy restoration** (background tab, serializer fires arbitrarily later) is the hardest scenario; handled by the 8s flag timeout + ghost disposal in `deserializeProjectPanel`.
+- **Shared surface with sibling subtask B** — both edit `openProject()`/`_doOpenProject()`; the reveal calls in this plan's code samples defer to B (see the Superseded callout in Change 4).
 
 ## Proposed Changes
 

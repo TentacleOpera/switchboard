@@ -64,16 +64,27 @@ Replace `reveal(vscode.ViewColumn.One)` with an **in-place, focus-preserving** r
 
 ## Metadata
 
-- **Tags:** bug, project-panel, webview, multi-window, kanban, review-plan
-- **Complexity:** 3/10
+- **Tags:** bugfix, ui, reliability
+- **Complexity:** 3
 - **Area:** `PlanningPanelProvider` (project panel window management)
 - **Type:** Bug fix (behavioral)
+- **Feature:** Project panel fixes (`6f30b8c5-74d4-4246-9c03-53469640eb8d`)
+
+> Tags normalized to the allowed improve-plan tag set (was `bug, project-panel, webview, multi-window, kanban, review-plan`; the descriptive labels are captured in **Area**/**Type** above).
+
+## User Review Required
+
+- **None.** This is a self-contained behavioral bug fix with a clear correct end-state (reveal in place, never relocate). The only open item is a factual VS Code API question (see **Uncertain Assumptions**), not a product decision.
 
 ## Complexity Audit
 
-**Routine.** The change is four one-line edits swapping the argument to an existing VS Code API call, plus explanatory comments. No new state, no new API surface, no migration, no data model change. The only subtlety is understanding VS Code's `reveal()` column semantics, which this plan documents. Risk is low and contained to how/where the Project panel surfaces.
+### Routine
+- Four one-line edits swapping the argument to an existing VS Code API call (`reveal(vscode.ViewColumn.One)` → `reveal(undefined, true)`), plus explanatory comments.
+- No new state, no new API surface, no migration, no data-model change.
+- Does not touch persistence, the DB, message schemas, or the webview↔host contract (`activateKanbanTabAndSelectPlan` is untouched and already routes correctly).
 
-Not Complex/Risky: does not touch persistence, the DB, message schemas, or the webview↔host contract (`activateKanbanTabAndSelectPlan` is untouched and already routes correctly).
+### Complex / Risky
+- The only subtlety is VS Code's `reveal(viewColumn, preserveFocus)` column/window semantics for a panel living in an **auxiliary window** — whether `undefined` truly reveals in place there, or re-docks to the main window. This is the one unverified assumption (see **Uncertain Assumptions**). It is *not* safety-critical because the dominant fix path routes data via `postMessage` and never calls `reveal()` for the aux-window case (see below).
 
 ## Edge-Case & Dependency Audit
 
@@ -85,6 +96,22 @@ Not Complex/Risky: does not touch persistence, the DB, message schemas, or the w
 - **`preserveFocus: true` interaction with the Kanban click.** The user clicked from the Kanban board; keeping focus there (rather than stealing it to the Project panel) is the desired behavior and matches the existing intent comment ("do NOT forcibly reveal (which steals it back)").
 - **Dependencies:** none new. `reveal(viewColumn?, preserveFocus?)` has existed since early VS Code; the `preserveFocus` overload is long-stable and well within the declared engine `^1.93.0`.
 - **Main Planning panel (`_panel`, `switchboard-planning`) reveal sites** at lines 807 and 1074 share the same `reveal(vscode.ViewColumn.One)` pattern and the same latent steal-back bug. They are **out of scope** for this memo issue (which is specifically about Review Plan → Project panel), but are called out here so a follow-up can apply the identical one-line fix for consistency. Not changed in this plan to keep the blast radius minimal.
+
+## Dependencies
+
+- No external/session dependencies. `reveal(viewColumn?, preserveFocus?)` has existed since early VS Code; the `preserveFocus` overload is long-stable and well within the declared engine `^1.93.0`.
+- **Sibling subtask coordination (feature `Project panel fixes`):** this plan **shares the `openProject()` / `_doOpenProject()` surface** with its sibling *"Fix: Project panel duplicate on window restore (serializer ghost)"*. This plan is the **owner of the reveal-target decision**: all Project-panel reveal calls must be `reveal(undefined, true)`, never `reveal(vscode.ViewColumn.One)`. The sibling plan adds a restore-guard *around* those same reveal calls and defers to this decision. **Recommended coding order: land this plan first** (it stabilises the four reveal sites to their final form), then the restore-guard plan builds its guard around the already-correct reveal target. See the feature file's *Dependencies & sequencing* for the reconciled end-state.
+
+## Adversarial Synthesis
+
+Key risks: (1) the aux-window `reveal(undefined, true)` in-place semantics are unverified — if VS Code re-docks on any `reveal()`, the *fallback* path (guard wrongly returns `true`) still steals the panel back; (2) `viewColumn === undefined` is an acknowledged-fragile aux-window signal. Mitigations: the **primary** path never calls `reveal()` for the aux-window case — the guard returns `false`, we skip reveal, and `postMessage` routes the selection to the panel wherever it lives (same extension host, same `WebviewPanel` object), which is robust regardless of reveal semantics. The change is strictly no worse than today's guaranteed steal-back, and the two API uncertainties are flagged for confirmation before treating the fallback as bulletproof.
+
+## Uncertain Assumptions
+
+The following VS Code API behaviors are **not 100% certain** and were flagged; the user was advised to run web research to confirm them before implementation:
+
+1. **`WebviewPanel.reveal(undefined, true)` on a panel currently in an auxiliary window** ("Move Editor into New Window") reveals it **in place** (keeps it in the aux window) rather than re-docking it into the main window's last-used column. `ViewColumn` is main-window-relative and there is no public API to target a specific auxiliary window, so it is unconfirmed whether "reveal in the last-shown column" preserves aux-window residency.
+2. **`WebviewPanel.viewColumn === undefined` reliably indicates auxiliary-window residency** (vs. a hidden/background tab, or version-dependent values) across VS Code `1.93+`. The plan already treats this as fragile; the fix is designed so its accuracy is not safety-critical, but the actual reported values across aux-window / hidden-tab / minimised states are worth confirming.
 
 ## Proposed Changes
 
@@ -158,6 +185,8 @@ All edits are within the Project-panel reveal paths. Introduce an in-place, focu
 No changes to `hasProjectPanel()`, `isProjectInCurrentWindow()`, `postMessageToProjectWebview()`, the `reviewPlan` handlers, or the webview contract. The `isProjectInCurrentWindow()` gate in the callers (`KanbanProvider.ts:8713`, `:257`) is retained — it preserves the "don't raise the floated window on every click" intent — but its accuracy is no longer safety-critical, because the reveal it gates is now non-destructive.
 
 ## Verification Plan
+
+> **Session directives:** **skip compilation** and **skip automated tests**. The `npm run compile` step below is retained for the eventual VSIX build but is out of scope for this session.
 
 Manual verification in an installed VSIX (the project tests against the VSIX, not `dist/`):
 

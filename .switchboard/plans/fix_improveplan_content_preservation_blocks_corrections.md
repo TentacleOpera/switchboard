@@ -162,3 +162,40 @@ Apply the same two changes (A and B) as File 1. The constraint text and step 4 t
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern.** Mechanical text replacement in two near-identical markdown files — no code, no parsing, no migration. The Intern should apply Change A and Change B to both files and duplicate the Superseded Callout Format Specification into the Claude skill copy so each file is self-contained.
+
+---
+
+## Reviewer Pass (2026-07-09)
+
+**Outcome:** Implementation verified correct and complete. No CRITICAL/MAJOR findings; no code fixes required.
+
+### Implementation status (committed in `dda2eeb`, working tree clean)
+Both switchboard files carry the full change and are **byte-identical** in every changed block:
+- **Change A** — two-tier `CONTENT PRESERVATION` rule: present in both files (agents lines 11–18, claude lines 12–19). `diff` → IDENTICAL.
+- **Change B** — "Preserve all factual context…" instruction: present in both (agents line 110 under Step 5, claude line 94 under Step 4). `diff` → IDENTICAL. (Step number differs only because the `.agents` copy carries an out-of-scope "Challenge the approach" Step 3 from `e56c557`; the instruction text itself matches.)
+- **Superseded Callout Format Specification**: duplicated self-contained into both files (agents 124–147, claude 108–131). `diff` → IDENTICAL.
+
+### Manual Verification (plan items 1–2) — PASS
+- No leftover old language: `grep "Append and refine|do not truncate"` and `grep "FORBIDDEN from deleting original"` → none in either switchboard file.
+- Two-tier rule present and identical across both files (byte-level diff).
+- Step 4/5 "Preserve" instruction updated in both files (byte-level diff).
+- `SESSION vs PRODUCT SCOPE` rule and all sibling sections untouched.
+- Callout format spec duplicated in both files (no cross-file reference).
+- **Scope cut honored:** the Gitlab copies (`/Users/patrickvuleta/Documents/Gitlab/.agents/workflows/improve-plan.md` and the corresponding skill) still carry the OLD `CONTENT PRESERVATION` rule — intentionally not updated, as planned.
+
+### Behavioral Verification (plan items 3–4) — DEFERRED
+Requires a live `improve-plan` pass against a plan with a known-weak conclusion and against a clean plan. Not exercised in this reviewer pass (no code path to drive statically). Left as-is for a real improve-plan run.
+
+### Files changed by this review
+None. Implementation was already correct; no fixes applied.
+
+### Validation results
+- Compilation: skipped per session directive.
+- Automated tests: skipped per session directive (and none exist for this prompt-text change).
+- Verification method: static inspection + byte-level parity diffs of all three changed blocks across both files.
+
+### Remaining risks (not defects in this plan)
+1. **Mirror structural drift** — the `.claude/skills/improve-plan/SKILL.md` mirror lacks the "Challenge the approach" Step 3 that the `.agents/workflows/improve-plan.md` source has. Introduced by `e56c557`, out of this plan's scope; self-heals when the `.claude` mirror is regenerated on VSIX rebuild. Watch, do not hand-patch.
+2. **Prompt-level enforcement only** — the permissive "any improvement" threshold and the mandatory-callout rule are enforced by prose, not code. Inherent and accepted per the plan's Adversarial Synthesis.
+3. **No automated parity check** — the two switchboard files stay in sync by discipline; a future edit could drift them silently. Accepted per plan; building a parity test is out of scope.
+4. **"deliberately non-destructive" phrasing** (agents line 24) is now slightly looser than literal — improve-plan can supersede conclusions — but remains accurate because the callout preserves original text verbatim (nothing is destroyed). NIT; no change made.
