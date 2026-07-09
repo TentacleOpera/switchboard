@@ -14,49 +14,15 @@ Query kanban board state using direct SQL access to the kanban database. This sk
 1. **Workspace ID and Database Path**: Read from `.switchboard/workspace-id` (two lines: line 1 = workspace ID, line 2 = database path)
 2. **SQL CLI**: Use `sqlite3` CLI (pre-installed on macOS)
 
-## Display Format — MANDATORY GROUPING
-
-The kanban board does NOT present plans as a flat list. It groups them by **project**, then by **feature** (with subtasks nested under their parent feature), then **standalone plans**. Any output you produce from this skill MUST follow the same structure. Never dump a flat table.
-
-Required output shape:
-
-```
-## <COLUMN NAME>
-
-### <Project Name>            ← omit this header if no projects / single "Unassigned" group
-**Feature: <feature topic>** (cx: N)
-  - <subtask topic> (cx: N)
-  - <subtask topic> (cx: N)
-- <standalone plan topic> (cx: N)
-
-### Unassigned                ← plans with no project_id
-**Feature: <feature topic>** (cx: N)
-  - <subtask topic> (cx: N)
-- <standalone plan topic> (cx: N)
-```
-
-Rules:
-- **Features** (`is_feature = 1`) are rendered as bold headers with their subtasks indented beneath.
-- **Subtasks** (`feature_id` non-null) are rendered as indented bullets under their feature. Never list them at the top level.
-- **Standalone plans** (`is_feature = 0` AND `feature_id` NULL) are rendered as top-level bullets.
-- **Projects** group the above. Plans with `project_id` NULL go under an "Unassigned" heading. If every plan is unassigned, omit the project headers entirely.
-- If a subtask's parent feature is NOT in the same column, still render the subtask but note `(parent feature "<name>" in <column>)` so the lineage isn't lost.
-
 ## Fast Path: Read Board State (No SQL)
 
-The kanban board auto-exports its current state to per-column markdown files. For simple reads, use these instead of SQL:
+The kanban board auto-exports its current state to a markdown file on every change. For simple reads, use this instead of SQL:
 
-1. Read `<workspace_root>/.switchboard/kanban-board.md` for the column index.
-2. Read the relevant per-column file, e.g. `.switchboard/kanban-state-plan-reviewed.md`.
+```bash
+read_file <workspace_root>/.switchboard/kanban-board.md
+```
 
-Each entry carries grouping metadata in an HTML comment suffix:
-- `<!-- planId:<id> feature -->` → this row is an feature
-- `<!-- planId:<id> subtask-of:"<feature topic>" -->` → this row is a subtask of the named feature
-- `<!-- planId:<id> -->` (no marker) → standalone plan
-
-Parse these markers to group your output per the Display Format above. The per-column files do NOT carry project grouping — if you need project grouping, use the SQL query below.
-
-Use SQL queries only when you need project grouping, filtering, aggregation, or specific plan lookups that the markdown files don't support.
+Use SQL queries only when you need filtering, aggregation, or specific plan lookups that the markdown file doesn't support.
 
 ## Get Workspace ID and Database Path
 
@@ -95,40 +61,18 @@ fi
 
 ## Common SQL Queries
 
-### Get All Active Plans in a Column (grouped)
-
-This query returns everything needed to render the column per the Display Format: feature/subtask flags, resolved feature name, and project name. **Always use this query (not the flat one) when showing a column to the user.**
+### Get All Active Plans in a Column
 
 ```sql
-SELECT
-  p.plan_id,
-  p.topic,
-  p.complexity,
-  p.is_feature,
-  p.feature_id,
-  e.topic   AS feature_name,
-  e.kanban_column AS feature_column,
-  proj.name AS project_name
-FROM plans p
-LEFT JOIN plans e   ON p.feature_id = e.plan_id
-LEFT JOIN projects proj ON p.project_id = proj.id
-WHERE p.workspace_id = '<workspace_id>'
-  AND p.status = 'active'
-  AND p.kanban_column = '<column_name>'
-ORDER BY
-  proj.name IS NULL, proj.name,
-  p.is_feature DESC,
-  p.feature_id IS NULL, p.feature_id,
-  p.updated_at DESC;
+SELECT plan_id, session_id, topic, kanban_column, status, complexity
+FROM plans
+WHERE workspace_id = '<workspace_id>' 
+  AND status = 'active' 
+  AND kanban_column = '<column_name>'
+ORDER BY updated_at DESC;
 ```
 
 **Valid columns:** CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, LEAD CODED, CODER CODED, CODE REVIEWED, CODED, COMPLETED
-
-**How to read the result for grouping:**
-- `is_feature = 1` → render as a bold feature header.
-- `feature_id` non-null AND `is_feature = 0` → render as indented subtask under the feature named in `feature_name`. If `feature_column` differs from the queried column, append `(parent feature in <feature_column>)`.
-- `is_feature = 0` AND `feature_id` NULL → standalone plan, top-level bullet.
-- `project_name` non-null → group under that project heading; NULL → under "Unassigned".
 
 ### Get Plans for Dependency Check (CREATED, BACKLOG, PLAN REVIEWED)
 
@@ -213,7 +157,7 @@ sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column F
 | linear_issue_id | TEXT | Linear issue ID |
 | worktree_id | INTEGER | Associated worktree ID |
 | worktree_status | TEXT | Worktree status ('none', 'active', 'merged', 'deleted') |
-| is_feature | INTEGER | 1 if this plan is an feature, 0 otherwise |
+| is_feature | INTEGER | 1 if this plan is a feature, 0 otherwise |
 | feature_id | TEXT | Parent feature plan_id if this is a subtask |
 | workspace_name | TEXT | Human-readable name of the workspace |
 | project_id | INTEGER | Foreign key matching projects.id |
@@ -237,4 +181,4 @@ sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column F
 **Key:** `workspace_id` stores the workspace identifier.
 
 ## Cross-Reference
-For ready-made query templates on workspace names, projects, and features, see the [query_kanban_plans.md](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.agents/skills/query_kanban_plans.md) skill.
+For ready-made query templates on workspace names, projects, and features, see the [query-kanban-plans](../query-kanban-plans/SKILL.md) skill.

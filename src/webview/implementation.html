@@ -169,6 +169,15 @@
             margin-bottom: 0;
         }
 
+        .agents-group-label {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin: 12px 0 4px;
+        }
+
         .icon-btn {
             min-width: 20px;
             height: 20px;
@@ -1433,6 +1442,9 @@
                     Set commands for each agent role. Uncheck to hide an agent from the sidebar. Leave command empty to
                     skip.
                 </div>
+
+                <!-- CORE -->
+                <div class="agents-group-label" style="margin-top:4px;">Core</div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="planner" checked
                         style="width:auto; margin:0; flex-shrink:0;">
@@ -1464,16 +1476,19 @@
                         placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="onboard-agent-toggle" data-role="tester"
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Acceptance Tester</label><input type="text" id="onboard-cli-tester"
-                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="analyst" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Analyst</label><input type="text" id="onboard-cli-analyst"
                         placeholder="e.g. qwen" style="flex:1;">
+                </div>
+
+                <!-- OPTIONAL -->
+                <div class="agents-group-label">Optional</div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="tester"
+                        style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Acceptance Tester</label><input type="text" id="onboard-cli-tester"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="jules"

@@ -1,46 +1,43 @@
 ---
 name: refine-ticket
-description: Refine a ticket into a complete, agent-actionable specification with acceptance criteria, flow diagrams, and challenged assumptions
+description: Refine a ticket into a lean, agent-actionable spec — real files, testable acceptance criteria, no invented context
 disable-model-invocation: true
 ---
 
 # Skill: Refine Ticket
 
-This skill transforms any ticket (sparse or partial) into a complete, unambiguous, agent-actionable ticket.
+Turn a sparse ticket into a lean, actionable spec a developer can pick up. Lean is the goal — a thin, correct ticket beats a padded one. The reader will delete anything they don't need, so don't make them.
 
 ## When to Use
 Triggered by clicking "Refine" on a ticket card in the Switchboard tickets tab.
 
 ## What it does
-Produces a complete best-practice ticket (acceptance criteria, user flow, flow diagrams, assumptions challenged, ambiguity eliminated), and writes the result back to the local markdown file.
+Fills the actionable core — what to build, where, and how to know it's done — and writes it back to the local markdown file. It does NOT pad the ticket with every section in a template.
 
-## Template Sections (Flexible - Agent decides which apply)
-- `## Summary` — one-paragraph plain-English description
-- `## Background / Why` — context, motivation, business reason
-- `## User Flow` — numbered steps (for features)
-- `## Acceptance Criteria` — grouped, checkboxed, testable ("given X, when Y, then Z")
-- `## Assumptions` — each assumption explicitly challenged or validated
-- `## Open Questions` — unresolved ambiguities
-- `## Dependencies` — upstream/downstream, blocking issues
-- `## Designs / References` — mockups, screenshots, related tickets
-- `## Flow Diagram` — Mermaid flowchart rendered to inline PNG (for non-trivial flows)
+## Include by default
+- `## Summary` — one short paragraph: what we're building, plainly.
+- `## Work Items` (or `## Tasks`) — the concrete pieces of work, each naming the real repo/file(s) it touches.
+- `## Acceptance Criteria` — grouped by work item, checkboxed, testable ("given X, when Y, then Z").
+- `## Flow Diagram` — Mermaid → inline PNG. Include whenever the ticket involves a flow (anything past a trivial one-step change); skip only for pure copy/config/no-flow tweaks.
+
+## Optional sections — add ONLY when THIS ticket clearly needs it (default: omit)
+- `## User Flow` — numbered steps, when behaviour isn't obvious from the summary and the diagram.
+- `## Open Questions` — real unresolved blockers, each with an owner. Not a dumping ground.
+- `## Dependencies`, `## Designs / References` — only if they change what a dev does.
+
+Do NOT add `## Background / Why`, `## Assumptions`, or `## Scope` by default. Most tickets don't need them, and they're the first thing users cut.
+
+## Hard rules
+- **Never invent context.** Do not write Background, Why, business rationale, or motivation unless it's stated in the ticket or verifiable in code/spikes. Fabricated rationale gets caught and destroys trust — omit it instead.
+- **Ground every claim in real code.** Before naming a file, surface, page, or handler, open it and confirm it's the one actually involved. Don't assume which repo/page/webhook applies — verify. A wrong file reference is worse than none.
+- **No reader-facing meta.** A dev reads the ticket, not your reasoning about it. No "I assumed…", no self-narration, no challenged-assumptions commentary in the output.
+- **Terse.** Bullets over prose. One-line acceptance criteria. Cut anything a dev wouldn't act on.
 
 ## Agent Instructions
-- Read the existing ticket content; determine ticket type (feature, bugfix, feature, refactor).
-- Identify what's missing or incomplete.
-- Fill gaps intelligently — don't blindly apply all sections.
-- Challenge assumptions: for each, ask "is this actually true?" and document.
-- Eliminate ambiguity: replace vague language with specific, testable criteria.
-- For non-trivial flows: generate Mermaid, render to PNG via `npx @mermaid-js/mermaid-cli -i input.mmd -o output.png`, save alongside ticket file, embed as `![Flow Diagram](./{filename}.png)`.
+- Read the existing ticket; keep well-written content — enhance, don't rewrite good work.
+- Identify what's genuinely missing to make it actionable, and fill just that.
+- Replace vague language with specific, testable criteria.
+- Flow diagram: `npx @mermaid-js/mermaid-cli -i input.mmd -o output.png`, save alongside the ticket, embed as `![Flow](./{filename}.png)`.
 - Preserve YAML frontmatter.
-- Preserve existing well-written content — enhance, don't rewrite.
-- Write refined content back to the local file path provided in the prompt.
-- Report back with summary of changes.
-
-## Gold Standard Reference
-- **Summary**: Plain-English description.
-- **Background/Why**: Business rationale.
-- **User Flow**: Steps.
-- **Acceptance Criteria**: Grouped, checkboxed, testable.
-- **Open Questions**: Unresolved ambiguities.
-- **Designs**: With screenshots/mockups.
+- Write the refined content back to the local file path provided in the prompt.
+- Report back with a short summary of changes.

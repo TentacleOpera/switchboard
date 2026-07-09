@@ -1,6 +1,8 @@
 ---
-name: clickup_move_task
+name: clickup-move-task
 description: Move a ClickUp task to a different list via LocalApiServer
+allowed-tools: Bash
+disable-model-invocation: true
 ---
 
 # Move ClickUp Task

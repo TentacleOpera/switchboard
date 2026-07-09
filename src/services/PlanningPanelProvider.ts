@@ -304,6 +304,7 @@ export class PlanningPanelProvider {
     private _pendingProjectMessages: any[] = [];
     private _projectPanelReadyTimer: NodeJS.Timeout | undefined;
     private _projectPanelOpening: Promise<void> | undefined;
+    private _projectPanelRestoring = false;
     private _disposables: vscode.Disposable[] = [];
     private _latestRequestIds: Map<string, number> = new Map();
     private _registeredRootsKey: string | null = null;
@@ -567,21 +568,65 @@ export class PlanningPanelProvider {
         return { path: null, source: 'not found' };
     }
 
+    /**
+     * Signal that a project-panel serializer restore may be in-flight.
+     * Called from extension.ts ONLY after confirming a switchboard-project
+     * tab exists in the editor layout (via TabGroups API). openProject()
+     * will wait briefly for the serializer before creating a duplicate.
+     */
+    public markProjectPanelRestoring(): void {
+        this._projectPanelRestoring = true;
+        // Safety net: if VS Code never calls the serializer (e.g., the tab was
+        // closed externally after layout save, or lazy-restored in a background
+        // group), clear the flag after a generous timeout so openProject()
+        // isn't permanently blocked.
+        setTimeout(() => {
+            if (this._projectPanelRestoring) {
+                console.warn('[ProjectPanel] Restore flag still set after 8s — clearing (serializer may not fire for this session).');
+                this._projectPanelRestoring = false;
+            }
+        }, 8000);
+    }
+
     public async openProject(): Promise<void> {
         if (this._projectPanelOpening) {
             await this._projectPanelOpening;
             if (this._projectPanel) {
-                this._projectPanel.reveal(vscode.ViewColumn.One);
+                // Reveal the panel where it currently lives. Passing an explicit
+                // ViewColumn.One would relocate it into the main window's first
+                // column, yanking it out of an auxiliary ("Move Editor into New
+                // Window") window. Omit the column to reveal in place; preserve
+                // focus so we don't steal the user off the board they clicked.
+                this._projectPanel.reveal(undefined, true);
             }
             return;
         }
 
         if (this._projectPanel) {
-            this._projectPanel.reveal(vscode.ViewColumn.One);
+            this._projectPanel.reveal(undefined, true);
             if (this._projectPanelReady) {
                 this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
             }
             return;
+        }
+
+        // If a serializer restore is pending, wait briefly for it before creating
+        // a new panel. This closes the gap between activation and the serializer
+        // call that would otherwise produce a duplicate tab.
+        if (this._projectPanelRestoring) {
+            await this._waitForRestore();
+            // Re-check: the serializer may have set _projectPanel while we waited.
+            if (this._projectPanel) {
+                this._projectPanel.reveal(undefined, true);
+                if (this._projectPanelReady) {
+                    this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
+                }
+                return;
+            }
+            // Serializer didn't fire in time — fall through to create a fresh panel.
+            // The ghost tab (if any) will be overwritten when the serializer
+            // eventually fires, or it was already disposed by VS Code.
+            console.warn('[ProjectPanel] Restore wait expired — creating fresh panel.');
         }
 
         this._projectPanelOpening = this._doOpenProject();
@@ -592,10 +637,28 @@ export class PlanningPanelProvider {
         }
     }
 
+    private _waitForRestore(): Promise<void> {
+        return new Promise<void>(resolve => {
+            const checkInterval = 50; // ms
+            const maxWait = 1500; // ms — tight; serializer fires within ~200-800ms
+                                   // in practice. 1.5s is generous enough to absorb
+                                   // slow extension hosts without noticeable delay.
+            let elapsed = 0;
+            const timer = setInterval(() => {
+                elapsed += checkInterval;
+                if (this._projectPanel || !this._projectPanelRestoring || elapsed >= maxWait) {
+                    clearInterval(timer);
+                    this._projectPanelRestoring = false;
+                    resolve();
+                }
+            }, checkInterval);
+        });
+    }
+
     private async _doOpenProject(): Promise<void> {
         this._lastWebviewRootsSignature = '';
         if (this._projectPanel) {
-            this._projectPanel.reveal(vscode.ViewColumn.One);
+            this._projectPanel.reveal(undefined, true);
             return;
         }
 
@@ -647,6 +710,7 @@ export class PlanningPanelProvider {
                 this._projectPanel = undefined;
                 this._projectPanelReady = false;
                 this._projectPanelOpening = undefined;
+                this._projectPanelRestoring = false;
                 this._pendingProjectMessages = [];
                 if (this._projectPanelReadyTimer) {
                     clearTimeout(this._projectPanelReadyTimer);
@@ -923,6 +987,13 @@ export class PlanningPanelProvider {
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
+        this._projectPanelRestoring = false;
+        // If openProject() already created a panel while we waited for the
+        // serializer, dispose the ghost — we can't have two.
+        if (this._projectPanel) {
+            panel.dispose();
+            return;
+        }
         this._projectPanel = panel;
         await this._hydratePanel(this._projectPanel, true);
     }
@@ -971,6 +1042,7 @@ export class PlanningPanelProvider {
                 this._projectPanel = undefined;
                 this._projectPanelReady = false;
                 this._projectPanelOpening = undefined;
+                this._projectPanelRestoring = false;
                 this._pendingProjectMessages = [];
                 if (this._projectPanelReadyTimer) {
                     clearTimeout(this._projectPanelReadyTimer);
@@ -1110,7 +1182,11 @@ export class PlanningPanelProvider {
 
     public revealProject(): void {
         if (this._projectPanel) {
-            this._projectPanel.reveal(vscode.ViewColumn.One);
+            // Reveal in the panel's CURRENT location. An explicit ViewColumn.One
+            // relocates the panel into the main window, stealing it back out of an
+            // auxiliary window. Omitting the column reveals it in place;
+            // preserveFocus keeps the user on the board they clicked from.
+            this._projectPanel.reveal(undefined, true);
         } else {
             void this.openProject();
         }
@@ -6352,7 +6428,7 @@ Please format the updated output document strictly as follows:
                                                 const cm = fm[1].match(/^created:\s*(.+)$/m);
                                                 if (cm) { dateCreated = cm[1].trim(); }
                                                 const am = fm[1].match(/^assignees:\s*(.+)$/m);
-                                                if (am) { assignees = am[1].split(',').map(s => s.trim()).filter(Boolean); }
+                                                if (am) { assignees = am[1].split(',').map((s: string) => s.trim()).filter(Boolean); }
                                             }
                                             // Fallback to file mtime for older files lacking a `created:` field,
                                             // so they still sort in a reasonable order rather than to the end.
@@ -7949,6 +8025,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 // Clear the stale reference so openProject() creates a fresh panel.
                 this._projectPanel = undefined;
                 this._projectPanelOpening = undefined;
+                this._projectPanelRestoring = false;
             }
         }
     }
@@ -9799,6 +9876,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     this._projectPanel = undefined;
                     this._projectPanelReady = false;
                     this._projectPanelOpening = undefined;
+                    this._projectPanelRestoring = false;
                     this._pendingProjectMessages = [];
                     if (this._projectPanelReadyTimer) {
                         clearTimeout(this._projectPanelReadyTimer);

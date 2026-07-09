@@ -171,6 +171,10 @@ export class DesignService {
         return this._ctx.handleMessage({ type: 'sendClaudeArtifactPrompt', ...payload });
     }
 
+    async "sendClaudeImportPrompt"(payload: any): Promise<any> {
+        return this._ctx.handleMessage({ type: 'sendClaudeImportPrompt', ...payload });
+    }
+
     async "serveAndOpenHtml"(payload: any): Promise<any> {
         return this._ctx.handleMessage({ type: 'serveAndOpenHtml', ...payload });
     }

@@ -1,6 +1,6 @@
 ---
 name: improve-feature
-description: Reconcile and restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent
+description: "Reconcile and restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent"
 ---
 
 # Improve Feature

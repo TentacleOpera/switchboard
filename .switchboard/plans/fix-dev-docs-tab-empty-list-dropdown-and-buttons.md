@@ -188,3 +188,7 @@ Per session directives (SKIP TESTS, SKIP COMPILATION) and project convention, ve
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder.**
+
+---
+
+**Completion Report:** Implemented all four fixes. Added `buildSidebarToggleRow` in `src/webview/planning.js` so `renderDevDocsList` no longer throws, restored the file list, and wired the Dev Docs sidebar toggle with persisted collapse state. Added `class="workspace-filter-select"` to the workspace `<select>` in `src/webview/planning.html`. Synced the Dev Docs workspace picker by sending `fetchKanbanPlans` on tab entry, resolving defaults from `kanbanFilters.workspaceRoot` with a `normalizeFsPath` comparison, and persisting explicit overrides via `devdocs.root`. Enabled the `Import` button in `populateDevDocsAndNotebookFilters` and removed the `disabled = true` lines from the delete handlers so the button stays available. `node --check` passed on `planning.js` and the diff is limited to the expected two files. No compile or test steps were run per the session directives.

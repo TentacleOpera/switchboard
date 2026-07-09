@@ -31,8 +31,6 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 ---
 
 <!-- switchboard:agents-protocol:start -->
-<!-- switchboard:agents-protocol:start -->
-<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
@@ -66,7 +64,7 @@ Before EVERY response, you MUST:
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow or uses a recognized natural-language trigger listed in the table above (e.g. "start memo capture").
 3. **If a command match is found**: Read the workflow file with `view_file .agents/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
-4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query_switchboard_kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
+4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query-switchboard-kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
 5. **If no match is found**: Respond normally.
 
 ### Execution Rules
@@ -102,7 +100,7 @@ All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
 ```
 
-Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query_switchboard_kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill. The **orchestrator persona** is the sanctioned exception — it moves cards via `move-card.js`/`POST /kanban/move` (the API path a human's click takes), never via SQL.
+Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query-switchboard-kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill. The **orchestrator persona** is the sanctioned exception — it moves cards via `move-card.js`/`POST /kanban/move` (the API path a human's click takes), never via SQL.
 
 ### 📚 Available Skills
 
@@ -111,24 +109,29 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | Skill | When to Use |
 |-------|-------------|
 | `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
-| `clickup_api` | Direct ClickUp API access via LocalApiServer proxy (replaces call_clickup_api) |
-| `clickup_attach` | Attach files to ClickUp tasks via LocalApiServer (replaces clickup_attach) |
-| `clickup_create_subpage` | Create doc pages in ClickUp via LocalApiServer (replaces clickup_create_subpage) |
-| `clickup_create_task` | Create ClickUp tasks with optional subtasks via LocalApiServer (replaces clickup_create_task) |
-| `clickup_fetch` | Fetch ClickUp tasks/lists with name resolution (replaces clickup_fetch) |
-| `clickup_modify_task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
-| `clickup_move_task` | Move a ClickUp task to a different list via LocalApiServer |
-| `linear_move_issue` | Move a Linear issue to a different project via LocalApiServer |
-| `generate_diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
+| `clickup-api` | Direct ClickUp API access via LocalApiServer proxy (replaces call_clickup_api) |
+| `clickup-attach` | Attach files to ClickUp tasks via LocalApiServer (replaces clickup_attach) |
+| `clickup-create-subpage` | Create doc pages in ClickUp via LocalApiServer (replaces clickup_create_subpage) |
+| `clickup-create-task` | Create ClickUp tasks with optional subtasks via LocalApiServer (replaces clickup_create_task) |
+| `clickup-fetch` | Fetch ClickUp tasks/lists with name resolution (replaces clickup_fetch) |
+| `clickup-modify-task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
+| `clickup-move-task` | Move a ClickUp task to a different list via LocalApiServer |
+| `linear-move-issue` | Move a Linear issue to a different project via LocalApiServer |
+| `generate-diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
+| `get-tickets` | Fetch tickets from the local Switchboard API proxy (ClickUp/Linear) for the current workspace. |
 | `review` | User asks to review code changes, a PR, or specific files |
-| `query_switchboard_kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
+| `query-switchboard-kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
 | `kanban_operations` | Move kanban cards via move-card.js — MANUAL FALLBACK ONLY, use only when user explicitly requests a card move |
 | `query_archive` | Query the DuckDB archive directly using duckdb CLI |
-| `complexity_scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
-| `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
-| `notion_api` | Post a reply back to a Notion-driven Remote Control card via the `/comment` bridge (provider `notion`) |
-| `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
-| `deep_planning` | User requests complex code changes requiring architecture understanding |
+| `query-kanban-plans` | Query the Kanban database for plans by workspace name, project, and features. |
+| `complexity-scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
+| `linear-api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
+| `notion-api` | Post a reply back to a Notion-driven Remote Control card via the `/comment` bridge (provider `notion`) |
+| `web-research` | User asks to "research X", "investigate Y", or needs authoritative sources |
+| `deep-planning` | User requests complex code changes requiring architecture understanding |
+| `advise_research` | When planning, flag uncertain assumptions and supply a ready-to-run web-research prompt to confirm them. |
+| `constitution-builder` | Build or refine a project constitution (coding standards and conventions) for the workspace. |
+| `tuning` | Tune Switchboard agent behavior and workflow settings. |
 | `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
 | `switchboard` | User types `/switchboard` or doesn't know which skill they need — front door that detects local vs remote and routes the request to the right skill. |
 | `switchboard-chat` | Local consultative planning mode. Reached via `/switchboard` in local mode (the `/sw` alias was retired). Reads kanban state so you can reference columns and chain workflows. |
@@ -140,7 +143,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `create-feature` | Create a Switchboard feature from a remote session by writing the feature file directly to `.switchboard/features/` — use when the VS Code extension is not running and `create-feature.js` is unreachable |
 | `create-feature-from-plans` | Create a Switchboard feature from a known set of plans when the extension is running — runs create-feature.js |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
-| `worktree_cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
+| `worktree-cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
 | `switchboard-orchestrator` | Launched by the Orchestration automation mode (Start orchestrator button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). Manual `/switchboard-orchestrator` is for deliberate resume/debug only. |
 | `switchboard-manage` | Host-agnostic management console — drive the board, plans, features, and dispatch from any agentic coding host with VS Code minimised. Consultative persona: report state on entry, then wait for user direction. Automation is opt-in only. Replaces the old human `/switchboard-orchestrator` slash command. |
 | `switchboard-orchestration` | Fleet coding/review agents working inside orchestration worktrees — discover the API port, read board/features/plans/worktrees, file requests to the orchestrator, and read the session log via HTTP endpoints. |

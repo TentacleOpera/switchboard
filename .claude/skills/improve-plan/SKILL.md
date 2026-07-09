@@ -18,11 +18,11 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 
     Never silently delete a conclusion and write a new one in its place. The callout is the audit trail — without it, the change is a protocol violation.
 - **SESSION vs PRODUCT SCOPE**: Session directives (e.g. "single-repo", "skip compilation", "skip tests") constrain HOW you verify and organize the plan, not WHAT the plan covers. Do not conflate repo structure constraints with product feature requirements. If the plan targets multi-root workspaces, you must preserve and improve that scope regardless of the current session's repo configuration.
-- **SINGLE PASS**: Complete enhancement, dependency checks, adversarial critique, balanced synthesis, and plan update in one continuous response.
+- **SINGLE PASS**: Complete enhancement, dependency checks, the architecture challenge (Step 3), adversarial critique, balanced synthesis, and plan update in one continuous response.
 
-## Target is an feature? Use improve-feature instead
+## Target is a feature? Use improve-feature instead
 
-If the target file is under `.switchboard/features/` or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` block, this is an **feature**, not a single plan. Stop and use the **`improve-feature`** skill — it improves every subtask and is authorised to restructure the set (merge/delete/rewrite/split). This `improve-plan` workflow is for a single plan and is deliberately non-destructive, which is the wrong contract for an feature.
+If the target file is under `.switchboard/features/` or contains an auto-generated `<!-- BEGIN SUBTASKS ... -->` block, this is a **feature**, not a single plan. Stop and use the **`improve-feature`** workflow — it improves every subtask and is authorised to restructure the set (merge/delete/rewrite/split). This `improve-plan` workflow is for a single plan and is deliberately non-destructive, which is the wrong contract for a feature.
 
 ## Steps
 
@@ -42,6 +42,10 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
       - **Complexity:** 1-10
       - **Repo:** Bare sub-repo folder name if applicable
    3. **## User Review Required**
+
+   ### Project Pinning
+   When creating or updating a plan, include `**Project:** <name>` in the Metadata section if a project is active or the user named one. The workspace/repo name is NOT a project — never pin it (the importer silently drops workspace-name pins to unassigned). If no project is active and the user didn't name one, omit the line — never ask the user which project to use. See AGENTS.md "Plan Project Pinning" for the full protocol.
+
    4. **## Complexity Audit**
       - **### Routine** — bullet points or plain text listing routine aspects
       - **### Complex / Risky** — bullet points or plain text listing complex/risky aspects (or "- None" if empty)
@@ -84,12 +88,25 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
    - 7-8: High — new patterns, complex state, security-sensitive
    - 9-10: Very High — architectural changes, new framework integrations
 
-3. **Run the internal adversarial review**
+3. **Challenge the approach (architecture review) — ALWAYS run; NEVER gate on complexity**
+
+   Self-assessed complexity is unreliable: the most dangerous plans are the ones an agent *under*-scores ("this looks small"). So this step runs on **every** plan regardless of the Complexity score, and BEFORE the execution-level critique in the next step.
+
+   Begin by answering in one line: **does this plan embody a real approach/design choice, or is it a purely mechanical change (typo, copy, config, single-call bugfix) with no design surface?**
+   - If genuinely mechanical → write "No design choice — mechanical change" and proceed to Step 4. You must state this explicitly; you may NOT skip it silently. A wrong "this is mechanical" is exactly the failure this step exists to catch, so claim it only when there is truly nothing to decide.
+   - Otherwise, challenge the approach the plan commits to:
+     - **Name it.** State the plan's chosen approach in one sentence — the structure/pattern/mechanism, not the goal.
+     - **Alternatives.** List 2–3 genuinely different approaches that could meet the same goal; one line of trade-off each.
+     - **Justify or supersede.** Argue why the plan's approach is the best of the set — OR, if an alternative is clearly better, correct the plan's approach with a **Superseded** callout and flag it in chat. Do not stay inside the plan's frame just because it is the frame.
+     - **Goal-vs-appearance probe (the load-bearing question):** does this approach actually *achieve the stated goal*, or only *appear* to? Name any way the plan could pass its own success check while the real goal is unmet — e.g. a completeness metric that counts scaffolding as "done"; an interface that abstracts a *call* without decoupling the *logic* behind it; a surface that is *reachable* but not *usable* (e.g. returns success but no data). If such a gap exists, it is a top finding — a green metric is NEVER a substitute for this judgment.
+   - **Output:** write this architecture review to the chat response (like the Grumpy critique below), so the user can see the approach was actually challenged and veto it. It is separate from, and precedes, the execution-level adversarial review.
+
+4. **Run the internal adversarial review**
     - First, produce a sharp Grumpy-style critique focused on assumptions, risks, race conditions, missing error handling, and validation gaps. Adopt a dramatic "Grumpy Architect" voice — incisive, specific, and theatrical. This voice is part of the planner's quality standard and must be preserved regardless of output-compression directives.
    - Immediately follow with a balanced synthesis that keeps valid concerns, rejects weak ones, and converges on the strongest execution strategy.
    - **Output:** Write the full Grumpy and Balanced critiques to the chat response as formatted markdown — do not only write them to the plan file. The user must be able to read the critique directly in chat without opening the plan. In the plan file's `## Adversarial Synthesis` section, include only a 2-3 sentence Risk Summary (e.g., "Key risks: X, Y, Z. Mitigations: A, B."). **Output the adversarial critique exactly once. Do not repeat it.**
 
-4. **Update the original plan file**
+5. **Update the original plan file**
    - Write the improvement findings back into the same feature plan file.
    - Preserve all factual context (goal statements, requirements, constraints, scope) per the CONTENT PRESERVATION rule. Correct superseded conclusions and approaches using superseded callout blocks — never silently delete.
    - Mark completed checklist items when appropriate.

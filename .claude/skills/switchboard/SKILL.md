@@ -1,15 +1,11 @@
 ---
 name: switchboard
-description: Front door for Switchboard — routes the user's request to the right Switchboard skill so they never have to know skill names
+description: "Front door for Switchboard — routes the user's request to the right Switchboard skill so they never have to know skill names"
 ---
 
 # Switchboard
 
 The single entry point. The user describes what they want in plain language and **you** pick the skill — they never have to memorize skill names.
-
-## `/switchboard` never implements
-
-This is a **planning/routing front door** — in a `/switchboard` turn you do NOT write, edit, or suggest code changes, and you do NOT open files to start implementing. Any request to **build, add, change, fix, or implement** something — including imperative asks like *"add a button that…"*, *"this needs to…"*, *"make X do Y"* — routes to **`switchboard-chat`** (planning) unless it matches a more specific skill in the table below. The **plan is the deliverable**; code happens later, via the kanban/coding flow the user chooses. If you catch yourself about to edit a source file from a `/switchboard` turn, stop — you've skipped the routing step.
 
 ## The opener
 
@@ -19,7 +15,7 @@ When the user types a bare `/switchboard` (no request attached), reply with a **
 > - **Plan something** — talk it through and I'll write up a plan you can merge
 > - **Capture ideas fast** — dump thoughts now, sort them later
 > - **Sharpen an existing plan** — deepen or pressure-test one you've already got
-> - **Group related plans into an feature**
+> - **Group related plans into a feature**
 >
 > What are you working on?
 
@@ -33,10 +29,10 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 
 | The user wants to… | Use |
 | :--- | :--- |
-| Plan, consult, or **build / add / change / fix / implement** anything — including imperative asks (*"add a button that…"*, *"this needs to…"*, *"make X do Y"*) | **`switchboard-chat`** (writes plan files you merge on the branch — the plan is the deliverable, not code). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
+| Plan / consult on what to build | **`switchboard-chat`** (writes plan files you merge on the branch). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
 | Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) |
 | Deepen / adversarially review **one** plan | **`improve-plan`** |
-| Reconcile & restructure an **feature's** subtasks | **`improve-feature`** |
+| Reconcile & restructure a **feature's** subtasks | **`improve-feature`** |
 | Split **one plan** into Complex/Risky + Routine tiers | **`switchboard-split`** |
 | Tier a whole **feature** by complexity (high/low) | **`improve-feature`** high/low mode |
 | Create a new feature | **`create-feature`** |
@@ -55,4 +51,4 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 - **Chain when natural**, e.g. planning → `create-feature` → `improve-feature`.
 - **Surface a gap only when a request actually hits one.** A few skills need the running extension (`clickup-*`, `improve-remote-plan`, live `kanban.db`/DuckDB reads). In a remote session, don't preemptively warn about them — only if the user asks for one, say the direct route needs the extension and offer the remote equivalent (plan work → plain plan-file edits with `**Feature:**`/`**Project:**` frontmatter; board moves → Notion/Linear MCP).
 - **Only ask a question if genuinely ambiguous**, and then just one; otherwise pick the best fit and proceed.
-- **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded in here — do not tell users to type them.
+- **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them.

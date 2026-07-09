@@ -204,3 +204,30 @@ The ClickUp render (`:9843`, reads `a.username || a.email`) and the Linear rende
 ## Completion Report
 
 Implemented the file-backed assignee pipeline for the Tickets tab sidebar. Added `assignees:` frontmatter writes in `src/services/TaskViewerProvider.ts` for both ClickUp and Linear imports, parsed that frontmatter in both `listLocalTicketFiles` and `_scanLocalTicketFiles` in `src/services/PlanningPanelProvider.ts`, and updated `src/webview/planning.js` to map the parsed assignee strings into the existing ClickUp/Linear render shapes instead of hardcoding empty values. Added `Array.isArray` guards in the webview mapping for defensive runtime safety. ESLint and `node --check` passed; compilation and automated tests were skipped per session directives.
+
+## Reviewer Pass (2026-07-09)
+
+Direct in-place reviewer pass against this plan as source of truth. All four planned touchpoints were verified in the committed code (`728e8b7`); the implementation matches the plan and the render shapes align with their consumers.
+
+**Verified touchpoints**
+- `TaskViewerProvider.ts:6124-6129` (ClickUp writer) and `:5853-5854` (Linear writer) — assignee `assignees:` frontmatter written, defensively, after the existing `parentId` push. Gated on `createdAt` exactly like the sibling `status`/`statusType` keys (existing behaviour, not a regression).
+- `PlanningPanelProvider.ts:6333/6354-6355/6387` (DB-backed `listLocalTicketFiles`) — `let assignees` is declared **inside** the `for (const dbT of dbTickets)` body, so it resets per row (no cross-row leak); parse + push present.
+- `PlanningPanelProvider.ts:9429/9436/9446` (fallback `_scanLocalTicketFiles`) — mirrored parse + push present, so the fallback does not regress to "Unassigned".
+- `planning.js:5172` (ClickUp map → `[{ username }]`) and `:5184` (Linear map → `{ name }`) — consumed unchanged by `_renderClickUpTicketCard` at `:9847` (`a.username || a.email`) and `_renderLinearTicketCard` at `:9875` (`assignee?.name || assignee?.email`). Shapes match.
+
+**Adversarial checks that passed**
+- No third sidebar-row builder: only two `localTicketFilesListed` emit points exist (`:6247` empty early-return, `:6404` real emit); the four other `assignees: []` / `assignee: null` literals in `planning.js` (`:5212/5225/5280/5287`) are `selectedClickUpIssue`/`selectedLinearIssue` **detail-view placeholders**, not sidebar rows — out of scope, no regression.
+- Type-safety: `LinearIssue.assignee` is declared `{ id; name; email } | null` (`LinearSyncService.ts:59`), so `issue?.assignee?.name` type-checks; the ClickUp writer's `task` is `any`, so its `.map` carries no implicit-any break.
+- Legacy blockquote writer (`ClickUpSyncService.ts:3159/3175`) confirmed present and correctly left untouched — it does not feed the file-backed sidebar.
+- `node --check src/webview/planning.js` → SYNTAX OK.
+
+**Findings (see summary below)** — no CRITICAL/MAJOR. Two NITs, both already accepted as residual risk in the Adversarial Synthesis; no code changes applied.
+
+**Files changed by this reviewer pass:** none (no material fix warranted).
+
+**Verification run:** read-based structural review + `node --check` on the webview JS (passed) + type-field confirmation for the two `.ts` edits. Compilation and automated tests skipped per session directives (SKIP COMPILATION / SKIP TESTS).
+
+**Remaining risks (cosmetic only, unchanged from plan):**
+- A display name containing a literal comma splits into two names in the sidebar (frontmatter is regex/single-line parsed, not YAML). No crash, no data loss.
+- A ClickUp user without a `username` renders by email in both the live and file-backed paths (consistent between them).
+- Legacy already-imported files show "Unassigned" until healed by **Refetch** (`forceFull`), a closed-status filter switch, or a remote update — as documented; assignees are display-only derived data, so no migration/`.bak` is needed.

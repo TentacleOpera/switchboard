@@ -42,7 +42,13 @@ export function cleanupTerminalSendLock(key: string): void {
 
 // Named timing constants for clipboard paste operations
 const PRE_PASTE_SETTLE_MS = 200;
-const POST_PASTE_SETTLE_MS = 800;
+
+// Connection-aware paste settle delay. Web research confirmed 100ms is safe
+// for local terminals but unsafe for Remote-SSH (50-200ms RTT) where the
+// Enter sequence can arrive before the clipboard buffer transfers.
+// vscode.env.remoteName is undefined for local, non-undefined for remote.
+const isRemoteTerminal = () => vscode.env.remoteName !== undefined;
+const POST_PASTE_SETTLE_MS = () => isRemoteTerminal() ? 300 : 100; // was 800
 
 /**
  * Paste text to terminal via clipboard to bypass PTY line-buffer limits.
@@ -86,7 +92,7 @@ export async function pasteTextViaClipboard(
         }
 
         await vscode.commands.executeCommand('workbench.action.terminal.paste');
-        await new Promise(r => setTimeout(r, POST_PASTE_SETTLE_MS));
+        await new Promise(r => setTimeout(r, POST_PASTE_SETTLE_MS()));
         try { await vscode.env.clipboard.writeText(previousClipboard); } catch { /* ignore */ }
     });
 }
@@ -124,8 +130,8 @@ export async function sendRobustText(
 ): Promise<void> {
     const CHUNK_SIZE = 500;
     const CHUNK_DELAY = 50; // ms between chunks
-    const NEWLINE_DELAY = paced ? 1000 : 100; // adaptive delay before submission
-    const CLI_CONFIRM_ENTER_DELAY = paced ? 350 : 150;
+    const NEWLINE_DELAY = paced ? (isRemoteTerminal() ? 600 : 300) : 100; // was 1000 / 100 — adaptive delay before submission
+    const CLI_CONFIRM_ENTER_DELAY = paced ? (isRemoteTerminal() ? 300 : 150) : 100; // was 350 / 150
     const isCliAgent = /\b(copilot|gemini|agy|claude|windsurf|cursor|cortex)\b/i.test(terminal.name);
     const _log = (msg: string) => { log?.(msg); console.log(`[sendRobustText] ${msg}`); };
 

@@ -27,7 +27,7 @@
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
         kanbanListCollapsed: persistedState.kanbanListCollapsed || false,
-        devdocsListCollapsed: false,
+        devdocsListCollapsed: persistedState.devdocsListCollapsed || false,
         editMode: { docs: false, local: false, kanban: false, online: false, devdocs: false },
         editOriginalContent: { docs: null, local: null, kanban: null, online: null, devdocs: null },
         dirtyFlags: { docs: false, local: false, kanban: false, online: false, devdocs: false },
@@ -1920,6 +1920,9 @@
         } else if (activeTab === 'html') {
             state.htmlPreviewCollapsed = !state.htmlPreviewCollapsed;
             applySidebarState('html', state.htmlPreviewCollapsed);
+        } else if (activeTab === 'devdocs') {
+            state.devdocsListCollapsed = !state.devdocsListCollapsed;
+            applySidebarState('devdocs', state.devdocsListCollapsed);
         } else {
             state.docsListCollapsed = !state.docsListCollapsed;
             applySidebarState('docs', state.docsListCollapsed);
@@ -1933,7 +1936,8 @@
             docsListCollapsed: state.docsListCollapsed,
             ticketsPreviewCollapsed: state.ticketsPreviewCollapsed,
             kanbanListCollapsed: state.kanbanListCollapsed,
-            htmlPreviewCollapsed: state.htmlPreviewCollapsed
+            htmlPreviewCollapsed: state.htmlPreviewCollapsed,
+            devdocsListCollapsed: state.devdocsListCollapsed
         });
     }
 
@@ -1988,6 +1992,7 @@
             vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
         }
         if (tabName === 'devdocs') {
+            vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
             vscode.postMessage({ type: 'loadDevDocs' });
         }
         if (tabName === 'notebook') {
@@ -4395,7 +4400,6 @@
                         if (devdocsPreviewContent) devdocsPreviewContent.innerHTML = '<div class="empty-state">Select a dev doc to view it</div>';
                         if (btnEditDevdocs) btnEditDevdocs.disabled = true;
                         if (btnDeleteDevdocs) btnDeleteDevdocs.style.display = 'none';
-                        if (btnImportDevdoc) btnImportDevdoc.disabled = true;
                         if (btnAgentDevdoc) { btnAgentDevdoc.disabled = true; btnAgentDevdoc.textContent = 'Draft with agent'; }
                     }
                     vscode.postMessage({ type: 'loadDevDocs' });
@@ -4423,7 +4427,6 @@
                         if (devdocsPreviewContent) devdocsPreviewContent.innerHTML = '<div class="empty-state">This dev doc was deleted on disk.</div>';
                         if (btnEditDevdocs) btnEditDevdocs.disabled = true;
                         if (btnDeleteDevdocs) btnDeleteDevdocs.style.display = 'none';
-                        if (btnImportDevdoc) btnImportDevdoc.disabled = true;
                         if (btnAgentDevdoc) { btnAgentDevdoc.disabled = true; btnAgentDevdoc.textContent = 'Draft with agent'; }
                         showToast('This dev doc was deleted on disk.', 'error');
                     }
@@ -8147,32 +8150,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    const isShareLink = (url) => /claude\.ai\/share\//i.test(url);
-
-    const ARTIFACT_DOWNLOAD_PROMPT = ({ url, folder }) => {
-        if (isShareLink(url)) {
-            return `WARNING: The URL ${url} is a claude.ai SHARE link, not a Claude Code artifact.\n` +
-                `Share links are immutable snapshots — WebFetch will retrieve only a React shell or a 403, ` +
-                `and the Artifact tool cannot republish to this URL.\n` +
-                `Ask the artifact owner to share the claude.ai/code/artifact/ URL instead.\n` +
-                `If you want to proceed anyway, WebFetch may return the rendered content if you are logged in, ` +
-                `but you will not be able to push edits back to this URL.`;
-        }
-        return `Download a claude.ai artifact into this repo so I can preview and edit it locally.\n\n` +
-            `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability ` +
-            `enabled in your org settings. If you are not logged in, run /login first.\n\n` +
-            `1. Use WebFetch to retrieve the content at: ${url}\n` +
-            `   (WebFetch passes your active claude.ai session credentials, so it gets the rendered content, not the React shell.)\n` +
-            `2. Normalize to publish-ready form so the file round-trips without reformatting later. WebFetch returns the HOST-WRAPPED page — claude.ai's own skeleton (a frame-navigation <script>, a viewport meta, a CSS reset) PLUS the original document nested inside its <body>. Discard the host skeleton AND strip the document's own outer <!DOCTYPE>/<html>/<head>/<body> tags, keeping only the real inner content (the real <title>, the author's <style>/<script>, meta description). Add a single <meta charset="utf-8"> line so special characters render in local preview. Keep ALL assets inlined (data: URIs / inline <style>/<script>) and do NOT add external fonts/CSS/JS/images — the artifact host's CSP blocks them. This strip is REQUIRED, not cosmetic: the platform double-wraps rather than strips (confirmed), so skipping it nests another host skeleton on every round-trip.\n` +
-            `3. Name the file from the artifact's <title> or first heading (slugify it, .html extension). ` +
-            `If no title is available, fall back to a slug derived from the URL path.\n` +
-            `4. Save the normalized content to: ${folder ? folder + '/' : ''}<chosen-filename>\n` +
-            (folder ? `` : `   (No HTML folder is configured in Switchboard — after saving, add this file's folder via "Manage HTML Folders" to preview it in the HTML tab.)\n`) +
-            `5. Make the FIRST line of the saved file this marker so the round-trip knows the source:\n` +
-            `   <!-- switchboard-artifact-source: ${url} -->\n` +
-            `6. Report the local path you saved.`;
-    };
-
     const ARTIFACT_UPLOAD_PROMPT = ({ url, folder, filename }) =>
         `Publish a local document back to claude.ai as an Artifact.\n\n` +
         `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability enabled.\n\n` +
@@ -8194,31 +8171,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
         return (input ? input.value.trim() : '');
     };
 
-    let artifactDirectionIsDownload = true; // default: download
-
-    const directionBtn = document.getElementById('btn-artifact-direction');
-    function updateDirectionLabel() {
-        if (directionBtn) {
-            directionBtn.textContent = artifactDirectionIsDownload ? '⇅ Download' : '⇅ Upload';
-            directionBtn.title = artifactDirectionIsDownload
-                ? 'Download: fetch artifact from claude.ai → save locally. Click to switch to Upload.'
-                : 'Upload: publish local file → claude.ai. Click to switch to Download.';
-        }
-    }
-    if (directionBtn) {
-        directionBtn.addEventListener('click', () => {
-            artifactDirectionIsDownload = !artifactDirectionIsDownload;
-            updateDirectionLabel();
-        });
-    }
-    updateDirectionLabel();
-
     function buildArtifactPrompt() {
         const url = getArtifactUrlInput();
-        if (artifactDirectionIsDownload) {
-            const folder = getHtmlFolderFallback();
-            return { prompt: ARTIFACT_DOWNLOAD_PROMPT({ url, folder }), kind: 'download' };
-        }
         const folder = state.activeDocSourceFolder || getHtmlFolderFallback();
         const filename = state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html');
         return { prompt: ARTIFACT_UPLOAD_PROMPT({ url, folder, filename }), kind: 'upload' };
@@ -11387,13 +11341,30 @@ Instructions:
     let _notebookWorkspaceRoot = '';
     let _notebookHydrated = false;
 
+    function buildSidebarToggleRow(collapsed) {
+        const row = document.createElement('div');
+        row.className = 'sidebar-toggle-row';
+        const btn = document.createElement('button');
+        btn.className = 'sidebar-toggle-btn';
+        btn.title = 'Toggle sidebar';
+        btn.textContent = collapsed ? '»' : '«';
+        btn.addEventListener('click', () => {
+            state.devdocsListCollapsed = !state.devdocsListCollapsed;
+            applySidebarState('devdocs', state.devdocsListCollapsed);
+            const currentPersisted = vscode.getState() || {};
+            vscode.setState({ ...currentPersisted, devdocsListCollapsed: state.devdocsListCollapsed });
+        });
+        row.appendChild(btn);
+        return row;
+    }
+
     function renderDevDocsList() {
         if (!devdocsListPane) return;
         devdocsListPane.innerHTML = '';
         devdocsListPane.appendChild(buildSidebarToggleRow(state.devdocsListCollapsed));
 
         let docs = _devDocsWsFilter
-            ? _devDocs.filter(d => d.workspaceRoot === _devDocsWsFilter)
+            ? _devDocs.filter(d => normalizeFsPath(d.workspaceRoot) === normalizeFsPath(_devDocsWsFilter))
             : _devDocs.slice();
 
         // Scope by source-type filter (docs / readme). README entries are sourceType 'readme'.
@@ -11453,6 +11424,8 @@ Instructions:
         devdocsWorkspaceFilter.addEventListener('change', () => {
             if (state.dirtyFlags.devdocs) exitEditMode('devdocs');
             _devDocsWsFilter = devdocsWorkspaceFilter.value;
+            _restoredPanelState.panel['devdocs.root'] = _devDocsWsFilter;
+            persistTab('devdocs.root', _devDocsWsFilter);
             renderDevDocsList();
         });
     }
@@ -11593,6 +11566,36 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         vscode.postMessage({ type: 'importNotebookLMPlans', workspaceRoot: getNotebookWorkspaceRoot() });
     });
 
+    function resolveDevDocsWorkspaceFilter(workspaceItems) {
+        const items = workspaceItems || [];
+        const panel = _restoredPanelState.panel || {};
+        const hasRestored = Object.prototype.hasOwnProperty.call(panel, 'devdocs.root') && panel['devdocs.root'] !== undefined;
+        const restored = hasRestored ? panel['devdocs.root'] : null;
+        const effectiveKanbanRoot = kanbanFilters.workspaceRoot || _kanbanDefaultRoot;
+
+        const restoredItem = (restored !== null && restored !== '')
+            ? items.find(item => normalizeFsPath(item.workspaceRoot) === normalizeFsPath(restored))
+            : null;
+        const kanbanItem = effectiveKanbanRoot
+            ? items.find(item => normalizeFsPath(item.workspaceRoot) === normalizeFsPath(effectiveKanbanRoot))
+            : null;
+
+        let resolved;
+        if (restored === '') {
+            resolved = '';
+        } else if (restoredItem) {
+            resolved = restoredItem.workspaceRoot;
+        } else if (kanbanItem) {
+            resolved = kanbanItem.workspaceRoot;
+        } else {
+            resolved = items[0] ? items[0].workspaceRoot : '';
+        }
+
+        _devDocsWsFilter = resolved;
+        if (devdocsWorkspaceFilter) devdocsWorkspaceFilter.value = resolved;
+        return resolved;
+    }
+
     function populateDevDocsAndNotebookFilters() {
         const devdocsWorkspaceFilter = document.getElementById('devdocs-workspace-filter');
         const notebookWorkspaceFilter = document.getElementById('notebook-workspace-filter');
@@ -11605,7 +11608,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 opt.textContent = ws.label;
                 devdocsWorkspaceFilter.appendChild(opt);
             });
-            devdocsWorkspaceFilter.value = _devDocsWsFilter || '';
+            resolveDevDocsWorkspaceFilter(_kanbanWorkspaceItems);
+            if (_devDocs.length) {
+                renderDevDocsList();
+            }
+        }
+        if (btnImportDevdoc && _kanbanWorkspaceItems.length > 0) {
+            btnImportDevdoc.disabled = false;
         }
 
         if (notebookWorkspaceFilter) {

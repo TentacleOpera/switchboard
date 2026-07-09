@@ -39,7 +39,11 @@ There is **no contradiction left** after reconciliation: the only true overlap w
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix: Project panel duplicate on window restore (serializer ghost)](../plans/fix_project-panel-restore-serializer-ghost-duplicate.md) — **PLAN REVIEWED**
-- [ ] [Review Plan opens a duplicate Project panel instead of targeting the one moved to a new window](../plans/feature_plan_20260709092124_review-plan-steals-project-panel-from-new-window.md) — **PLAN REVIEWED**
+- [ ] [Fix: Project panel duplicate on window restore (serializer ghost)](../plans/fix_project-panel-restore-serializer-ghost-duplicate.md) — **INTERN CODED**
+- [ ] [Review Plan opens a duplicate Project panel instead of targeting the one moved to a new window](../plans/feature_plan_20260709092124_review-plan-steals-project-panel-from-new-window.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+Implemented both subtasks in the prescribed order (reveal-target first, then serializer-ghost guard built on top). **Reveal-target subtask:** swapped all four `_projectPanel.reveal(vscode.ViewColumn.One)` sites in `src/services/PlanningPanelProvider.ts` (openProject opening-await branch, existing-panel fast path, `_doOpenProject` redundant guard, and `revealProject()`) to `reveal(undefined, true)` — reveal in place, preserve focus — so a floated Project panel is never yanked back into the main window and the main window is never raised/un-minimised. **Serializer-ghost subtask:** added the `_projectPanelRestoring` flag, `markProjectPanelRestoring()` (8s safety-timeout), `_waitForRestore()` (≤1.5s bounded poll), an `openProject()` restore-guard that waits for the serializer before creating a duplicate, ghost-disposal in `deserializeProjectPanel` (disposes the incoming ghost if a fresh panel already exists), and `_projectPanelRestoring = false` clears at all four `_projectPanelOpening` clear-sites (both `onDidDispose` handlers, the `dispose()` re-registration, and the `_updateWebviewRoots()` catch block). Added the conditional `vscode.window.tabGroups.all` ghost-tab check in `src/extension.ts` so the flag is armed only when a `switchboard-project` tab actually exists (zero delay when `persistPanels` is off or no prior panel). Files changed: `src/services/PlanningPanelProvider.ts`, `src/extension.ts`, and new `src/test/project-panel-restore-guard.test.js` (static-source-assertion test). No issues encountered; per session directives compilation and automated tests were skipped, verification was by read-back.
 

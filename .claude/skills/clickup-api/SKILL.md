@@ -1,6 +1,8 @@
 ---
 name: clickup-api
 description: Make direct ClickUp API calls via LocalApiServer proxy
+allowed-tools: Bash
+disable-model-invocation: true
 ---
 
 # ClickUp API Proxy

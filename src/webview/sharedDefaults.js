@@ -120,11 +120,11 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'suppressWalkthrough', label: 'Suppress Walkthrough Artifact', tooltip: 'Do not generate walkthrough.md at task completion', default: false },
-        { id: 'staggeredImplementation', label: 'Staggered Implementation', tooltip: 'After completing each subtask, append a brief summary to the feature file\'s ## Implementation Notes section so the next subtask has context from prior work', default: false },
+        { id: 'staggeredImplementation', label: 'Staggered Implementation', group: 'features', tooltip: 'After completing each subtask, append a brief summary to the feature file\'s ## Implementation Notes section so the next subtask has context from prior work', default: false },
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
         { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
     ],
     coder: [
@@ -139,11 +139,11 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'suppressWalkthrough', label: 'Suppress Walkthrough Artifact', tooltip: 'Do not generate walkthrough.md at task completion', default: false },
-        { id: 'staggeredImplementation', label: 'Staggered Implementation', tooltip: 'After completing each subtask, append a brief summary to the feature file\'s ## Implementation Notes section so the next subtask has context from prior work', default: false },
+        { id: 'staggeredImplementation', label: 'Staggered Implementation', group: 'features', tooltip: 'After completing each subtask, append a brief summary to the feature file\'s ## Implementation Notes section so the next subtask has context from prior work', default: false },
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
         { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
     ],
     reviewer: [
@@ -179,11 +179,11 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'suppressWalkthrough', label: 'Suppress Walkthrough Artifact', tooltip: 'Do not generate walkthrough.md at task completion', default: false },
-        { id: 'staggeredImplementation', label: 'Staggered Implementation', tooltip: 'After completing each subtask, append a brief summary to the feature file\'s ## Implementation Notes section so the next subtask has context from prior work', default: false },
+        { id: 'staggeredImplementation', label: 'Staggered Implementation', group: 'features', tooltip: 'After completing each subtask, append a brief summary to the feature file\'s ## Implementation Notes section so the next subtask has context from prior work', default: false },
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
         { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
     ],
     analyst: [

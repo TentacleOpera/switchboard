@@ -422,6 +422,23 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
+    // Phase 1 Workstream A: start the idle-eviction sweep + apply the resident-DB budget
+    // from settings. The sweep evicts cached KanbanDatabase instances idle > 10 min
+    // (except the active workspace) and aggressively evicts when summed resident size
+    // crosses the budget — the primary defense against sql.js WASM heap exhaustion.
+    KanbanDatabase.startEvictionSweep();
+    const budgetMb = vscode.workspace.getConfiguration('switchboard').get<number>('kanban.residentDbBudgetMb', 500) ?? 500;
+    KanbanDatabase.setResidentDbBudgetMb(budgetMb);
+
+    // Phase 1 Workstream D: one-time cleanup of stale diagnostic files left by the
+    // removed per-persist feature-clobber probe.
+    const allRoots = (kanbanProvider as any)._getWorkspaceRoots?.() as string[] | undefined;
+    if (allRoots && allRoots.length > 0) {
+        KanbanDatabase.cleanupDiagnosticFiles(allRoots);
+    } else if (workspaceRoot) {
+        KanbanDatabase.cleanupDiagnosticFiles([workspaceRoot]);
+    }
+
     // Migrate any cards stranded in deprecated columns (CONTEXT GATHERER, CODE_RESEARCHER, SPLITTER)
     // to PLAN REVIEWED. Runs once at activation; idempotent (no-op once no cards remain).
     if (workspaceRoot) {
@@ -431,6 +448,19 @@ export async function activate(context: vscode.ExtensionContext) {
             const workspaceId = await (kanbanProvider as any)._readWorkspaceId(workspaceRoot);
             if (workspaceId) {
                 await db.migrateDeprecatedColumns(workspaceId);
+                // Phase 2: reconcile any transient double-home (hot+cold) from a prior
+                // interrupted partition BEFORE the first board read, so no reader
+                // observes a plan in both stores. Runs after migrations (V55 may have
+                // just partitioned) and is a no-op when no archive exists.
+                await db.reconcileHotCold().catch((e: unknown) => console.warn('[Switchboard] Hot/cold reconcile skipped:', e));
+                // Phase 1 Workstream C: run telemetry retention on activation (daily
+                // cadence; the periodic re-run is handled by the board refresh path).
+                const peDays = vscode.workspace.getConfiguration('switchboard').get<number>('kanban.planEventsRetentionDays', 90) ?? 90;
+                const alDays = vscode.workspace.getConfiguration('switchboard').get<number>('kanban.activityLogRetentionDays', 30) ?? 30;
+                void db.runTelemetryRetention({
+                    planEventsOlderThanDays: peDays,
+                    activityLogOlderThanDays: alDays,
+                }).catch((e: unknown) => console.warn('[Switchboard] Telemetry retention skipped:', e));
             }
         } catch (e) {
             console.warn('[Switchboard] Deprecated column migration skipped:', e);
@@ -2958,6 +2988,20 @@ export async function activate(context: vscode.ExtensionContext) {
                 await planningPanelProvider.deserializeProjectPanel(panel, state);
             }
         });
+
+        // Only set the restore guard if a switchboard-project tab is actually
+        // present in the editor layout (ghost tab from previous session).
+        // This avoids a 1.5s wait penalty on first openProject() in sessions
+        // that never had a PROJECT panel open.
+        const hasProjectGhost = vscode.window.tabGroups.all.some(group =>
+            group.tabs.some(tab =>
+                tab.input instanceof vscode.TabInputWebview &&
+                tab.input.viewType === 'switchboard-project'
+            )
+        );
+        if (hasProjectGhost) {
+            planningPanelProvider.markProjectPanelRestoring();
+        }
         vscode.window.registerWebviewPanelSerializer('switchboard-design', {
             deserializeWebviewPanel: async (panel, state) => {
                 await designPanelProvider.deserializeWebviewPanel(panel, state);
@@ -3655,6 +3699,13 @@ export function deactivate() {
         }
     }
     registeredTerminals.clear();
+
+    // Phase 1 Workstream A: stop the idle-eviction sweep and evict ALL cached
+    // KanbanDatabase instances (drain + flush + close) so the shared WASM heap is
+    // released before the host process exits. Without this, sql.js MEMFS buffers
+    // persist until the extension host process is torn down.
+    KanbanDatabase.stopEvictionSweep();
+    void KanbanDatabase.evictAll();
 
     // Cleanup other resources
     if (setupStatusBarItem) {

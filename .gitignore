@@ -10,6 +10,9 @@ dist/
 # Packaged extensions
 *.vsix
 
+# Release staging folder (prebuilt .vsix artifacts; ignored to keep release assets out of git history)
+releases/
+
 # Local env / secrets — never commit
 .env
 .env.*

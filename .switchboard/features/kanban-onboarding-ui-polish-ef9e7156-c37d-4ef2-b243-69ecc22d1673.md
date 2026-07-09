@@ -25,9 +25,13 @@ These four are grouped because they are small, low-risk presentation/UX fixes to
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Create Worktree Button Has No Tooltip When Active](../plans/feature_plan_20260709124500_create-worktree-button-tooltip-when-active.md) — **PLAN REVIEWED**
-- [ ] [Claudify "Colour Kanban Board Icons" Not Applied Live When Switching to Claudify](../plans/feature_plan_20260709124600_claudify-colour-kanban-icons-live-apply-on-theme-switch.md) — **PLAN REVIEWED**
-- [ ] ["Colour Kanban Board Icons" Label & Description Should Use American "Color"](../plans/feature_plan_20260709124700_colour-kanban-icons-american-spelling.md) — **PLAN REVIEWED**
-- [ ] [Agents List Needs "Core" / "Optional" Subheaders (Kanban Agents Tab + Onboarding)](../plans/feature_plan_20260709124800_agents-tab-core-optional-subheaders.md) — **PLAN REVIEWED**
+- [ ] [Create Worktree Button Has No Tooltip When Active](../plans/feature_plan_20260709124500_create-worktree-button-tooltip-when-active.md) — **INTERN CODED**
+- [ ] [Claudify "Colour Kanban Board Icons" Not Applied Live When Switching to Claudify](../plans/feature_plan_20260709124600_claudify-colour-kanban-icons-live-apply-on-theme-switch.md) — **INTERN CODED**
+- [ ] ["Colour Kanban Board Icons" Label & Description Should Use American "Color"](../plans/feature_plan_20260709124700_colour-kanban-icons-american-spelling.md) — **INTERN CODED**
+- [ ] [Agents List Needs "Core" / "Optional" Subheaders (Kanban Agents Tab + Onboarding)](../plans/feature_plan_20260709124800_agents-tab-core-optional-subheaders.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+Implemented all four UI-polish subtasks. In `src/webview/kanban.html`, `updateCreateWorktreeButton()` now sets descriptive `data-tooltip` text in its enabled states, the AGENTS tab rows were reordered into Core/Optional groups with `.agents-group-label` subheaders, and the corresponding style was added. In `src/services/TaskViewerProvider.ts`, the `switchboard.theme.name` config watcher now broadcasts `colourKanbanIconsChanged` with the effective value from `getEffectiveColourKanbanIcons()`, making Claudify icon coloring apply live. In `src/webview/setup.html` and `package.json`, the user-facing title and description were changed from "colour" to "color" while leaving the config key and all internal identifiers unchanged. In `src/webview/implementation.html`, the onboarding CLI step also received the Core/Optional grouping and matching style. The first `Core` label was given an inline `margin-top:4px` because the planned `:first-of-type` rule would not match due to preceding header/intro `div` elements. No tests or compilation steps were run per the session directive; verification was by reading modified files and grep checks.
 

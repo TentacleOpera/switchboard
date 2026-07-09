@@ -393,8 +393,36 @@
           "default": 100,
           "minimum": 1,
           "maximum": 500,
-          "description": "Maximum number of cards shown in the Kanban Completed column (1–500). Higher values may slow rendering.",
+          "description": "Safety floor for the Kanban Completed column: minimum number of completed cards shown even when the hot window (kanban.hotWindowDays) is sparse. Older completed plans live in the cold archive and surface via 'show older'.",
           "scope": "resource"
+        },
+        "switchboard.kanban.hotWindowDays": {
+          "type": "integer",
+          "default": 45,
+          "minimum": 1,
+          "description": "Phase 2 hot/cold split: plans not updated within this many days (and not in-flight) move to the cold archive (kanban-archive.db). The Completed column shows completed plans within this window. Default 45.",
+          "scope": "resource"
+        },
+        "switchboard.kanban.residentDbBudgetMb": {
+          "type": "integer",
+          "default": 500,
+          "minimum": 50,
+          "description": "Summed resident DB budget in MB across all cached KanbanDatabase instances. When crossed, the idle-eviction sweep aggressively evicts non-active instances to free the WASM heap. Default 500 (conservative for older V8 hosts).",
+          "scope": "application"
+        },
+        "switchboard.kanban.planEventsRetentionDays": {
+          "type": "integer",
+          "default": 90,
+          "minimum": 1,
+          "description": "Days to retain plan_events (workflow telemetry) before pruning. A minimum of the most-recent 50 events per plan is always kept. Default 90.",
+          "scope": "application"
+        },
+        "switchboard.kanban.activityLogRetentionDays": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 1,
+          "description": "Days to retain activity_log rows before pruning. Default 30.",
+          "scope": "application"
         },
         "switchboard.kanban.dbPath": {
           "type": "string",
@@ -724,7 +752,7 @@
         "switchboard.theme.colourKanbanIcons": {
           "type": "boolean",
           "default": false,
-          "description": "Render kanban board icons in full colour at rest (terracotta for Claudify) instead of flat grey with a colour click-flash. Only affects the Claudify theme.",
+          "description": "Render kanban board icons in full color at rest (terracotta for Claudify) instead of flat grey with a color click-flash. Only affects the Claudify theme.",
           "scope": "window"
         },
         "switchboard.theme.pixelFont": {
@@ -796,7 +824,8 @@
     "catalog:generate": "node scripts/generate-protocol-catalog.js --write",
     "catalog:check": "node scripts/generate-protocol-catalog.js",
     "parity:check": "node scripts/check-protocol-parity.js",
-    "push-routing:check": "node scripts/check-push-routing.js"
+    "push-routing:check": "node scripts/check-push-routing.js",
+    "release": "bash scripts/publish-release.sh"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

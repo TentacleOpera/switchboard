@@ -539,6 +539,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _mcpMonitorTimer?: NodeJS.Timeout;
     private _mcpMonitorFirstPromptTimer?: NodeJS.Timeout;
     private _mcpMonitorConfigChangeTimer?: NodeJS.Timeout;
+    private _mcpMonitorOutputWatcher?: vscode.FileSystemWatcher;
+    private _mcpMonitorOutputFallbackTimer?: NodeJS.Timeout;
     private _mcpMonitorTickQueue: Promise<void> = Promise.resolve();
     private _mcpMonitorLastSendAt = 0;
     private _mcpMonitorInFlight = false;
@@ -693,6 +695,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (e.affectsConfiguration('switchboard.theme.name')) {
                     const theme = this.handleGetThemeSetting();
                     this.broadcastToWebviews({ type: 'switchboardThemeChanged', theme });
+                    // The effective "colour kanban icons" default is theme-derived when the
+                    // setting is unset (true for Claudify). Switching themes therefore changes
+                    // the effective value even though switchboard.theme.colourKanbanIcons itself
+                    // did not — so re-broadcast it here. Without this, switching to Claudify at
+                    // runtime adds `theme-claudify` but never `kanban-icons-colour`, leaving icons
+                    // grey until reload despite the checkbox reading ON.
+                    this.broadcastToWebviews({
+                        type: 'colourKanbanIconsChanged',
+                        enabled: getEffectiveColourKanbanIcons()
+                    });
                 }
                 if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
                     const disabled = vscode.workspace
@@ -4398,6 +4410,12 @@ Each plan file must include:
             console.log(`[TaskViewerProvider] Applied claude_artifacts fallback command: ${cmd}`);
         }
 
+        // Fallback: claude_import defaults to 'claude' when configured command is missing/blank
+        if (role === 'claude_import' && (!cmd || cmd.trim() === '')) {
+            cmd = 'claude';
+            console.log(`[TaskViewerProvider] Applied claude_import fallback command: ${cmd}`);
+        }
+
         return cmd;
     }
 
@@ -6124,7 +6142,7 @@ Each plan file must include:
         // Persist assignee display names so the file-backed sidebar can show them
         // without re-hitting the API (the Assign modal uses the live detail fetch).
         const cuAssignees = Array.isArray(task?.assignees)
-            ? task.assignees.map((a) => String(a?.username || a?.email || '').trim()).filter(Boolean)
+            ? task.assignees.map((a: any) => String(a?.username || a?.email || '').trim()).filter(Boolean)
             : [];
         if (cuAssignees.length) { fmLines.push(`assignees: ${cuAssignees.join(', ')}`); }
         fmLines.push('---', '');
@@ -21594,6 +21612,7 @@ What would you like to find?`;
             clearTimeout(this._mcpMonitorConfigChangeTimer);
             this._mcpMonitorConfigChangeTimer = undefined;
         }
+        this._disposeMcpMonitorOutputCapture();
     }
 
     private _enqueueMcpMonitorTick() {
@@ -21654,16 +21673,92 @@ What would you like to find?`;
                     updatedBaselines[src] = nowIso;
                 }
                 await GlobalIntegrationConfigService.setMcpMonitorConfig({ sourceLastCheckAt: updatedBaselines });
+
+                // Output capture: watch the results file rather than polling on a
+                // fixed timer. The watcher fires the moment Claude writes the file;
+                // a 90s fallback timeout covers the case where Claude never writes
+                // (responds inline, errors, or the terminal is closed mid-response).
+                this._startMcpMonitorOutputCapture();
             }
         } finally {
             this._mcpMonitorInFlight = false;
         }
     }
 
+    /**
+     * Start a file watcher + 90s fallback timer to capture the monitor's written
+     * findings (.switchboard/comms-monitor-latest.md) and push them to the webview.
+     * Disposes any previous capture cycle first.
+     */
+    private _startMcpMonitorOutputCapture(): void {
+        this._disposeMcpMonitorOutputCapture();
+
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) return;
+        const outputPath = path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md');
+        const outputUri = vscode.Uri.file(outputPath);
+
+        this._mcpMonitorOutputWatcher = vscode.workspace.createFileSystemWatcher(
+            outputUri.fsPath, false, false, false
+        );
+        this._mcpMonitorOutputWatcher.onDidChange(() => this._captureMcpMonitorOutput());
+        this._mcpMonitorOutputWatcher.onDidCreate(() => this._captureMcpMonitorOutput());
+
+        this._mcpMonitorOutputFallbackTimer = setTimeout(async () => {
+            await this._captureMcpMonitorOutput();
+        }, 90 * 1000);
+    }
+
+    /**
+     * Read the results file and push its contents to the webview. Posts a
+     * "no output" state if the file is missing or unreadable (Claude responded
+     * inline without writing, or hasn't finished yet). Disposes the watcher +
+     * fallback timer once capture fires.
+     */
+    private async _captureMcpMonitorOutput(): Promise<void> {
+        this._disposeMcpMonitorOutputCapture();
+
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) return;
+        const outputPath = path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md');
+        try {
+            const content = await fs.promises.readFile(outputPath, 'utf-8');
+            const stat = await fs.promises.stat(outputPath);
+            const message = {
+                type: 'commsMonitorOutput',
+                output: content,
+                timestamp: stat.mtime.toISOString()
+            };
+            this._view?.webview.postMessage(message);
+            this._kanbanProvider?.postMessage(message);
+        } catch {
+            const message = {
+                type: 'commsMonitorOutput',
+                output: null,
+                timestamp: new Date().toISOString()
+            };
+            this._view?.webview.postMessage(message);
+            this._kanbanProvider?.postMessage(message);
+        }
+    }
+
+    private _disposeMcpMonitorOutputCapture(): void {
+        if (this._mcpMonitorOutputWatcher) {
+            this._mcpMonitorOutputWatcher.dispose();
+            this._mcpMonitorOutputWatcher = undefined;
+        }
+        if (this._mcpMonitorOutputFallbackTimer) {
+            clearTimeout(this._mcpMonitorOutputFallbackTimer);
+            this._mcpMonitorOutputFallbackTimer = undefined;
+        }
+    }
+
     private _buildMcpMonitorPrompt(cfg: McpMonitorConfig, opts?: { dueSources?: string[] }): string {
-        // If the user has an override, use it verbatim.
+        const outputPostscript = this._mcpMonitorOutputPostscript();
+        // If the user has an override, use it verbatim (plus the file-write postscript
+        // so output capture still works for custom prompts).
         if (cfg.promptOverride && cfg.promptOverride.trim()) {
-            return normalizeNewlines(cfg.promptOverride.trim());
+            return normalizeNewlines(cfg.promptOverride.trim() + outputPostscript);
         }
 
         const sources = opts?.dueSources ?? cfg.sources ?? [];
@@ -21697,8 +21792,22 @@ What would you like to find?`;
             }
         }
         if (lines.length === 0) return '';
-        const body = preamble + "\n\n" + lines.map(line => `- ${line}`).join('\n');
+        const body = preamble + "\n\n" + lines.map(line => `- ${line}`).join('\n') + outputPostscript;
         return normalizeNewlines(body);
+    }
+
+    /**
+     * File-write postscript appended to every monitor prompt so Claude saves its
+     * findings to .switchboard/comms-monitor-latest.md. The webview watches that
+     * file and displays the contents in the COMMS tab "Latest Results" section.
+     * Returns '' when the workspace root cannot be resolved (capture silently
+     * disables — the fallback timer posts a "no output" state).
+     */
+    private _mcpMonitorOutputPostscript(): string {
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) return '';
+        const outputPath = path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md');
+        return `\n\nIMPORTANT: You MUST call your filesystem write tool to save your findings (or "All clear" with the timestamp) to the file \`${outputPath}\` as markdown with a timestamp header and bullet points. Do not output your final analysis solely in natural language — always write it to that file.`;
     }
 
     private _buildSlackPromptLine(cfg: McpMonitorConfig): string {
@@ -21907,20 +22016,23 @@ What would you like to find?`;
 
     /**
      * Step 3 of the three-step launch: enable polling, start the GCD timer,
-     * and schedule the 30s first-prompt one-shot so the first check arrives
+     * and schedule a 2s first-prompt one-shot so the first check arrives
      * quickly without waiting a full interval.
      */
     public async startMcpMonitorPolling(): Promise<void> {
         await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: true });
         await this._startMcpMonitorLoop();
-        // 30s first-prompt one-shot — lives here, not in launchMcpMonitorTerminal.
+        // First prompt: fire within 2s instead of 30s. The three-step launch
+        // (Start Terminal → Check Auth → Start Polling) already gates on auth,
+        // so the 30s grace period is redundant. A short delay lets the config
+        // write settle and the webview update before the tick runs.
         if (this._mcpMonitorFirstPromptTimer) {
             clearTimeout(this._mcpMonitorFirstPromptTimer);
         }
         this._mcpMonitorFirstPromptTimer = setTimeout(() => {
             this._mcpMonitorFirstPromptTimer = undefined;
             this._enqueueMcpMonitorTick();
-        }, 30 * 1000);
+        }, 2 * 1000);
         await this._postMcpMonitorConfig();
     }
 

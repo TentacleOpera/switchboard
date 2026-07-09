@@ -1,6 +1,8 @@
 ---
-name: linear_move_issue
+name: linear-move-issue
 description: Move a Linear issue to a different project via LocalApiServer
+allowed-tools: Bash
+disable-model-invocation: true
 ---
 
 # Move Linear Issue

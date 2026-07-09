@@ -95,6 +95,7 @@ export class DesignPanelProvider implements vscode.Disposable {
             case 'renderMarkdownLive': return await svc['renderMarkdownLive'](p);
             case 'saveFileContent': return await svc['saveFileContent'](p);
             case 'sendClaudeArtifactPrompt': return await svc['sendClaudeArtifactPrompt'](p);
+            case 'sendClaudeImportPrompt': return await svc['sendClaudeImportPrompt'](p);
             case 'serveAndOpenHtml': return await svc['serveAndOpenHtml'](p);
             case 'setActivePlanningContext': return await svc['setActivePlanningContext'](p);
             case 'stitchApplyDesignSystem': return await svc['stitchApplyDesignSystem'](p);
@@ -1786,6 +1787,19 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (!prompt) break;
                 await vscode.env.clipboard.writeText(prompt);
                 showTemporaryNotification('Copied Claude import prompt to clipboard.');
+                break;
+            }
+
+            case 'sendClaudeImportPrompt': {
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.sendPromptToAgentTerminal('claude_import', prompt, message.workspaceRoot || undefined);
+                    showTemporaryNotification('Sent Claude import prompt to agent terminal.');
+                } else {
+                    await vscode.env.clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unavailable — copied Claude import prompt to clipboard instead.');
+                }
                 break;
             }
 

@@ -1,6 +1,7 @@
 ---
 name: improve-remote-plan
 description: Improve a Switchboard plan stored in Linear — reads, deepens, writes back via the LocalApiServer GraphQL proxy without touching git. Use in remote sessions.
+allowed-tools: Bash
 ---
 
 # Improve Remote Plan (Linear)
@@ -70,8 +71,6 @@ Apply the same logic as `/improve-plan`:
 - Deepen implementation tasks with specific file paths, method names, and constraints where inferable from the description.
 - Add or improve `## Edge Cases & Risks` and `## Out of Scope` sections.
 - Do NOT change the plan's intent or introduce scope the user hasn't approved.
-
-**Project pinning (remote guardrail):** The workspace/repo name is NOT a project — never pin it, never emit a placeholder like `<project>`. This is a remote/DB-less session: you cannot read `kanban.activeProjectFilter`. If the existing plan already carries a `**Project:**` line naming a real, user-created project, preserve it. If it pins the workspace/repo name, a `<...>` placeholder, or a name you cannot confirm is a real user-created project, **drop the `**Project:**` line** (leave the plan unassigned) rather than echoing or guessing it. The importer is resolve-only: an unknown/workspace-name/placeholder pin leaves the plan unassigned instead of minting a project, so a bad pin is inert — but do not propagate one either.
 
 ## Write Phase
 

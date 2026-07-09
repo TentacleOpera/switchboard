@@ -964,7 +964,8 @@
         .complexity-indicator.very-low { color: #00e5ff; }
         .complexity-indicator.unknown { color: #7f848e; }
 
-        /* Static, non-animated, theme-specific highlight border */
+        /* Agent activity-light border glow ring — lit while a card is dispatched to an agent.
+           Amber hue + subtle pulse. Negative inset lets it sit outside the border. */
         .kanban-card.is-working::after {
             content: "";
             position: absolute;
@@ -974,17 +975,27 @@
             z-index: 1;
             /* Default fallback — only reachable if a future third theme clears both
                cyber-theme-enabled and theme-claudify. Defensive only. */
-            box-shadow: 0 0 0 2px #e0a800;
+            box-shadow: 0 0 0 2px #e0a800, 0 0 14px color-mix(in srgb, #e0a800 45%, transparent);
+            animation: kanban-working-pulse 1.8s ease-in-out infinite;
         }
 
-        /* Afterburner theme: cyan highlight */
+        /* Afterburner theme: cyan glow */
         body.cyber-theme-enabled .kanban-card.is-working::after {
-            box-shadow: 0 0 0 2px #00e5ff;
+            box-shadow: 0 0 0 2px #00e5ff, 0 0 14px color-mix(in srgb, #00e5ff 45%, transparent);
         }
 
-        /* Claudify theme: orange highlight */
+        /* Claudify theme: orange glow */
         body.theme-claudify .kanban-card.is-working::after {
-            box-shadow: 0 0 0 2px #D97757;
+            box-shadow: 0 0 0 2px #D97757, 0 0 14px color-mix(in srgb, #D97757 45%, transparent);
+        }
+
+        @keyframes kanban-working-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .kanban-card.is-working::after { animation: none; }
         }
 
         /* One-shot feedback when a card's operation completes (status light goes out
@@ -1260,6 +1271,14 @@
           margin-bottom: 2px !important; /* Clarification: Scoped explicitly to prevent regressions */
         }
 
+        .agents-group-label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          color: var(--text-secondary);
+          margin: 12px 0 4px;
+        }
         /* Drag-Drop Mode Toggle Styles */
         .mode-toggle {
             display: flex;
@@ -2839,6 +2858,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <!-- Agent Visibility & CLI Commands -->
         <div class="db-subsection">
           <div class="subsection-header"><span>Agent Visibility &amp; CLI Commands</span></div>
+
+          <!-- CORE -->
+          <div class="agents-group-label" style="margin-top:4px;">Core</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists. Increase the number of terminals to spread multiple plans among different planners for faster processing of plan batches.</div>
           <div class="startup-row planner-pool-row" style="padding-left:24px;">
@@ -2863,10 +2885,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Executes simple, repetitive code edits and heavily guided tasks at lowest cost.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Evaluates completed implementations against plans, checking for regressions and scope creep.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
-          <div class="agent-description">Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
           <div class="agent-description">Researches general-purpose technical queries and outlines plan dependencies.</div>
+
+          <!-- OPTIONAL -->
+          <div class="agents-group-label">Optional</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
+          <div class="agent-description">Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
@@ -3038,11 +3063,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   <span class="tooltip">Planner outputs a research prompt (for Google AI Studio / Claude / your research agent) covering its uncertain assumptions</span>
                 </label>
 
-                <label class="checkbox-item" title="When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file">
-                  <input type="checkbox" id="plannerAddonWriteFeatureDescriptionIfEmpty">
-                  <span>Write Feature Description If Empty</span>
-                  <span class="tooltip">When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file</span>
-                </label>
+                <details class="addon-subsection-accordion">
+                  <summary class="addon-subsection-header">Features</summary>
+                  <div class="addon-subsection-body" style="display:flex;flex-direction:column;gap:8px;padding:8px 12px;">
+                    <div class="addon-subsection-caption" style="opacity:0.75;font-size:11px;">These add-ons only take effect when the dispatched card is a feature (has subtasks). They are ignored for single-plan dispatch.</div>
+                    <label class="checkbox-item" title="When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file">
+                      <input type="checkbox" id="plannerAddonWriteFeatureDescriptionIfEmpty">
+                      <span>Write Feature Description If Empty</span>
+                      <span class="tooltip">When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file</span>
+                    </label>
+                  </div>
+                </details>
 
                 <details class="addon-subsection-accordion">
                   <summary class="addon-subsection-header">Subagent Policy</summary>
@@ -3467,9 +3498,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no push clause' }
                     ] },
                     { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-                    { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
+                    { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
                     { id: 'phoneAFriend', label: 'Phone-a-Friend', tooltip: 'When done coding the batch, notify the Phone-a-Friend terminal to do a second pass (requires Phone-a-Friend agent configured)', default: false },
-                    { id: 'applyFeatureDirectives', label: 'Apply Feature Ultracode/Goal Directives', tooltip: 'When dispatched on a feature, prepend the board\'s ultracode//goal directives (as for Lead/Coder/Intern)', default: false }
+                    { id: 'applyFeatureDirectives', label: 'Apply Feature Ultracode/Goal Directives', group: 'features', tooltip: 'When dispatched on a feature, prepend the board\'s ultracode//goal directives (as for Lead/Coder/Intern)', default: false }
                 ];
             }
 
@@ -3669,6 +3700,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             function prettyGroupLabel(g) {
                 if (g === 'git') return 'Git Strategy';
                 if (g === 'subagent') return 'Subagent Policy';
+                if (g === 'features') return 'Features';
                 return g.charAt(0).toUpperCase() + g.slice(1);
             }
 
@@ -3689,7 +3721,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 body.style.display = 'flex';
                 body.style.flexDirection = 'column';
                 body.style.gap = '8px';
-                
+                if (groupName === 'features') {
+                    const cap = document.createElement('div');
+                    cap.className = 'addon-subsection-caption';
+                    cap.style.opacity = '0.75';
+                    cap.style.fontSize = '11px';
+                    cap.textContent = 'These add-ons only take effect when the dispatched card is a feature (has subtasks). They are ignored for single-plan dispatch.';
+                    body.appendChild(cap);
+                }
                 items.forEach(addon => renderAddon(addon, role, body));
                 
                 details.appendChild(summary);
@@ -5576,7 +5615,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const size = selectedCards.size;
             if (size === 0) {
                 btn.disabled = false;
-                btn.removeAttribute('data-tooltip');
+                btn.setAttribute('data-tooltip', 'Create a worktree for the active project / workspace');
                 btn.title = '';
                 return;
             }
@@ -5591,7 +5630,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         btn.setAttribute('data-tooltip', 'Feature already has a worktree');
                     } else {
                         btn.disabled = false;
-                        btn.removeAttribute('data-tooltip');
+                        btn.setAttribute('data-tooltip', 'Create a worktree for this feature');
                         btn.title = '';
                     }
                 } else {
@@ -6579,6 +6618,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let autobanPanelInteractionTimer = null;
         let isCommsPanelInteracting = false;
         let commsPanelInteractionTimer = null;
+        let commsPanelRenderPending = false;
         let lastAntigravityAgent = '';
         let lastAntigravityColumn = '';
         let lastSafetySession = null;
@@ -7298,9 +7338,28 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   mcpMonitorPresets = msg.presets || mcpMonitorPresets;
                   mcpMonitorResolvedCmd = msg.resolvedStartupCommand || '';
                   if (!isCommsPanelInteracting) {
+                      commsPanelRenderPending = false;
                       renderCommsPanel();
+                  } else {
+                      // State updated but DOM is stale — defer render until guard expires.
+                      commsPanelRenderPending = true;
+                      console.log('[kanban] Deferring comms panel re-render: user interaction guard active');
                   }
                   break;
+                }
+                case 'commsMonitorOutput': {
+                    window.__commsMonitorOutput = msg.output
+                        ? `[${new Date(msg.timestamp).toLocaleTimeString()}]\n${msg.output}`
+                        : `[${new Date(msg.timestamp).toLocaleTimeString()}] No output captured (Claude may have responded "All clear" or not yet finished).`;
+                    if (!isCommsPanelInteracting) {
+                        commsPanelRenderPending = false;
+                        renderCommsPanel();
+                    } else {
+                        // State updated but DOM is stale — defer render until guard expires
+                        // (same pattern as updateMcpMonitorConfig).
+                        commsPanelRenderPending = true;
+                    }
+                    break;
                 }
                 case 'mcpMonitorPreview': {
                   // Backend-rendered preview (response to renderMcpMonitorPreview).
@@ -9409,6 +9468,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 commsPanelInteractionTimer = setTimeout(() => {
                     isCommsPanelInteracting = false;
                     commsPanelInteractionTimer = null;
+                    // If a config update was suppressed while the guard was active,
+                    // re-render now so the DOM reflects the current state.
+                    if (commsPanelRenderPending) {
+                        commsPanelRenderPending = false;
+                        renderCommsPanel();
+                    }
                 }, 2000);
             };
             el.addEventListener('focus', setInteracting);
@@ -9733,18 +9798,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const stopPollBtn = document.createElement('button');
             stopPollBtn.textContent = 'Stop Polling';
             stopPollBtn.style.cssText = btnBaseStyle + ' background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary);';
+            stopPollBtn.title = 'Stop the polling loop. The terminal stays alive — you can restart polling later without re-launching.';
             guardCommsInteraction(stopPollBtn);
             stopPollBtn.addEventListener('click', () => {
+                stopPollBtn.disabled = true;
+                stopPollBtn.textContent = 'Stopping…';
                 postKanbanMessage({ type: 'stopMcpMonitorPolling' });
             });
 
             const stopTermBtn = document.createElement('button');
-            stopTermBtn.textContent = 'Stop Monitor';
-            stopTermBtn.style.cssText = btnBaseStyle + ' background:var(--accent-red, #c0392b); color:var(--bg-primary);';
+            stopTermBtn.textContent = 'Kill Terminal';
+            stopTermBtn.style.cssText = btnBaseStyle + ' background:var(--panel-bg2); border:1px solid var(--accent-red, #c0392b); color:var(--accent-red, #c0392b);';
+            stopTermBtn.title = 'Kill the monitor terminal and stop polling. Claude\'s session will be lost.';
             guardCommsInteraction(stopTermBtn);
             stopTermBtn.addEventListener('click', () => {
                 stopTermBtn.disabled = true;
-                stopTermBtn.textContent = 'Stopping…';
+                stopTermBtn.textContent = 'Killing…';
                 postKanbanMessage({ type: 'stopMcpMonitorTerminal' });
             });
 
@@ -9757,9 +9826,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 } else {
                     lifecycleRow.appendChild(startPollBtn);
                 }
-                lifecycleRow.appendChild(stopTermBtn);
             }
             mcpConfigPanel.appendChild(lifecycleRow);
+
+            // Terminal kill control on a separate row with a divider
+            if (isMcpMonitorTerminalRunning) {
+                const terminalControlRow = document.createElement('div');
+                terminalControlRow.style.cssText = 'margin-top:6px; padding-top:6px; border-top:1px dashed var(--border-color); display:flex; gap:6px;';
+                terminalControlRow.appendChild(stopTermBtn);
+                mcpConfigPanel.appendChild(terminalControlRow);
+            }
 
             // ─── Status Line ───
             const statusLine = document.createElement('div');
@@ -9777,6 +9853,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             mcpHelp.style.cssText = 'margin-top:8px; font-size:9px; color:var(--text-secondary); line-height:1.3; border-top:1px solid var(--border-color); padding-top:6px;';
             mcpHelp.textContent = 'How it works: Start the terminal, check auth, then start polling. Each source is polled on its own interval. Switchboard sends a read-only prompt to your monitor terminal asking it to check the selected sources (Slack, Gmail, Google Calendar, or a custom instruction) via your claude.ai MCP servers. The terminal reports what\'s new in its pane.';
             mcpConfigPanel.appendChild(mcpHelp);
+
+            // ─── Latest Results ───
+            const resultsSection = document.createElement('div');
+            resultsSection.id = 'comms-monitor-results';
+            resultsSection.style.cssText = 'margin-top:8px; padding:8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); font-family:var(--font-mono); font-size:10px; color:var(--text-primary); max-height:200px; overflow-y:auto; white-space:pre-wrap;';
+            if (window.__commsMonitorOutput) {
+                resultsSection.textContent = window.__commsMonitorOutput;
+            } else {
+                resultsSection.textContent = '(no results yet — start polling to see monitor output)';
+            }
+            mcpConfigPanel.appendChild(resultsSection);
 
             container.appendChild(mcpConfigPanel);
 

@@ -369,6 +369,9 @@ export class KanbanProvider implements vscode.Disposable {
         const persistedWorkspace = this._context.workspaceState.get<{ index: number; name: string } | null>('kanban.lastSelectedWorkspace', null);
         this._currentWorkspaceRoot = this._resolvePersistedWorkspace(persistedWorkspace);
         if (this._currentWorkspaceRoot) {
+            // Phase 1 Workstream A: mark this workspace as active so the idle-eviction
+            // sweep exempts it (the board the user is looking at stays resident).
+            KanbanDatabase.setActiveWorkspaceRoot(this._currentWorkspaceRoot);
             const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
             const persistedFilter = this._context.workspaceState.get<string | null>(`kanban.projectFilter.${resolvedRoot}`, null);
             if (persistedFilter !== null) {
@@ -1056,6 +1059,9 @@ export class KanbanProvider implements vscode.Disposable {
         }
         if (this._currentWorkspaceRoot !== resolved) {
             this._currentWorkspaceRoot = resolved;
+            // Phase 1 Workstream A: update the active-workspace exemption so the eviction
+            // sweep now protects the newly-focused workspace and may evict the previous one.
+            KanbanDatabase.setActiveWorkspaceRoot(resolved);
             this._onWorkspaceChangeEmitter.fire(resolved);
             void this._reconcileStaleWorktreeMode(resolved)
                 .catch(e => console.warn('[KanbanProvider] setCurrentWorkspaceRoot: failed to reconcile stale worktree mode:', e));
@@ -3083,10 +3089,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) return;
 
+        // Phase 2: the Completed column is now a time-based hot window (default 45 days)
+        // instead of a count-based cap. The old `kanban.completedLimit` setting is
+        // respected as a safety floor (min cards shown even on a quiet workspace) so
+        // existing user configs degrade gracefully. Older completed plans live in the
+        // cold store and surface via the "show older →" affordance.
         const completedLimit = Math.max(1, Math.min(
             vscode.workspace.getConfiguration('switchboard').get<number>('kanban.completedLimit', 100) ?? 100,
             500
         ));
+        const hotWindowDays = vscode.workspace.getConfiguration('switchboard').get<number>('kanban.hotWindowDays', 45) ?? 45;
 
         try {
             const [customAgents, customKanbanColumns] = await Promise.all([
@@ -3179,7 +3191,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     console.log(`[KanbanProvider] _refreshBoardImpl: filtered out ${dbRows.length - activeRows.length} ghost plans`);
                 }
 
-                const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
+                const completedRecords = (await db.getCompletedPlansInHotWindow(workspaceId, hotWindowDays, completedLimit))
                     .filter(rec => rec.planFile);
                 // Workspace-wide (unfiltered) subtask counts — a feature's count is intrinsic
                 // and must not shrink to 0 when its subtasks fall outside the board's

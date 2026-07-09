@@ -171,3 +171,5 @@ Place this `<details>` where the flat label was (before the Subagent Policy `<de
 ---
 
 **Recommendation:** Complexity 3/10 → **Send to Intern.**
+
+**Completion Report:** Implemented the Features accordion for feature-only add-ons in the Prompts tab. Tagged `staggeredImplementation` with `group: 'features'` in `src/webview/sharedDefaults.js` for lead, coder, and intern; relabeled `useWorktreesPerPlan` in both `sharedDefaults.js` and the `kanban.html` custom-agent fallback. Added `group: 'features'` to `applyFeatureDirectives` in `kanban.html`, added a `features` case to `prettyGroupLabel`, and added a caption inside the dynamic Features accordion. Replaced the static planner `Write Feature Description If Empty` flat label with a matching `<details>` Features accordion, preserving the input id. Files changed: `src/webview/sharedDefaults.js` and `src/webview/kanban.html`. No compilation or tests were run per the session directive; `git diff --check` and `npx eslint src/webview/sharedDefaults.js` passed. No issues encountered.

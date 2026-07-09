@@ -41,10 +41,15 @@ Web research was run and findings integrated into the plans. Of the 4 original u
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Comms Monitor: Start Polling Button Should Immediately Poll, Not Wait 30s](../plans/feature_plan_20260706092056_comms-monitor-start-polling-immediate-first-tick.md) — **PLAN REVIEWED**
-- [ ] [Comms Monitor: Stop Polling Button Stuck — UI Never Updates After Stop](../plans/feature_plan_20260706092058_comms-monitor-stop-polling-button-stuck.md) — **PLAN REVIEWED**
-- [ ] [Comms Monitor: Capture Agent Output and Display in COMMS Tab UI](../plans/feature_plan_20260706092100_comms-monitor-capture-output-to-ui.md) — **PLAN REVIEWED**
-- [ ] [Comms Monitor: Stop Polling Kills the Terminal Instead of Just Stopping Polling](../plans/feature_plan_20260706092059_comms-monitor-stop-polling-sends-clear.md) — **PLAN REVIEWED**
-- [ ] [Comms Monitor: Reduce Delay Between Prompt Paste and Enter Submission](../plans/feature_plan_20260706092101_comms-monitor-reduce-paste-to-enter-delay.md) — **PLAN REVIEWED**
+- [ ] [Comms Monitor: Start Polling Button Should Immediately Poll, Not Wait 30s](../plans/feature_plan_20260706092056_comms-monitor-start-polling-immediate-first-tick.md) — **LEAD CODED**
+- [ ] [Comms Monitor: Stop Polling Button Stuck — UI Never Updates After Stop](../plans/feature_plan_20260706092058_comms-monitor-stop-polling-button-stuck.md) — **LEAD CODED**
+- [ ] [Comms Monitor: Capture Agent Output and Display in COMMS Tab UI](../plans/feature_plan_20260706092100_comms-monitor-capture-output-to-ui.md) — **LEAD CODED**
+- [ ] [Comms Monitor: Stop Polling Kills the Terminal Instead of Just Stopping Polling](../plans/feature_plan_20260706092059_comms-monitor-stop-polling-sends-clear.md) — **LEAD CODED**
+- [ ] [Comms Monitor: Reduce Delay Between Prompt Paste and Enter Submission](../plans/feature_plan_20260706092101_comms-monitor-reduce-paste-to-enter-delay.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+Implemented all 5 subtasks of the Comms Monitor testing-bugfixes/UX feature. Files changed: `src/services/terminalUtils.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/kanban.html`. (1) Start-polling first-tick delay cut 30s→2s in `startMcpMonitorPolling()`. (2) Stop-polling stuck button fixed via a `commsPanelRenderPending` deferred-render flag wired into the interaction-guard timer callback, plus immediate "Stopping…" visual feedback on the Stop Polling button. (3) Stop-polling-kills-terminal confusion fixed by relabeling "Stop Monitor"→"Kill Terminal", restyling to a red outline on gray, moving it to a separate row with a dashed divider, and adding tooltips to both stop buttons. (4) Paste-to-Enter delay reduced from ~1800ms to ~400ms (local) / ~900ms (remote) via connection-aware `POST_PASTE_SETTLE_MS`/`NEWLINE_DELAY`/`CLI_CONFIRM_ENTER_DELAY` using `vscode.env.remoteName`. (5) Output capture added: every monitor prompt now appends a mandatory file-write postscript targeting `.switchboard/comms-monitor-latest.md`; a `vscode.workspace.createFileSystemWatcher` (plus 90s fallback timer) reads the file and pushes a `commsMonitorOutput` message to the webview, which renders it in a new "Latest Results" section using `textContent` (XSS-safe). No issues encountered; the Slack-prompt-clarity subtask referenced in the feature description was not in the dispatched subtask set and was not implemented.
+
 

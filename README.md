@@ -10,6 +10,18 @@ There is nothing to install beyond the extension itself. If you already have you
 
 ---
 
+## Install
+
+Download the latest packaged extension from the **[Releases page](https://github.com/TentacleOpera/switchboard/releases/latest)**, then install it:
+
+- **VS Code UI:** Extensions panel → `…` menu → **Install from VSIX…** → pick the downloaded `.vsix`.
+- **CLI:** `code --install-extension switchboard-<version>.vsix`
+
+Direct link for the current build:
+`https://github.com/TentacleOpera/switchboard/releases/download/v1.7.6/switchboard-1.7.6.vsix`
+
+---
+
 ## How it works
 
 - **Drag-and-drop orchestration** — Manage the whole project by moving cards to dispatch real work.
@@ -63,7 +75,7 @@ Both Stitch and Claude tabs share the Design panel's folder browsing, **Link to 
 ## Getting Started
 
 ### 1. Install
-Install **Switchboard** from the VS Code Marketplace.
+Install **Switchboard** from the VS Code Marketplace, or sideload the latest `.vsix` from the [Releases page](https://github.com/TentacleOpera/switchboard/releases/latest).
 
 ### 2. Set Up Your Agent Team
 Open the Switchboard sidebar, go to **Setup**, and enter your CLI agent startup commands (e.g., `gemini --approval-mode yolo`). Or connect your chat-based IDE agents.

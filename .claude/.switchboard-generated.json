@@ -1,8 +1,13 @@
 {
   "generator": "ClaudeCodeMirrorService",
-  "version": "1.7.5",
-  "generatedAt": "2026-06-29T04:00:51.096Z",
+  "version": "1.7.6",
+  "generatedAt": "2026-07-09T02:22:15.044Z",
   "skills": [
+    {
+      "source": "workflows/switchboard-index.md",
+      "name": "switchboard",
+      "relPath": ".claude/skills/switchboard/SKILL.md"
+    },
     {
       "source": "workflows/memo.md",
       "name": "memo",
@@ -19,62 +24,97 @@
       "relPath": ".claude/skills/improve-plan/SKILL.md"
     },
     {
+      "source": "workflows/improve-feature.md",
+      "name": "improve-feature",
+      "relPath": ".claude/skills/improve-feature/SKILL.md"
+    },
+    {
+      "source": "workflows/switchboard-split.md",
+      "name": "switchboard-split",
+      "relPath": ".claude/skills/switchboard-split/SKILL.md"
+    },
+    {
       "source": "workflows/switchboard-chat.md",
       "name": "switchboard-chat",
       "relPath": ".claude/skills/switchboard-chat/SKILL.md"
     },
     {
-      "source": "skills/clickup_api.md",
+      "source": "skills/switchboard-manage",
+      "name": "switchboard-manage",
+      "relPath": ".claude/skills/switchboard-manage/SKILL.md"
+    },
+    {
+      "source": "skills/improve-remote-plan",
+      "name": "improve-remote-plan",
+      "relPath": ".claude/skills/improve-remote-plan/SKILL.md"
+    },
+    {
+      "source": "skills/create-feature",
+      "name": "create-feature",
+      "relPath": ".claude/skills/create-feature/SKILL.md"
+    },
+    {
+      "source": "skills/create-feature-from-plans",
+      "name": "create-feature-from-plans",
+      "relPath": ".claude/skills/create-feature-from-plans/SKILL.md"
+    },
+    {
+      "source": "skills/clickup-api",
       "name": "clickup-api",
       "relPath": ".claude/skills/clickup-api/SKILL.md"
     },
     {
-      "source": "skills/clickup_fetch.md",
+      "source": "skills/clickup-fetch",
       "name": "clickup-fetch",
       "relPath": ".claude/skills/clickup-fetch/SKILL.md"
     },
     {
-      "source": "skills/clickup_create_task.md",
+      "source": "skills/clickup-create-task",
       "name": "clickup-create-task",
       "relPath": ".claude/skills/clickup-create-task/SKILL.md"
     },
     {
-      "source": "skills/clickup_modify_task.md",
+      "source": "skills/clickup-modify-task",
       "name": "clickup-modify-task",
       "relPath": ".claude/skills/clickup-modify-task/SKILL.md"
     },
     {
-      "source": "skills/clickup_attach.md",
+      "source": "skills/clickup-attach",
       "name": "clickup-attach",
       "relPath": ".claude/skills/clickup-attach/SKILL.md"
     },
     {
-      "source": "skills/clickup_create_subpage.md",
+      "source": "skills/clickup-create-subpage",
       "name": "clickup-create-subpage",
       "relPath": ".claude/skills/clickup-create-subpage/SKILL.md"
     },
     {
-      "source": "skills/linear_api.md",
+      "source": "skills/linear-api",
       "name": "linear-api",
       "relPath": ".claude/skills/linear-api/SKILL.md"
     },
     {
-      "source": "skills/notion_api.md",
+      "source": "skills/clickup-move-task",
+      "name": "clickup-move-task",
+      "relPath": ".claude/skills/clickup-move-task/SKILL.md"
+    },
+    {
+      "source": "skills/linear-move-issue",
+      "name": "linear-move-issue",
+      "relPath": ".claude/skills/linear-move-issue/SKILL.md"
+    },
+    {
+      "source": "skills/notion-api",
       "name": "notion-api",
       "relPath": ".claude/skills/notion-api/SKILL.md"
     },
     {
-      "source": "skills/switchboard_remote_notion.md",
-      "name": "switchboard-remote-notion",
-      "relPath": ".claude/skills/switchboard-remote-notion/SKILL.md"
-    },
-    {
-      "source": "skills/get_tickets.md",
+      "source": "skills/get-tickets",
       "name": "get-tickets",
       "relPath": ".claude/skills/get-tickets/SKILL.md"
     },
     {
-      "source": "skills/generate_diagram.md",
+      "source": "skills/generate-diagram",
       "name": "generate-diagram",
       "relPath": ".claude/skills/generate-diagram/SKILL.md"
     },
@@ -84,12 +124,32 @@
       "relPath": ".claude/skills/kanban-operations/SKILL.md"
     },
     {
+      "source": "skills/worktree-cleanup",
+      "name": "worktree-cleanup",
+      "relPath": ".claude/skills/worktree-cleanup/SKILL.md"
+    },
+    {
       "source": "skills/refine_ticket.md",
       "name": "refine-ticket",
       "relPath": ".claude/skills/refine-ticket/SKILL.md"
     },
     {
-      "source": "skills/archive.md",
+      "source": "skills/refine_feature.md",
+      "name": "refine-feature",
+      "relPath": ".claude/skills/refine-feature/SKILL.md"
+    },
+    {
+      "source": "skills/group-into-features",
+      "name": "group-into-features",
+      "relPath": ".claude/skills/group-into-features/SKILL.md"
+    },
+    {
+      "source": "skills/switchboard-orchestration",
+      "name": "switchboard-orchestration",
+      "relPath": ".claude/skills/switchboard-orchestration/SKILL.md"
+    },
+    {
+      "source": "skills/archive",
       "name": "archive",
       "relPath": ".claude/skills/archive/SKILL.md"
     },
@@ -99,27 +159,27 @@
       "relPath": ".claude/skills/query-archive/SKILL.md"
     },
     {
-      "source": "skills/query_switchboard_kanban.md",
+      "source": "skills/query-switchboard-kanban",
       "name": "query-switchboard-kanban",
       "relPath": ".claude/skills/query-switchboard-kanban/SKILL.md"
     },
     {
-      "source": "skills/query_kanban_plans.md",
+      "source": "skills/query-kanban-plans",
       "name": "query-kanban-plans",
       "relPath": ".claude/skills/query-kanban-plans/SKILL.md"
     },
     {
-      "source": "skills/web_research.md",
+      "source": "skills/web-research",
       "name": "web-research",
       "relPath": ".claude/skills/web-research/SKILL.md"
     },
     {
-      "source": "skills/deep_planning.md",
+      "source": "skills/deep-planning",
       "name": "deep-planning",
       "relPath": ".claude/skills/deep-planning/SKILL.md"
     },
     {
-      "source": "skills/complexity_scoring.md",
+      "source": "skills/complexity-scoring",
       "name": "complexity-scoring",
       "relPath": ".claude/skills/complexity-scoring/SKILL.md"
     },
@@ -129,14 +189,54 @@
       "relPath": ".claude/skills/advise-research/SKILL.md"
     },
     {
-      "source": "skills/constitution_builder.md",
+      "source": "skills/constitution-builder",
       "name": "constitution-builder",
       "relPath": ".claude/skills/constitution-builder/SKILL.md"
     },
     {
-      "source": "skills/tuning.md",
+      "source": "skills/tuning",
       "name": "tuning",
       "relPath": ".claude/skills/tuning/SKILL.md"
+    },
+    {
+      "source": "workflows/improve-plan.md",
+      "name": "switchboard-plan",
+      "relPath": ".claude/skills/switchboard-plan/SKILL.md"
+    },
+    {
+      "source": "workflows/improve-feature.md",
+      "name": "switchboard-feature",
+      "relPath": ".claude/skills/switchboard-feature/SKILL.md"
+    },
+    {
+      "source": "skills/improve-remote-plan",
+      "name": "switchboard-remote-plan",
+      "relPath": ".claude/skills/switchboard-remote-plan/SKILL.md"
+    },
+    {
+      "source": "skills/notion-api",
+      "name": "switchboard-notion",
+      "relPath": ".claude/skills/switchboard-notion/SKILL.md"
+    },
+    {
+      "source": "skills/linear-api",
+      "name": "switchboard-linear",
+      "relPath": ".claude/skills/switchboard-linear/SKILL.md"
+    },
+    {
+      "source": "skills/clickup-api",
+      "name": "switchboard-clickup",
+      "relPath": ".claude/skills/switchboard-clickup/SKILL.md"
+    },
+    {
+      "source": "skills/kanban_operations",
+      "name": "switchboard-kanban",
+      "relPath": ".claude/skills/switchboard-kanban/SKILL.md"
+    },
+    {
+      "source": "skills/web-research",
+      "name": "switchboard-research",
+      "relPath": ".claude/skills/switchboard-research/SKILL.md"
     }
   ],
   "settingsAllowEntries": [
