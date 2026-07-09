@@ -203,3 +203,7 @@ Manual verification in an installed VSIX (the project tests against the VSIX, no
 6. **`npm run compile`** to confirm the TypeScript change builds cleanly (only needed when producing a VSIX).
 
 Success criteria: Review Plan never relocates a floated Project panel and never spawns a duplicate for the auxiliary-window case; the plan is selected in the panel wherever it currently lives; first-open and hidden-tab behavior are unchanged.
+
+## Review Findings
+
+Verified all four Project-panel reveal sites swapped to `reveal(undefined, true)` (PlanningPanelProvider.ts:600 openProject opening-await branch, :606 existing-panel fast path, :661 _doOpenProject redundant guard, :1189 revealProject); the brand-new `createWebviewPanel(..., ViewColumn.One, ...)` at :665-668 correctly left unchanged; the two planning-panel (`_panel`) reveals at :871/:1146 correctly left as `ViewColumn.One` (out of scope). Caller trace (KanbanProvider:255-258/:8723-8726, TaskViewerProvider→activatePlanInProjectPanel) confirms the `isProjectInCurrentWindow()` gate is retained and `postMessage` still routes the selection regardless — no steal-back, no double-trigger, no regression. No CRITICAL/MAJOR issues; no code fixes applied. Compile/tests skipped per session directive.

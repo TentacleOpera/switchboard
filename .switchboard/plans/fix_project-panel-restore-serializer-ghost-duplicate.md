@@ -306,3 +306,7 @@ The flagged uncertainty was confirmed by web research (VS Code API docs + issues
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.** The changes are localized to `PlanningPanelProvider.ts` (one new field, one new method, guards in two existing methods) and a one-line call in `extension.ts`. The edge-case audit covers the lazy-restoration scenario which is the hardest to reason about. The `_projectPanelRestoring` flag is a simple, testable mechanism.
+
+## Review Findings
+
+Verified all four `_projectPanelRestoring = false` clear-sites are paired with the `_projectPanelOpening` clears (PlanningPanelProvider.ts:713 _doOpenProject onDidDispose, :1045 _hydratePanel onDidDispose, :8028 _updateWebviewRoots catch, :9879 dispose() re-registration) plus the terminal clears in deserializeProjectPanel (:990) and _waitForRestore (:651); the ghost-disposal fast-path (:993-996) returns before _hydratePanel so the disposed ghost is never wired to our onDidDispose and cannot null the live _projectPanel; conditional arming behind the TabGroups ghost check exists (extension.ts:2996-3004); reveal sites reconciled to `reveal(undefined, true)` per sibling; static-assertion test present (src/test/project-panel-restore-guard.test.js). No CRITICAL/MAJOR issues; no code fixes applied. Remaining risk: orphaned 8s setTimeout handle (plan-acknowledged, harmless). Compile/tests skipped per session directive.
