@@ -172,3 +172,7 @@ Per project rules, `dist/` is NOT used during development or testing — `src/` 
 
 - `src/webview/kanban.html` — replace pulsing animation with static theme-specific highlight (lines 963–979); remove `@keyframes kanban-working-pulse` and the `prefers-reduced-motion` override
 - `dist/webview/kanban.html` — regenerated at VSIX release time only (not a dev artefact)
+
+## Review Findings
+
+Reviewer pass (2026-07-09). A prior `restore-kanban-working-animation.md` commit (`e367991`) had re-added the pulse + glow after this plan first landed, but the user re-confirmed the plan's original intent (static highlight, no animation — the pulse read as too busy). Applied the plan as written: removed `animation: kanban-working-pulse`, the `@keyframes` block, the `prefers-reduced-motion` gate, and the `0 0 14px` glow spread; `.kanban-card.is-working::after` is now a static 2px ring, theme-colored — Afterburner cyan `#00e5ff` (`kanban.html:983`), Claudify orange `#D97757` (`kanban.html:988`), amber default fallback (`kanban.html:981`). Orphan check clean: no `kanban-working-pulse` refs remain; `.is-working` still applied by JS at `kanban.html:6010` so the ring renders. Compile/tests skipped per directive. Remaining risk: none.

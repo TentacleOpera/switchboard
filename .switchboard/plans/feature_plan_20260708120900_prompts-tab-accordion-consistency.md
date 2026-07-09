@@ -189,3 +189,7 @@ Per project rules, `dist/` is NOT used during development or testing — `src/` 
 - `src/webview/sharedDefaults.js` — add `group: 'subagent'` to `subagentPolicy` (all 10 roles; preferred: extract a shared `SUBAGENT_POLICY_RADIO` constant and reference it everywhere)
 - `src/webview/kanban.html` — `prettyGroupLabel` mapping for `'subagent'` + planner hardcoded HTML wrapped in `<details class="addon-subsection-accordion">`
 - `dist/webview/kanban.html` — regenerated at VSIX release time only (not a dev artefact)
+
+## Review Findings
+
+Reviewer pass (2026-07-09). Implemented as the preferred shared-constant refactor: `SUBAGENT_POLICY_RADIO` at `sharedDefaults.js:86` (`group: 'subagent'`) referenced by all 10 roles, zero orphan inline descriptors. `prettyGroupLabel` maps `'subagent' → 'Subagent Policy'` (`kanban.html:3702`); planner block wrapped in `<details class="addon-subsection-accordion">` (`kanban.html:3078`) with the redundant header span removed. Regression-checked: planner custom-input show/hide (`kanban.html:4377`, load `3441`) resolves inside `<details>` via name/id queries; prompt builder reads the `subagentPolicy` value, not the `group` metadata, so the tag is inert to output. No fixes needed; compile/tests skipped per directive. Remaining risk: none.

@@ -19,7 +19,11 @@ Group of 2 kanban.html visual fixes: add accordion to Subagent Policy section in
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Plan: Prompts Tab Accordion Consistency — Subagent Policy & Git Safety Guardrail](../plans/feature_plan_20260708120900_prompts-tab-accordion-consistency.md) — **CODER CODED**
-- [ ] [Feature Plan: Replace Pulsing Working Animation with Theme-Specific Static Highlight](../plans/feature_plan_20260708120901_kanban-card-coding-animation-claudify-override.md) — **CODER CODED**
+- [ ] [Feature Plan: Prompts Tab Accordion Consistency — Subagent Policy & Git Safety Guardrail](../plans/feature_plan_20260708120900_prompts-tab-accordion-consistency.md) — **CODE REVIEWED**
+- [ ] [Feature Plan: Replace Pulsing Working Animation with Theme-Specific Static Highlight](../plans/feature_plan_20260708120901_kanban-card-coding-animation-claudify-override.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Reviewer pass (2026-07-09) with advanced regression analysis. **Subtask 1 (accordion)** implemented correctly: shared `SUBAGENT_POLICY_RADIO` constant (`sharedDefaults.js:86`, `group: 'subagent'`, 10 role refs, no orphan inline descriptor), `prettyGroupLabel` maps `'subagent'` (`kanban.html:3702`), planner block wrapped in `<details>` (`kanban.html:3078`) with custom-input listener (`kanban.html:4377`) verified resolving inside the accordion. **Subtask 2 (animation):** a prior `restore-kanban-working-animation.md` commit had re-added the pulse; the user re-confirmed the original intent, so the animation, `@keyframes`, `prefers-reduced-motion` gate, and glow spread were removed. `.kanban-card.is-working::after` is now a static theme-colored 2px ring (Afterburner `#00e5ff`, Claudify `#D97757`, `kanban.html:983/988`); no orphaned `kanban-working-pulse` refs remain. Compile/tests skipped per directive. Remaining risk: none — pure CSS + static DOM, `subagentPolicy` group tag is inert to prompt output.
 

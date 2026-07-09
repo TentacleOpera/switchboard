@@ -964,8 +964,9 @@
         .complexity-indicator.very-low { color: #00e5ff; }
         .complexity-indicator.unknown { color: #7f848e; }
 
-        /* Agent activity-light border glow ring — lit while a card is dispatched to an agent.
-           Amber hue + subtle pulse. Negative inset lets it sit outside the border. */
+        /* Agent activity-light highlight ring — lit while a card is dispatched to an agent.
+           Static, non-animated 2px border ring, theme-colored. Negative inset lets it sit
+           outside the border. No animation by design (a pulse read as too busy). */
         .kanban-card.is-working::after {
             content: "";
             position: absolute;
@@ -975,27 +976,17 @@
             z-index: 1;
             /* Default fallback — only reachable if a future third theme clears both
                cyber-theme-enabled and theme-claudify. Defensive only. */
-            box-shadow: 0 0 0 2px #e0a800, 0 0 14px color-mix(in srgb, #e0a800 45%, transparent);
-            animation: kanban-working-pulse 1.8s ease-in-out infinite;
+            box-shadow: 0 0 0 2px #e0a800;
         }
 
-        /* Afterburner theme: cyan glow */
+        /* Afterburner theme: cyan highlight */
         body.cyber-theme-enabled .kanban-card.is-working::after {
-            box-shadow: 0 0 0 2px #00e5ff, 0 0 14px color-mix(in srgb, #00e5ff 45%, transparent);
+            box-shadow: 0 0 0 2px #00e5ff;
         }
 
-        /* Claudify theme: orange glow */
+        /* Claudify theme: orange highlight */
         body.theme-claudify .kanban-card.is-working::after {
-            box-shadow: 0 0 0 2px #D97757, 0 0 14px color-mix(in srgb, #D97757 45%, transparent);
-        }
-
-        @keyframes kanban-working-pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            .kanban-card.is-working::after { animation: none; }
+            box-shadow: 0 0 0 2px #D97757;
         }
 
         /* One-shot feedback when a card's operation completes (status light goes out
