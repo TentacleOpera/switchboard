@@ -618,8 +618,10 @@ export class PlanningPanelProvider {
             // Re-check: the serializer may have set _projectPanel while we waited.
             // Capture into a const local so the post-await narrowing survives the
             // earlier `if (this._projectPanel) { return; }` which pinned the member
-            // to `undefined` in this branch's control-flow analysis.
-            const restoredPanel: vscode.WebviewPanel | undefined = this._projectPanel;
+            // to `undefined` in this branch's control-flow analysis. The `as` cast
+            // re-widens the read to its declared union so the truthiness guard
+            // below narrows to WebviewPanel rather than `never`.
+            const restoredPanel = this._projectPanel as vscode.WebviewPanel | undefined;
             if (restoredPanel) {
                 restoredPanel.reveal(undefined, true);
                 if (this._projectPanelReady) {

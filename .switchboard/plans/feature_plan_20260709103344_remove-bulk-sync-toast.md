@@ -127,3 +127,7 @@ This is the only call site — `grep` for the message string returns a single hi
 ## Completion Summary
 
 Removed the single `vscode.window.showInformationMessage(...)` call from `src/services/GlobalPlanWatcherService.ts` inside `_registerEventForBulkCheck` (formerly line 609). The bulk-change backup logic (`db.writeDbBackup('bulk-change')`) and the output-channel log line (`[GlobalPlanWatcher] bulk change (${count}); snapshot written`) remain intact. The message string no longer appears in the source, and the file still compiles syntactically; no other files were modified. Per the session directive, no compilation or automated test run was executed.
+
+## Review Findings
+
+Files changed: `src/services/GlobalPlanWatcherService.ts` only. Verified: `showInformationMessage` is gone from the file (grep exit 1) and the "Multiple cards" string returns zero hits in `src/`; the surviving `try` block retains `writeDbBackup('bulk-change')` (`:607`), the `count` log line (`:608`), the `count` declaration (`:601`), the buffer reset, and the `catch` unchanged. Regression trace: the deleted line was the last, fire-and-forget statement in the `try` — its promise was never awaited and no caller observes it, so removal cannot reorder, gate, or double-trigger anything; no "quieter" replacement was introduced. No CRITICAL/MAJOR findings; no code fixes needed. No remaining risk.
