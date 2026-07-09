@@ -182,3 +182,34 @@ Modified `ClickUpSyncService.ts` to query `last_page` instead of using length he
 Updated `TaskViewerProvider.ts` to gate prunes and sweeps on complete fetches only, and added orphan cleanup to eliminate duplicates.
 Updated `PlanningPanelProvider.ts` and UI files to add a dedicated full Refetch button alongside the existing Refresh button.
 No issues encountered during implementation.
+
+## Reviewer Pass (in-place, 2026-07-09)
+
+Direct adversarial review against this plan as source-of-truth. Verified the implementation in commit `28e465b` against every Requirement and Defect. Result: **implementation is faithful and correct; no CRITICAL/MAJOR data-loss defect found.** One low-risk diagnostic hardening applied.
+
+### Requirement conformance (verified against source)
+- **Req 1 (destroy only on trustworthy set):** ✔ `fetchIsAuthoritative = fetchComplete && !resolutionFailed && rawItemCount > 0` gates **both** the prune (`TaskViewerProvider.ts:20838`) and the full deletion sweep (`:20892`). A short/incomplete/errored fetch → writes still happen, all deletions skipped.
+- **Req 2 (live, fully-paginated, never cache):** ✔ `getListTasksLive` calls `_fetchListTasksInternal` with `forceRefresh:true` (`ClickUpSyncService.ts:1247-1251`), which skips the cache-read block (`:1163`). Pagination terminates on `last_page===true` (`:1198`) with empty-page (`:1204`) and `maxPages=100` (`:1181`) guards; `complete` is set true **only** via `last_page===true` — never from a constant or page length. Cache still written after fetch (`:1214`) so warm reads survive.
+- **Req 3 (rename overwrites same file; orphans cleaned; both writers):** ✔ Shared helper `_removeOrphanTicketFiles` (`:20560`) invoked by **both** `_writeTaskDocument` (`:20632`) and `importTaskAsDocument` (`:20360`). Honors the mtime-vs-`lastSyncedAt` guard (`:20580`) — a locally-edited old-slug file is preserved. Existing duplicates self-heal on next import.
+- **Req 4 (no healthy-case regression):** ✔ conditional — reconciliation runs whenever `complete===true`, which holds on a healthy `last_page`-returning fetch. **Residual dependency on the ClickUp `last_page` field** (see Remaining Risks).
+- **Req 5 (no confirm dialogs):** ✔ none added anywhere in the path.
+- **Req 6 (deliberate full re-fetch control):** ✔ `forceFull` plumbed through `refreshTicketsDelta` (`PlanningPanelProvider.ts:6027`, `isDeltaRefresh` at `:6034`, cursor reset at `:6057`); "Refresh"=delta / "Refetch"=full relabel in `planning.html:3769-3770` + new handler in `planning.js:8915`. The `:6588` "Click Refetch" message is now truthful.
+- **Linear parity:** ✔ `reachedPageCap` set only on genuine truncation (`LinearSyncService.ts:847`, copied to filtered result `:854`), drives `fetchComplete = !reachedPageCap` (`TaskViewerProvider.ts:20724`).
+
+### Findings
+- **[CRITICAL-adjacent → resolved by design + fix] Safety net depends on `last_page`.** If ClickUp omits `last_page`, `complete` stays false → reconciliation silently never runs (fail-safe: no data loss, but duplicates/closed tickets never reconcile). This is the plan's own documented residual assumption. Kept the deliberate fail-safe semantics; added observability (below).
+- **[MAJOR-parity → FIXED] No ClickUp cap/incomplete diagnostic.** `LinearSyncService` warns on page-cap; the new ClickUp path exited silently. **Fix applied** (`ClickUpSyncService.ts`): `console.warn` when a **full** (non-delta) fetch exits without `last_page===true` — distinct messages for the `maxPages` cap vs. general non-authoritative exit. Scoped to `!options.dateUpdatedGt` so delta/auto-sync ticks don't spam the log.
+- **[MAJOR-efficiency → DEFERRED] Per-write `getImportedTickets()` + `readdirSync`.** `_removeOrphanTicketFiles` re-reads the DB and dir on every ticket write (O(N) reads; O(N²)-ish dir work). Negligible on target ~15–37-ticket lists; a `includeClosed` pull on a very large list could stutter. Not fixed: the plan **deliberately** placed cleanup in the writers (to cover both paths + the non-authoritative case); batching would change the helper contract and both call sites — moderate risk for marginal gain. Recommended follow-up: hoist one `getImportedTickets()`/`readdir` per import and pass into the helper.
+- **[NIT] `deleteImportedTicket` coupling.** The helper (`:20589`) deletes the ticket's only DB row and relies on the caller re-registering two lines later; both callers do. Fragile if a third caller is added. Consider a comment or scoping the delete to the orphan's own filePath.
+- **[NIT] Delta `fetchComplete = true` (`:20693`)** is a harmless dead value (every consumer gates on `!isDelta`), but a future refactor reusing it on a delta path would regress. Consider a one-line comment.
+
+### Files changed by this review
+- `src/services/ClickUpSyncService.ts` — added scoped diagnostic `console.warn` for a non-authoritative full fetch (parity with Linear; no behavioral change to the gate).
+
+### Validation
+- Per session directive: **SKIP COMPILATION** and **SKIP TESTS** — not run. Verification was static: traced the gate, pagination terminal conditions, orphan-cleanup mtime guard, DB field names (`slugPrefix`/`lastSyncedAt`/`remoteDocId`/`filePath` confirmed on `ImportedDocEntry`), and all `getListTasks`/`getListTasksLive` call sites (no signature break — `getListTasks` still returns `ClickUpTask[]`). The applied edit is a self-contained `if` block with no new symbols.
+
+### Remaining risks
+1. **`last_page` presence (top risk).** Healthy reconciliation and the new diagnostic both assume ClickUp returns `last_page` on `GET /list/{id}/task` for this workspace. If absent, prune/sweep silently stop (safe, but non-functional) and the new warn fires on every full fetch — which is itself the signal to do the plan's 2-minute manual confirmation against a live response.
+2. **Large-list import cost** (efficiency finding above) — bounded, deferred.
+3. **`deleteImportedTicket`/delta-`fetchComplete` coupling** — latent only, no current failure path.

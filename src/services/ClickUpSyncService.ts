@@ -1208,6 +1208,24 @@ export class ClickUpSyncService {
       await this.delay(200);
     }
 
+    // Diagnostic parity with LinearSyncService.queryIssues: a full paginated
+    // fetch that exits WITHOUT observing last_page===true is not authoritative
+    // and will (correctly) suppress the destructive prune/sweep downstream.
+    // Surface it so a silently-truncated import (>maxPages of data, or a
+    // workspace whose API never flips last_page) is diagnosable in the field
+    // instead of manifesting only as reconciliation quietly never happening.
+    // Scoped to full (non-delta) fetches: a delta query (dateUpdatedGt) is
+    // expected to be "incomplete" by nature and its `complete` flag is never
+    // consumed by the deletion gate, so warning there would only spam the log
+    // on every auto-sync tick.
+    if (!complete && !options.dateUpdatedGt) {
+      if (page >= maxPages) {
+        console.warn(`[ClickUpSync] Reached max page cap (${maxPages}) for list ${normalizedListId} without last_page:true — result may be incomplete; destructive reconciliation will be skipped.`);
+      } else {
+        console.warn(`[ClickUpSync] Pagination for list ${normalizedListId} ended without last_page:true (${tasks.length} task(s) fetched) — treating as non-authoritative; destructive reconciliation will be skipped.`);
+      }
+    }
+
     const dedupedTasks = this._dedupeTasks(tasks);
 
     // Update cache and reverse map
