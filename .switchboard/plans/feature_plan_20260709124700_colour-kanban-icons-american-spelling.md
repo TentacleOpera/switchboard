@@ -114,3 +114,7 @@ Change **only** the `"description"` string value; leave the property name `switc
 ## Recommendation
 
 Complexity 1 → **Send to Intern.** Trivial, well-bounded copy change; the only discipline required is leaving every identifier alone.
+
+## Review Findings
+
+Files changed: `src/webview/setup.html` (Theme-tab title + description, 1314-1315) and `package.json` (settings description, 755). Both display strings now read "color" (2 occurrences each) with zero user-facing "colour" remaining. Config key `switchboard.theme.colourKanbanIcons`, message types, DOM ids, body class `kanban-icons-colour`, and `getEffectiveColourKanbanIcons` all remain British — verified by grep (key count 1, property name unchanged). No migration risk, no wiring touched, no remaining risks; no code fixes required.

@@ -184,3 +184,7 @@ Add a matching `.agents-group-label` style to implementation.html's `<style>` bl
 ## Recommendation
 
 Complexity 3 → **Send to Intern.** Presentational reorder + two label elements in two files; the discipline is moving row markup verbatim and keeping the Planner pool block attached — no logic changes.
+
+## Review Findings
+
+Files changed: `src/webview/kanban.html` (AGENTS tab + `.agents-group-label` style) and `src/webview/implementation.html` (onboarding CLI step + style). Kanban Core order is Planner→Lead→Coder→Intern→Reviewer→Analyst (Analyst moved up) with Optional holding the remaining six + jules-auto-sync; onboarding has 6 core + Acceptance Tester + Jules + auto-sync. All `data-role`/id/`checked`/placeholder preserved verbatim; both visibility iterations use `querySelectorAll(...).forEach` on `data-role` and the onboarding save reads by class+id, so the reorder is behaviour-preserving. Verified by read + grep — no rows dropped or duplicated. Remaining risk: NIT — the planned `:first-of-type` rule was replaced with an inline `margin-top:4px` on the first Core label (sound, since `:first-of-type` wouldn't match past preceding divs); a future dev deleting the inline style would regress top spacing. No code fixes required.

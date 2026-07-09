@@ -116,3 +116,7 @@ No other files change. The static `data-tooltip` on the HTML button (`kanban.htm
 ## Recommendation
 
 Complexity 2 → **Send to Intern.** Localized, single-function, behaviour-preserving copy change with a clear verification checklist.
+
+## Review Findings
+
+Files changed: `src/webview/kanban.html` (`updateCreateWorktreeButton`, ~5602-5636). Both enabled branches now `setAttribute('data-tooltip', …)` with the specified copy and retain `btn.title=''`; the three disabled tooltips are untouched. Caller trace: function is invoked on load/selection/board changes with no signature, return, or side-effect change — no double-refresh, no race. Verified by read + grep (SKIP TESTS/SKIP COMPILATION per directive). Remaining risk: NIT only — the disabled `hasWorktree` branch doesn't clear `btn.title`, but `title` is never set non-empty anywhere so no duplicate native tooltip can appear. No code fixes required.

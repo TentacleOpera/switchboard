@@ -131,3 +131,7 @@ The setup panel already re-broadcasts `colourKanbanIconsSetting` to itself for t
 ## Recommendation
 
 Complexity 3 → **Send to Intern.** A single wiring change at a well-identified chokepoint, with the reaching-the-webview question now resolved. Borderline Intern/Coder because of the one cross-file dependency; the resolved provider-ownership note removes the main uncertainty.
+
+## Review Findings
+
+Files changed: `src/services/TaskViewerProvider.ts` (`switchboard.theme.name` config watcher, ~695-708). The added `colourKanbanIconsChanged` broadcast carries `enabled: getEffectiveColourKanbanIcons()`, which matches the kanban handler's `msg.enabled` (`kanban.html:6660-6663`); `getEffectiveColourKanbanIcons()` reads `theme.name` fresh (`themeBodyClass.ts:39`) and the config event fires post-commit, so the new theme resolves on a live switch. No feedback loop (handler only `classList.toggle`), correct ordering (theme class added before icon class), explicit user OFF respected via `inspect()`, first-paint path untouched. Verified by read + grep. No remaining risks; no code fixes required.
