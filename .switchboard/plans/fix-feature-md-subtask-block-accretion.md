@@ -152,4 +152,8 @@ Manual (installed VSIX):
 
 **Recommendation:** Complexity 4 (Mostly routine, one positional-insertion subtlety) → **Send to Coder.**
 
+## Review Findings
+
+**CRITICAL (fixed):** the implemented heading regexes were not line-anchored (`/##\s*Subtasks\b…/`, `/##\s*Worktrees\b…/`), so they matched the literal text `## Subtasks` inside prose/backticks — `firstSubtaskIndex` landed mid-sentence and spliced the auto-block into the middle of the feature description (the reviewed feature file was corrupted this way: its own bullet was split). The plan's proposed code anchored via `(^|\n)\s*`; the implementation dropped it. Fixed by anchoring both heading regexes to line-start (`^…gm`) in `src/services/KanbanProvider.ts` (`_regenerateFeatureFile`), and manually repaired the split sentence in the feature `.md`. Core strip-all-then-insert-one, positional re-insertion, byte-identical skip, and WORKTREES parity were otherwise correct. Verified in JS: anchored regex now targets the real BEGIN marker (offset 1507, not the prose hit at 1227); an adversarial 3-block file (orphan + 2 dupes) collapses to exactly one block with backtick prose preserved and position held. No compile/tests run (skipped per project convention). Remaining risk: the non-greedy orphan regex can under-strip if an orphan's `END` was already consumed by the well-formed-pair pass (plan adversarial note #3) — not present in the observed corruption shape.
+
 **Stage Complete:** PLAN REVIEWED

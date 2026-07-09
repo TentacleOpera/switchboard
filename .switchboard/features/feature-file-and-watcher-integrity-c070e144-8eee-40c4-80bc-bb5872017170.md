@@ -9,15 +9,13 @@ Make Switchboard feature .md files and kanban DB rows robust against the two way
 ## How the Subtasks Achieve This
 
 - **Guard the plan-watcher against git-churn board clobber**: Replaces the watcher's hard-delete-on-file-disappearance with a durable soft-delete + reconcile model (a `missing` status lifecycle, status-agnostic reactivation on reappearance preserving `plan_id`/`feature_id`/column/complexity, a bounded purge sweep), adds git-awareness so bulk changes are batched, and adds bulk-change DB backups. This stops git checkouts from clobbering DB-only state.
-- **Fix `_regenerateFeatureFile` splice so it collapses to exactly one `
+- **Fix `_regenerateFeatureFile` splice so it collapses to exactly one `## Subtasks` block**: Replaces the broken independent-`indexOf` splice with strip-all-then-insert-one (healing orphan/duplicate blocks in one pass), and applies the same fix to the WORKTREES block. This stops feature `.md` files from growing without bound on every regeneration.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix `_regenerateFeatureFile` splice so it collapses to exactly one `## Subtasks` block](../plans/fix-feature-md-subtask-block-accretion.md) — **LEAD CODED**
-- [ ] [Guard the plan-watcher against git-churn board clobber](../plans/guard-watcher-against-git-churn-board-clobber.md) — **LEAD CODED**
+- [ ] [Fix `_regenerateFeatureFile` splice so it collapses to exactly one `## Subtasks` block](../plans/fix-feature-md-subtask-block-accretion.md) — **CODE REVIEWED**
+- [ ] [Guard the plan-watcher against git-churn board clobber](../plans/guard-watcher-against-git-churn-board-clobber.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
-
-## Subtasks` block**: Replaces the broken independent-`indexOf` splice with strip-all-then-insert-one (healing orphan/duplicate blocks in one pass), and applies the same fix to the WORKTREES block. This stops feature `.md` files from growing without bound on every regeneration.
 
 ## Dependencies & sequencing
 

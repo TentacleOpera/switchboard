@@ -10548,7 +10548,12 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         let newContent: string;
         const subtaskRegexes = [
             /<!-- BEGIN SUBTASKS[\s\S]*?<!-- END SUBTASKS -->/g,
-            /##\s*Subtasks\b[\s\S]*?<!-- END SUBTASKS -->/g,
+            // Heading must be line-anchored (^…m). A bare /##\s*Subtasks\b/ also matches the
+            // literal text "## Subtasks" inside prose/backticks (e.g. a feature that documents
+            // this very code), so firstSubtaskIndex would land mid-sentence and the block would
+            // be spliced into the middle of the description. Only a real heading at column 0 is
+            // an auto-block.
+            /^##\s*Subtasks\b[\s\S]*?<!-- END SUBTASKS -->/gm,
             /<!-- (?:BEGIN|END) SUBTASKS[^\n]*-->/g
         ];
         let firstSubtaskIndex = -1;
@@ -10602,7 +10607,10 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             const worktreeSection = `<!-- BEGIN WORKTREES (auto-generated, do not edit) -->\n## Worktrees\n${worktreeLines.join('\n')}\n<!-- END WORKTREES -->`;
             const wtRegexes = [
                 /<!-- BEGIN WORKTREES[\s\S]*?<!-- END WORKTREES -->/g,
-                /##\s*Worktrees\b[\s\S]*?<!-- END WORKTREES -->/g,
+                // Line-anchored (^…m) for the same reason as the SUBTASKS heading above: a bare
+                // /##\s*Worktrees\b/ would match "## Worktrees" text inside prose and splice the
+                // worktree block mid-sentence.
+                /^##\s*Worktrees\b[\s\S]*?<!-- END WORKTREES -->/gm,
                 /<!-- (?:BEGIN|END) WORKTREES[^\n]*-->/g
             ];
             let firstWtIndex = -1;
