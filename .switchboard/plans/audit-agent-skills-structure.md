@@ -107,11 +107,14 @@ backend-consumed or remote-only tools. Some advertised skills are not actually r
 
 ## User Review Required
 
-- **`worktree_cleanup` — wire up or retire?** Advertised but unreachable on both hosts, and prior
-  project notes indicate `POST /worktree/cleanup` may not exist server-side (shipped merge is a
-  bare `git merge`). Decision: (a) restructure into `worktree_cleanup/SKILL.md` + add a
-  `MIRROR_MANIFEST` entry + confirm/implement the endpoint, or (b) retire it (remove source +
-  `AGENTS.md` row). Recommendation: **(b) retire** unless the endpoint is confirmed live.
+- **`worktree_cleanup` — wire up or retire?** Advertised but unreachable on both hosts (flat +
+  not in the manifest). The `POST /worktree/cleanup` endpoint **is live and implemented**
+  (verified: `LocalApiServer.ts:2390` → `cleanupWorktree` option → `KanbanProvider._cleanupWorktree`
+  at `:10259`), so the skill body is correct — the only defect is registry drift. Decision:
+  (a) restructure into `worktree_cleanup/SKILL.md` + add a `MIRROR_MANIFEST` entry (`no-model`,
+  `Bash`), or (b) retire it (remove source + `AGENTS.md` row) if worktree cleanup should stay
+  button-only. Recommendation: **(a) wire up** — it's a working capability; `no-model` keeps it
+  from auto-triggering, honoring its "only after a user-confirmed merge" precondition.
 - **`create-feature-from-plans` — regularize or accept Claude-only?** Recommendation:
   **regularize** — author an `.agents/skills/create-feature-from-plans/SKILL.md` source + a
   `MIRROR_MANIFEST` entry so it regenerates and is discoverable on both hosts.
@@ -137,7 +140,8 @@ backend-consumed or remote-only tools. Some advertised skills are not actually r
   is invisible until a regeneration runs.
 - Skill bodies traverse upward for `.agents/skills/_lib/sb_api_call.sh`; moving a skill one level
   deeper does not change that (the loop walks up to `.agents/skills`) — verify, don't assume.
-- The `worktree_cleanup` endpoint-liveness question is a real dependency, not a doc tweak.
+- (`worktree_cleanup`'s `POST /worktree/cleanup` endpoint is confirmed live — no longer an open
+  risk; its fate is a keep/retire product choice, not a liveness question.)
 
 ## Edge-Case & Dependency Audit
 
@@ -170,8 +174,8 @@ bulk-moves ~18–20 skill source files, and each move MUST update its `MIRROR_MA
 path in the same commit or the skill vanishes from Claude Code for ~4,000 installs. Mitigation:
 treat file-move + manifest-edit as one atomic unit per skill; after the change, regenerate the
 Claude Code mirror and diff `.claude/skills/` against the manifest, and restart/re-discover on
-Antigravity to confirm each skill registers. Secondary risk: deciding `worktree_cleanup`'s fate
-without confirming its endpoint — flagged for user review, not guessed.
+Antigravity to confirm each skill registers. (`worktree_cleanup`'s endpoint is confirmed live, so
+its keep/retire is a product choice, not a risk.)
 
 ## Proposed Changes
 
