@@ -10339,6 +10339,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // Track in-flight abandonment so re-render skips it
                 if (!window._removingWorktreeIds) window._removingWorktreeIds = new Set();
                 window._removingWorktreeIds.add(w.id);
+                // Self-heal: if the backend never returns a fresh worktreeConfig (e.g. it early-breaks
+                // when the workspace/db can't be resolved during a refresh storm), don't suppress this
+                // row forever. 30s is far beyond any real `git worktree remove`, so it never fires
+                // mid-removal — it only un-sticks a genuinely stalled abandon.
+                setTimeout(() => {
+                    if (window._removingWorktreeIds && window._removingWorktreeIds.has(w.id)) {
+                        window._removingWorktreeIds.delete(w.id);
+                        try { renderWorktreesTab(); } catch (e) { /* tab may be unmounted */ }
+                    }
+                }, 30000);
                 abandonWorktree(w.id, w.branch, w.path);
             });
             mainLine.appendChild(abandonBtn);

@@ -2680,7 +2680,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 // Note on dual subsystems: worktree terminals deliberately use the autoban registry
                 // and are matched for routing by worktreePath, not name.
                 const roles = agents.map(a => a.role);
-                await taskViewerProvider.ensureWorktreeTerminals(w.path, roles);
+                // User-initiated (AGENTS button / "OPEN AGENT TERMINALS"): isManual=true so the
+                // autoban 5-per-role cap never blocks a human opening grid worktree terminals.
+                await taskViewerProvider.ensureWorktreeTerminals(w.path, roles, true, true);
             }
         }
 

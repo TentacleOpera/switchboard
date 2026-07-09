@@ -20,8 +20,28 @@ Group of 3 worktree-tab fixes: abandon button lag (optimistic UI + N+1 query opt
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Plan: Fix Abandon Worktree Button Lag with Optimistic UI](../plans/feature_plan_20260708120903_abandon-worktree-optimistic-ui.md) — **CODER CODED**
-- [ ] [Feature Plan: Remove Autoban 5-Terminal Cap from Manual Worktree Creation](../plans/feature_plan_20260708120904_worktree-terminal-limit-manual-vs-autoban.md) — **CODER CODED**
-- [ ] [Feature Plan: Add Column Subheaders to Worktree Creation Dropdown](../plans/feature_plan_20260708120907_worktree-creation-dropdown-column-subheaders.md) — **CODER CODED**
+- [ ] [Feature Plan: Fix Abandon Worktree Button Lag with Optimistic UI](../plans/feature_plan_20260708120903_abandon-worktree-optimistic-ui.md) — **CODE REVIEWED**
+- [ ] [Feature Plan: Remove Autoban 5-Terminal Cap from Manual Worktree Creation](../plans/feature_plan_20260708120904_worktree-terminal-limit-manual-vs-autoban.md) — **CODE REVIEWED**
+- [ ] [Feature Plan: Add Column Subheaders to Worktree Creation Dropdown](../plans/feature_plan_20260708120907_worktree-creation-dropdown-column-subheaders.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Feature Code Review (Direct Reviewer Pass — 2026-07-09)
+
+Direct in-place reviewer pass over all 3 subtasks (Grumpy → Balanced → fix → verify). Compilation and automated tests skipped per session directive; verification was static (read/reason + grep). Full per-subtask review sections are appended to each subtask plan file.
+
+**Result: all 3 subtasks implemented as specified. 2 MAJOR edge-cases found and fixed inline; 0 CRITICAL; remaining findings were NITs left as-is.**
+
+| Subtask | Verdict | Fix applied |
+| :-- | :-- | :-- |
+| Dropdown column subheaders | ✅ Clean, pattern-faithful | None |
+| Remove autoban cap (manual) | ✅ Gate + 5 sites correct | **`src/extension.ts:2683`** — 6th manual caller (`createAgentGrid` / AGENTS button) still hit the cap; now passes `isManual: true`. Plan's "no missed callers" claim was wrong. |
+| Abandon optimistic UI + N+1 | ✅ N+1 + happy path correct | **`src/webview/kanban.html`** — added 30 s self-heal timeout so a stalled abandon (backend early-break before DB update / config send) can't suppress the row forever. |
+
+### Files changed by this review
+- `src/extension.ts` — `createAgentGrid` worktree-terminal call now passes `isManual: true`.
+- `src/webview/kanban.html` — 30 s self-healing timeout in the Abandon click handler.
+
+### Remaining risks (feature-wide)
+- Abandon self-heal is time-based (30 s); a pathological >30 s successful removal would briefly un-hide then re-hide the row (cosmetic, unobserved).
+- All other subtasks carry no material residual risk.
 

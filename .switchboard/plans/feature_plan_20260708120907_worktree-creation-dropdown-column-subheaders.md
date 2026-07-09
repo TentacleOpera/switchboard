@@ -162,3 +162,24 @@ Rebuild via `npm run build`. Do NOT manually edit.
 
 - `src/webview/kanban.html` — replace flat dropdown with column-grouped `<optgroup>` dropdown
 - `dist/webview/kanban.html` — rebuild artefact
+
+## Code Review (Direct Reviewer Pass — 2026-07-09)
+
+**Verdict:** Implemented as specified, faithful to the `implementation.html` pattern. No CRITICAL/MAJOR findings. No code changes.
+
+### Verified as implemented
+- `kanban.html:10546-10586` — builds `colIdMap` from `columnDefinitions`, groups filtered feature cards by `(feature.column || 'CREATED').trim().toUpperCase()`, sorts group keys by column index (unknown → `999`), emits `<optgroup>` per non-empty group with uppercased label, `<option>` value=`planId` text=`topic`.
+- Exclusion of features with existing worktrees preserved via `.filter(c => !currentFeatureWorktrees[c.planId])` — equivalent to the old inline `if (currentFeatureWorktrees[...]) return;`.
+- Confirmed `feature.column` is populated on cards (`kanban.html:5778`, `5833`); empty string falls back to `CREATED` correctly (`'' || 'CREATED'`).
+
+### Findings (all NIT, not actioned)
+- Unknown columns sort to `999` and render their raw uppercase id as the label — graceful degradation, no crash.
+- If `columnDefinitions` is empty when the dropdown builds, all groups sort to insertion order with raw-id labels — transient, self-corrects on next render.
+
+### Validation
+- Compilation and automated tests SKIPPED per session directive.
+- Static review: field names (`planId`, `topic`, `column`) all proven by pre-existing usage; no scope issues (`columnDefinitions` is module-level, in scope inside `createWorktreesPanel`).
+
+### Remaining risks
+- None. Pure additive UI change; no data-model, scope, or behavior change to worktree creation.
+- Files changed by this review: none.

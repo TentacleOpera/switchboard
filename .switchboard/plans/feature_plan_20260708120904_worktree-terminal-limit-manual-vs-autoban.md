@@ -154,4 +154,26 @@ await this._taskViewerProvider.ensureWorktreeTerminals(wtPath, activeAgents, fal
 
 - `src/services/TaskViewerProvider.ts` — add `isManual` param, gate the cap check
 - `src/services/KanbanProvider.ts` — pass `isManual: true` from 5 manual call sites
+- `src/extension.ts` — pass `isManual: true` from the `createAgentGrid` worktree-terminal call (6th manual caller, found in review)
 - `dist/extension.js` — rebuild artefact
+
+## Code Review (Direct Reviewer Pass — 2026-07-09)
+
+**Verdict:** Gate + parameter correct; 5 KanbanProvider call sites correct. One MAJOR fixed inline — the plan's "no missed callers" claim was wrong.
+
+### Verified as implemented
+- `ensureWorktreeTerminals` signature (`TaskViewerProvider.ts:8395`) adds `isManual: boolean = false`; gate at `:8440` is `!isManual && worktreeTerminalsForRole.length >= MAX_AUTOBAN_TERMINALS_PER_ROLE`. Default-`false` is the conservative choice — a new caller that forgets the flag keeps the cap.
+- All 5 KanbanProvider manual call sites pass `isManual: true`: `9469`, `9506`, `9542`, `9621`, and `10179` (`_ensureFeatureIntegrationWorktree`, correctly `..., false, true` — reveal=false, isManual=true, positional trap avoided).
+- Autoban path (`_createAutobanTerminal`, `TaskViewerProvider.ts:7271-7272`) does NOT route through `ensureWorktreeTerminals` — cap retained there. Confirmed.
+
+### Finding fixed inline
+- **[MAJOR] Missed 6th manual caller** — `extension.ts:2683`, inside `createAgentGrid()`. This function is bound to the `switchboard.createAgentGrid` command (AGENTS button / status-bar terminal icon / "OPEN AGENT TERMINALS" button) — a user-initiated path exactly analogous to `openWorktreeTerminals`. It called `ensureWorktreeTerminals(w.path, roles)` with the default `isManual=false`, so it still hit the autoban cap. With `plannerCount > 5` (`extension.ts:2656` pushes one 'planner' role per planner), opening grid terminals in a worktree would trip the exact "worktree role terminal limit reached" toast this feature set out to eliminate. The plan's "All 5 call sites verified — no missed callers" assertion was incorrect.
+  - **Fix:** Changed the call to `ensureWorktreeTerminals(w.path, roles, true, true)` (`reveal=true` preserves prior default behavior; `isManual=true` lifts the cap for this user-initiated path).
+
+### Validation
+- Compilation and automated tests SKIPPED per session directive.
+- Static review: new 4-arg call matches the 4-param signature; no other `ensureWorktreeTerminals` callers exist in `src/` (grep-verified — only `extension.ts` + the 5 KanbanProvider sites + the definition).
+
+### Remaining risks
+- None material. All known manual/user-initiated callers now pass `isManual: true`; any future caller defaults to the capped (safe) behavior.
+- Files changed by this review: `src/extension.ts` (6th caller now passes `isManual: true`).

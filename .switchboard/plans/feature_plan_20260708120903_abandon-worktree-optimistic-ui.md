@@ -195,3 +195,28 @@ Rebuild via `npm run build`. Do NOT manually edit.
 - `src/services/KanbanProvider.ts` — batch query in `_sendWorktreeConfig`
 - `src/services/KanbanDatabase.ts` — add `getPlansByPlanIds` method (if needed)
 - `dist/webview/kanban.html` — rebuild artefact
+
+## Code Review (Direct Reviewer Pass — 2026-07-09)
+
+**Verdict:** Implemented as specified. N+1 fix correct; optimistic UI happy-path correct. One MAJOR edge-case fixed inline.
+
+### Verified as implemented
+- `getPlansByPlanIds` (`KanbanDatabase.ts:3420`) — batch fetch with empty-input guard (`planIds.length === 0 → []`, no empty-`IN ()` SQL error). Uses `PLAN_COLUMNS`, IN-clause placeholders — matches the plan.
+- `_sendWorktreeConfig` (`KanbanProvider.ts:10380-10391`) — batches via `getPlansByPlanIds`, builds `planMap` keyed by `p.planId`, looks up `planMap.get(w.feature_id)`. Behaviorally identical to the old per-worktree `getPlanByPlanId` loop (same columns, same no-workspace-filter semantics). Confirmed `planId` is the record field (`KanbanDatabase.ts:38`).
+- Optimistic UI (`kanban.html:10330-10343`), skip-on-render (`kanban.html:10412-10416`), and config-arrival cleanup (`kanban.html:10201-10207`) — all correct for the happy path and for a mid-flight re-render.
+
+### Finding fixed inline
+- **[MAJOR] Unbounded optimistic-suppression window** — `kanban.html` abandon click handler. The backend abandon handler early-`break`s before any DB update / `_sendWorktreeConfig` when `workspaceRoot` can't be resolved (`KanbanProvider.ts:9697`) or the DB isn't ready (`9699`) — reachable during a refresh storm. In that case no fresh config ever arrives, the worktree stays `status='active'`, and the cleanup (which only removes ids *absent* from the config) never clears the id, so the row is suppressed on every subsequent render until a full webview reload. The plan's adversarial synthesis covered the git-error case (which marks 'abandoned' and self-resolves) but not the early-break-before-DB-update case.
+  - **Fix:** Added a 30 s self-healing `setTimeout` in the click handler — if the id is still in `_removingWorktreeIds` after 30 s, it is removed and `renderWorktreesTab()` re-runs, un-sticking the row. 30 s is far beyond any real `git worktree remove`, so it never fires mid-removal (no flash-back regression); it only recovers a genuinely stalled abandon.
+
+### Findings not actioned (NITs)
+- `window._removingWorktreeIds` is a `window`-global — harmless in a sandboxed webview iframe.
+- Residual `opacity: 0.4` fade persists if no re-render fires; the self-heal timeout now covers the material case, so the cosmetic residue is not worth extra churn.
+
+### Validation
+- Compilation and automated tests SKIPPED per session directive.
+- Static review: `getPlansByPlanIds` arg/return shapes consistent with `getPlanByPlanId`; `planMap` key matches `w.feature_id`; self-heal closure references (`window._removingWorktreeIds`, `w.id`, `renderWorktreesTab`) all in scope.
+
+### Remaining risks
+- Self-heal is time-based (30 s). A pathological `git worktree remove` exceeding 30 s while succeeding would briefly un-hide then re-hide the row on the next config — cosmetic only, and not observed in practice.
+- Files changed by this review: `src/webview/kanban.html` (self-heal timeout).

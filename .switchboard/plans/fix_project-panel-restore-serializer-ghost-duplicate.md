@@ -105,18 +105,22 @@ In `openProject()`, after the existing `_projectPanelOpening` check and before t
 
 However, the better approach: if the restoring flag is set, we should **wait briefly** for the serializer and then fall through if it doesn't arrive. This gives the serializer a chance to fire (it usually fires within 1-2 seconds of activate).
 
+> **Superseded:** the `openProject()` code sample below originally used `this._projectPanel.reveal(vscode.ViewColumn.One);` at its three reveal sites.
+> **Reason:** the sibling subtask *"Review Plan opens a duplicate Project panel…"* (same feature) fixes a **separate** bug where `reveal(vscode.ViewColumn.One)` relocates a floated (auxiliary-window) Project panel back into the main window. That plan owns the reveal-target decision for the whole feature: every Project-panel reveal must be `reveal(undefined, true)` (reveal in place, preserve focus). Keeping `ViewColumn.One` here would re-introduce the steal-back bug this feature is meant to eliminate.
+> **Replaced with:** `this._projectPanel.reveal(undefined, true);` at all three reveal sites in the sample below. **Sequencing:** land the reveal-target subtask first, then implement this restore guard on top of the already-corrected reveal sites (see the feature file's *Dependencies & sequencing*).
+
 ```typescript
 public async openProject(): Promise<void> {
     if (this._projectPanelOpening) {
         await this._projectPanelOpening;
         if (this._projectPanel) {
-            this._projectPanel.reveal(vscode.ViewColumn.One);
+            this._projectPanel.reveal(undefined, true);
         }
         return;
     }
 
     if (this._projectPanel) {
-        this._projectPanel.reveal(vscode.ViewColumn.One);
+        this._projectPanel.reveal(undefined, true);
         if (this._projectPanelReady) {
             this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
         }
@@ -130,7 +134,7 @@ public async openProject(): Promise<void> {
         await this._waitForRestore();
         // Re-check: the serializer may have set _projectPanel while we waited.
         if (this._projectPanel) {
-            this._projectPanel.reveal(vscode.ViewColumn.One);
+            this._projectPanel.reveal(undefined, true);
             if (this._projectPanelReady) {
                 this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
             }
@@ -169,13 +173,16 @@ private _waitForRestore(): Promise<void> {
 }
 ```
 
-**Change 5: Clear the restoring flag in all `onDidDispose` handlers**
+**Change 5: Clear the restoring flag on EVERY path that nulls `_projectPanel`/`_projectPanelOpening`**
 
-If the panel is disposed (user closes tab) while the restoring flag is set, clear it so future `openProject()` calls aren't blocked. Add `this._projectPanelRestoring = false;` to the same three `onDidDispose` handlers that already clear `_projectPanelOpening`:
+If the panel is disposed (user closes tab) while the restoring flag is set, clear it so future `openProject()` calls aren't blocked. Add `this._projectPanelRestoring = false;` to the **same sites that already clear `_projectPanelOpening`** — there are **four**, not three (the original plan listed only the three `onDidDispose` handlers and missed the catch-block clear at item 4):
 
-1. `_doOpenProject` onDidDispose (~line 645-660)
-2. `_hydratePanel(isProject=true)` onDidDispose (~line 970-981)
-3. `dispose()` re-registered onDidDispose (~line 9780-9790)
+1. `_doOpenProject` `onDidDispose` (line ~645-660, clears `_projectPanelOpening` at line 649).
+2. `_hydratePanel(isProject=true)` `onDidDispose` (line ~970-981, clears at line 973).
+3. `dispose()` re-registered `onDidDispose` (line ~9792-9801, clears at line 9795).
+4. **`_updateWebviewRoots()` catch block (line ~7936-7948).** This is **not** an `onDidDispose` handler — it is an inline `catch` that fires when `this._projectPanel.webview.options = …` throws because the panel was already disposed but its reference wasn't cleared (e.g. the planning panel closed first, removing the dispose listener). Lines 7946-7947 null `_projectPanel` and `_projectPanelOpening`; add `this._projectPanelRestoring = false;` here too. Without it, if the panel dies via this path while restoring, the flag leaks and the next `openProject()` eats a needless ≤1.5s wait — the 8s timeout in `markProjectPanelRestoring` is the backstop, but this closes the gap directly.
+
+> **Clarification (from improve pass):** the `setTimeout` in `markProjectPanelRestoring` is intentionally fire-and-forget and its handle is not retained — after the flag is cleared early (the common case), the orphaned timer wakes once, sees the flag already `false`, and no-ops. This is harmless but was noted; keeping a handle to `clearTimeout` on early-clear is an optional tidiness improvement, not a correctness requirement. Likewise, `_waitForRestore()` deliberately sets `_projectPanelRestoring = false` as it resolves — it is the terminal consumer of the flag, so this side effect is by design.
 
 ### File: `src/extension.ts`
 
@@ -220,7 +227,7 @@ A new test file (matching the existing suite idiom) that asserts:
 4. `deserializeProjectPanel` contains `this._projectPanelRestoring = false`.
 5. `openProject` contains `if (this._projectPanelRestoring)`.
 6. `extension.ts` contains the `TabInputWebview` / `viewType === 'switchboard-project'` ghost-tab check before `markProjectPanelRestoring()`.
-7. All three `onDidDispose` handlers that clear `_projectPanelOpening` also clear `_projectPanelRestoring`.
+7. All **four** sites that clear `_projectPanelOpening` also clear `_projectPanelRestoring` — the three `onDidDispose` handlers **and** the `_updateWebviewRoots()` catch block (line ~7946). A simple way to assert this without brittle line coupling: the count of `_projectPanelRestoring = false` occurrences is ≥ the count of `_projectPanelOpening = undefined` occurrences that are paired with a `_projectPanel = undefined` on the adjacent line.
 
 ## Edge-Case & Dependency Audit
 
@@ -258,7 +265,23 @@ A new test file (matching the existing suite idiom) that asserts:
 ## Dependencies
 
 - Predecessor plan: `feature_plan_20260708095648_review-plan-tab-pileup-race-condition.md` (the `_projectPanelOpening` lock). This plan builds on that lock and does not modify it.
-- No external dependencies.
+- No external dependencies. The `TabGroups` API (`vscode.window.tabGroups`, `TabInputWebview.viewType`) is stable and well within the declared engine `^1.93.0`; the codebase does not currently use it, so Change 6 introduces the first use.
+- **Sibling subtask coordination (feature `Project panel fixes`):** shares the `openProject()` / `_doOpenProject()` surface with *"Review Plan opens a duplicate Project panel…"*. That sibling **owns the reveal-target decision** (all reveals → `reveal(undefined, true)`); this plan's code samples defer to it (see the Superseded callout in Change 4). **Recommended coding order: reveal-target subtask first, then this restore guard** — so the guard is built around the already-corrected reveal sites and no reveal call regresses to `ViewColumn.One`.
+
+## Adversarial Synthesis
+
+Key risks: (1) the serializer-vs-`openProject()` timing race is the whole point — the flag, the bounded wait, and the clear-sites must stay in agreement; a missed clear-site (the original plan overlooked the `_updateWebviewRoots` catch block at 7946) leaks the flag and forces a needless wait. (2) Lazy restoration means the serializer can fire arbitrarily late; the 8s flag timeout plus ghost disposal in `deserializeProjectPanel` prevent a second live panel. (3) Reveal-target must stay reconciled with the sibling subtask (`reveal(undefined, true)`). Mitigations: conditional arming via the TabGroups ghost-tab check keeps the default (`persistPanels: false`) path at zero cost; all four clear-sites now covered; the 8s timeout backstops any unforeseen clear-path.
+
+## Assumptions Verified (web research, 2026-07-09)
+
+The flagged uncertainty was confirmed by web research (VS Code API docs + issues #182795, #73017, #195715; release notes 1.85/1.86/1.88). The design is validated:
+
+1. **CONFIRMED: `vscode.window.tabGroups.all` enumerates auxiliary-window tab groups**, and their tabs expose `TabInputWebview` with the correct extension-registered `viewType`. Editor groups are indexed globally across main and auxiliary windows, so the Change 6 ghost-tab check detects a floated `switchboard-project` ghost correctly.
+2. **CONFIRMED: the `WebviewPanelSerializer` fires for a webview that was floated into an auxiliary window**, restoring it directly into the aux-window group it previously inhabited (auxiliary window layouts are persisted since 1.86). So `markProjectPanelRestoring()` arms correctly for floated panels.
+3. **CONFIRMED: lazy background restoration is real** — VS Code defers `deserializeWebviewPanel` for background tabs until the user focuses them, and running `createWebviewPanel` before that late deserialize is a documented duplicate-tab race (issues #182795, #73017). This is exactly this plan's root cause.
+4. **Design validated:** the VS Code-recommended mitigation for the lazy-restore race is a singleton registry that **disposes the duplicate on late deserialization and focuses the existing panel** — precisely this plan's ghost-disposal in `deserializeProjectPanel` (Edge-Case #5). No redesign needed.
+
+> **Note (not a blocker):** research surfaced a real upstream class of bug — orphaned `setTimeout` handles in aux-window/webview code (e.g. VS Code PR #311824 "aux window - fix setTimeout leak"). This reinforces the Change 5 clarification about the un-cancelled 8s timer in `markProjectPanelRestoring`; harmless here (flag-guarded), but retaining the handle to `clearTimeout` on early-clear is the tidier pattern.
 
 ## Verification Plan
 
