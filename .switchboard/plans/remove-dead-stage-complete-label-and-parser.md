@@ -94,3 +94,7 @@ None. No other plans or sessions need to complete first. The deletion is self-co
 **Send to Intern.** Complexity 2 — mechanical two-file dead-code deletion, one cross-file import to sever, no new behavior, no migration. The only ways to get it wrong are (a) touching `destinationColumn`, or (b) leaving a dangling import/comment — both covered by the Boundaries section and the grep-empty verification gate.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Reviewed 2026-07-09. Files changed: `src/services/planMetadataUtils.ts` (import, interface field, parser block, return-literal entry removed) and `src/services/agentPromptBuilder.ts` (`STAGE_COMPLETE_LABEL` constant removed; `destinationColumn` JSDoc updated to note vestigial history). Validation: `grep -rn "stageComplete\|STAGE_COMPLETE_LABEL" src/` returns zero; `destinationColumn` boundary intact (15 hits across KanbanProvider/agentConfig/test); compile+tests skipped per session directive. No CRITICAL/MAJOR findings — deletion complete, import severed cleanly, no orphaned references. Only remaining risk is cosmetic (a few leftover blank lines), left as-is to avoid churning a committed, clean file.

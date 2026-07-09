@@ -616,8 +616,12 @@ export class PlanningPanelProvider {
         if (this._projectPanelRestoring) {
             await this._waitForRestore();
             // Re-check: the serializer may have set _projectPanel while we waited.
-            if (this._projectPanel) {
-                this._projectPanel.reveal(undefined, true);
+            // Capture into a const local so the post-await narrowing survives the
+            // earlier `if (this._projectPanel) { return; }` which pinned the member
+            // to `undefined` in this branch's control-flow analysis.
+            const restoredPanel: vscode.WebviewPanel | undefined = this._projectPanel;
+            if (restoredPanel) {
+                restoredPanel.reveal(undefined, true);
                 if (this._projectPanelReady) {
                     this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
                 }

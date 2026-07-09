@@ -155,3 +155,7 @@ No automated tests cover the workflow/skill markdown files (they are agent instr
 **Recommendation:** Complexity 3 → **Send to Intern**.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Reviewed 2026-07-09. Files changed: `.agents/workflows/improve-plan.md`, `.claude/skills/improve-plan/SKILL.md`, `.agents/workflows/switchboard-chat.md`, `.claude/skills/switchboard-chat/SKILL.md`, `CLAUDE.md`, `AGENTS.md` — dead Plan-Import Manifest sections replaced with `## Post-Review Board State` / `## Feature Relationships (frontmatter carrier)`. Validation: dead-language grep (`plan-import|Trigger A|Trigger B|stale-manifest|importManifest`) returns zero across live docs; frontmatter carrier (`**Feature:**`/`**Project:**`/`create-feature-from-plans`) preserved in all four; mirror pairs byte-identical for the new sections; CLAUDE/AGENTS dropped "No manifest is needed" while keeping the carrier sentence. No CRITICAL/MAJOR findings — and the implementation correctly improved on the plan by instructing agents NOT to hand-write `**Plan ID:**` (never parsed; DB-assigned) rather than preserving that dead guidance. Remaining risks: GAP A (Notion-remote column-advance) and GAP B (`move-card.js` direct-DB fallback caveat) remain documentation-honesty follow-ups, correctly deferred and out of scope.
