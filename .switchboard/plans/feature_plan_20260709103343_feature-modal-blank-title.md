@@ -130,3 +130,7 @@ None apply. `src/webview/kanban.html` is an inline-scripted VS Code webview with
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern.**
+
+## Completion Report
+
+Implemented the change in `src/webview/kanban.html`: the multi-plan group-into-feature branch now opens the feature-create modal with an empty `feature-create-name` field and immediately focuses it via `setTimeout(..., 0)` after the modal is unhidden. Removed the `firstTopic`-derived suggestion logic and `' Feature'` suffix. The single-plan promote and blank-feature modes are untouched, and the existing empty-name submit guard still enforces a required title. No automated tests were run per the plan's verification instructions. The working tree also contains unrelated pre-existing changes in `kanban.html` and other files that were not part of this plan.

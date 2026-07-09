@@ -160,3 +160,60 @@ existing import path is unaffected.
 **Complexity 5 → Send to Coder.** The guidance + stdout fixes are routine; the importer
 `**Feature:**` fix is the real work and touches the install-base import path, so it needs the
 investigation + apply-if-empty care called out above.
+
+---
+
+## Code Review — In-Place Reviewer Pass (2026-07-09)
+
+Reviewed the committed implementation (`a4ad186`) against this plan. **Result: all four deliverables
+land correctly; the load-bearing importer fix is done with proper apply-if-empty + defer/retry care;
+no CRITICAL/MAJOR findings; no code fixes required.**
+
+### Deliverable-by-deliverable
+1. **Single-add primitive — DONE, correct.** `POST /kanban/features/assign`
+   (`LocalApiServer.ts:624`, routed `:2411`): auth → `assignToFeature` option guard (503) →
+   validates `feature` + `plan`/`plans` (400) → delegates. Wired via `TaskViewerProvider.ts:1271` →
+   `KanbanProvider.assignPlansToFeature:11093`. Resolution is genuinely no-UUID:
+   `db.resolveFeatureIdentifier` (`KanbanDatabase.ts:3562`: id→path→topic/slug→basename, `is_feature=1`)
+   + `db.resolvePlanIdentifier` per plan. **Additive verified:** a plan already on a *different*
+   feature is pushed to `skipped`, never re-homed (`KanbanProvider.ts:11126`); locked-column guard
+   present (`:11116`). Additive alongside the retained singular `/kanban/feature/assign`.
+2. **`**Feature:**`-on-import fix — DONE, correct (the real work).** Root cause was the link-apply
+   step, not the parse: `parsePlanMetadata` (`planMetadataUtils.ts:110`) already extracts
+   `**Feature:**` (regex handles plain / list / numbered / blockquote; accepts UUID *or* name).
+   `_applyFeatureLink` (`GlobalPlanWatcherService.ts:651`) is **apply-if-empty** (only links when the
+   subtask's `feature_id` is empty — never clobbers a DB/UI link, `:682`), defers with a max-retry
+   drop when the feature isn't imported yet (`:669`), and regenerates the parent feature file so its
+   Subtasks block updates (`:693`). Applied on **both** fresh import (`:897`) and re-save (`:1018`),
+   and deferred links retry on feature-file import (`:893`) — so both import orders resolve.
+3. **Declarative-first guidance — DONE.** `kanban_operations/SKILL.md` now leads with `reconcile`,
+   documents `move-card.js`'s path-addressing, the new single-add endpoint, `**Feature:**`
+   self-linking, and the converge-to-set caveat. `switchboard-manage` §2/§3 mirror it.
+4. **`get-state.js` stdout hygiene — DONE, correct.** `console.log/info/warn/debug` redirected to
+   stderr on line 2 **before** the `require('KanbanDatabase')` (so even an import-time capture gets
+   the redirected binding), and `process.stdout.end(payload, cb)` flushes JSON before exit. The
+   stale "don't parse stdout" warning was removed from the SKILL.
+
+### Findings
+- **NIT (defer):** stale endpoint naming — `LocalApiServer.ts:622` comment and
+  `assign-to-feature.js:7` header still say the *singular* `/kanban/feature/assign` is "for the
+  kanban_operations script," but the script now calls the *plural* endpoint (`:105`);
+  `switchboard-orchestration/SKILL.md:117` documents only the singular. All cosmetic — both
+  endpoints exist and both resolve refs. No functional impact.
+- **NIT (defer):** re-assigning a plan already on the *same* feature reports it in `assigned` (not a
+  no-op in the report), though it is a functional no-op. Harmless.
+
+### Files changed by this review
+- None (no CRITICAL/MAJOR findings).
+
+### Validation (per directive: no compile, no tests)
+- Confirmed `assign-to-feature.js` emits `{ok:true,assigned,skipped}` — matches the SKILL doc.
+- Confirmed `parsePlanMetadata` populates `metadata.feature` (so the `else if (metadata.feature)`
+  link branch is live, not dead code) and was unchanged by this commit — validating the
+  root-cause-is-link-apply conclusion.
+- Confirmed the additive skip path and locked-column guard by reading `assignPlansToFeature`.
+
+### Remaining risks
+- End-to-end acceptance (write a plan with `**Feature:**`, observe it link with zero script calls)
+  requires a running extension; static review confirms the code path is correct and apply-if-empty.
+- Ships to the install base only via the 1.7.6 bump (sibling subtask), as noted.

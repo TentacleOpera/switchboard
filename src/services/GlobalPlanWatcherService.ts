@@ -606,7 +606,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     await db.ensureReady();
                     await db.writeDbBackup('bulk-change');
                     this._outputChannel?.appendLine(`[GlobalPlanWatcher] bulk change (${count}); snapshot written`);
-                    vscode.window.showInformationMessage(`Multiple cards (${count}) changed by a file sync. Backup snapshot created.`);
                 } catch (e) {
                     this._outputChannel?.appendLine(`[GlobalPlanWatcher] Failed to write bulk-change backup: ${e}`);
                 }

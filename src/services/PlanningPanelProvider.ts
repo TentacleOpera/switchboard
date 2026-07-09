@@ -1432,13 +1432,13 @@ Your job is to help the user write and refine the following governance documents
    - [unresolved decision or risk]
 
 2. **Constitution** (coding standards) — located at \`CONSTITUTION.md\`
-   Follow instructions in \`.agents/skills/constitution_builder.md\`.
+   Follow instructions in \`.agents/skills/constitution-builder/SKILL.md\`.
 
 3. **System Files** — \`CLAUDE.md\` and \`AGENTS.md\`
    These are agent governance files. Help the user write rules that agents should follow when working in this repo.
 
 4. **Tuning Insights** — \`.switchboard/insights/*.md\`
-   Follow instructions in \`.agents/skills/tuning.md\`.
+   Follow instructions in \`.agents/skills/tuning/SKILL.md\`.
 
 ## Workflow
 
@@ -4630,7 +4630,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to build or improve CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .agents/skills/constitution-builder/SKILL.md to build or improve CONSTITUTION.md in this project.`;
                 // Try dispatching via the planner role (gets rotation for free).
                 // Fall back to ad-hoc terminal creation if no planner agent is registered.
                 if (this._taskViewerProvider) {
@@ -4649,7 +4649,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .agents/skills/constitution_builder.md to improve and update the existing CONSTITUTION.md in this project.`;
+                const promptText = `Follow instructions in .agents/skills/constitution-builder/SKILL.md to improve and update the existing CONSTITUTION.md in this project.`;
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
                     if (dispatched) { break; }
@@ -6330,6 +6330,7 @@ Please format the updated output document strictly as follows:
                                     let fileScopeId = '';
                                     let dateCreated: string | undefined;
                                     let syncStatus: 'synced' | 'modified' | 'local-only' = 'local-only';
+                                    let assignees: string[] = [];
                                     if (fs.existsSync(dbT.filePath)) {
                                         try {
                                             const content = fs.readFileSync(dbT.filePath, 'utf8');
@@ -6350,6 +6351,8 @@ Please format the updated output document strictly as follows:
                                                 // Drives the sidebar's newest-first sort.
                                                 const cm = fm[1].match(/^created:\s*(.+)$/m);
                                                 if (cm) { dateCreated = cm[1].trim(); }
+                                                const am = fm[1].match(/^assignees:\s*(.+)$/m);
+                                                if (am) { assignees = am[1].split(',').map(s => s.trim()).filter(Boolean); }
                                             }
                                             // Fallback to file mtime for older files lacking a `created:` field,
                                             // so they still sort in a reasonable order rather than to the end.
@@ -6380,7 +6383,8 @@ Please format the updated output document strictly as follows:
                                         lastSyncedAt: dbT.lastSyncedAt,
                                         syncStatus,
                                         url: dbT.url || '',
-                                        dateCreated
+                                        dateCreated,
+                                        assignees
                                     });
                                 }
                             }
@@ -9422,12 +9426,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 let title = match[2].replace(/-/g, ' ');
                 let kanbanColumn = '';
                 let dateCreated: string | undefined;
+                let assignees: string[] = [];
                 try {
                     const content = nfs.readFileSync(fullPath, 'utf8');
                     const fm = content.match(/^---\n([\s\S]*?)\n---/);
                     if (fm) {
                         const km = fm[1].match(/kanbanColumn:\s*(.+)/); if (km) { kanbanColumn = km[1].trim(); }
                         const cm = fm[1].match(/^created:\s*(.+)$/m); if (cm) { dateCreated = cm[1].trim(); }
+                        const am = fm[1].match(/^assignees:\s*(.+)$/m); if (am) { assignees = am[1].split(',').map(s => s.trim()).filter(Boolean); }
                     }
                     const h1 = content.match(/^#\s+(.+)$/m);
                     if (h1) { title = h1[1].trim(); }
@@ -9437,7 +9443,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 if (!dateCreated) {
                     try { dateCreated = nfs.statSync(fullPath).mtime.toISOString(); } catch {}
                 }
-                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '', dateCreated });
+                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '', dateCreated, assignees });
             }
         }
     }

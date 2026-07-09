@@ -9679,7 +9679,7 @@ ${FOCUS_DIRECTIVE}`;
 ${note}
 ${steps}
 
-After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree_cleanup\` skill (\`.agents/skills/worktree_cleanup.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
+After the merge succeeds, **ask the user whether they want you to clean up this worktree in Switchboard.** If they say yes, run the \`worktree-cleanup\` skill (\`.agents/skills/worktree-cleanup/SKILL.md\`) — it calls the Switchboard local API to mark the worktree merged and remove it. Do not clean up without the user's confirmation.`;
 
                 this.postMessage({ type: 'mergePromptReady', worktreeId, prompt });
                 break;

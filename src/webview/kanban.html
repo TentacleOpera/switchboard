@@ -36,6 +36,7 @@
             --accent-teal: #D97757;
             --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
             --accent-teal-bright: #E2A188;
+            --feature-accent: #D4A017;   /* gold: replaces base purple #7c3aed for feature/epic cards (Claudify only) */
             --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-secondary: #8C8C8C;
             --border-color: #333333;
@@ -160,14 +161,14 @@
             color: var(--text-primary) !important;
             box-shadow: none !important;
         }
-        /* Feature cards: restore the purple identity that the !important .kanban-card rules above
+        /* Feature cards: restore the gold identity that the !important .kanban-card rules above
            otherwise flatten (mirrors the green .completed bar). Declared after :hover so the
-           purple survives hover. Selection still wins for non-feature cards; feature cards have their
-           own .feature-card.selected override below that keeps the purple border. */
+           gold survives hover. Selection still wins for non-feature cards; feature cards have their
+           own .feature-card.selected override below that keeps the gold border. */
         body.theme-claudify .kanban-card.feature-card,
         body.theme-claudify .kanban-card.feature-card:hover {
-            border-left: 4px solid #7c3aed !important;
-            background: linear-gradient(180deg, color-mix(in srgb, #7c3aed 12%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border-left: 4px solid var(--feature-accent) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--feature-accent) 12%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
         }
         /* Selected: clear terracotta highlight so the selection is obvious (keep green completed bar). */
         body.theme-claudify .kanban-card.selected {
@@ -176,10 +177,15 @@
             color: var(--text-primary) !important;
             box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
         }
-        /* Selected feature cards in Claudify: purple border instead of terracotta */
+        /* Selected feature cards in Claudify: gold border instead of terracotta */
         body.theme-claudify .kanban-card.feature-card.selected {
-            border-color: #7c3aed !important;
-            box-shadow: inset 0 0 0 1px #7c3aed !important;
+            border-color: var(--feature-accent) !important;
+            box-shadow: inset 0 0 0 1px var(--feature-accent) !important;
+        }
+        /* Claudify: feature subtask label in gold to match the recolored feature accent
+           (base rule at .feature-subtask-label stays purple for Afterburner). */
+        body.theme-claudify .feature-subtask-label {
+            color: var(--feature-accent);
         }
         /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
            Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
@@ -8054,12 +8060,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (descInput) descInput.style.display = 'none';
                 if (submitBtn) submitBtn.textContent = 'Promote to Feature';
             } else {
-                const suggestion = firstTopic.length > 40 ? firstTopic.substring(0, 37) + '...' : firstTopic;
-                if (nameInput) nameInput.value = suggestion ? suggestion + ' Feature' : '';
+                // Group-into-feature: no pre-filled title. The first member's topic is never a
+                // correct name for the group, so require the user to type one. The submit handler
+                // (feature-create-submit) already blocks an empty name.
+                if (nameInput) nameInput.value = '';
                 if (titleText) titleText.textContent = 'Create Feature';
                 if (descLabel) descLabel.style.display = '';
                 if (descInput) descInput.style.display = '';
                 if (submitBtn) submitBtn.textContent = 'Create Feature';
+                // Focus the empty field so the user can type the title immediately. setTimeout(…, 0)
+                // defers focus to the next tick — after modal.classList.remove('hidden') runs below —
+                // because focusing a still-hidden element is a no-op.
+                if (nameInput) setTimeout(() => nameInput.focus(), 0);
             }
             if (modal) modal.classList.remove('hidden');
         }

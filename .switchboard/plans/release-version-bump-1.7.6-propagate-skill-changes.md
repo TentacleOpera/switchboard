@@ -115,3 +115,36 @@ manual release step that follows.
 **Complexity 2 → Send to Intern.** Mechanically a one-line bump, but it MUST land last (with or
 after both content subtasks) — the only thing an executor can get wrong is ordering. Ready to
 execute once both siblings are merged.
+
+---
+
+## Code Review — In-Place Reviewer Pass (2026-07-09)
+
+Reviewed the committed implementation (`a4ad186`) against this plan. **Result: correct and complete;
+no findings; no code fixes required.**
+
+### Verified
+1. `package.json` version reads `1.7.6` (was `1.7.5`).
+2. `package-lock.json` is aligned — both the top-level `"version"` and the root-package `"version"`
+   node read `1.7.6` (the plan's edge case "no other manifest drifts" is satisfied).
+3. **Sequencing satisfied:** the two content subtasks (skills audit/restructure + `switchboard-manage`
+   rewrite) and the ergonomics subtask are all present in the same commit as the bump, so the release
+   carries them — the bump does not ship an old skill layer.
+4. `CHANGELOG.md` — none exists in the repo, so the plan's *optional* "if present" CHANGELOG entry is
+   a correct no-op (not a miss).
+
+### Findings
+- None.
+
+### Files changed by this review
+- None.
+
+### Validation (per directive: no compile, no tests)
+- `grep` confirmed `package.json` and `package-lock.json` version fields = `1.7.6`; confirmed no
+  `CHANGELOG.md` present.
+
+### Remaining risks
+- The VSIX build/publish is the manual release step (out of code scope, as the plan states). The
+  version gate (`shouldRefreshAgentWorkspaceFiles` / `_shouldRefreshAgentVersion`) will only re-trip
+  once a VSIX built from this commit is installed over an existing ≤1.7.5 install — that propagation
+  cannot be verified statically here.

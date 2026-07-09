@@ -5850,6 +5850,8 @@ Each plan file must include:
         if (issue?.project?.id) { fmLines.push(`projectId: ${String(issue.project.id).trim()}`); }
         if (issue?.project?.name) { fmLines.push(`projectName: ${String(issue.project.name).trim()}`); }
         if ((issue as any)?.parentId) { fmLines.push(`parentId: ${String((issue as any).parentId).trim()}`); }
+        const lnAssignee = String(issue?.assignee?.name || issue?.assignee?.email || '').trim();
+        if (lnAssignee) { fmLines.push(`assignees: ${lnAssignee}`); }
         fmLines.push('---', '');
         const yamlFrontmatter = createdAt ? fmLines.join('\n') : '';
 
@@ -6119,6 +6121,12 @@ Each plan file must include:
         if (cuType) { fmLines.push(`statusType: ${cuType}`); }
         if (task?.list?.id) { fmLines.push(`listId: ${String(task.list.id).trim()}`); }
         if (task?.parentId) { fmLines.push(`parentId: ${String(task.parentId).trim()}`); }
+        // Persist assignee display names so the file-backed sidebar can show them
+        // without re-hitting the API (the Assign modal uses the live detail fetch).
+        const cuAssignees = Array.isArray(task?.assignees)
+            ? task.assignees.map((a) => String(a?.username || a?.email || '').trim()).filter(Boolean)
+            : [];
+        if (cuAssignees.length) { fmLines.push(`assignees: ${cuAssignees.join(', ')}`); }
         fmLines.push('---', '');
         const yamlFrontmatter = createdAt ? fmLines.join('\n') : '';
 

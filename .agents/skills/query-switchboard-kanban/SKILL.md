@@ -179,4 +179,4 @@ sqlite3 -readonly "$DB_PATH" "SELECT plan_id, session_id, topic, kanban_column F
 **Key:** `workspace_id` stores the workspace identifier.
 
 ## Cross-Reference
-For ready-made query templates on workspace names, projects, and features, see the [query_kanban_plans.md](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.agents/skills/query_kanban_plans.md) skill.
+For ready-made query templates on workspace names, projects, and features, see the [query-kanban-plans](../query-kanban-plans/SKILL.md) skill.

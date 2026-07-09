@@ -255,3 +255,46 @@ optional `skills.json` manual-registration override — neither changes this pla
 blast radius of `MIRROR_MANIFEST`). Execute as atomic per-skill units (move file + update manifest
 `source:` + aliases together), then verify on both hosts. All three product decisions are
 confirmed — **ready to execute**.
+
+---
+
+## Code Review — In-Place Reviewer Pass (2026-07-09)
+
+Reviewed the committed implementation (`a4ad186`) against this plan. **Result: implementation is
+correct and complete for the plan's stated scope; one MAJOR consumer-side regression found and
+fixed** — the file moves left dangling `.agents/skills/<name>.md` references in code that emits
+agent prompts, exactly the "advertised-but-unreachable" class this plan set out to eliminate, but
+via consumers the plan did not enumerate.
+
+### Findings by severity
+- **MAJOR — dangling skill-path references introduced by the moves (FIXED).** The flat→dir moves
+  broke 8 hardcoded `.agents/skills/<name>.md` references that resolve to now-404 paths. These are
+  emitted as agent prompts / doc links and would 404 for ~4,000 installs once 1.7.6 scaffolds the
+  new layout:
+  - `src/services/PlanningPanelProvider.ts:1435` — `constitution_builder.md` → `constitution-builder/SKILL.md`
+  - `src/services/PlanningPanelProvider.ts:1441` — `tuning.md` → `tuning/SKILL.md`
+  - `src/services/PlanningPanelProvider.ts:4633` / `:4652` — `constitution_builder.md` (build + update button flows) → `constitution-builder/SKILL.md`
+  - `src/services/KanbanProvider.ts:9682` — `worktree_cleanup` skill (`worktree_cleanup.md`) → `worktree-cleanup` skill (`worktree-cleanup/SKILL.md`)
+  - `.agents/workflows/switchboard-orchestrator.md:102` — `worktree_cleanup.md` → `worktree-cleanup/SKILL.md`
+  - `.agents/skills/query-switchboard-kanban/SKILL.md:182` and `.agents/skills/query_archive/SKILL.md:55` — cross-links to `query_kanban_plans.md` (also a machine-absolute `file:///Users/...` path) → workspace-relative `../query-kanban-plans/SKILL.md`
+- **NIT — pre-existing bare underscore skill-name refs (NOT fixed; out of scope).** `agentPromptBuilder.ts:622` (`skill: "complexity_scoring"`), `:641/643` (`web_research skill`), `:663` (`deep_planning skill`), `planning.js:161/182/…` (`get_tickets skill`, `generate_diagram skill`). The manifest diff confirms every `name:` slug was ALREADY kebab before this commit — so these mismatches pre-date this change and were not introduced by it. They are natural-language references (LLM-tolerant), so low-impact, but a follow-up should align them and the plan's proposed manifest unit-test should also assert in-code skill-name references match a manifest `name`.
+
+### Verified GOOD (no change needed)
+- **Manifest ↔ disk parity:** all 41 `MIRROR_MANIFEST` sources resolve — every directory source contains `SKILL.md`, every flat source exists (script-verified).
+- **Frontmatter:** all 30 directory skills carry BOTH `name:` and `description:` (the three gaps the plan called out — `advise_research`, `group-into-features`, `switchboard-orchestration` — are fixed).
+- **No orphans:** every on-disk skill dir (except `_lib`) is referenced by the manifest.
+- **`_lib` traversal safe:** skill bodies resolve `_lib/sb_api_call.sh` via a `$PWD` walk-up loop (or workspace-root-relative `$CUR/.agents/skills/_lib/...`), independent of the skill file's own depth — deeper nesting cannot break it, as the plan predicted.
+- **Drift fixed:** `worktree-cleanup` wired (manifest `no-model` + dir); `create-feature-from-plans` regularized (`.agents/` source + `default` manifest entry); dead `switchboard_remote_notion.md.migrated.bak` removed; `refine_ticket`/`refine_feature` correctly kept flat.
+
+### Files changed by this review
+- `src/services/PlanningPanelProvider.ts`, `src/services/KanbanProvider.ts`,
+  `.agents/workflows/switchboard-orchestrator.md`,
+  `.agents/skills/query-switchboard-kanban/SKILL.md`, `.agents/skills/query_archive/SKILL.md`.
+
+### Validation (per directive: no compile, no tests)
+- Re-ran the stale-path sweep → **zero** remaining `.agents/skills/<name>.md` file-path references.
+- Confirmed the four new targets exist on disk. Edits are string-literal-content only (backtick balance preserved) — no type/syntax surface touched.
+
+### Remaining risks
+- The two-host mirror was not regenerated in-session (regen fires on version bump / Setup — the release subtask). Parity is verified at the manifest↔source level; the actual `.claude/skills/` regen should be spot-checked after 1.7.6 installs.
+- The pre-existing underscore skill-name NIT remains for a follow-up (not shipped-state regression).

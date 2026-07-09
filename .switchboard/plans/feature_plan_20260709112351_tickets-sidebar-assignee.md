@@ -200,3 +200,7 @@ The ClickUp render (`:9843`, reads `a.username || a.email`) and the Linear rende
 ---
 
 **Recommendation: Send to Coder** (complexity 4/10). Routine multi-touch data-threading along an existing pipeline, with one documented migration nuance (Refetch heals legacy files) and no design decisions left open.
+
+## Completion Report
+
+Implemented the file-backed assignee pipeline for the Tickets tab sidebar. Added `assignees:` frontmatter writes in `src/services/TaskViewerProvider.ts` for both ClickUp and Linear imports, parsed that frontmatter in both `listLocalTicketFiles` and `_scanLocalTicketFiles` in `src/services/PlanningPanelProvider.ts`, and updated `src/webview/planning.js` to map the parsed assignee strings into the existing ClickUp/Linear render shapes instead of hardcoding empty values. Added `Array.isArray` guards in the webview mapping for defensive runtime safety. ESLint and `node --check` passed; compilation and automated tests were skipped per session directives.

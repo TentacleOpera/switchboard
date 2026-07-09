@@ -275,3 +275,50 @@ touched, so rollback is a `git checkout` of that one file.
 **Complexity 3 → Send to Intern**, with the caveat that this is a control-plane file behind an
 explicit user-approval gate: an intern-level executor should apply the rewrite verbatim to the
 approved design, not improvise persona wording. Ready to execute on approval.
+
+---
+
+## Code Review — In-Place Reviewer Pass (2026-07-09)
+
+Reviewed the committed `.agents/skills/switchboard-manage/SKILL.md` (`a4ad186`) against this plan.
+**Result: implementation fully satisfies the plan; no CRITICAL/MAJOR findings; no code fixes
+required.** The rewrite is behaviorally correct against every acceptance criterion.
+
+### Acceptance criteria — verified against the file
+1. **Workspace scoping (the data-integrity bug):** FIXED by construction. §1 resolves `ROOT` once
+   (dir containing `.switchboard/api-server-port.txt`), reads local markdown under `$ROOT`, and §2
+   makes `workspaceRoot=$ROOT` a bolded non-optional rule on every `/kanban/*` example. Reading the
+   current workspace's own `.switchboard/` structurally eliminates the Gitlab-vs-switchboard cross-talk.
+2. **Minimal checks:** entry now issues exactly one network call (`curl /health`); counts come from
+   `grep -c 'planId:'` on local state files — verified all 7 referenced `kanban-state-*.md` filenames
+   exist in this workspace, so the greps resolve.
+3. **No UUIDs:** §1 step 4 + Hard Rule 7 forbid raw UUIDs in the entry report.
+4. **Big files never loaded:** `code-reviewed` collapsed to a single count line; counts via `grep -c`.
+5. **Action-time scoping:** §2 rule + per-row `workspaceRoot` (query for reads, body for writes).
+6. **Framing:** §1 lead sentence + Hard Rule 3 make local markdown the primary read path — the
+   API-first defense the agent used to argue with is gone. The stale `?project=` param is removed
+   (board browse is `?workspaceRoot=$ROOT`), matching the plan's superseded-param correction.
+
+Cross-integration bonus: the rewrite also documents the sibling ergonomics subtask's new
+`POST /kanban/features/assign` single-add primitive (§2 row + §3), so the two subtasks compose.
+
+### Findings
+- **NIT (defer):** §1 step 3's shown `grep -c 'planId:'` commands count feature-card rows too; the
+  "count feature rows separately (`… feature -->`)" caveat is stated in prose but no subtract command
+  is shown. Per-column plan counts can be inflated by the handful of feature rows in pre-coding
+  columns. Cosmetic — the caveat is present and an agent following it will `grep -c 'feature -->'`
+  and subtract. Not worth a change.
+
+### Files changed by this review
+- None (no CRITICAL/MAJOR findings).
+
+### Validation (per directive: no compile, no tests)
+- Verified all 7 `kanban-state-*.md` filenames in §1 exist under `.switchboard/`.
+- Confirmed `?project=` is absent from the board row and `workspaceRoot` is present on every §2 example.
+- SKILL.md frontmatter carries `name` + `description` (Antigravity-registerable); manifest entry
+  present (`ClaudeCodeMirrorService.ts:65`, `no-model`).
+
+### Remaining risks
+- Behavioral acceptance (does a live re-run issue exactly one curl?) can only be confirmed by
+  running the skill; static review confirms the document now steers that behavior.
+- Mirror regen deferred to the version bump (as the plan notes).

@@ -99,7 +99,7 @@ subtask → integration → main convergence.
    (Abort-eject-escalate; the unattended standard. This deliberately diverges from the
    attended merge-prompt guidance of "never abort without asking the user".)
 3. Verify the merged result (build/tests as applicable), then request worktree cleanup:
-   use the worktree_cleanup skill (`.agents/skills/worktree_cleanup.md`) if it exists;
+   use the worktree-cleanup skill (`.agents/skills/worktree-cleanup/SKILL.md`) if it exists;
    otherwise record the un-cleaned worktree in the session log for the human.
 4. Log the merge in the session log; only then consider the next completed feature.
 

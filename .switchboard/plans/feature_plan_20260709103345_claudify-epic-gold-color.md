@@ -187,3 +187,7 @@ body.theme-claudify .feature-subtask-label {
 ---
 
 **Recommendation:** Complexity 2/10 → **Send to Intern.** A tightly-scoped, single-file CSS recolor with a clear, verified fix shape and no logic risk.
+
+## Completion Summary
+
+Implemented the Claudify-only recolor of feature/epic cards from purple to gold. Added `--feature-accent: #D4A017;` to the `body.theme-claudify` variable block in `src/webview/kanban.html` and updated the three existing Claudify feature-card declarations to use `var(--feature-accent)`. Added a new `body.theme-claudify .feature-subtask-label` rule so the subtask label renders gold instead of leaking the base purple. Left the base `.feature-card`, `.feature-subtask-label`, and `.kanban-card.feature-card.selected` rules untouched so Afterburner stays purple. Updated the nearby comments to reference gold instead of purple. No compilation or tests were run per the plan directives; verification was done by reading the diff and confirming only the intended `body.theme-claudify` selectors changed.

@@ -5168,7 +5168,9 @@
                 if (localProvider === 'clickup') {
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
-                        status: t.status || '', assignees: [], filePath: t.filePath,
+                        status: t.status || '',
+                        assignees: Array.isArray(t.assignees) ? t.assignees.map(n => ({ username: n })) : [],
+                        filePath: t.filePath,
                         syncStatus: t.syncStatus, url: t.url,
                         dateCreated: t.dateCreated
                     }));
@@ -5178,7 +5180,9 @@
                 } else {
                     linearProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
-                        state: { name: t.status || '' }, assignee: null, description: '', filePath: t.filePath,
+                        state: { name: t.status || '' },
+                        assignee: Array.isArray(t.assignees) && t.assignees.length ? { name: t.assignees[0] } : null,
+                        description: '', filePath: t.filePath,
                         syncStatus: t.syncStatus, url: t.url,
                         dateCreated: t.dateCreated
                     }));

@@ -123,3 +123,7 @@ This is the only call site — `grep` for the message string returns a single hi
 ---
 
 **Recommendation: Send to Intern.** (Complexity 1/10 — a single-line deletion with the surrounding logic explicitly preserved.)
+
+## Completion Summary
+
+Removed the single `vscode.window.showInformationMessage(...)` call from `src/services/GlobalPlanWatcherService.ts` inside `_registerEventForBulkCheck` (formerly line 609). The bulk-change backup logic (`db.writeDbBackup('bulk-change')`) and the output-channel log line (`[GlobalPlanWatcher] bulk change (${count}); snapshot written`) remain intact. The message string no longer appears in the source, and the file still compiles syntactically; no other files were modified. Per the session directive, no compilation or automated test run was executed.

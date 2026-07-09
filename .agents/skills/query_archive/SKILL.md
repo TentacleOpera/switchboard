@@ -52,4 +52,4 @@ The DuckDB archive `plans` table mirrors the schema of the live `kanban.db` `pla
 > The archive table may not yet contain the new `workspace_name` or `project_id` columns if they have not been propagated to the archive database. When querying the archive, verify their existence before filtering on them.
 
 ## Cross-Reference
-For ready-made SQL query templates on workspace names, projects, and features, see the [query_kanban_plans.md](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.agents/skills/query_kanban_plans.md) skill.
+For ready-made SQL query templates on workspace names, projects, and features, see the [query-kanban-plans](../query-kanban-plans/SKILL.md) skill.
