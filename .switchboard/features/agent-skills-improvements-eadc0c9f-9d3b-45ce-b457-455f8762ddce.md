@@ -45,12 +45,12 @@ registered, the other fixes *how one skill behaves* on entry.
   entry-fix first (self-contained, low-risk, doc-only, behind an explicit approval gate), then
   the skills audit (broader, edits control-plane `MIRROR_MANIFEST`, and carries a genuine
   product decision about `worktree_cleanup`'s fate).
-- **Prerequisites / guards:** The audit subtask is gated on the user's decisions on
-  `worktree_cleanup` (wire up vs retire), `create-feature-from-plans` (regularize vs accept
-  Claude-only), and the set of backend-only skills that should stay flat. The Antigravity
-  discovery question is **resolved** (web research confirmed filesystem auto-discovery of
-  `SKILL.md` directories), so the restructure proceeds on that basis. The entry-fix is gated only
-  on the standard control-plane approval gate.
+- **Prerequisites / guards:** All prerequisites for the audit subtask are now cleared. The three
+  product decisions are confirmed (wire up `worktree_cleanup`; regularize `create-feature-from-plans`;
+  keep only `refine_ticket`/`refine_feature` flat), and the Antigravity discovery question is
+  resolved (web research confirmed filesystem auto-discovery of `SKILL.md` directories). Both
+  subtasks are execution-ready; the entry-fix is gated only on the standard control-plane approval
+  gate.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks

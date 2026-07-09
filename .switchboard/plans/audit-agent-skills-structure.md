@@ -107,22 +107,22 @@ backend-consumed or remote-only tools. Some advertised skills are not actually r
 
 ## User Review Required
 
-- **`worktree_cleanup` — wire up or retire?** Advertised but unreachable on both hosts (flat +
-  not in the manifest). The `POST /worktree/cleanup` endpoint **is live and implemented**
-  (verified: `LocalApiServer.ts:2390` → `cleanupWorktree` option → `KanbanProvider._cleanupWorktree`
-  at `:10259`), so the skill body is correct — the only defect is registry drift. Decision:
-  (a) restructure into `worktree_cleanup/SKILL.md` + add a `MIRROR_MANIFEST` entry (`no-model`,
-  `Bash`), or (b) retire it (remove source + `AGENTS.md` row) if worktree cleanup should stay
-  button-only. Recommendation: **(a) wire up** — it's a working capability; `no-model` keeps it
-  from auto-triggering, honoring its "only after a user-confirmed merge" precondition.
-- **`create-feature-from-plans` — regularize or accept Claude-only?** Recommendation:
-  **regularize** — author an `.agents/skills/create-feature-from-plans/SKILL.md` source + a
-  `MIRROR_MANIFEST` entry so it regenerates and is discoverable on both hosts.
-- **Scope of the restructure — which flat skills stay flat?** Deliberately-unregistered backend
-  hooks (`refine_ticket`, `refine_feature` — AGENTS.md marks them "not invocable via skill")
-  *should* stay flat/unregistered on Antigravity. Confirm the intended set of "backend-only,
-  keep flat" skills vs "convert to directory." Recommendation: convert everything that is meant
-  to be user- or model-invocable; keep only the backend hooks flat.
+**None outstanding — all three decisions confirmed by the user (2026-07-09):**
+
+1. **`worktree_cleanup` → WIRE UP.** Restructure to `worktree_cleanup/SKILL.md` + add a
+   `MIRROR_MANIFEST` entry (`no-model`, `Bash`). The `POST /worktree/cleanup` endpoint is live
+   and implemented (verified: `LocalApiServer.ts:2390` → `cleanupWorktree` option →
+   `KanbanProvider._cleanupWorktree` at `:10259`), so the skill body is correct — this fixes pure
+   registry drift. `no-model` keeps it from auto-triggering, honoring its "only after a
+   user-confirmed merge" precondition.
+2. **`create-feature-from-plans` → REGULARIZE.** Author an
+   `.agents/skills/create-feature-from-plans/SKILL.md` source (from the existing `.claude/` body)
+   + add a `MIRROR_MANIFEST` entry (`default`) so it regenerates and is discoverable on both
+   hosts, completing the local/remote pair with `create-feature`.
+3. **Backend-only stay-flat set → ONLY `refine_ticket` + `refine_feature`.** These are the
+   AGENTS.md-flagged button hooks ("not invocable via `skill:`") — they stay flat/unregistered.
+   Every other skill that is meant to be user- or model-invocable (including the `no-model`
+   proxies) converts to directory form.
 
 ## Complexity Audit
 
@@ -184,7 +184,8 @@ its keep/retire is a product choice, not a risk.)
   (`archive.md`, `clickup_*.md`, `linear_*.md`, `notion_api.md`, `get_tickets.md`,
   `generate_diagram.md`, `query_*.md`, `web_research.md`, `deep_planning.md`,
   `complexity_scoring.md`, `constitution_builder.md`, `tuning.md`, `improve_remote_plan.md`,
-  `create_feature.md`, and `worktree_cleanup.md` if kept) are invisible to Antigravity discovery.
+  `create_feature.md`, and `worktree_cleanup.md`) are invisible to Antigravity discovery. Keep
+  only `refine_ticket.md` + `refine_feature.md` flat (button-only backend hooks).
 - **Logic:** For each, create `skills/<name>/SKILL.md` (kebab-case dir name matching the manifest)
   with `name:` + `description:` frontmatter, moving the body in.
 - **Implementation:** Prefer `git mv` to preserve history. Keep the **deliberately-unregistered
@@ -194,9 +195,9 @@ its keep/retire is a product choice, not a risk.)
 ### `src/services/ClaudeCodeMirrorService.ts` (`MIRROR_MANIFEST`, lines 46–156) — lockstep source updates
 - **Context:** Authoritative Claude Code registry; hardcodes `source:` paths.
 - **Logic:** For every skill moved above, change its entry's `source:` from `'skills/foo.md'` to
-  `'skills/foo'`. Add entries for `create-feature-from-plans` (regularized) and `worktree-cleanup`
-  (if kept). Note the `/switchboard-*` alias entries (lines 141–155) reuse the same `source:` — update
-  those too so aliases don't break.
+  `'skills/foo'`. Add entries for `create-feature-from-plans` (regularized, `default`) and
+  `worktree-cleanup` (`no-model`, `Bash`). Note the `/switchboard-*` alias entries (lines 141–155)
+  reuse the same `source:` — update those too so aliases don't break.
 - **Implementation:** Edit entries in place; do not reorder/restyle unrelated ones. **Never move a
   file without its matching manifest edit in the same commit.**
 - **Edge Cases:** Every `source:` must resolve; a directory source must contain `SKILL.md`.
@@ -252,5 +253,5 @@ optional `skills.json` manual-registration override — neither changes this pla
 
 **Complexity 6 → Send to Coder** (upper Coder / Coder-Lead boundary due to the ~4,000-install
 blast radius of `MIRROR_MANIFEST`). Execute as atomic per-skill units (move file + update manifest
-`source:` + aliases together), then verify on both hosts. Ready once the User-Review decisions
-(`worktree_cleanup`, `create-feature-from-plans`, backend-only set) are confirmed.
+`source:` + aliases together), then verify on both hosts. All three product decisions are
+confirmed — **ready to execute**.
