@@ -31,7 +31,7 @@ Stop the extension host from dying with `Error: disk I/O error` thrown from `dis
 ## Metadata
 - **Tags:** infrastructure, reliability, performance, bugfix
 - **Complexity:** 7
-- **Repo:** switchboard (extension root; primary file `src/services/KanbanDatabase.ts`)
+- **Primary file:** `src/services/KanbanDatabase.ts` (extension root; single-repo workspace)
 
 ## User Review Required
 
@@ -76,6 +76,8 @@ Stop the extension host from dying with `Error: disk I/O error` thrown from `dis
 
 ## Proposed Changes
 
+> **Anchor note (verified during improve-feature pass, 2026-07-09).** The line numbers cited throughout this plan were authored against an earlier revision of `KanbanDatabase.ts`; the file has since grown to **7,885 lines** and the anchors have drifted ~+40 in the `7000+` region. **The named symbols are current and authoritative — grep the symbol, not the line.** Verified current anchors: `_persist()` **:7179**; `this._db.export()` **:7190** (also on reload :5240); `_writeKanbanStateBackup()` def **:6821**, called **:7219**; `_scheduleLocalMirror()` def **:7007**, called **:7218**; `_diagFeatureSnapshot` def **:7168**, called persist **:7181** / reload **:4990**; `_instances` **:779** / `_instancesByDbPath` **:780**; `getInstance` set **:936–:937**, drain `await existing._writeTail` **:960**, stale-reload delete **:965**; `dispose()` **:1308** → `exportStateToFile()` **:7155** → `flushLocalBoardMirror()` **:7138**; `purgeOldTombstones` **:4400**; `cleanupActivityLog` **:7463**; `deletePlanEventsByPlanId` **:7446**; `plan_events` DDL **:223**, inserts **:7253**/**:7420**; `activity_log` DDL **:237**, insert **:7320**. Confirmed root cause: `_sqlJsPromise` is a **static** field (**:782**) initialized once by `_loadSqlJs()` (**:7817**), so `initSqlJs()` runs a single time and every `new SQL.Database()` across all workspaces shares one Emscripten WASM linear heap — which is exactly why exhaustion hits all DBs at the same instant.
+
 ### `src/services/KanbanDatabase.ts` — Workstream A: idle-eviction of cached instances
 - **Context:** static `_instances`/`_instancesByDbPath` (`:779`) never evict on idle; `getInstance` sets at `:936`–`:937`; drain-before-null pattern at `:959`–`:960`; `dispose()` at `:1308`.
 - **Logic:** track `_lastAccessMs` per instance, bumped in `ensureReady()`/read/write entry points. A single static sweep timer (one, not per-instance) evicts instances idle > TTL (default 10 min), **except** the active-workspace instance. Eviction = `await _writeTail` → force final flush (reuse `exportStateToFile()` + `_writeKanbanStateBackup()` from `dispose()`) → `this._db.close()` (frees WASM memory) → delete from both maps → null `_db`. `getInstance()` for an evicted key rebuilds via the existing lazy `_initialize()` path.
@@ -93,6 +95,7 @@ Stop the extension host from dying with `Error: disk I/O error` thrown from `dis
 - **Logic:** add `purgeOldPlanEvents(olderThanDays, minPerPlan)` — delete rows older than the window **except** the most-recent `minPerPlan` per `plan_id` (window function or correlated subquery), clamped like `purgeOldTombstones`. Schedule both prunes on a low-frequency sweep (e.g. daily / on activation) via `KanbanProvider`, not per-write. Optional throttled `VACUUM` (opt-in, at most once per sweep, holding `_writeTail`) to reclaim pages.
 - **Implementation:** parameterized `_persistedUpdate` SQL; expose retention windows as settings with clear descriptions ("older events are removed; recent forensics preserved"). Idempotent; safe to run repeatedly.
 - **Edge Cases:** empty tables (no-op); min-per-plan floor guarantees every card keeps recent history; never a bare `DELETE FROM plan_events`; VACUUM skipped if a write is pending.
+- **Phase-2 handoff (reconciled with `split_kanban_hot_cold_dbs.md`):** write the prune so **row selection is separate from the sink**. Phase 1's sink is *delete from the single DB* (optionally forwarding aged rows to the DuckDB archive first, a silent no-op when the CLI is absent). Phase 2 (the hot/cold split) MAY swap the sink to *relocate aged rows to the cold store* instead of deleting them. Keeping `purgeOldPlanEvents(olderThanDays, minPerPlan)` as pure selection + a pluggable action means Phase 2 changes only where aged rows go — the age/min-per-plan logic and its tests carry forward unchanged. Do not hardwire deletion into the selection query.
 
 ### `src/services/KanbanDatabase.ts` — Workstream D: remove the temporary diagnostic
 - **Context:** `_diagFeatureSnapshot('persist')` called at `:7141` (also on reload), def `:7128`, writing via `appendFeatureClobberDiag` to `feature-clobber-diagnostic.txt` (observed 10 MB).
@@ -115,6 +118,16 @@ Stop the extension host from dying with `Error: disk I/O error` thrown from `dis
 
 ### Manual (the real acceptance gate)
 - Open ~9 workspaces, let pollers run, drive a burst of card moves + Copy Prompt on the 4.8 MB board; confirm no `disk I/O error` in Dev Tools console over an extended session, and that evicted workspaces reopen cleanly on click. Confirm the switchboard DB shrinks after a retention sweep + VACUUM.
+
+## Uncertain Assumptions
+
+The following are sql.js / Emscripten *internals* not settled from this repo's code alone (the shared-heap root cause **is** confirmed from code — `_sqlJsPromise` is static, `:782`). The user was advised to run web research to confirm these before implementation, because Workstream A's payoff depends on them:
+
+1. **Does `db.close()` actually relieve heap pressure, or only free allocations for in-heap reuse?** Emscripten's `free()` returns memory to sql.js's internal allocator but classically does **not** shrink `WebAssembly.Memory` (WASM linear memory can grow but not shrink). If so, eviction (Workstream A) prevents *further* growth and lets freed space be reused — it does **not** return RAM to the OS or lower an already-peaked heap. This changes the framing from "eviction reclaims memory" to "eviction caps growth"; still the right fix, but the acceptance criteria (and the manual test's expectation that memory drops after eviction) must match reality.
+2. **Is `ALLOW_MEMORY_GROWTH` enabled in the bundled `sql-wasm` build?** This determines whether exhaustion is a hard fixed-ceiling OOM or a failed `memory.grow()` on a large allocation — which in turn sets how aggressive the eviction TTL and persist-debounce must be to stay under the ceiling.
+3. **`export()` transient peak.** `this._db.export()` is assumed to allocate a full second copy of the DB, so peak heap during a persist is ~2× the DB size (source pages + serialized `Uint8Array`) within the shared heap. If accurate, coalescing writes (Workstream B) also reduces the *peak*, not just the churn — worth confirming to size the win.
+
+These do not block writing the plan, but they should be confirmed before implementation so Workstream A/B's success metrics are stated against how sql.js actually manages WASM memory.
 
 ## Out of Scope
 - **Pruning completed/archived `plans` rows.** Plans are records, still rendered in the COMPLETED column, and their growth (~a few thousand rows / low-single-digit MB) is acceptable and **did not cause the crash**. Resident-heap pressure is solved by eviction (A) + coalescing (B) + telemetry GC (C) — never by deleting plan history. Bounding the *hot* DB at scale (so the per-write full-file serialize stops growing with lifetime plan count — noticeable around ~10k plans / ~10 MB) is handled **structurally** by the Phase-2 follow-up **`split_kanban_hot_cold_dbs.md`** (move dormant plans to a mandatory cold sql.js store, never delete). Out of scope for this hotfix.

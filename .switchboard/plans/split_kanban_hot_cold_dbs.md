@@ -25,7 +25,7 @@ Two consequences, both root causes of unbounded growth:
 ## Metadata
 - **Tags:** infrastructure, reliability, performance, database, refactor
 - **Complexity:** 8
-- **Repo:** switchboard (extension root; primary file `src/services/KanbanDatabase.ts`, board wiring in `src/services/KanbanProvider.ts`)
+- **Primary files:** `src/services/KanbanDatabase.ts` (cold store + read routing) and `src/services/KanbanProvider.ts` (board window). Single-repo workspace.
 
 ## User Review Required
 
@@ -77,9 +77,12 @@ Two consequences, both root causes of unbounded growth:
 
 ## Proposed Changes
 
+> **Anchor note (verified during improve-feature pass, 2026-07-09).** Line numbers below were authored against an earlier revision; `KanbanDatabase.ts` is now **7,885 lines** and anchors have drifted. **Grep the named symbol, not the line.** Verified current anchors — `KanbanDatabase.ts`: `_instancesByDbPath` **:780**, private ctor **:1303**, `new KanbanDatabase(stable, resolvedDbPath)` **:935**; `getBoardFilteredByProject` **:3184**; `getCompletedPlans` **:3253**; `_persist()` **:7179**, `this._db.export()` **:7190**; the empty-project enumeration `NOT IN (SELECT DISTINCT project FROM plans …)` at **:3012** and **:3026** (the data-loss trap); `SELECT DISTINCT workspace_name FROM plans` **:1596**. `KanbanProvider.ts`: `completedLimit` read+clamped **:3086–:3087** inside `_refreshBoardImpl` **:3081**; board reads `getBoardFilteredByProject` **:3151** / `getCompletedPlans` **:3182**.
+
 ### `src/services/KanbanDatabase.ts` — cold store as a second instance
 - **Context:** class is already per-path (`_instancesByDbPath` `:780`; private ctor `:1303`); `getInstance` keys by workspace root today.
 - **Logic:** add a sibling accessor (e.g. `getArchiveInstance(workspaceRoot)`) returning a `KanbanDatabase` bound to `<ws>/.switchboard/kanban-archive.db`, sharing all persistence/eviction machinery. Cold schema = `plans` (+ optionally the telemetry tables if GC relocates there). The hot instance gains `archiveToCold(planId)` / `restoreToHot(planId)` implementing the safe write→verify→delete move across the two instances.
+  - **Telemetry-GC handoff (reconciled with `fix_kanban_db_wasm_memory_exhaustion.md` Workstream C):** the Phase-1 hotfix intentionally writes `purgeOldPlanEvents`/`cleanupActivityLog` with row *selection* separated from the *sink*. This plan's opportunity is to swap that sink from "delete aged telemetry from the single DB" to "relocate aged telemetry into the cold store" — reusing the same age/min-per-plan selection and its tests unchanged. If you take that option, add `plan_events`/`activity_log` to the cold schema; if not, telemetry GC stays a hot-only delete and this is a no-op. Either way, do not re-implement the selection logic.
 - **Edge Cases:** single-home invariant; feature-unit moves; worktree/in-flight pin; `reconcileHotCold()` runs and **settles before the first board read** on activation (not lazily).
 - **Do not over-engineer the cold write path.** The cold store inherits sql.js's whole-file-rewrite, but it is written rarely (only on move), so the frequent-write concern does not apply to it. `node:sqlite` remains the eventual engine for *both* stores once the Electron/Node baseline supports it across the install base; keep the cold-store code thin enough to swap.
 
