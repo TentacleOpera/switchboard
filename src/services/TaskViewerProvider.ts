@@ -21696,10 +21696,14 @@ What would you like to find?`;
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
         const outputPath = path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md');
-        const outputUri = vscode.Uri.file(outputPath);
 
+        // Use RelativePattern (dir + basename) — the repo-wide convention for
+        // single-file watchers (see PlanningPanelProvider). A raw fsPath string
+        // glob breaks on Windows (backslashes are glob escapes), so the watcher
+        // would never fire and capture would always fall through to the 90s timer.
         this._mcpMonitorOutputWatcher = vscode.workspace.createFileSystemWatcher(
-            outputUri.fsPath, false, false, false
+            new vscode.RelativePattern(path.dirname(outputPath), path.basename(outputPath)),
+            false, false, false
         );
         this._mcpMonitorOutputWatcher.onDidChange(() => this._captureMcpMonitorOutput());
         this._mcpMonitorOutputWatcher.onDidCreate(() => this._captureMcpMonitorOutput());
