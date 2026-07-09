@@ -206,3 +206,7 @@ The coder **non-feature** path (promptParts at lines 1242 onward) does NOT get t
 ## Recommendation
 
 **Send to Coder.** Complexity 4 (Low, upper edge): multi-file but each change is mechanical pattern-mirroring of `suppressWalkthrough`; the one moderate risk (parallel-worktree append conflict) is handled in directive prose, not new state machinery. The coder should use the **refined** directive text in Step 4b (self-locating + parallel-safe + defensive + dual-report-aware), not the original.
+
+## Review Findings
+
+Reviewed 2026-07-09. All four files (`sharedDefaults.js`, `agentConfig.ts`, `KanbanProvider.ts`, `agentPromptBuilder.ts`) verified against plan — every requirement met, full wiring chain intact from UI toggle through to prompt output. Zero CRITICAL/MAJOR findings; three NITs deferred (directive's `PLANS TO PROCESS` reference is inaccurate for coder-feature path but harmless since `FEATURE FILE:` block provides the path; `group: 'features'` property diverges from the `suppressWalkthrough` pattern; const repeated across three paths mirrors existing convention). Advanced regression analysis confirmed no double-triggers, no race conditions with marker-based splice, no orphaned references, and no caller breakage. No code fixes applied.
