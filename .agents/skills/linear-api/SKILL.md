@@ -1,4 +1,5 @@
 ---
+name: Linear API
 description: Make direct Linear GraphQL API calls via LocalApiServer proxy
 ---
 

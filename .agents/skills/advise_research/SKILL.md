@@ -1,3 +1,8 @@
+---
+name: Advise Research
+description: When planning, flag uncertain assumptions and supply a ready-to-run web-research prompt to confirm them.
+---
+
 # Advise Research If Unsure
 
 When planning, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist:

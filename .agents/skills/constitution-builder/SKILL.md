@@ -1,3 +1,8 @@
+---
+name: Constitution Builder
+description: Build or refine a project constitution (coding standards and conventions) for the workspace.
+---
+
 # Skill: Constitution Builder
 
 ## Overview

@@ -1,3 +1,8 @@
+---
+name: Tuning
+description: Tune Switchboard agent behavior and workflow settings.
+---
+
 # Tuning Skill
 
 ## Purpose

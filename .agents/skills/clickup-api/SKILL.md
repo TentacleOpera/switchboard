@@ -1,4 +1,5 @@
 ---
+name: ClickUp API
 description: Make direct ClickUp API calls via LocalApiServer proxy
 ---
 

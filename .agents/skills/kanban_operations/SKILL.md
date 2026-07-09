@@ -11,7 +11,7 @@ Move cards and query kanban state by running the provided scripts.
 
 ## Resolving Plan IDs (do this FIRST — offline, no script)
 
-Every op below is keyed on a **`planId`** (a UUID). Resolve it the cheap way — do **not** make the user supply UUIDs, and do **not** parse `get-state.js` stdout (it interleaves a `[KanbanDatabase] Resolved DB path…` log line that breaks `JSON.parse`/`jq`):
+Every op below is keyed on a **`planId`** (a UUID), but you should not need UUIDs for most ops. Resolve a plan the cheap way when needed, or use the path/slug-addressed APIs below so the server resolves it:
 
 - **Per-column index (fastest, offline):** `.switchboard/kanban-state-<column>.md`. Every plan line ends with `<!-- planId:<uuid> … -->`; subtasks also carry `subtask-of:"<feature>"` and feature cards carry `feature`. One `grep` gives you the ID **and** its feature membership:
   ```bash
@@ -26,13 +26,17 @@ Every op below is keyed on a **`planId`** (a UUID). Resolve it the cheap way —
 ## Move a Card
 
 ```bash
-node .agents/skills/kanban_operations/move-card.js <session_id> <target_column>
+node .agents/skills/kanban_operations/move-card.js <session_or_plan_file> <target_column>
 ```
 
-**Example:**
+**Examples:**
 ```bash
 node .agents/skills/kanban_operations/move-card.js sess_1777206335666 CODER_CODED
+node .agents/skills/kanban_operations/move-card.js .switchboard/plans/my-plan.md CODER_CODED
+node .agents/skills/kanban_operations/move-card.js my-plan.md CODER_CODED
 ```
+
+- `<session_or_plan_file>` can be a legacy `session_id`, or a **plan file path** (relative or absolute), or a plan basename. The script resolves it to the DB `planId`.
 
 **Valid columns:** Sourced from `VALID_KANBAN_COLUMNS` export in `KanbanDatabase.ts`. Includes all built-in columns (CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, INTERN CODED, LEAD CODED, CODER CODED, CODE REVIEWED, ACCEPTANCE TESTED, CODED, COMPLETED) plus any custom agent columns matching the safe-name regex.
 
@@ -62,15 +66,23 @@ node .agents/skills/kanban_operations/create-feature.js "Onboarding revamp" '["a
 ## Assign Plans to a Feature
 
 ```bash
-node .agents/skills/kanban_operations/assign-to-feature.js <feature_plan_id> <plan_ids_json> [workspace_root]
+node .agents/skills/kanban_operations/assign-to-feature.js <feature> <plan_or_plan_ids_json> [workspace_root]
 ```
 
-**Example:**
+**Examples:**
 ```bash
+# Add a single plan by path (no UUID)
+node .agents/skills/kanban_operations/assign-to-feature.js "Agent skills improvements" .switchboard/plans/my-plan.md /Users/me/repo
+
+# Add a single plan by slug
+node .agents/skills/kanban_operations/assign-to-feature.js "Agent skills improvements" my-plan-slug
+
+# Add a batch by UUIDs (legacy shape still works)
 node .agents/skills/kanban_operations/assign-to-feature.js <featurePlanId-from-create> '["e5f6-..."]' /Users/me/repo
 ```
 
-- `feature_plan_id` is the `featurePlanId` returned by `create-feature.js`. `plan_ids_json` is a JSON array of `planId` values to add.
+- `<feature>` can be a feature `planId`, a feature file path, or a feature name/slug.
+- `<plan_or_plan_ids_json>` is either a single plan ref (file path, slug, or `planId`) or a JSON array of plan refs.
 - Output: `{"ok":true,"assigned":["..."],"skipped":["..."]}`. A plan already on another feature (or that is itself a feature / missing) is reported in `skipped` and left untouched — it does not abort the batch.
 - Same constraints as `create-feature.js`: requires the running extension (no direct-DB fallback). Feature assignment syncs the newly assigned subtasks as children of the feature's external issue/task IF real-time sync is enabled.
 - **⚠ Cross-column warning:** If the plan being assigned is in a different kanban column than the feature (e.g. the plan is in CREATED but the feature is in PLAN REVIEWED), the agent MUST warn the user:
@@ -142,15 +154,16 @@ Triggered by the **SUGGEST FEATURES** board button, which copies a prompt to the
 ## Get Kanban State
 
 ```bash
-node .agents/skills/kanban_operations/get-state.js <workspace_id>
+node .agents/skills/kanban_operations/get-state.js <workspace_root>
 ```
 
 **Example:**
 ```bash
-node .agents/skills/kanban_operations/get-state.js my-workspace-123
+node .agents/skills/kanban_operations/get-state.js /Users/me/repo
+node .agents/skills/kanban_operations/get-state.js /Users/me/repo | jq '.columns["CREATED"] | length'
 ```
 
-Outputs JSON with columns as keys and arrays of plans as values.
+Outputs parseable JSON on stdout with columns as keys and arrays of plans as values. Diagnostic logs are routed to stderr, so piping to `jq` works.
 
 ## Usage with Explicit Workspace
 
@@ -193,6 +206,7 @@ node .agents/skills/kanban_operations/reconcile-features.js <workspace_root> '<r
 
 - **Create a feature:** list it with its subtasks — the feature is created if no active feature has that name.
 - **Add subtasks to an existing feature:** include the existing feature name + the full desired subtask set — new entries are assigned, the rest are left in place.
+- **Self-linking via file frontmatter:** a plan file can carry `**Feature:** <feature-plan-id>` or `**Feature:** <feature-name>`. The watcher links it to the feature on import (apply-if-empty — it never overwrites an existing link).
 - **Remove a subtask from a feature:** omit it from the desired subtask set — it's detached (not tombstoned).
 - **Delete unmentioned features:** set `"removeUnmentionedFeatures": true` — every active feature NOT named in the input is deleted (subtasks detached, not tombstoned). Default `false` (safe — never deletes by accident).
 - **Inline new plan:** a subtask entry of the form `{slug,title,body}` writes a new plan file, imports it, and links it in one step.
@@ -202,5 +216,7 @@ Output: `{ ok, features: [{name, featurePlanId, subtasks:[{planId,planFile,topic
 
 The equivalent HTTP endpoint (for non-shell hosts) is `POST /kanban/features/reconcile` on the local API server (port in `.switchboard/api-server-port.txt`).
 
-> **`get-state.js | jq` now works:** the `[KanbanDatabase] Resolved DB path…` diagnostic log was moved to stderr (Feature A · A3), so `node get-state.js <root> | jq .` emits parseable JSON on stdout.
+> **Single-add endpoint:** `POST /kanban/features/assign` with `{ feature, plan }` (or `{ feature, plans }` for a batch) is the additive, path/slug-addressed primitive. It resolves both operands server-side and never detaches existing subtasks — use it for "add one plan" instead of the converge-to-set `reconcile` or UUID-only `assignToFeature`.
+>
+> **`get-state.js | jq` now works:** all diagnostic logging is routed to stderr, so `node get-state.js <root> | jq .` emits parseable JSON on stdout.
 

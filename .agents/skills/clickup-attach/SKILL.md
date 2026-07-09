@@ -1,4 +1,5 @@
 ---
+name: ClickUp Attach
 description: Attach files to ClickUp tasks via LocalApiServer
 ---
 

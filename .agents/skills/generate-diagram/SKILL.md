@@ -1,4 +1,5 @@
 ---
+name: Generate Architectural Diagram
 description: Generate architectural diagrams via LocalApiServer
 ---
 

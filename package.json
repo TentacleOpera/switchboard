@@ -9,7 +9,7 @@
     "orchestration",
     "multi-agent"
   ],
-  "version": "1.7.5",
+  "version": "1.7.6",
   "main": "./dist/extension.js",
   "publisher": "TurnZero",
   "repository": {

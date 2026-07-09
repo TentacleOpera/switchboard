@@ -1,4 +1,5 @@
 ---
+name: ClickUp Create Task
 description: Create ClickUp tasks with optional subtasks via LocalApiServer
 ---
 

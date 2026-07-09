@@ -1,3 +1,8 @@
+---
+name: Archive Operations
+description: Query and manage the DuckDB archive of historical plans and conversations.
+---
+
 # Archive Operations Skill
 
 ## Purpose

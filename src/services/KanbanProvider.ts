@@ -11106,7 +11106,8 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         if (!db || !(await db.ensureReady())) {
             return { success: false, assigned: [], skipped: [], error: 'Kanban database not available.' };
         }
-        const feature = await db.getPlanByPlanId(featurePlanId);
+        const workspaceId = (await db.getWorkspaceId()) || workspaceRoot;
+        const feature = await db.resolveFeatureIdentifier(featurePlanId, workspaceId);
         if (!feature || !feature.isFeature) {
             return { success: false, assigned: [], skipped: [], error: 'Feature not found.' };
         }
@@ -11119,12 +11120,12 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         const skipped: string[] = [];
         const assignedRecords: any[] = [];
         for (const pid of ids) {
-            const subtask = await db.getPlanByPlanId(pid);
+            const subtask = await db.resolvePlanIdentifier(pid, workspaceId);
             // Skip-and-report: missing, itself a feature, or already on a different feature.
             if (!subtask || subtask.isFeature) { skipped.push(pid); continue; }
             if (subtask.featureId && subtask.featureId !== feature.planId) { skipped.push(pid); continue; }
             await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
-            assigned.push(pid);
+            assigned.push(subtask.planId);
             assignedRecords.push(subtask);
         }
         if (assigned.length > 0) {

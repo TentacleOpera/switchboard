@@ -1,4 +1,5 @@
 ---
+name: ClickUp Modify Task
 description: Update ClickUp task properties via LocalApiServer
 ---
 

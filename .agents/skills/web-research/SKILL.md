@@ -1,3 +1,8 @@
+---
+name: Comprehensive Web Research
+description: Run comprehensive multi-source web research and synthesize a cited summary.
+---
+
 # Comprehensive Web Research
 
 ## Purpose

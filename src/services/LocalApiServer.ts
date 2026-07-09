@@ -615,6 +615,61 @@ export class LocalApiServer {
     }
 
     /**
+     * POST /kanban/features/assign — single (or batch) additive assign of existing plans
+     * to an existing feature, resolved by path/slug/planId (Feature A · A3 ergonomic).
+     * Body: { feature: string, plan?: string, plans?: string[], workspaceRoot?: string }.
+     * This is the additive, no-UUID-choreography primitive; the existing
+     * /kanban/feature/assign endpoint remains available for the kanban_operations script.
+     */
+    private async _handleKanbanFeaturesAssign(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                detail: 'Configure token in VS Code: Switchboard: Api Token setting, then reload window'
+            }));
+            return;
+        }
+
+        const assignToFeature = this._options.assignToFeature;
+        if (!assignToFeature) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Feature assignment not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const feature = String(body?.feature || '').trim();
+            let planRefs: string[] = [];
+            if (Array.isArray(body?.plans)) {
+                planRefs = body.plans.map((p: any) => String(p).trim()).filter((p: string) => p.length > 0);
+            } else if (body?.plan) {
+                planRefs = [String(body.plan).trim()];
+            }
+            if (!feature) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: feature' }));
+                return;
+            }
+            if (planRefs.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: plan or plans' }));
+                return;
+            }
+
+            const result = await assignToFeature(workspaceRoot, feature, planRefs);
+            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanFeaturesAssign error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanFeaturesAssign failed' }));
+        }
+    }
+
+    /**
      * Handle POST /kanban/feature/remove — remove a single subtask from its parent
      * feature through the running extension. Reached by the kanban_operations
      * remove-from-feature.js script. Body: { subtaskPlanId: string, workspaceRoot?: string }.
@@ -2353,6 +2408,8 @@ export class LocalApiServer {
                 await this._handleKanbanDeleteFeature(req, res);
             } else if (pathname === '/kanban/feature/split' && req.method === 'POST') {
                 await this._handleKanbanSplitFeature(req, res);
+            } else if (pathname === '/kanban/features/assign' && req.method === 'POST') {
+                await this._handleKanbanFeaturesAssign(req, res);
             } else if (pathname === '/kanban/features/reconcile' && req.method === 'POST') {
                 await this._handleKanbanReconcileFeatures(req, res);
             } else if (pathname.startsWith('/kanban/verb/') && req.method === 'POST') {

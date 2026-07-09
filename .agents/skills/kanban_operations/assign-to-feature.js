@@ -16,26 +16,33 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-const featurePlanId = process.argv[2];
-const planIdsJson = process.argv[3];
+const featureRef = process.argv[2];
+const planRefOrJson = process.argv[3];
 const workspaceRoot = process.argv[4] || '.';
 
-if (!featurePlanId || !planIdsJson) {
-  console.error("Usage: node assign-to-feature.js <feature_plan_id> <plan_ids_json> [workspace_root]");
-  console.error('  plan_ids_json is a JSON array of planId values, e.g. \'["abc-123","def-456"]\'');
+if (!featureRef || !planRefOrJson) {
+  console.error("Usage: node assign-to-feature.js <feature> <plan_or_plan_ids_json> [workspace_root]");
+  console.error('  <feature> can be a feature planId, file path, or feature name/slug.');
+  console.error('  <plan_or_plan_ids_json> is either a single plan ref (path/slug/id) or a JSON array of refs, e.g. \'["abc-123","def-456"]\'');
   process.exit(1);
 }
 
-let planIds;
-try {
-  planIds = JSON.parse(planIdsJson);
-} catch (err) {
-  console.error(`Invalid plan_ids_json (not valid JSON): ${err.message}`);
-  process.exit(1);
-}
-if (!Array.isArray(planIds) || planIds.length === 0 || !planIds.every(p => typeof p === 'string')) {
-  console.error('plan_ids_json must be a non-empty JSON array of planId strings.');
-  process.exit(1);
+let body;
+if (planRefOrJson.trim().startsWith('[')) {
+  let planRefs;
+  try {
+    planRefs = JSON.parse(planRefOrJson);
+  } catch (err) {
+    console.error(`Invalid plan_ids_json (not valid JSON): ${err.message}`);
+    process.exit(1);
+  }
+  if (!Array.isArray(planRefs) || planRefs.length === 0 || !planRefs.every(p => typeof p === 'string')) {
+    console.error('plan_ids_json must be a non-empty JSON array of plan strings.');
+    process.exit(1);
+  }
+  body = { workspaceRoot, feature: featureRef, plans: planRefs };
+} else {
+  body = { workspaceRoot, feature: featureRef, plan: planRefOrJson.trim() };
 }
 
 // ── Discover the running extension's API server: walk up for the port file. ──
@@ -95,11 +102,7 @@ async function tryViaExtension() {
   }
 
   try {
-    const resp = await httpJson('POST', port, '/kanban/feature/assign', {
-      workspaceRoot,
-      featurePlanId,
-      planIds
-    }, 15000);
+    const resp = await httpJson('POST', port, '/kanban/features/assign', body, 15000);
     let parsed = {};
     try { parsed = JSON.parse(resp.body); } catch { /* non-JSON body */ }
     if (resp.status >= 200 && resp.status < 300 && parsed.success) {

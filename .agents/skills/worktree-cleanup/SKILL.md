@@ -1,4 +1,5 @@
 ---
+name: Worktree Cleanup
 description: Mark a worktree merged and clean it up (kind-aware) via LocalApiServer
 ---
 

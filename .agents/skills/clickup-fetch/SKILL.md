@@ -1,4 +1,5 @@
 ---
+name: ClickUp Fetch
 description: Fetch ClickUp tasks/lists with automatic name resolution
 ---
 

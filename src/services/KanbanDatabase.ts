@@ -3554,6 +3554,54 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
+    /**
+     * Resolve a feature by an identifier of ambiguous vintage: feature plan_id first,
+     * then plan_file path, then topic/slug, then basename. Restricts to active features.
+     * This mirrors resolvePlanIdentifier for plans but insists on is_feature = 1.
+     */
+    public async resolveFeatureIdentifier(
+        ref: string,
+        workspaceId: string
+    ): Promise<KanbanPlanRecord | null> {
+        if (!ref || !ref.trim()) return null;
+        const trimmed = ref.trim();
+
+        // 1. plan_id / session_id
+        const byId = await this.resolvePlanByAnyId(trimmed);
+        if (byId && byId.isFeature) return byId;
+
+        // 2. plan_file path (relative or absolute)
+        const byFile = await this.getPlanByPlanFile(trimmed, workspaceId);
+        if (byFile && byFile.isFeature) return byFile;
+
+        if (!(await this.ensureReady()) || !this._db) return null;
+
+        // 3. topic / slug (case-insensitive exact match on active features)
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE LOWER(topic) = LOWER(?)
+               AND workspace_id = ?
+               AND is_feature = 1
+               AND status = 'active'
+             LIMIT 1`,
+            [trimmed, workspaceId]
+        );
+        const rows = this._readRows(stmt);
+        if (rows.length > 0) return rows[0];
+
+        // 4. plan_file basename (e.g. "my-feature.md" without the .switchboard/features/ prefix)
+        const basename = path.basename(trimmed);
+        const stmt2 = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND is_feature = 1 AND status = 'active'
+               AND (plan_file = ? OR plan_file LIKE ?)
+             ORDER BY updated_at DESC LIMIT 1`,
+            [workspaceId, basename, `%/${basename}`]
+        );
+        const rows2 = this._readRows(stmt2);
+        return rows2.length > 0 ? rows2[0] : null;
+    }
+
     /** Returns all plan files in the DB (any status) in a single query. */
     public async getPlanFileSet(): Promise<Set<string>> {
         if (!(await this.ensureReady()) || !this._db) return new Set();

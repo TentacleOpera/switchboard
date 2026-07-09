@@ -74,9 +74,43 @@ so without the bump the changes propagate to no one.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Audit and Restructure Agent Skills to Prevent Discovery Failures](../plans/audit-agent-skills-structure.md) — **PLAN REVIEWED**
-- [ ] [Fix `switchboard-manage` Entry: Local-Markdown-First, Workspace-Scoped, Low-Noise Console](../plans/switchboard-manage-entry-local-md-and-workspace-scoping.md) — **PLAN REVIEWED**
-- [ ] [Release: Bump Extension Version to 1.7.6 to Propagate the Skill Changes](../plans/release-version-bump-1.7.6-propagate-skill-changes.md) — **PLAN REVIEWED**
-- [ ] [Make Board/Feature Ops Ergonomic for Agents: Declarative-First, No UUID Choreography](../plans/agent-board-op-ergonomics-declarative-first.md) — **PLAN REVIEWED**
+- [ ] [Audit and Restructure Agent Skills to Prevent Discovery Failures](../plans/audit-agent-skills-structure.md) — **CODER CODED**
+- [ ] [Fix `switchboard-manage` Entry: Local-Markdown-First, Workspace-Scoped, Low-Noise Console](../plans/switchboard-manage-entry-local-md-and-workspace-scoping.md) — **CODER CODED**
+- [ ] [Release: Bump Extension Version to 1.7.6 to Propagate the Skill Changes](../plans/release-version-bump-1.7.6-propagate-skill-changes.md) — **CODER CODED**
+- [ ] [Make Board/Feature Ops Ergonomic for Agents: Declarative-First, No UUID Choreography](../plans/agent-board-op-ergonomics-declarative-first.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+All four subtasks have been completed under the accuracy workflow.
+
+### Audit and Restructure Agent Skills (completed in prior thread)
+- Flat `.agents/skills/*.md` files moved into `.agents/skills/<name>/SKILL.md` directories.
+- `ClaudeCodeMirrorService.ts` `MIRROR_MANIFEST` updated to mirror the new directory paths.
+- `AGENTS.md` updated with the new skill names (kebab-case) and removed stale references.
+- `create-feature-from-plans` source created and `worktree_cleanup` made reachable.
+
+### Fix `switchboard-manage` Skill Entry (completed in prior thread)
+- `switchboard-manage/SKILL.md` rewritten to be local-markdown-first, workspace-scoped, and low-noise.
+- Entry protocol reads the current workspace's markdown state first, then drives actions with `workspaceRoot`.
+
+### Make Board/Feature Ops Ergonomic (completed in this session)
+- **Single-add primitive:** Added `POST /kanban/features/assign` (`LocalApiServer.ts`) with `{ feature, plan }` (or `{ feature, plans }` for batch) and routed it through `KanbanProvider.assignPlansToFeature`.
+- **Path/slug resolution:** Added `KanbanDatabase.resolveFeatureIdentifier` and updated `KanbanProvider.assignPlansToFeature` to resolve both the feature and each plan by path, slug, name, or UUID.
+- **Fixed `**Feature:**` frontmatter linking:** `GlobalPlanWatcherService._applyFeatureLink` now uses `resolveFeatureIdentifier` (supports UUID or name), links to the resolved `featureRow.planId`, and regenerates the parent feature file so the `Subtasks` block stays current.
+- **Clean `get-state.js` stdout:** `kanban_operations/get-state.js` now routes all `console.log/info/warn/debug` to stderr and flushes JSON on stdout with `process.stdout.end`, so `get-state | jq` works cleanly.
+- **Updated `assign-to-feature.js`:** Accepts a single plan ref (path/slug/id) or a JSON array of refs, and calls the new `/kanban/features/assign` endpoint.
+- **Updated guidance:** `kanban_operations/SKILL.md` and `switchboard-manage/SKILL.md` now document the new single-add endpoint, path/slug refs, clean `get-state | jq`, and `**Feature:**` self-linking.
+
+### Release: Bump Extension Version to 1.7.6
+- `package.json` and `package-lock.json` updated to `1.7.6`.
+- `npm run compile` completed successfully; `dist/extension.js` rebuilt with the new endpoint and `1.7.6` version.
+
+### Verification
+- `npx tsc -p .`: only pre-existing relative-import file-extension warnings (5 errors unrelated to this change).
+- `npx tsc -p tsconfig.test.json`: compiled cleanly and updated `out/`.
+- `npm run compile`: webpack finished with 3 optional dependency warnings (bufferutil, utf-8-validate, canvas).
+- `npm run lint`: 0 errors, 2000 pre-existing warnings.
+- `node .agents/skills/kanban_operations/get-state.js <workspace> | jq .`: emits parseable JSON.
+- `node .agents/skills/kanban_operations/assign-to-feature.js ...` reaches the running API (server reload required to pick up the new endpoint).
 

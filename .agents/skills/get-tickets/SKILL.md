@@ -1,3 +1,8 @@
+---
+name: Local Ticket Access
+description: Fetch tickets from the local Switchboard API proxy (ClickUp/Linear) for the current workspace.
+---
+
 # Local Ticket Access
 
 Use this skill to access ClickUp/Linear ticket data via the local API server (no MCP required).

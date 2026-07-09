@@ -653,14 +653,16 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         db: KanbanDatabase,
         subtaskPlanId: string,
         featureId: string,
-        relativePath: string
+        relativePath: string,
+        workspaceId: string,
+        workspaceRoot: string
     ): Promise<void> {
         if (!featureId || subtaskPlanId === featureId) return;
         // Don't link a feature to itself.
         if (relativePath.startsWith('.switchboard/features/')) return;
 
         try {
-            const featureRow = await db.getPlanByPlanId(featureId);
+            const featureRow = await db.resolveFeatureIdentifier(featureId, workspaceId);
             if (!featureRow || !featureRow.isFeature) {
                 // Defer — feature not imported yet, or not a feature row.
                 const existing = this._pendingFeatureLinks.get(subtaskPlanId);
@@ -682,11 +684,19 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 // DB already has a link — file does not overwrite (apply-if-empty).
                 return;
             }
-            await db.updateFeatureStatus(subtaskPlanId, 0, featureId);
+            await db.updateFeatureStatus(subtaskPlanId, 0, featureRow.planId);
             this._pendingFeatureLinks.delete(subtaskPlanId);
             this._outputChannel?.appendLine(
-                `[GlobalPlanWatcher] Linked subtask ${relativePath} to feature ${featureId} via **Feature:** frontmatter`
+                `[GlobalPlanWatcher] Linked subtask ${relativePath} to feature ${featureRow.planId} via **Feature:** frontmatter`
             );
+            // Regenerate the parent feature file so its Subtasks block includes the newly linked plan.
+            try {
+                await this._regenerateFeatureFile?.(workspaceRoot, featureRow.planId);
+            } catch (regenErr) {
+                this._outputChannel?.appendLine(
+                    `[GlobalPlanWatcher] regenerateFeatureFile failed for ${featureRow.planId}: ${regenErr instanceof Error ? regenErr.message : String(regenErr)}`
+                );
+            }
         } catch (e) {
             this._outputChannel?.appendLine(
                 `[GlobalPlanWatcher] _applyFeatureLink failed for ${relativePath}: ${e instanceof Error ? e.message : String(e)}`
@@ -697,10 +707,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     /** Retry deferred feature links (called on feature-file import + periodic scan). */
     private async _retryPendingFeatureLinks(db: KanbanDatabase, workspaceRoot: string): Promise<void> {
         if (this._pendingFeatureLinks.size === 0) return;
+        const workspaceId = (await db.getWorkspaceId()) || '';
         const entries = [...this._pendingFeatureLinks.entries()];
         for (const [subtaskPlanId, { featureId }] of entries) {
             // Re-resolve via DB; the feature may have landed since the defer.
-            await this._applyFeatureLink(db, subtaskPlanId, featureId, '');
+            await this._applyFeatureLink(db, subtaskPlanId, featureId, '', workspaceId, workspaceRoot);
         }
     }
 
@@ -884,7 +895,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 } else if (metadata.feature) {
                     // Durable **Feature:** frontmatter fact — link subtask to feature
                     // (apply-if-empty; defer if feature not imported yet).
-                    await this._applyFeatureLink(db, newRecord.planId, metadata.feature, relativePath);
+                    await this._applyFeatureLink(db, newRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
                 }
                 // Restore the real pre-delete column from the delete-tombstone for ALL
                 // plans — features included. insertFileDerivedPlan hardcodes 'CREATED' on a
@@ -1005,7 +1016,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 }
                 // Durable **Feature:** frontmatter fact on re-save (apply-if-empty).
                 if (metadata.feature && !relativePath.startsWith('.switchboard/features/')) {
-                    await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath);
+                    await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
                 }
                 // Activity-light OFF-switch: the next plan-file edit after dispatch turns off
                 // the light. The watcher only fires on mtime advance (the gate at line 589

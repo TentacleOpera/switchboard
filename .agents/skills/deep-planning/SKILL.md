@@ -1,3 +1,8 @@
+---
+name: Deep Planning
+description: Produce a deep implementation plan for a codebase change, with research and adversarial review.
+---
+
 # Deep Planning for Codebase Changes
 
 ## Purpose

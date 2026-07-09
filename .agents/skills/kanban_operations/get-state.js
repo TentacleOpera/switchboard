@@ -1,3 +1,6 @@
+// Route all diagnostic logging to stderr so stdout is strictly parseable JSON.
+console.log = console.info = console.warn = console.debug = (...args) => console.error(...args);
+
 const { KanbanDatabase, VALID_KANBAN_COLUMNS } = require('../../../out/services/KanbanDatabase');
 
 const workspaceRoot = process.argv[2] || '.';
@@ -12,14 +15,16 @@ db.ensureReady().then(async () => {
     columns[col] = await db.getPlansByColumn(workspaceId, col);
   }
 
-  console.log(JSON.stringify({
+  const payload = JSON.stringify({
     workspaceId,
     timestamp: new Date().toISOString(),
     columns
-  }, null, 2));
+  }, null, 2);
 
-  if (typeof db.close === 'function') db.close();
-  process.exit(0);
+  process.stdout.end(payload + '\n', 'utf8', () => {
+    if (typeof db.close === 'function') db.close();
+    process.exit(0);
+  });
 }).catch(err => {
   console.error(err);
   if (typeof db.close === 'function') db.close();

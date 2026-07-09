@@ -70,28 +70,31 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // Remote-session skills — operate on Linear/feature files directly, used when the
     // VS Code extension is off (claude.ai / Claude Code web). Both were previously
     // authored only under .claude/ and so never shipped to user workspaces.
-    { source: 'skills/improve_remote_plan.md', name: 'improve-remote-plan', invocation: 'default', allowedTools: 'Bash' },
-    { source: 'skills/create_feature.md', name: 'create-feature', invocation: 'default' },
+    { source: 'skills/improve-remote-plan', name: 'improve-remote-plan', invocation: 'default', allowedTools: 'Bash' },
+    { source: 'skills/create-feature', name: 'create-feature', invocation: 'default' },
+    // Create a feature from a known set of plans when the extension is running.
+    { source: 'skills/create-feature-from-plans', name: 'create-feature-from-plans', invocation: 'default' },
 
     // Side-effecting proxy skills → disable-model-invocation (explicit /name only).
-    { source: 'skills/clickup_api.md', name: 'clickup-api', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup_fetch.md', name: 'clickup-fetch', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup_create_task.md', name: 'clickup-create-task', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup_modify_task.md', name: 'clickup-modify-task', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup_attach.md', name: 'clickup-attach', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup_create_subpage.md', name: 'clickup-create-subpage', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/linear_api.md', name: 'linear-api', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-api', name: 'clickup-api', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-fetch', name: 'clickup-fetch', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-create-task', name: 'clickup-create-task', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-modify-task', name: 'clickup-modify-task', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-attach', name: 'clickup-attach', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-create-subpage', name: 'clickup-create-subpage', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/linear-api', name: 'linear-api', invocation: 'no-model', allowedTools: 'Bash' },
     // Move-task proxy skills — sources existed under .agents/ but were missing from
     // the manifest, so they never generated into user workspaces.
-    { source: 'skills/clickup_move_task.md', name: 'clickup-move-task', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/linear_move_issue.md', name: 'linear-move-issue', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/notion_api.md', name: 'notion-api', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-move-task', name: 'clickup-move-task', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/linear-move-issue', name: 'linear-move-issue', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/notion-api', name: 'notion-api', invocation: 'no-model', allowedTools: 'Bash' },
     {
-        source: 'skills/get_tickets.md', name: 'get-tickets', invocation: 'no-model', allowedTools: 'Bash',
+        source: 'skills/get-tickets', name: 'get-tickets', invocation: 'no-model', allowedTools: 'Bash',
         descriptionFallback: 'Fetch tickets from the local Switchboard API proxy (ClickUp/Linear) for the current workspace.'
     },
-    { source: 'skills/generate_diagram.md', name: 'generate-diagram', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/generate-diagram', name: 'generate-diagram', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/kanban_operations', name: 'kanban-operations', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/worktree-cleanup', name: 'worktree-cleanup', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/refine_ticket.md', name: 'refine-ticket', invocation: 'no-model' },
     { source: 'skills/refine_feature.md', name: 'refine-feature', invocation: 'no-model' },
 
@@ -105,24 +108,24 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
 
     // Pure info-retrieval / read-only skills → user-invokable:false + rich description.
     {
-        source: 'skills/archive.md', name: 'archive', invocation: 'no-user', allowedTools: 'Bash',
+        source: 'skills/archive', name: 'archive', invocation: 'no-user', allowedTools: 'Bash',
         descriptionFallback: 'Query and manage the DuckDB archive of historical plans and conversations.'
     },
     { source: 'skills/query_archive', name: 'query-archive', invocation: 'no-user', allowedTools: 'Bash' },
-    { source: 'skills/query_switchboard_kanban.md', name: 'query-switchboard-kanban', invocation: 'no-user', allowedTools: 'Bash' },
-    { source: 'skills/query_kanban_plans.md', name: 'query-kanban-plans', invocation: 'no-user', allowedTools: 'Bash' },
+    { source: 'skills/query-switchboard-kanban', name: 'query-switchboard-kanban', invocation: 'no-user', allowedTools: 'Bash' },
+    { source: 'skills/query-kanban-plans', name: 'query-kanban-plans', invocation: 'no-user', allowedTools: 'Bash' },
     {
-        source: 'skills/web_research.md', name: 'web-research', invocation: 'no-user',
+        source: 'skills/web-research', name: 'web-research', invocation: 'no-user',
         allowedTools: 'Read, Glob, Grep, WebSearch, WebFetch',
         descriptionFallback: 'Run comprehensive multi-source web research and synthesize a cited summary.'
     },
     {
-        source: 'skills/deep_planning.md', name: 'deep-planning', invocation: 'no-user',
+        source: 'skills/deep-planning', name: 'deep-planning', invocation: 'no-user',
         allowedTools: 'Read, Glob, Grep, WebSearch, WebFetch',
         descriptionFallback: 'Produce a deep implementation plan for a codebase change, with research and adversarial review.'
     },
     {
-        source: 'skills/complexity_scoring.md', name: 'complexity-scoring', invocation: 'no-user',
+        source: 'skills/complexity-scoring', name: 'complexity-scoring', invocation: 'no-user',
         descriptionFallback: 'Score the complexity of a planned change on a 1–10 scale to route it to the right workflow.'
     },
     {
@@ -130,11 +133,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         descriptionFallback: 'When planning, flag uncertain assumptions and supply a ready-to-run web-research prompt to confirm them.'
     },
     {
-        source: 'skills/constitution_builder.md', name: 'constitution-builder', invocation: 'no-user',
+        source: 'skills/constitution-builder', name: 'constitution-builder', invocation: 'no-user',
         descriptionFallback: 'Build or refine a project constitution (coding standards and conventions) for the workspace.'
     },
     {
-        source: 'skills/tuning.md', name: 'tuning', invocation: 'no-user',
+        source: 'skills/tuning', name: 'tuning', invocation: 'no-user',
         descriptionFallback: 'Tune Switchboard agent behavior and workflow settings.'
     },
 
@@ -143,13 +146,13 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // router points at these). Additive: the canonical names keep working.
     { source: 'workflows/improve-plan.md', name: 'switchboard-plan', invocation: 'default' },
     { source: 'workflows/improve-feature.md', name: 'switchboard-feature', invocation: 'default' },
-    { source: 'skills/improve_remote_plan.md', name: 'switchboard-remote-plan', invocation: 'default', allowedTools: 'Bash' },
-    { source: 'skills/notion_api.md', name: 'switchboard-notion', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/linear_api.md', name: 'switchboard-linear', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup_api.md', name: 'switchboard-clickup', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/improve-remote-plan', name: 'switchboard-remote-plan', invocation: 'default', allowedTools: 'Bash' },
+    { source: 'skills/notion-api', name: 'switchboard-notion', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/linear-api', name: 'switchboard-linear', invocation: 'no-model', allowedTools: 'Bash' },
+    { source: 'skills/clickup-api', name: 'switchboard-clickup', invocation: 'no-model', allowedTools: 'Bash' },
     { source: 'skills/kanban_operations', name: 'switchboard-kanban', invocation: 'no-model', allowedTools: 'Bash' },
     {
-        source: 'skills/web_research.md', name: 'switchboard-research', invocation: 'no-user',
+        source: 'skills/web-research', name: 'switchboard-research', invocation: 'no-user',
         allowedTools: 'Read, Glob, Grep, WebSearch, WebFetch',
         descriptionFallback: 'Run comprehensive multi-source web research and synthesize a cited summary.'
     },
