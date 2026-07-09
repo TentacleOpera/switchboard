@@ -11,10 +11,12 @@ one host or another; and (2) one specific skill, `switchboard-manage`, has an en
 that reports the wrong workspace on multi-root machines and is needlessly network-noisy. The
 two content subtasks are grouped because both are "agent-skill correctness" work on the shared
 `.agents/skills/` control-plane surface — one fixes *which* skills exist and how they are
-registered, the other fixes *how one skill behaves* on entry. A third subtask bumps the
-extension version so those control-plane changes actually reach the ~4,000 installs — the
-scaffolder that regenerates a workspace's skill layer is version-gated, so without the bump the
-changes propagate to no one.
+registered, the other fixes *how one skill behaves* on entry. A third subtask reduces the
+*interaction cost* of driving the board from an agent (the skill layer's ergonomics, distinct
+from discovery) — chiefly the missing clean way to add a single plan to a feature. A fourth
+subtask bumps the extension version so all these control-plane changes actually reach the
+~4,000 installs — the scaffolder that regenerates a workspace's skill layer is version-gated,
+so without the bump the changes propagate to no one.
 
 ## How the Subtasks Achieve This
 
@@ -34,32 +36,40 @@ changes propagate to no one.
   all live API calls to action-time with an explicit `workspaceRoot=$ROOT`. Contributes the
   "one skill behaves correctly and quietly" half of the goal, eliminating the wrong-workspace
   data-integrity bug.
-- **Release: Bump Extension Version to 1.7.6 to Propagate the Skill Changes**: The two content
-  subtasks edit control-plane source (`MIRROR_MANIFEST`, `.agents/skills/**`, `AGENTS.md`) that
-  only re-scaffolds into an existing install when the version-gated migration fires. This subtask
-  bumps `package.json` `1.7.5 → 1.7.6` so that gate trips and the changes actually reach the
-  ~4,000 installs. Contributes the "does any of this reach users" step — the feature's shipping
-  gate.
+- **Make Board/Feature Ops Ergonomic for Agents: Declarative-First, No UUID Choreography**:
+  Addresses the skill layer's *ergonomics* (distinct from discovery) — the interaction cost once
+  an agent has found the right tool. Headline gap: there is no clean way to add a single plan to a
+  feature (`assign-to-feature.js` needs two UUIDs; `reconcile` is converge-to-set; the `**Feature:**`
+  file-line silently no-ops on import). Adds an additive path/slug-addressed assign primitive,
+  fixes the file-based link, makes `reconcile` the documented default for restructures, and cleans
+  up `get-state.js` stdout. Contributes the "cheap to operate" half of a usable skill layer.
+- **Release: Bump Extension Version to 1.7.6 to Propagate the Skill Changes**: The three content
+  subtasks edit control-plane source (`MIRROR_MANIFEST`, `.agents/skills/**`, `AGENTS.md`, the plan
+  watcher, `kanban_operations`) that only re-scaffolds/ships into an existing install when the
+  version-gated migration fires. This subtask bumps `package.json` `1.7.5 → 1.7.6` so that gate
+  trips and the changes actually reach the ~4,000 installs. Contributes the "does any of this reach
+  users" step — the feature's shipping gate.
 
 ## Dependencies & sequencing
 
-- **Cross-feature dependencies:** None. All three subtasks are self-contained within this feature.
-- **Shared surface (within-feature):** The two content subtasks both touch
-  `.agents/skills/switchboard-manage/SKILL.md`, but in **disjoint regions** — the audit touches
-  only frontmatter/registry (and finds this skill already correct there), while the entry-fix
-  rewrites the body (§1/§2/§6). No merge conflict. There is a one-way *informational* dependency:
-  the audit subtask documents the mirror-generation mechanism (`MIRROR_MANIFEST` → `.claude/skills/`)
-  that the entry-fix's "regenerate the mirror after editing" note relies on.
-- **Shipping order:** The two content subtasks are independent of each other (either first;
-  suggested: entry-fix first — self-contained/low-risk — then the audit). The **version bump MUST
-  land last**, with or after both content subtasks: bumping before they land trips a regen that
-  ships the old skill layer and burns the version window (forcing a second bump later).
+- **Cross-feature dependencies:** None. All four subtasks are self-contained within this feature.
+- **Shared surface (within-feature):** The three content subtasks touch **disjoint** files. The
+  audit and the entry-fix both touch `.agents/skills/switchboard-manage/SKILL.md` but in disjoint
+  regions — the audit only frontmatter/registry (and finds this skill already correct there), the
+  entry-fix only the body (§1/§2/§6); no conflict. The ergonomics subtask touches the plan
+  watcher + `kanban_operations` scripts + guidance — no overlap with the other two. One-way
+  *informational* dependency: the audit subtask documents the mirror-generation mechanism
+  (`MIRROR_MANIFEST` → `.claude/skills/`) that the entry-fix's "regenerate the mirror" note relies on.
+- **Shipping order:** The three content subtasks (audit, entry-fix, ergonomics) are independent of
+  each other and can land in any order (suggested: entry-fix first — self-contained/low-risk). The
+  **version bump MUST land last**, with or after all three: bumping before they land trips a regen
+  that ships the old skill layer and burns the version window (forcing a second bump later).
 - **Prerequisites / guards:** All prerequisites for the content subtasks are cleared. The three
   product decisions are confirmed (wire up `worktree_cleanup`; regularize `create-feature-from-plans`;
   keep only `refine_ticket`/`refine_feature` flat), and the Antigravity discovery question is
-  resolved (web research confirmed filesystem auto-discovery of `SKILL.md` directories). Both
+  resolved (web research confirmed filesystem auto-discovery of `SKILL.md` directories). The
   content subtasks are execution-ready; the entry-fix is gated only on the standard control-plane
-  approval gate. The version bump is gated on both content subtasks being merged, and its VSIX
+  approval gate. The version bump is gated on all three content subtasks being merged, and its VSIX
   build/publish is a manual release step.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
@@ -67,5 +77,6 @@ changes propagate to no one.
 - [ ] [Audit and Restructure Agent Skills to Prevent Discovery Failures](../plans/audit-agent-skills-structure.md) — **PLAN REVIEWED**
 - [ ] [Fix `switchboard-manage` Entry: Local-Markdown-First, Workspace-Scoped, Low-Noise Console](../plans/switchboard-manage-entry-local-md-and-workspace-scoping.md) — **PLAN REVIEWED**
 - [ ] [Release: Bump Extension Version to 1.7.6 to Propagate the Skill Changes](../plans/release-version-bump-1.7.6-propagate-skill-changes.md) — **PLAN REVIEWED**
+- [ ] [Make Board/Feature Ops Ergonomic for Agents: Declarative-First, No UUID Choreography](../plans/agent-board-op-ergonomics-declarative-first.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
