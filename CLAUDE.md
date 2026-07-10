@@ -31,6 +31,7 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 ---
 
 <!-- switchboard:agents-protocol:start -->
+<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
@@ -53,6 +54,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/improve-feature` | **`improve-feature.md`** | Reconcile & restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. Supports a high/low complexity-tier mode. |
 | `/switchboard-split` | **`switchboard-split.md`** | Split one plan into a Complex/Risky file + a Routine companion so the tiers can be coded separately. Remote-safe (file writes). |
 | `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
+| `/switchboard-manage` | **`switchboard-manage.md`** | Management console — thin router that reads and follows the `switchboard-manage` skill: entry snapshot → categorized menu → wait for direction. |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
 | `/switchboard-orchestrator` *(system-launched)* | **`switchboard-orchestrator.md`** | Orchestration-mode batch manager — system-woken persona that groups plans into features (confirm gate off + `Miscellaneous` sweep), fans out to per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Launched by the AUTOMATION tab's Start orchestrator; not for ad-hoc use. |
 
@@ -193,6 +195,7 @@ Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both pa
 
 > **System backstop:** the importer is resolve-only. An unknown pin (or one equal to a workspace name / a literal `<...>` placeholder) leaves the plan unassigned instead of auto-creating a `projects` row. Only the user creates projects (on the board). The protocol above is the first line of defense; the import guard is the non-negotiable backstop.
 
+<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->

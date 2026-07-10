@@ -1268,6 +1268,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return await this._context.secrets.get('switchboard.apiToken') || '';
             },
             allRoots: allRoots,
+            getRegisteredTerminals: () => {
+                // Live dispatch targets only — a disposed terminal lingers in the
+                // map with exitStatus set and must not count as "registered".
+                const names: string[] = [];
+                this._registeredTerminals?.forEach((term, name) => {
+                    if (term.exitStatus === undefined) { names.push(name); }
+                });
+                return names;
+            },
+            resolveKanbanDispatch: async (wsRoot, targetColumn) => {
+                if (!this._kanbanProvider) {
+                    // No provider yet — report gates closed so /kanban/dispatch fails
+                    // loudly instead of firing a verb into nothing.
+                    return { role: null, cliTriggersEnabled: false, dragDropMode: null, source: null };
+                }
+                return this._kanbanProvider.resolveDispatchForApi(wsRoot, targetColumn);
+            },
+            resolveAutoDispatchColumn: async (_wsRoot, complexity) => {
+                if (!this._kanbanProvider) {
+                    return { targetColumn: 'LEAD CODED', reason: 'kanban provider unavailable — defaulting to lead' };
+                }
+                return this._kanbanProvider.resolveAutoDispatchColumn(complexity);
+            },
             moveCard: async (wsRoot, sessionId, targetColumn, planFile) => {
                 // Route the kanban_operations fallback script's move through the
                 // provider so it inherits the feature cascade, integration-sync fan-out,
@@ -18636,6 +18659,7 @@ What would you like to find?`;
             workspaceRoot?: string;
         } = {}
     ): Promise<{ planFileAbsolute: string; }> {
+        options.skipBrainPromotion ??= true;
         const workspaceRoot = options.workspaceRoot || this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             throw new Error('No workspace folder found.');
@@ -22169,7 +22193,7 @@ What would you like to find?`;
         }
 
         // 2. Build the manage prompt (static string + port interpolation only).
-        const prompt = `Read .agents/skills/switchboard-manage/SKILL.md and follow its entry protocol. Report the board state for this workspace, then wait for my direction. The API server is running on port ${port}.`;
+        const prompt = `Read ${workspaceRoot}/.agents/skills/switchboard-manage/SKILL.md and follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour), then wait for my direction. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.`;
 
         // 3. Resolve the PM terminal — two-stage lookup matching sendPromptToAgentTerminal
         //    and the Phone-a-Friend dispatch: registered terminals first, then open

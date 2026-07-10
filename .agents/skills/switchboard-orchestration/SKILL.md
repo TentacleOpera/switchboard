@@ -118,7 +118,8 @@ curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also
 
 | Endpoint | Body | Purpose |
 |---|---|---|
-| `POST /kanban/move` | `{ planId or sessionId, targetColumn, workspaceRoot? }` | Move a card (feature cascade + tracker sync inherited) |
+| `POST /kanban/dispatch` | `{ plan: planId or plan-file path, targetColumn?, workspaceRoot? }` | ONE-call advance-and-dispatch. `targetColumn` omitted/`"auto"` → routed by plan complexity through the board's own rule (default bands 1–4 → INTERN CODED, 5–6 → CODER CODED, 7+/unknown → LEAD CODED; custom routing maps + pair-mode bypass honored; decision returned in `routing`). Canonicalizes explicit columns, persists the move, fires the column's role prompt (CLI-triggers setting does not gate API dispatches), verifies vs DB. Honest response (`moved`, `dispatched`, `dispatchedAt`); 4xx/409 when it can't work (no role on column, no live terminal agent). Prefer this over move + raw `triggerAction` (whose exact webview field names and hollow `{success:true}` acks hide no-ops) |
+| `POST /kanban/move` | `{ planId or sessionId, targetColumn, workspaceRoot? }` | Move a card (feature cascade + tracker sync inherited). Column IDs are canonical uppercase (`LEAD CODED`), never state-file slugs (`lead-coded`) — both endpoints canonicalize and 400 on unknown columns |
 | `POST /kanban/feature` | `{ name, planIds: [...], description?, workspaceRoot? }` | Create a feature from plan IDs |
 | `POST /kanban/feature/assign` | `{ featurePlanId, planIds: [...], workspaceRoot? }` | Assign plans to a feature |
 | `POST /kanban/feature/remove` | `{ subtaskPlanId, workspaceRoot? }` | Detach a subtask from its feature |

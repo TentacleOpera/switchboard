@@ -130,3 +130,5 @@ Not implemented. Both original fixes addressed the wrong layer; the backflow rem
 ## Recommendation
 
 **Send to Intern** (complexity 2). The fix is the removal of an unwanted side-effect that every other code path already opts out of; the only discipline required is not touching the legitimate import path (`_mirrorBrainPlan`) or the brain-origin writeback marker (`_recentBrainWrites`).
+
+Implemented the fix in `src/services/TaskViewerProvider.ts`. I added `options.skipBrainPromotion ??= true;` at the start of `_createInitiatedPlan`, so the kanban "Create Plan" path and all other default callers skip the `_promotePlanToBrain` backflow. The `createDraftPlanTicket` call was left unchanged, and the legitimate brain import/writeback paths (`_mirrorBrainPlan`, `_recentBrainWrites`, `syncMirrorToBrain`) were untouched. The `_promotePlanToBrain` method remains in source but is unreachable by default. No tests or compilation were run per the session directives.

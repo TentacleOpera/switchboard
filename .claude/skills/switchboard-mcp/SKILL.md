@@ -1,6 +1,7 @@
 ---
-name: Switchboard MCP
-description: Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts) to Switchboard's LocalApiServer HTTP surface
+name: switchboard-mcp
+description: "Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts) to Switchboard's LocalApiServer HTTP surface"
+user-invokable: false
 ---
 
 # Switchboard MCP
@@ -42,7 +43,7 @@ node ./dist/index.js /abs/path/to/workspace
 - `SWITCHBOARD_API_TOKEN` (env, optional): bearer token. **Leave unset for the default token-less localhost path.** Sending a bearer header against a token-less server will 401.
 
 ## Tools
-Curated verbs: `board_read`, `health_read` (liveness + registered terminal agents), `columns_read`, `plan_read`, `plan_create`, `plan_delete`, `plan_set_project`, `plan_set_complexity`, `card_move` (move only — fires no agent), `card_dispatch` (ONE-call advance-and-dispatch via `POST /kanban/dispatch`; omit `targetColumn` for complexity auto-routing; DB-verified honest response), `features_reconcile`, `orchestration_dispatch`, `worktree_list`, `worktree_cleanup`, `clickup_request`, `linear_request`, `catalog_read`, plus a generic `switchboard_request` passthrough (method + path + body).
+Curated verbs: `board_read`, `columns_read`, `plan_read`, `plan_create`, `plan_delete`, `plan_set_project`, `plan_set_complexity`, `card_move`, `features_reconcile`, `orchestration_dispatch`, `worktree_list`, `worktree_cleanup`, `clickup_request`, `linear_request`, `catalog_read`, plus a generic `switchboard_request` passthrough (method + path + body).
 
 ## Persona
 The management-console discipline (report-then-wait, no eager automation, no confirm gates, deletes execute immediately, never ask which project to pin) is baked into the tool descriptions. An opt-in `switchboard_console` prompt loads the full persona. The server `instructions` field is set for clients that honor it (Claude Code).

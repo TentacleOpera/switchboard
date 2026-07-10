@@ -1,6 +1,6 @@
 ---
 name: switchboard-contracts
-description: "System behavior contracts for agents driving Switchboard — consult when unsure how the system behaves; never for invocation. This doc answers how the system behaves. It never answers how to invoke something — for invocation, use the switchboard-orchestration skill and GET /catalog."
+description: System behavior contracts for agents driving Switchboard — consult when unsure how the system behaves; never for invocation. This doc answers how the system behaves. It never answers how to invoke something — for invocation, use the switchboard-orchestration skill and GET /catalog.
 user-invokable: false
 ---
 

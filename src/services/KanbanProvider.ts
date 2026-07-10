@@ -6498,6 +6498,52 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * Lazily constructs the service (a remote-control session drives verbs with
      * VS Code minimised and the kanban panel possibly never opened).
      */
+    /**
+     * API-facing dispatch resolution for POST /kanban/dispatch. Exposes the same
+     * spec/role resolution the triggerAction/promptOnDrop webview arms use, plus
+     * the CLI-triggers gate, so the endpoint can fail LOUDLY before invoking the
+     * arm — the arm itself `break`s silently on a missing role or disabled
+     * triggers (correct for webview callers, a lie for HTTP callers who then
+     * receive the route layer's hollow {success:true}).
+     */
+    public async resolveDispatchForApi(workspaceRootIn: string, targetColumn: string): Promise<{
+        role: string | null;
+        cliTriggersEnabled: boolean;
+        dragDropMode: string | null;
+        source: string | null;
+    }> {
+        const workspaceRoot = this._resolveWorkspaceRoot(workspaceRootIn);
+        const spec = workspaceRoot ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn) : null;
+        const role = spec?.role || this._columnToRole(targetColumn) || null;
+        return {
+            role,
+            cliTriggersEnabled: this._cliTriggersEnabled,
+            dragDropMode: spec?.dragDropMode ?? null,
+            source: spec?.source ?? null,
+        };
+    }
+
+    /**
+     * Complexity-routed target column for POST /kanban/dispatch when the caller
+     * omits targetColumn. Delegates to resolveRoutedRole — the single source of
+     * truth the board itself uses (custom routing map if configured, else the
+     * default bands 1–4 intern / 5–6 coder / 7+ lead, plus the pair-programming
+     * intern→coder bypass). Routing disabled or complexity unknown → lead, same
+     * as the board.
+     */
+    public resolveAutoDispatchColumn(complexity: string | undefined | null): { targetColumn: string; reason: string } {
+        if (!this._dynamicComplexityRoutingEnabled) {
+            return { targetColumn: 'LEAD CODED', reason: 'dynamic complexity routing off → lead' };
+        }
+        const score = parseComplexityScore(String(complexity ?? ''));
+        if (!(score >= 1 && score <= 10)) {
+            return { targetColumn: 'LEAD CODED', reason: 'complexity unknown → lead' };
+        }
+        const role = this.resolveRoutedRole(score);
+        const targetColumn = role === 'intern' ? 'INTERN CODED' : role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
+        return { targetColumn, reason: `complexity ${score} → ${role} (board routing rule)` };
+    }
+
     public async handleServiceVerb(verb: string, payload: any): Promise<any> {
         if (!this._kanbanService) {
             this._initKanbanService();
@@ -7071,7 +7117,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             }
             case 'triggerAction': {
-                if (!this._cliTriggersEnabled) {
+                // The CLI-triggers setting exists to stop webview DRAG-DROP from
+                // auto-dispatching. An API-originated dispatch (POST /kanban/dispatch)
+                // is an explicit manager command, not an accidental drag — it bypasses
+                // the gate. The webview never sets apiOriginated, so UI behavior is
+                // unchanged.
+                if (!this._cliTriggersEnabled && !msg?.apiOriginated) {
                     break;
                 }
                 // Drag-drop triggered a column transition

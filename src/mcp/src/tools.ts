@@ -61,9 +61,14 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     // --- Read tools ---
 
     server.registerTool('board_read', {
-        description: 'Read the full Switchboard kanban board (all columns, cards, and plan summaries). Use this on entry to report board state, then wait for direction.',
+        description: 'Read the full Switchboard kanban board (all columns, cards, and plan summaries). On entry: summarize to a ONE-LINE column-count snapshot (never dump cards), present the two-tier menu (1. Plan 2. Code 3. Board 4. Automate · More: design & artifacts, external PM, setup & tour), then wait for direction.',
         inputSchema: { workspaceRoot: workspaceRootSchema }
     }, async (args) => toReadResult(await doCall({ method: 'GET', path: '/kanban/board', workspaceRoot: args.workspaceRoot, token })));
+
+    server.registerTool('health_read', {
+        description: 'Liveness + registered terminal agents: GET /health → {status, port, roots, terminals, terminalCount}. terminalCount 0 while plans exist usually means the user forgot to open their agent terminals (AGENT SETUP tab / saved grid) — card_dispatch will 409 until one is live; suggest opening terminals before Guided setup.',
+        inputSchema: {}
+    }, async () => toResult(await doCall({ method: 'GET', path: '/health', token })));
 
     server.registerTool('columns_read', {
         description: 'Read the kanban column layout ({builtIn, custom}).',
@@ -147,7 +152,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     // --- Movement ---
 
     server.registerTool('card_move', {
-        description: 'Move a kanban card by planId or sessionId to a target column. Returns 502 on upstream move failure.' + MUTATING_RULES,
+        description: 'Move a kanban card by planId or sessionId to a target column (move only — fires no agent; use card_dispatch to advance AND dispatch). Column IDs are canonical uppercase display names ("LEAD CODED", never the slug "lead-coded" — a slug written verbatim strands the card between views on older servers; current servers canonicalize and 400 on unknown columns). Returns 502 on upstream move failure.' + MUTATING_RULES,
         inputSchema: {
             planId: z.string().optional().describe('Plan ID to move.'),
             sessionId: z.string().optional().describe('Session ID to move (alternative to planId).'),
@@ -160,6 +165,20 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         if (args.sessionId) body.sessionId = args.sessionId;
         if (args.workspaceRoot) body.workspaceRoot = args.workspaceRoot;
         return toResult(await doCall({ method: 'POST', path: '/kanban/move', body, workspaceRoot: args.workspaceRoot, token }));
+    });
+
+    server.registerTool('card_dispatch', {
+        description: 'ONE-call advance-and-dispatch (POST /kanban/dispatch): move a plan to a coding column AND fire that column\'s configured agent prompt — the same path a board drag takes, with the move persisted before the dispatch. OMIT targetColumn to auto-route by the plan\'s complexity through the board\'s own rule (default bands: 1-4 → INTERN CODED, 5-6 → CODER CODED, 7+/unknown → LEAD CODED; honors custom routing maps and the pair-programming bypass; the decision comes back in `routing`) — never hardcode LEAD CODED. The response is verified against the DB: {success, moved, dispatched, role, routing, dispatchedAgent, dispatchedAt} — success:true means the card landed AND a dispatch was observed, never just "request parsed". A 409 "no live terminal agent" usually means the user forgot to open their agent terminals (suggest AGENT SETUP tab / saved grid before Guided setup). The board\'s CLI-triggers setting does NOT gate this call.' + MUTATING_RULES,
+        inputSchema: {
+            plan: z.string().describe('Plan reference: planId, sessionId, or plan-file path.'),
+            targetColumn: z.string().optional().describe('Canonical column ID (e.g. "LEAD CODED"). Omit (or pass "auto") to route by complexity.'),
+            workspaceRoot: workspaceRootSchema
+        }
+    }, async (args) => {
+        const body: Record<string, unknown> = { plan: args.plan };
+        if (args.targetColumn) body.targetColumn = args.targetColumn;
+        if (args.workspaceRoot) body.workspaceRoot = args.workspaceRoot;
+        return toResult(await doCall({ method: 'POST', path: '/kanban/dispatch', body, workspaceRoot: args.workspaceRoot, token }));
     });
 
     // --- Features ---

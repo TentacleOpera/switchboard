@@ -40,58 +40,112 @@ verify-before-mutate and for mutations.**
    ROOT="$CUR"
    ```
    `ROOT` is the single anchor you reuse everywhere — it fixes workspace scoping.
+   **If your dispatch prompt already names the workspace root** (the Manage button injects
+   the board's selected workspace), use that as `$ROOT` directly and skip the walk — your
+   terminal's working directory may belong to a different root than the board dropdown.
 
 2. **Liveness only — the one network call.** Read the port and confirm Switchboard is up:
    ```bash
    PORT=$(cat "$ROOT/.switchboard/api-server-port.txt")
    BASE="http://127.0.0.1:$PORT"
-   curl -s "$BASE/health"   # -> { status: 'ok', port, roots: [...] }
+   curl -s "$BASE/health"   # -> { status:'ok', port, roots:[...], terminals:[...], terminalCount }
    ```
    - If the port file is missing, tell the user to open the workspace in VS Code with the
      Switchboard extension active. Do not fall back to direct DB access.
    - Cross-check that `ROOT` appears in `health.roots`; if not, warn the user they are
      outside a registered Switchboard workspace and stop. **No other API call at entry.**
+   - **Save the `terminals` field** — it is the list of live registered terminal agents
+     and feeds the setup-gap check in step 4 (no extra call, no file read).
 
-3. **Read board state from LOCAL markdown — one compact line.** Count non-empty pre-code
-   columns and collapse terminal columns to a single total. Never load the big files into
-   context — use `grep -c`:
+3. **Read board state from LOCAL markdown — ONE command, no shell arithmetic.** Count
+   every column in a single awk pass over ALL `kanban-state-*.md` files (never one grep
+   per column, never `grep -c` piped into `$(( ))` math — see Shell discipline below):
    ```bash
-   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-created.md"           # CREATED
-   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-plan-reviewed.md"     # PLAN REVIEWED
-   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-backlog.md"           # BACKLOG
-   # Terminal columns — collapse to one total:
-   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-lead-coded.md"        # LEAD CODED
-   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-coder-coded.md"       # CODER CODED
-   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-intern-coded.md"      # INTERN CODED
-   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-code-reviewed.md"     # CODE REVIEWED
+   awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0}
+        /planId:/{ if (/ feature -->/) feats[col]++; else plans[col]++ }
+        END{for (c in plans) printf "%s: %d plans, %d features\n", c, plans[c], feats[c]}' \
+     "$ROOT"/.switchboard/kanban-state-*.md
    ```
+   - **Feature rows carry `planId:` too** — only the trailing ` feature -->` marker
+     distinguishes them, so a bare `grep -c 'planId:'` silently inflates plan counts.
+     The awk above already splits plans from features per column.
+   - Format the one-line snapshot yourself from the raw counts: name the non-empty
+     pre-code columns (created, plan-reviewed, backlog, …) and collapse post-code
+     columns (coded, lead-coded, coder-coded, intern-coded, code-reviewed,
+     acceptance-tested, completed) into a single `terminal N` total. Report any
+     unrecognized column by name — custom columns exist.
    Display as one line, e.g.:
    `Board: CREATED 6 · PLAN REVIEWED 3 · BACKLOG 31 · terminal 1143. Updated <ts>.`
-   - **Feature rows** are counted separately (`… feature -->`) so column counts are not
-     inflated. **Do NOT list feature names on entry** — the user didn't ask for them.
+   - **Do NOT list feature names on entry** — the user didn't ask for them.
    - **Display the `Updated:` timestamp** from `$ROOT/.switchboard/kanban-board.md` so
      staleness is explicit.
    - **Scope:** if an active project filter is set, say so; otherwise report the whole
      workspace and say so.
+   - **Column IDs vs slugs:** the state FILES are slugs (`kanban-state-lead-coded.md`)
+     but the canonical column IDs for API calls are uppercase display names
+     (`LEAD CODED`). Never pass a slug as `targetColumn`.
 
-4. **Detect setup gaps (cheap, local, no API).** Check three things from local files:
-   - **Terminal agent registered?** `grep -c '"terminals"' "$ROOT/.switchboard/state.json"` or
-     check if `state.json` has non-empty `terminals` object.
+   > **Shell discipline (hard-won, 2026-07-10):** run each entry step as ONE
+   > foreground/blocking command and read its full output — if your harness backgrounds
+   > or truncates it, re-run the same single command in blocking mode; do NOT decompose
+   > into per-column commands and chase fragments. Never store counts in variables named
+   > after reserved env vars (`TERM`, `PATH`, `STATUS` — `TERM=$(...)` silently collides
+   > with the terminal type and prints garbage). Never feed command substitution into
+   > shell arithmetic (`$(( $(grep -c …) ))` breaks on trailing newlines in zsh); let awk
+   > do ALL counting and do any summing yourself when you write the report.
+
+4. **Detect setup gaps (no extra API call).** Check three things:
+   - **Terminal agent registered?** Read it from the step-2 `/health` response: `terminals`
+     is the live registered-agent list (`terminalCount > 0` = registered). Registration is
+     in-memory extension state — **no file on disk reflects it. NEVER read
+     `.switchboard/state.json`**: it was migrated into kanban.db and only a dead
+     `state.json.migrated.bak` remains, which always parses to zero terminals (false
+     "no agent" gap). If `/health` has no `terminals` field (older extension build),
+     report "terminal-agent status: unknown" — do NOT claim a gap you cannot see.
    - **Plans exist?** `ls "$ROOT/.switchboard/plans/"*.md 2>/dev/null | wc -l` (exclude `brain_*`).
    - **Constitution exists?** Check `$ROOT/.switchboard/constitution.md` or
      `$ROOT/AGENTS.md` / `$ROOT/CLAUDE.md` (constitution files).
-   If any gap exists, surface **Setup & Tour → Guided setup** at the **top** of the menu
-   with a one-line nudge (e.g. "⚠ No terminal agent registered — Guided setup recommended").
+   If any gap exists, surface it at the **top** of the menu with a one-line nudge —
+   **matched to the likely cause, not always Guided setup**:
+   - No live terminal but plans/constitution exist → the user has set up before and
+     probably just hasn't opened their agent terminals: "⚠ No agent terminal is live —
+     open your agent terminal(s) (AGENT SETUP tab / saved grid) to re-register them."
+   - No terminal AND no plans/constitution → genuinely new: "⚠ Nothing configured yet —
+     Guided setup recommended."
    If all present, Setup & Tour is a normal menu item.
 
-5. **Report concisely, then present the menu, then stop.** A few lines: liveness +
-   one-line board snapshot + setup-gap nudge (if any) + the menu below. **No feature list,
-   no UUIDs, no wall of text.** **No API board query, no `/catalog`, no automation, no
-   eager action.**
+5. **Report concisely, then present the two-tier entry menu, then stop.** A few lines:
+   liveness + one-line board snapshot + setup-gap nudge (if any) + the entry menu (see the
+   "What you present on entry" block in §2 — four primary actions plus a one-line "More",
+   NOT the full category reference). **No feature list, no UUIDs, no wall of text.**
+   **No API board query, no `/catalog`, no automation, no eager action.**
 
 ---
 
 ## 2. Menu (pick one — wait for the user)
+
+**What you present on entry — two tiers, under ~10 lines.** The daily management loop
+(plan → dispatch → track → automate) leads; everything else is one named line away.
+Adapt the wording, keep the shape:
+
+```
+What would you like to do?
+1. Plan     — write or improve coding plans
+2. Code     — dispatch a plan to be coded, check what's in flight
+3. Board    — browse, move, complete cards; organize features
+4. Automate — oversee a column pass, or manage a project end-to-end
+More: design & artifacts · external PM (ClickUp/Linear) · setup & tour
+```
+
+- The numbered tier maps to Plan / Code / Features & Board / Automation below. "More"
+  areas (Design & Artifacts, External PM, Setup & Tour) are **named but not expanded** —
+  expand one only when the user picks it. Any request that obviously belongs to a
+  category (primary or More) is handled directly; the tiers shape the *presentation*,
+  not what you're allowed to do.
+- **Exception:** when step 4 found a setup gap, its nudge line goes ABOVE the menu and
+  Setup & Tour is promoted into the numbered tier.
+- The category sections below are your **reference** for endpoints and skills per item —
+  never print them wholesale.
 
 > **Every API call carries `workspaceRoot=$ROOT`.** The server multiplexes workspace roots;
 > a bare call silently targets the *primary* root — the wrong workspace. This is not optional.
@@ -103,18 +157,46 @@ verify-before-mutate and for mutations.**
 > only `{success:true}` — their data arrives on the **WS hub** — so for reads, use the
 > **dedicated GET endpoints** (`/kanban/board`, `/kanban/plans`, `/kanban/plan`) instead.
 
+> **Local-first for lists — you already have the data.** "What's in PLAN REVIEWED?" and
+> every other column-list question is answered by `$ROOT/.switchboard/kanban-state-<slug>.md`
+> (grep the titles out of the file you read at entry) — never curl the board API for a list
+> that's on disk. The API is for per-plan detail (`GET /kanban/plan?planId=` includes file
+> content) and mutations. When you do curl, extract the fields you need (`python3 -m
+> json.tool`, `grep -o`) — NEVER dump raw JSON into the terminal.
+
+> **Verb-rail payload trap:** raw verbs expect the EXACT webview message field names —
+> `triggerAction` wants `{sessionId, targetColumn}`, `promptOnDrop` wants
+> `{sessionIds, sourceColumn, targetColumn}` — and canonical column IDs (`LEAD CODED`,
+> never the slug `lead-coded`). Wrong names (`planId`, `column`) or slug columns make the
+> arm silently no-op while the route layer still answers `{success:true}` — the call LOOKS
+> successful and nothing happened. **Prefer the first-class endpoints** (they validate,
+> canonicalize columns, verify against the DB, and return honest errors); use raw verbs
+> only when no endpoint exists, and verify the effect afterwards (`GET /kanban/plan` →
+> `dispatchedAt`, column).
+
 ### Plan
 - **Write coding plans** — Use `switchboard-chat` planning behaviour → write `.md` files to
   `$ROOT/.switchboard/plans/`, then `POST /kanban/plans/import` with `{"workspaceRoot": "$ROOT"}`.
 - **Improve a plan** — `/improve-plan` (local) or `improve-remote-plan` (Linear-stored).
 
 ### Code
-- **Advance a card to a coding column** — `POST /kanban/move` (persist the move first), then
-  `POST /kanban/verb/promptOnDrop` or `POST /kanban/verb/triggerAction` to fire the role prompt.
+- **Dispatch a plan to be coded — ONE call:** `POST /kanban/dispatch` with
+  `{"workspaceRoot": "$ROOT", "plan": "<planId or plan-file path>"}`.
+  **Omit `targetColumn` (or pass `"auto"`) unless the user named a column** — the endpoint
+  routes by the plan's complexity through the board's own rule (default bands: 1–4 →
+  INTERN CODED, 5–6 → CODER CODED, 7+/unknown → LEAD CODED; custom routing maps and the
+  pair-programming bypass are honored; routing toggle off → LEAD CODED) and reports the
+  decision in `routing`. Never hardcode LEAD CODED. It canonicalizes any explicit column, persists the move first,
+  fires the column's configured role prompt (the exact path a webview drag takes — the
+  CLI-triggers setting does NOT gate API dispatches), then verifies against the DB and
+  answers honestly: `{success, moved, dispatched, role, routing, dispatchedAgent,
+  dispatchedAt}` — with real 4xx/409 errors when it CAN'T work (plan not found, column has
+  no role, no live terminal agent). `success:true` means the card is in the target column
+  AND a dispatch was observed — never just "request parsed".
 - **Focus-code a single plan** — Dispatch with a single-plan feature or direct prompt.
 - **Dispatch a feature's coding** — `POST /kanban/orchestration/dispatch` with `{"workspaceRoot": "$ROOT", ...}`.
 
-### Design & Artifacts
+### Design & Artifacts *(secondary — under "More", expand only when picked)*
 - **Design panel / Stitch verbs** — `POST /design/verb/<name>` (e.g. `stitchGenerate`,
   `createBrief`, `renderMarkdownLive`).
 - **Generate a diagram** — `generate-diagram` skill.
@@ -126,11 +208,13 @@ verify-before-mutate and for mutations.**
 - **Feature ops (imperative)** — `/kanban/feature/create`, `/kanban/feature/assign`,
   `/kanban/feature/remove`, `/kanban/feature/split`.
 - **Move / complete cards** — `POST /kanban/move` (by `sessionId` or `planFile` path).
-- **Browse / filter** — `GET /kanban/board?workspaceRoot=$ROOT` (whole workspace);
-  `GET /kanban/plans?workspaceRoot=$ROOT&column=<col>` or `&featureId=<feature-plan-id>`.
+- **Browse / filter** — column lists come from LOCAL files first:
+  `$ROOT/.switchboard/kanban-state-<slug>.md` (titles + planIds, already read at entry).
+  Use `GET /kanban/plans?workspaceRoot=$ROOT&column=<col>` / `&featureId=<id>` only for
+  fields the files lack (complexity, dispatch state) — and extract fields, never dump raw JSON.
 - **Set project / complexity** — `PUT /kanban/plans/project` and `PUT /kanban/plans/complexity`.
 
-### External PM
+### External PM *(secondary — under "More", expand only when picked)*
 - **ClickUp / Linear** — `/api/clickup/*`, `/api/linear/*`, `/task/*` (see `switchboard-orchestration` skill).
 - **Get tickets** — `get-tickets` skill.
 
@@ -142,7 +226,7 @@ verify-before-mutate and for mutations.**
 - **Run one pass now** — drive group → dispatch → verify-via-git → merge inline, in this session.
 - **Arm / disarm the unattended engine** — `POST /orchestration/start` / `POST /orchestration/stop`.
 
-### Setup & Tour
+### Setup & Tour *(under "More" normally; promoted to the numbered tier when a setup gap exists)*
 - **Guided setup (onboarding)** — see §5 below. Interactive, one step at a time.
 - **Guided tour (feature walkthrough)** — see §5 below. For set-up users.
 
@@ -270,14 +354,18 @@ with observed completion. Triggered by "progress through each plan in `<column>`
    epic subtasks** (epic subtasks carry their own `kanban_column` and must not leak into
    column sweeps). Report queue size + plan names, then start.
 
-2. **Precondition:** a terminal agent must be registered — otherwise dispatch falls back to
-   clipboard and the loop waits forever. Refuse to start and route to Guided setup instead.
+2. **Precondition:** a live terminal agent must be registered — otherwise dispatch falls
+   back to clipboard and the loop waits forever. Refuse to start; tell the user to open
+   their agent terminal(s) (AGENT SETUP tab / saved grid) — route to Guided setup only if
+   they have never configured an agent.
 
 3. **Loop (WIP = 1, oldest first):**
-   - **(a) Move + dispatch:** move the card to T via `POST /kanban/move` with
-     `workspaceRoot` — **persist the move *before* dispatch** (known move↔dispatch coupling).
-     Then fire T's configured prompt: `POST /kanban/verb/promptOnDrop` or
-     `POST /kanban/verb/triggerAction`. Record the dispatch timestamp + plan file path.
+   - **(a) Move + dispatch — one call:** `POST /kanban/dispatch` with
+     `{"workspaceRoot": "$ROOT", "plan": "<planId>", "targetColumn": "<T canonical ID>"}`.
+     It persists the move *before* dispatching internally (the move↔dispatch coupling
+     order) and its response says whether the dispatch actually happened (`dispatched`,
+     `dispatchedAt`). **Halt the pass on `success:false`** — never proceed on a hollow
+     ack. Record the `dispatchedAt` timestamp + plan file path.
    - **(b) Poll for completion cheaply and locally:** `stat` the plan file, no API board
      fetches. Use blocking sleep-loop chunks (`until <signal>; do sleep 60; done`, ≤10 min
      per shell invocation, re-invoke until signal or timeout).

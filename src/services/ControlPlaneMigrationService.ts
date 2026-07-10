@@ -1070,9 +1070,15 @@ export class ControlPlaneMigrationService {
                     continue;
                 }
             }
-            await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-            await fs.promises.copyFile(sourcePath, targetPath);
-            written += 1;
+            // Per-file failure tolerance: one unwritable file must not abort the
+            // refresh for the rest of the tree.
+            try {
+                await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+                await fs.promises.copyFile(sourcePath, targetPath);
+                written += 1;
+            } catch (copyErr) {
+                console.warn(`[ControlPlaneMigrationService] Agent file copy failed for ${entryRelativePath}, skipping:`, copyErr);
+            }
         }
         return written;
     }

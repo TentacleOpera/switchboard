@@ -505,14 +505,20 @@ export async function activate(context: vscode.ExtensionContext) {
                             agentsChanged = true;
                         }
                     } catch (hashErr) {
-                        // Fail-safe: skip on hash error, never clobber blindly
-                        console.warn(`[Switchboard] Skill hash compare failed for ${relativePath}, skipping:`, hashErr);
+                        // Fail-safe: skip on hash error/write error, never clobber blindly,
+                        // never abort the loop — remaining files still refresh.
+                        console.warn(`[Switchboard] Skill content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
                     }
                 } catch {
-                    // dest absent → copy new file
-                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
-                    agentsChanged = true;
+                    // dest absent → copy new file. Per-file failure tolerance: one
+                    // unwritable file must not abort the refresh for the rest.
+                    try {
+                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
+                        await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
+                        agentsChanged = true;
+                    } catch (copyErr) {
+                        console.warn(`[Switchboard] Skill seed copy failed for ${relativePath}, skipping:`, copyErr);
+                    }
                 }
             }
         } catch (err) {
@@ -3591,8 +3597,13 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         const isWorkflowFile = relativePath.startsWith('workflows' + path.sep) && relativePath.endsWith('.md');
 
         if (isWorkflowFile && needsWorkflowMigration) {
-            // Workflow files are canonical extension definitions — always overwrite on version change
-            await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
+            // Workflow files are canonical extension definitions — always overwrite on version change.
+            // Per-file failure tolerance: one unwritable file must not abort setup for the rest.
+            try {
+                await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
+            } catch (copyErr) {
+                console.warn(`[Setup] Workflow copy failed for ${relativePath}, skipping:`, copyErr);
+            }
             continue;
         }
 
@@ -3612,10 +3623,17 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
                     await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
                 }
             } catch (hashErr) {
-                console.warn(`[Setup] Agent file hash compare failed for ${relativePath}, skipping:`, hashErr);
+                // Fail-safe: skip on hash error/write error, never clobber blindly,
+                // never abort the loop — remaining files still refresh.
+                console.warn(`[Setup] Agent file content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
             }
         } catch {
-            await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
+            // dest absent → copy new file. Per-file failure tolerance as above.
+            try {
+                await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
+            } catch (copyErr) {
+                console.warn(`[Setup] Agent file copy failed for ${relativePath}, skipping:`, copyErr);
+            }
         }
     }
 

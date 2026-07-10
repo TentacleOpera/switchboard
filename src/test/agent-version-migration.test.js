@@ -365,6 +365,30 @@ async function run() {
                 'A file absent from the source must never be touched by overwriteIfDiffers');
         }
 
+        // ── Test 15: overwriteIfDiffers fail-safe — skip (do not clobber, do not throw) when hashing fails ──
+        {
+            const sourceDir = path.join(tempRoot, 'source-15');
+            const targetDir = path.join(tempRoot, 'target-15');
+
+            await fs.promises.mkdir(path.join(sourceDir, 'skills', 'demo'), { recursive: true });
+            await fs.promises.writeFile(path.join(sourceDir, 'skills', 'demo', 'SKILL.md'), '# fresh skill content', 'utf8');
+
+            // Target path exists but is a DIRECTORY where a file is expected —
+            // hashFile throws EISDIR, so the fail-safe must skip it, not overwrite it.
+            await fs.promises.mkdir(path.join(targetDir, 'skills', 'demo', 'SKILL.md'), { recursive: true });
+
+            const written = await ControlPlaneMigrationService._copyDirectoryRecursive(
+                sourceDir, targetDir,
+                { overwrite: false, overwriteIfDiffers: true }
+            );
+
+            const stat = await fs.promises.stat(path.join(targetDir, 'skills', 'demo', 'SKILL.md'));
+            assert.ok(stat.isDirectory(),
+                'On hash error the target must be left untouched (skip, never clobber blindly)');
+            assert.strictEqual(written, 0,
+                'A hash-error skip must not count as a written file');
+        }
+
     } finally {
         await fs.promises.rm(tempRoot, { recursive: true, force: true });
         vscodeMock.restore();

@@ -130,6 +130,40 @@ interface LocalApiServerOptions {
      * headless/test harnesses (returns 503).
      */
     kanbanVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    /**
+     * Names of currently registered, live terminal agents (dispatch targets).
+     * Surfaced on GET /health as `terminals` so external managers (the
+     * switchboard-manage skill's entry protocol) can detect the "no terminal
+     * agent registered" setup gap in the same single liveness call. Registration
+     * is in-memory runtime state — there is NO file that reflects it (the legacy
+     * `.switchboard/state.json` was migrated into kanban.db and renamed
+     * `.migrated.bak`), so /health is the only truthful source. Optional —
+     * absent in headless/test harnesses (/health then omits the field).
+     */
+    getRegisteredTerminals?: () => string[];
+    /**
+     * Pre-flight resolution for POST /kanban/dispatch: the target column's
+     * configured role/spec and the CLI-triggers gate. Lets the endpoint reject
+     * a doomed dispatch with a real error instead of letting the triggerAction
+     * arm silently no-op. Optional — absent in headless/test harnesses.
+     */
+    resolveKanbanDispatch?: (workspaceRoot: string, targetColumn: string) => Promise<{
+        role: string | null;
+        cliTriggersEnabled: boolean;
+        dragDropMode: string | null;
+        source: string | null;
+    }>;
+    /**
+     * Complexity-routed target column for POST /kanban/dispatch when the caller
+     * omits targetColumn (or passes "auto"). Delegates to the board's own
+     * score→role resolution (custom routing map or default bands 1–4 intern /
+     * 5–6 coder / 7+ lead, pair-mode bypass included); routing off or unknown
+     * complexity → lead. Optional.
+     */
+    resolveAutoDispatchColumn?: (workspaceRoot: string, complexity: string | null) => Promise<{
+        targetColumn: string;
+        reason: string;
+    }>;
     planningVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     designVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     setupVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
@@ -475,6 +509,173 @@ export class LocalApiServer {
     }
 
     /**
+     * Canonicalize a column reference against the board's real column IDs.
+     * Accepts 'LEAD CODED', 'lead-coded', 'lead_coded', 'Lead Coded' → 'LEAD CODED'.
+     * Returns null when nothing matches (caller responds 400). This exists because
+     * column IDs are uppercase display names ('LEAD CODED') while the kanban-state
+     * export files use slugs (kanban-state-lead-coded.md) — an API caller who
+     * echoes the slug back gets it written to the DB verbatim, and the board
+     * webview (which buckets by exact ID) dumps the card into the first column
+     * while project.html shows the raw value: the same card in two "columns".
+     */
+    private async _canonicalColumnId(raw: string, workspaceRoot?: string): Promise<string | null> {
+        const canon = (s: string) => s.trim().toUpperCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
+        const target = canon(raw);
+        if (!target) return null;
+        const ids: string[] = DEFAULT_KANBAN_COLUMNS.map((c: any) => String(c.id));
+        try {
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (db) {
+                const board = await this._resolveBoard(db);
+                for (const p of board || []) {
+                    const col = (p as any).kanbanColumn;
+                    if (col && !ids.includes(col)) { ids.push(String(col)); }
+                }
+            }
+        } catch { /* built-ins remain the floor */ }
+        // Built-ins are listed first, so a canonical ID always wins over a rogue
+        // stored variant that canonicalizes to the same target.
+        for (const id of ids) { if (canon(id) === target) return id; }
+        return null;
+    }
+
+    /**
+     * POST /kanban/dispatch — the ONE-CALL "advance a card and fire its agent"
+     * endpoint. Composes exactly what a webview drag does — the triggerAction arm
+     * persists the column move FIRST, then dispatches the target column's
+     * configured role prompt — and then VERIFIES the outcome against the DB
+     * before answering. Exists because driving this through the raw verb rail
+     * (`/kanban/verb/triggerAction`) requires exact webview payload field names
+     * (`sessionId`, `targetColumn`) and returns a hollow {success:true} even when
+     * the arm silently no-ops (wrong field names, CLI triggers disabled, column
+     * with no role) — a manager is one payload typo away from believing it
+     * dispatched something.
+     * Body: { plan: string (planId | sessionId | plan-file path), targetColumn:
+     *         string, workspaceRoot?: string }. `planId`/`sessionId`/`planFile`
+     *         are accepted as aliases for `plan`; `column` for `targetColumn`.
+     * Response: { success, planId, sessionId, topic, role, mode, column, moved,
+     *             dispatched, dispatchedAgent, dispatchedAt, error? } — success
+     * means "the card is in the target column AND a dispatch was observed",
+     * never just "the request parsed".
+     */
+    private async _handleKanbanDispatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        const fail = (code: number, error: string, extra?: Record<string, unknown>) => {
+            res.writeHead(code, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error, ...(extra || {}) }));
+        };
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const ref = String(body?.plan || body?.planId || body?.sessionId || body?.planFile || '').trim();
+            const rawColumn = String(body?.targetColumn || body?.column || '').trim();
+            if (!ref) {
+                fail(400, 'Missing required field: plan (planId | sessionId | plan-file path)');
+                return;
+            }
+            const kanbanVerb = this._options.kanbanVerb;
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!kanbanVerb || !db) {
+                fail(503, 'Kanban dispatch not available (extension callbacks missing)');
+                return;
+            }
+
+            // 1. Resolve the plan — planId first, then plan-file path.
+            let record: any = await db.getPlanByPlanId(ref);
+            if (!record && (ref.includes('/') || ref.endsWith('.md'))) {
+                const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                record = await db.getPlanByPlanFile(ref, wsId);
+            }
+            if (!record) {
+                fail(404, `Plan not found: '${ref}' (tried planId and plan-file path)`);
+                return;
+            }
+            const sessionId = record.sessionId || record.planId;
+
+            // 2. Resolve the target column. Omitted (or "auto") → route by complexity
+            //    through the board's own rule (default bands 1–4 intern / 5–6 coder /
+            //    7+ lead; honors custom routing maps and the pair-mode bypass).
+            let targetColumn: string | null;
+            let routing: string | undefined;
+            if (!rawColumn || rawColumn.toLowerCase() === 'auto') {
+                if (!this._options.resolveAutoDispatchColumn) {
+                    fail(400, 'targetColumn is required (auto-routing callback unavailable)');
+                    return;
+                }
+                const auto = await this._options.resolveAutoDispatchColumn(workspaceRoot, record.complexity ?? null);
+                targetColumn = auto.targetColumn;
+                routing = `auto: ${auto.reason}`;
+            } else {
+                targetColumn = await this._canonicalColumnId(rawColumn, workspaceRoot);
+                if (!targetColumn) {
+                    fail(400, `Unknown targetColumn '${rawColumn}' — valid column IDs: ${DEFAULT_KANBAN_COLUMNS.map((c: any) => c.id).join(' | ')} (plus any custom columns; see GET /kanban/columns)`);
+                    return;
+                }
+            }
+
+            // 3. Pre-flight the gates the arm breaks silently on — fail loudly instead.
+            //    (CLI-triggers is NOT checked: that setting gates webview drag-drop
+            //    auto-dispatch; an explicit API dispatch bypasses it via apiOriginated.)
+            let gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
+            if (this._options.resolveKanbanDispatch) {
+                gate = await this._options.resolveKanbanDispatch(workspaceRoot, targetColumn);
+                if (!gate.role) {
+                    fail(400, `Column '${targetColumn}' has no dispatch role/action configured — a card moved there fires nothing. Pick a coding column with a configured drop action.`);
+                    return;
+                }
+            }
+            const isPromptMode = gate?.dragDropMode === 'prompt';
+            if (!isPromptMode) {
+                let terminals: string[] | undefined;
+                try { terminals = this._options.getRegisteredTerminals?.(); } catch { /* health-style guard */ }
+                if (terminals !== undefined && terminals.length === 0) {
+                    fail(409, 'No terminal agent is live right now — dispatch would fall back to the clipboard and nothing would run. If you have set up agents before, just open your agent terminal(s) (AGENT SETUP tab / your saved agent grid) so they re-register; run Guided setup only if you have never configured one.');
+                    return;
+                }
+            }
+
+            // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
+            //    then dispatches (the known move↔dispatch coupling order).
+            const dispatchedAtBefore = record.dispatchedAt ?? null;
+            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, apiOriginated: true }, workspaceRoot);
+
+            // 5. Verify against the DB — report what happened, not what was requested.
+            const after: any = await db.getPlanByPlanId(record.planId);
+            const column = after?.kanbanColumn ?? record.kanbanColumn;
+            const moved = column === targetColumn;
+            const dispatchObserved = !!after?.dispatchedAt && after.dispatchedAt !== dispatchedAtBefore;
+            const dispatched = isPromptMode ? moved : dispatchObserved;
+            const success = moved && dispatched;
+            res.writeHead(success ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success,
+                planId: record.planId,
+                sessionId,
+                topic: record.topic,
+                ...(routing ? { routing } : {}),
+                role: gate?.role ?? null,
+                mode: isPromptMode ? 'prompt (copied to clipboard/terminal per column config)' : 'terminal',
+                column,
+                moved,
+                dispatched,
+                dispatchedAgent: after?.dispatchedAgent || null,
+                dispatchedAt: after?.dispatchedAt || null,
+                ...(success ? {} : {
+                    error: !moved
+                        ? `Card did not land in '${targetColumn}' (currently '${column}')`
+                        : 'Move persisted but no dispatch was recorded (dispatchedAt unchanged) — check the terminal agent'
+                })
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanDispatch error:', err);
+            fail(500, err instanceof Error ? err.message : 'kanbanDispatch failed');
+        }
+    }
+
+    /**
      * POST /kanban/move — move a kanban card via the running extension so the move
      * inherits the feature→subtask cascade, the Linear/ClickUp sync fan-out, and the
      * board refresh. Reached by the kanban_operations fallback script over the
@@ -500,12 +701,18 @@ export class LocalApiServer {
             const sessionId = String(body?.sessionId || '').trim();
             const planId = String(body?.planId || '').trim();
             const effectiveKey = sessionId || planId;
-            const targetColumn = String(body?.targetColumn || '').trim();
+            const rawColumn = String(body?.targetColumn || '').trim();
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
             const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
-            if (!effectiveKey || !targetColumn) {
+            if (!effectiveKey || !rawColumn) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing required fields: sessionId/planId and targetColumn' }));
+                return;
+            }
+            const targetColumn = await this._canonicalColumnId(rawColumn, workspaceRoot);
+            if (!targetColumn) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Unknown targetColumn '${rawColumn}' — valid column IDs: ${DEFAULT_KANBAN_COLUMNS.map((c: any) => c.id).join(' | ')} (plus any custom columns; see GET /kanban/columns)` }));
                 return;
             }
 
@@ -2273,8 +2480,17 @@ export class LocalApiServer {
 
         try {
             if (pathname === '/health') {
+                let terminals: string[] | undefined;
+                try {
+                    terminals = this._options.getRegisteredTerminals?.();
+                } catch { /* health must never fail on a callback error */ }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: 'ok', port: this._port, roots: this._allRoots }));
+                res.end(JSON.stringify({
+                    status: 'ok',
+                    port: this._port,
+                    roots: this._allRoots,
+                    ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {})
+                }));
             } else if (pathname === '/metadata/clickup' && req.method === 'GET') {
                 await this._handleGetMetadata('clickup', res);
             } else if (pathname === '/metadata/linear' && req.method === 'GET') {
@@ -2296,6 +2512,8 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/task/clickup/') && !pathname.endsWith('/move') && req.method === 'PUT') {
                 const taskId = pathname.split('/')[3];
                 await this._handleUpdateClickUpTask(taskId, req, res);
+            } else if (pathname === '/kanban/dispatch' && req.method === 'POST') {
+                await this._handleKanbanDispatch(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
                 await this._handleKanbanMove(req, res);
             } else if (pathname === '/kanban/feature' && req.method === 'POST') {
