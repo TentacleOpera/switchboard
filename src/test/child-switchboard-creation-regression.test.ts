@@ -24,9 +24,30 @@ function installVsCodeMock(mappingsConfig: any) {
         }
     };
 
+    // Mock WorkspaceIdentityService.getMappingsFromIndex — the guard reads from
+    // getMappingsFromIndex() (not vscode.workspace.getConfiguration) since commit a94e7f6.
+    // Without this, the guard sees { enabled: false, mappings: [] } and falls through
+    // to the default candidate === workspaceRoot check, making mapping-based tests pass
+    // or fail for the wrong reasons.
+    const mockWorkspaceIdentityService = {
+        getMappingsFromIndex: () => mappingsConfig || { enabled: false, mappings: [] },
+        resolveEffectiveWorkspaceRootFromMappings: (root: string) => root,
+        clearMappingCache: () => {},
+    };
+
+    // Clear cached WorkspaceIdentityService so the mock is used on next require
+    for (const key of Object.keys(require.cache)) {
+        if (key.includes('WorkspaceIdentityService')) {
+            delete require.cache[key];
+        }
+    }
+
     (Module as any)._load = function patchedLoad(request: string, parent: any, isMain: boolean) {
         if (request === 'vscode') {
             return mock;
+        }
+        if (request.endsWith('WorkspaceIdentityService') || request.includes('WorkspaceIdentityService')) {
+            return mockWorkspaceIdentityService;
         }
         return originalLoad.call(this, request, parent, isMain);
     };
