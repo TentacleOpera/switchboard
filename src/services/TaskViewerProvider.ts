@@ -12015,6 +12015,9 @@ What would you like to find?`;
 
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
+        // Guard: never scaffold .switchboard/ in a mapped child workspaceFolder
+        const { isAllowedSwitchboardLocation } = require('../utils/switchboardLocationGuard');
+        if (!isAllowedSwitchboardLocation(workspaceRoot, workspaceRoot)) return;
         const stagingDir = path.join(workspaceRoot, '.switchboard', 'plans');
         if (!fs.existsSync(stagingDir)) {
             try { fs.mkdirSync(stagingDir, { recursive: true }); } catch { }
