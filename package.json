@@ -75,6 +75,10 @@
         "title": "Switchboard: Open Setup"
       },
       {
+        "command": "switchboard.connectClaudeDesktop",
+        "title": "Switchboard: Connect Claude Desktop"
+      },
+      {
         "command": "switchboard.scaffoldMultiRepo",
         "title": "Multi-Repo: Scaffold Control Plane",
         "category": "Switchboard"

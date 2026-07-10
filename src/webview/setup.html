@@ -589,6 +589,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button id="btn-copy-tutorial-prompt" class="action-btn" style="flex: 1;">COPY TUTORIAL PROMPT</button>
                         <button id="btn-open-docs" class="secondary-btn" style="flex: 1;">OPEN DOCS</button>
                     </div>
+                    <div style="margin-top: 10px; padding: 10px; border: 1px solid var(--border-color); border-left: 3px solid var(--accent-teal); border-radius: 4px; background: var(--panel-bg);">
+                        <div class="section-label" style="margin-bottom: 4px;">Claude Desktop bridge</div>
+                        <div class="hint-text" style="margin-bottom: 8px; line-height: 1.5;">Connect Claude Desktop to this workspace's Switchboard board via a local MCP server. Writes an idempotent <code style="font-size:10px;">switchboard-mcp</code> entry into Claude Desktop's config with the workspace root pre-filled. Restart Claude Desktop after connecting.</div>
+                        <button id="btn-connect-claude-desktop" class="action-btn" style="width: 100%;">CONNECT CLAUDE DESKTOP</button>
+                    </div>
                     <label style="display:flex; align-items:flex-start; gap:8px; margin-top:8px;">
                         <input id="hide-guided-setup-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                         <div style="display:flex; flex-direction:column; gap:4px;">
@@ -3489,6 +3494,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'runSetup' });
         });
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
+        document.getElementById('btn-connect-claude-desktop')?.addEventListener('click', () => vscode.postMessage({ type: 'connectClaudeDesktop' }));
         document.getElementById('btn-export-prompts')?.addEventListener('click', () => {
             const statusEl = document.getElementById('prompt-settings-status');
             if (statusEl) {

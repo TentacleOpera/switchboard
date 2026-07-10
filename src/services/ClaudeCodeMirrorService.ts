@@ -156,6 +156,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         allowedTools: 'Read, Glob, Grep, WebSearch, WebFetch',
         descriptionFallback: 'Run comprehensive multi-source web research and synthesize a cited summary.'
     },
+    // switchboard-mcp — local stdio MCP server bridging Claude Desktop (and
+    // other MCP-only hosts) to LocalApiServer. Directory-form skill (the
+    // dynamic scan only auto-picks flat switchboard-*.md files, so it must be
+    // in the manifest or Claude Code never generates it into .claude/skills/).
+    { source: 'skills/switchboard-mcp', name: 'switchboard-mcp', invocation: 'no-user' },
 ];
 
 const GENERATED_MANIFEST_FILE = '.switchboard-generated.json';

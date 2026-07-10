@@ -1,0 +1,36 @@
+{
+  "manifest_version": "0.3",
+  "name": "switchboard-mcp",
+  "display_name": "Switchboard",
+  "description": "Drive Switchboard's kanban board, plans, features, and orchestration from Claude Desktop. Requires the Switchboard VS Code extension running with the target workspace open.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Switchboard"
+  },
+  "server": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["${__dirname}/dist/index.js"],
+    "mcp_config": {
+      "env": {
+        "SWITCHBOARD_WORKSPACE_ROOT": "${user_config.workspace_path}",
+        "SWITCHBOARD_API_TOKEN": "${user_config.api_token}"
+      }
+    }
+  },
+  "user_config": {
+    "workspace_path": {
+      "type": "string",
+      "description": "Absolute path to the workspace folder you open in VS Code with the Switchboard extension active.",
+      "required": true
+    },
+    "api_token": {
+      "type": "string",
+      "description": "Optional bearer token (only if LocalApiServer auth is enabled). Leave blank for the default token-less localhost path.",
+      "required": false,
+      "sensitive": true
+    }
+  },
+  "homepage": "https://github.com/TentacleOpera/switchboard",
+  "license": "MIT"
+}

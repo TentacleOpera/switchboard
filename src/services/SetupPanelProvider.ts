@@ -730,6 +730,9 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'openKanban':
                     await vscode.commands.executeCommand('switchboard.openKanban');
                     break;
+                case 'connectClaudeDesktop':
+                    await vscode.commands.executeCommand('switchboard.connectClaudeDesktop');
+                    break;
                 case 'saveStartupCommands':
                     if (this._setupService) {
                         await this._setupService.saveStartupCommands(message);

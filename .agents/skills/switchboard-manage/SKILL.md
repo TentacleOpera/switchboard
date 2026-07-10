@@ -95,6 +95,13 @@ Each action maps to an existing endpoint or skill. Wait for the user to pick one
 | **Edit docs / constitution / PRD / plan files** | Filesystem access — edit directly (hosts with fs access only) |
 | **Discover newly-added verbs** | `GET /catalog` — only when the user asks for an action not in this table |
 
+> **Claude Desktop** reaches this surface via the **local stdio MCP server**
+> (`@switchboard/mcp` / `switchboard-mcp`), not shell — it has no shell or
+> filesystem. The MCP server is a stateless thin HTTP client of the same
+> `LocalApiServer` surface this skill drives; the curated `switchboard_*` tools
+> map 1:1 to the endpoints above. Use the in-extension **Connect Claude Desktop**
+> button (Setup panel) to write the config entry idempotently.
+
 For the complete endpoint reference (request bodies, response shapes, error codes), read
 the **`switchboard-orchestration` skill** — this skill does not duplicate that contract.
 
