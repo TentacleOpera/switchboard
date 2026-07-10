@@ -14,6 +14,8 @@ Make `/switchboard-manage` feel like a real management console instead of a verb
 2. **The "Recent Features" list is useless noise.** It dumps 8 feature names on entry that the user never asked for and can't act on directly from the list.
 3. **The action menu is too narrow.** A flat 6 bullets (browse / filter / write plans / reorganize features / dispatch / automation). It omits the things a manager actually reaches for: **write coding plans, action/advance coding plans, design & artifacts, external project management, and a guided tour / onboarding.** *(Clarification: the skill's §2 endpoint table has ~15 rows, but it is an endpoint map, not a user-facing menu — the flat 6-item list is what the entry report presents. The rewrite replaces both with one categorized menu.)*
 
+4. **No attended column-oversight mode.** The only orchestration paths are "group into features + create worktrees" and the unattended timer engine (`/orchestration/start`). There is no way to tell the manager "progress through each plan in the coder column" — move the oldest card to the next column (firing its configured role prompt), watch for that plan's completion, then advance the next card, and so on. The user should be able to have the agent oversee the board sequentially without arming the automation timer.
+
 Plus a structural change: **eliminate the sidebar "Guided Setup" button and subsume onboarding + a guided tour into this skill**, so there is one entry point (the Manage launcher) that both drives the board *and* onboards a new user — no separate clipboard-prompt button.
 
 ### Problem / root cause
@@ -43,6 +45,7 @@ The skill was authored as a **status reporter + thin endpoint map**, not as a **
 ## User Review Required
 - **"Artifacts" definition.** Interpreted here as **design/doc outputs** — architectural diagrams (`generate-diagram` skill), PRD (`designDocLink`) and design-system docs (`designSystemDocLink`), and Design-panel/Stitch outputs. Confirm this is the intended scope (vs. host "Artifacts" like claude.ai pages).
 - **Guided Setup button removal.** Plan deletes the sidebar `Guided Setup` button entirely and folds onboarding into the Manage skill, leaving the **Manage launcher** as the single front door (relabel it "Get Started / Manage" so new users find it). Confirm full removal (vs. keeping a hidden fallback).
+- **Column-oversight completion signal.** The attended pass (#8) treats completion as *board signal OR file-quiet-period, whichever first*, because whether the system auto-moves a card when an in-workspace (no-worktree) coder finishes is not confirmed — the dual signal works in both worlds. Confirm this, or name the single authoritative signal if you know it (e.g. "the card always moves"), and confirm the defaults (60s poll, 3-5 min quiet grace, 30 min timeout).
 - Otherwise: None.
 
 ## Scope
@@ -55,7 +58,7 @@ The skill was authored as a **status reporter + thin endpoint map**, not as a **
    - **Design & Artifacts** — Design panel / Stitch verbs (`POST /design/verb/<name>`), generate a diagram (`generate-diagram`), PRD / design-system docs.
    - **Features & Board** — reorganize features (`POST /kanban/features/reconcile`), move/complete cards, browse/filter.
    - **External PM** — ClickUp / Linear (`/api/clickup`, `/api/linear`, `get-tickets`).
-   - **Automation** — run one pass / arm / disarm (`/orchestration/start|stop`).
+   - **Automation** — oversee a column (attended sequential pass — see #8), run one pass / arm / disarm (`/orchestration/start|stop`).
    - **Setup & Tour** — guided setup (onboarding) + guided tour (feature walkthrough) — see #4.
 3. **Setup-state awareness on entry.** Cheaply detect gaps from local files (no heavy API): is a terminal agent registered, do plans exist (`$ROOT/.switchboard/plans/*.md`), does a constitution exist (`getConstitutionPath`). If any gap, surface **Setup & Tour → Guided setup** at the *top* of the menu with a one-line nudge; if all present, it's a normal menu item.
 4. **Subsume Guided Setup + Guided Tour into the skill (interactive, no clipboard).** When the user picks guided setup, walk them through the missing step interactively **one step at a time, verifying each before advancing**, reading the same doc sections `_handleGuidedSetup` cited (preserve the mapping in Current State). Guided tour = a feature walkthrough for set-up users. This replaces the staged clipboard prompts.
@@ -71,6 +74,12 @@ The skill was authored as a **status reporter + thin endpoint map**, not as a **
    > **Replaced with:** The menu's honesty contract is about the **read/write split**, not availability: **command verbs** (move/trigger/dispatch/create/delete/reconcile/complete) are fully actionable now via `POST /<panel>/verb/<name>`; **read verbs** over the generic rail return only `{success:true}` — their data arrives on the WS hub — so for reads the menu routes to the **dedicated GET endpoints** (`/kanban/board`, `/kanban/plans`, `/kanban/plan`, `get-state.js`) or notes WS delivery. Rewrite §6.9's capability ceiling to match: the surface is complete for commands; the remaining ceiling is synchronous read-backs over the verb rail (deferred by A2b's User Review decision) and anything requiring a UI (terminal observation).
 
 7. **Update mirrored skill copies + docs.** Apply the rewrite to both `.agents/` and `.claude/` SKILL.md **bodies**, preserving each copy's own frontmatter (see Current State — they legitimately differ). Restore the Claude Desktop note block to the `.claude/` copy. Update the `switchboard-manage` row in `AGENTS.md`/`CLAUDE.md` if the persona summary changes.
+8. **New SKILL.md §: "Column Oversight — attended sequential pass."** The agent-supervised equivalent of single-column autoban: the agent replaces the automation timer with observed completion. Triggered by "progress through each plan in <column>" / "oversee the board". Protocol:
+   - **Resolve once:** source column S (the queue) and target column T (the next/coding column whose configured drop action fires the role prompt) — from the user's words, or inferred from board structure and confirmed in one line. Queue = planIds from `$ROOT/.switchboard/kanban-state-<S>.md` in file order, **excluding feature rows and epic subtasks** (epic subtasks carry their own `kanban_column` and must not leak into column sweeps). Report queue size + plan names, then start.
+   - **Precondition:** a terminal agent must be registered — otherwise dispatch falls back to clipboard and the loop waits forever. Refuse to start and route to Guided setup instead.
+   - **Loop (WIP = 1, oldest first):** (a) move the card to T via the click-equivalent API (`POST /kanban/move` with `workspaceRoot` — persist the move *before* dispatch, per the known move↔dispatch coupling), then fire T's configured prompt (`POST /kanban/verb/promptOnDrop` / `triggerAction`) and record the dispatch timestamp + plan file path; (b) poll for completion cheaply and locally — grep the kanban-state files and `stat` the plan file, no API board fetches — in blocking sleep-loop chunks (`until <signal>; do sleep 60; done`, ≤10 min per shell invocation, re-invoke until signal or timeout); (c) completion = **board signal** (planId leaves T / appears in a downstream coded column's state file) OR **file signal** (plan file mtime > dispatch time, then quiet — no further writes — for a 3-5 min grace period; a bare "file changed" is not completion, coders edit the plan mid-flight), whichever comes first; (d) **timeout** (default 30 min, user-tunable) → stop the entire pass, report the stuck card, never re-dispatch, never skip silently; (e) on completion, report one line (plan, duration, landing column) and advance the next card.
+   - **Termination:** queue empty → summary report. Any API error or user interruption → stop and report; leave the board as-is; never move a card backward.
+   - **Hard guardrails:** never arms `/orchestration/start` — this mode is session-scoped and dies with the conversation (that is its purpose); one card in flight at a time; a card is dispatched at most once per pass.
 
 ### ⚙️ OUT OF SCOPE
 - The verb-surface refactor (allowlist passthrough, shim deletion, parity gate) → `a2b-generic-verb-passthrough-vscode-running.md`. This plan wires the *menu*; that plan owns the dispatcher.
@@ -82,6 +91,7 @@ The skill was authored as a **status reporter + thin endpoint map**, not as a **
 1. **SKILL.md §1 rewrite:** concise liveness + one-line board snapshot; delete the feature-list block; add the setup-gap detection (agent / plans / constitution) driving menu ordering. Preserve "report then stop" and the `workspaceRoot=$ROOT` discipline.
 2. **SKILL.md §2 rewrite:** replace the flat table with the 7-category menu (#2 above). Each item maps to its endpoint/skill; the read/write contract per #6. Rewrite the §6.9 capability ceiling to match #6.
 3. **SKILL.md new §:** "Guided Setup & Tour" — the interactive onboarding protocol (one step at a time, per-gap doc references, verify-before-advance) replacing the clipboard flow.
+3b. **SKILL.md new §:** "Column Oversight — attended sequential pass" per Scope #8 (resolve S/T once, WIP-1 loop, dual completion signal, timeout, guardrails), listed under the Automation menu category.
 4. **UI removal:** strip the Guided Setup button + toggle + webview case + `_handleGuidedSetup` per #5; relabel the Manage launcher.
 5. **Mirror + docs:** sync the SKILL.md **body** to the second location preserving its frontmatter; update `AGENTS.md`/`CLAUDE.md` row.
 6. **Regen + gates:** rerun `npm run catalog:generate` (drops the `guidedSetup` verb from `protocol-catalog.json`; post-A2b this also regenerates `src/generated/verbAllowlist.ts` in the same script); `npm run catalog:check`; `npm run parity:check`.
@@ -94,6 +104,8 @@ The skill was authored as a **status reporter + thin endpoint map**, not as a **
 - **Verb + catalog removal**: deleting the `guidedSetup` verb touches the webview case, `_handleGuidedSetup`, and `protocol-catalog.json` (and, post-A2b, the generated allowlist) — all must agree or `catalog:check`/`parity:check` fail. Regenerate, don't hand-edit.
 - **Read/write honesty in the menu**: read-shaped menu actions must route to dedicated GET endpoints, not the verb rail (which returns bare acks for reads) — get this wrong and the "it says success but nothing came back" frustration returns in a new form.
 - **Two skill copies with intentionally different frontmatter**: body-sync only; a blind file copy breaks the `.claude/` host integration (`allowed-tools`, `disable-model-invocation`).
+- **Column-oversight completion detection**: a bare plan-file-mtime check declares victory on the coder's *first* mid-work edit; the quiet-period grace and the board-signal alternative are load-bearing. The move must persist before the dispatch fires (known move↔dispatch coupling) or the card bounces back and the pass stalls on a phantom.
+- **Column-oversight sweep scope**: epic subtasks carry their own `kanban_column` — a naive grep of the source column's state file would dispatch subtasks their feature worktree already owns. The exclusion rule is mandatory, not hygiene.
 
 ## Edge-Case & Dependency Audit
 - **Race Conditions:** None — prose/UI-removal change. The only ordering hazard is with the sibling A2b landing between this plan's authoring and coding; the ordering-aware step #5 covers both orders.
@@ -114,6 +126,7 @@ Key risks: (1) menu actions that are read-shaped silently returning bare acks if
 - §1: concise entry (liveness, one-line board snapshot, no feature list, no UUIDs, setup-gap detection) → menu → stop.
 - §2: 7-category menu with per-item endpoint/skill mapping and the read/write contract; §6.9 capability ceiling rewritten (commands complete; reads via GET/WS; no terminal observation).
 - New §: "Guided Setup & Tour" — interactive, verify-before-advance, doc-section curriculum transplanted from `_handleGuidedSetup`.
+- New §: "Column Oversight — attended sequential pass" — the timer-free single-column loop (Scope #8): resolve source/target columns once, move-then-dispatch oldest card, poll local state files for board-or-file-quiet completion, timeout stops the pass, WIP 1, never arms `/orchestration/start`.
 - Body synced to both copies; frontmatter preserved per copy; Claude Desktop note restored to `.claude/`.
 ### src/webview/implementation.html
 - Delete `btn-guided-setup` markup (`:1536-1537`), listener (`:1803-1804`), show/hide logic (`:2190`). Relabel `btn-quick-manage` (`:1532-1534`) to "Get Started / Manage" + updated tooltip.
@@ -138,6 +151,7 @@ Key risks: (1) menu actions that are read-shaped silently returning bare acks if
 - The menu shows all 7 categories; read-shaped items route to GET endpoints and return data; command items (e.g. reorganize features, advance a plan, run a pass) execute.
 - With no agent/plans/constitution, entry surfaces **Guided setup** at the top; picking it walks the user through interactively (not a clipboard copy).
 - The sidebar shows a single "Get Started / Manage" button (no separate Guided Setup); clicking it launches the skill; it is visible for a fresh, unconfigured workspace.
+- Column oversight: with 2-3 real plans queued in a pre-coding column, say "progress through each plan in <column>" — the agent moves the oldest card, the role prompt fires in the terminal agent, the agent waits (visible poll cadence, no busy API traffic), detects completion, advances the next card, and produces a per-card summary; a deliberately stalled card trips the timeout and halts the pass with a report instead of skipping.
 
 ## Effort note
 One focused session for the SKILL.md rewrite + button/verb removal + catalog regen. Sequenced after the verb passthrough, so no gating-flag follow-up pass is needed.
