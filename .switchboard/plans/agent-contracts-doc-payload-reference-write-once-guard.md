@@ -1,8 +1,8 @@
 ---
-description: "Three small supports for the NL-driven manager: an agent-facing system-contracts doc (behavior facts agents otherwise re-derive from source), generated per-verb payload field reference in the protocol catalog, and a guard ensuring the write-once completion directive survives prompt overrides."
+description: "Three small supports for the NL-driven manager: a switchboard-contracts skill (behavior facts agents otherwise re-derive from source — shipped as a skill because docs/ is not deployed with the extension), generated per-verb payload field reference in the protocol catalog, and a guard ensuring the write-once completion directive survives prompt overrides."
 ---
 
-# Agent Contracts Doc, Verb Payload Reference & Write-Once Directive Guard
+# Switchboard-Contracts Skill, Verb Payload Reference & Write-Once Directive Guard
 
 > **Status: PLAN.** Follow-up to the "Switchboard Remote Manager" feature (`a2b-generic-verb-passthrough-vscode-running.md` + `switchboard-manage-skill-ux-overhaul.md`). Those plans make the manager complete and usable; this plan makes it **self-sufficient** — agents stop re-deriving system behavior from source, stop guessing verb payloads, and the completion convention the oversight loop depends on cannot be silently edited away.
 
@@ -23,7 +23,7 @@ All three are the same underlying gap: the system's *conventions* live in code a
 - **Complexity:** 4
 
 ## User Review Required
-- **Doc location & name.** Proposed: `docs/agent_contracts.md`, referenced from the `switchboard-orchestration` and `switchboard-manage` skills. Confirm, or name a preferred location (e.g. a section inside the orchestration skill instead of a standalone doc).
+- **Doc location — resolved (user decision):** it ships as a **skill**, `.agents/skills/switchboard-contracts/SKILL.md`, because the `docs/` folder is not deployed with the extension while `.agents/skills/` is distributed with the plugin. (A new skill folder also sidesteps the overwrite:false propagation freeze that affects *updates* to existing skills — new files copy cleanly on install.)
 - **Override guard behavior.** Proposed: unconditionally re-append `CODING_COMPLETION_REPORT_DIRECTIVE` after any override is applied for code-touching roles (composition guarantee), rather than merely warning. Confirm — a user who *deliberately* wants a coder that never edits plan files would need to know this is not overridable.
 - Otherwise: None.
 
@@ -31,7 +31,13 @@ All three are the same underlying gap: the system's *conventions* live in code a
 
 ### ✅ IN SCOPE
 
-1. **`docs/agent_contracts.md` — one page, contracts only, no UI.** The behavioral facts an agent driving Switchboard must know, each with its source-of-truth reference:
+1. **`switchboard-contracts` skill — one page, contracts only, no UI.**
+
+   > **Superseded:** deliver as `docs/agent_contracts.md`.
+   > **Reason:** The `docs/` folder is not deployed with the extension — agents in installed workspaces would never see it. Skills (`.agents/skills/`) are distributed with the plugin.
+   > **Replaced with:** a new skill `.agents/skills/switchboard-contracts/SKILL.md` (description: "System behavior contracts for agents driving Switchboard — consult when unsure how the system behaves; never for invocation"). Same one-page content. Model-invocable so any agent can pull it on demand.
+
+   The behavioral facts an agent driving Switchboard must know, each with its source-of-truth reference:
    - Cards move on coding **start** (the move *is* the dispatch); they never move on finish.
    - Completion signal = **first plan-file mtime advance after dispatch** (`GlobalPlanWatcherService.ts` activity-light OFF-switch); dispatch never writes the plan file; no content is parsed ("no agent-authored text is trusted" as a control signal).
    - Plan files are **write-once-at-the-end** by dispatched agents (`CODING_COMPLETION_REPORT_DIRECTIVE`); mid-work plan edits break completion detection for everyone.
@@ -41,7 +47,7 @@ All three are the same underlying gap: the system's *conventions* live in code a
    - Every API call carries `workspaceRoot`; reads prefer local `kanban-state-*.md` files; the extension is the sole `kanban.db` writer.
    - Project pins are resolve-only on import; the workspace name is never a project.
    - A scoping preamble: *"This doc answers how the system behaves. It never answers how to invoke something — for invocation, use the `switchboard-orchestration` skill and `GET /catalog`."*
-   Add a pointer to this doc from the `switchboard-orchestration` skill and the `switchboard-manage` skill (both copies, body-only per their frontmatter split), phrased as: consult for behavior/concepts when unsure; never for invocation.
+   Add a pointer to this skill from the `switchboard-orchestration` skill and the `switchboard-manage` skill (both copies, body-only per their frontmatter split), phrased as: consult for behavior/concepts when unsure; never for invocation. Register the new skill in the `AGENTS.md`/`CLAUDE.md` skills table.
 2. **Per-verb payload field extraction in the catalog generator.** Extend `scripts/generate-protocol-catalog.js`: for each `requestSites[]` entry (verb + file + line), statically parse the `postMessage({ type: '<verb>', ...fields })` object literal at that site and record the literal's key names. Emit as `payloadKeys: string[]` per verb (attach to the site entries and aggregate per verb under `providers.<Name>`). Sites with dynamic/spread payloads (`...obj`, computed keys, variable message objects) get `payloadKeys: "dynamic"` — never guess. The data rides the existing `GET /catalog` endpoint automatically; no new endpoint. Regenerate the checked-in `protocol-catalog.json`.
 3. **Write-once directive guard.**
    - Composition guarantee in `agentPromptBuilder.ts`: after `defaultPromptOverride` application (`:1632-1633`), unconditionally re-append `CODING_COMPLETION_REPORT_DIRECTIVE` for code-touching roles (`CODE_TOUCHING_ROLES`, `:721`) if the composed prompt no longer contains it. The override customizes everything else; the completion contract survives.
@@ -55,8 +61,8 @@ All three are the same underlying gap: the system's *conventions* live in code a
 - Rewriting the user manual — it stays human/UI-facing.
 
 ## Implementation Steps
-1. Write `docs/agent_contracts.md` per Scope #1 (source every claim against current code at write time — do not copy this plan's line numbers blindly).
-2. Add the doc pointers to the `switchboard-orchestration` skill and both `switchboard-manage` SKILL.md copies (body-only; preserve per-host frontmatter).
+1. Write `.agents/skills/switchboard-contracts/SKILL.md` per Scope #1 (source every claim against current code at write time — do not copy this plan's line numbers blindly).
+2. Add the skill pointers to the `switchboard-orchestration` skill and both `switchboard-manage` SKILL.md copies (body-only; preserve per-host frontmatter); add the `switchboard-contracts` row to the `AGENTS.md`/`CLAUDE.md` skills table.
 3. Extend `scripts/generate-protocol-catalog.js` with payload-key extraction per Scope #2; regenerate `protocol-catalog.json`; confirm `catalog:check` treats the new field as part of the drift check.
 4. `agentPromptBuilder.ts`: add the composition guarantee after override application + the load-bearing comment on the constant.
 5. Gates: `npm run catalog:check`, `npm run parity:check` green.
@@ -83,10 +89,10 @@ All three are the same underlying gap: the system's *conventions* live in code a
 Key risks: (1) payload extraction over-claiming on dynamic call sites — mitigated by classifying anything non-literal as `"dynamic"` and preferring under-claim; (2) the directive guard altering prompts users deliberately customized — mitigated by the User Review decision and a changelog note; (3) the contracts doc drifting from code over time — mitigated by citing the source file for every contract so staleness is checkable, and by keeping it to contracts (slow-moving) rather than mechanics (fast-moving).
 
 ## Proposed Changes
-### docs/agent_contracts.md (new)
-- One-page behavioral contracts list per Scope #1, each fact with its source file citation; invocation-scoping preamble.
-### .agents/skills/switchboard-orchestration/SKILL.md, .agents/skills/switchboard-manage/SKILL.md + .claude mirror
-- One-line pointer: consult `docs/agent_contracts.md` for behavior when unsure; never for invocation (catalog/skill are the invocation authority). Body-only edits.
+### .agents/skills/switchboard-contracts/SKILL.md (new skill)
+- One-page behavioral contracts list per Scope #1, each fact with its source file citation; invocation-scoping preamble in the description and body.
+### .agents/skills/switchboard-orchestration/SKILL.md, .agents/skills/switchboard-manage/SKILL.md + .claude mirror, AGENTS.md/CLAUDE.md
+- One-line pointer: consult the `switchboard-contracts` skill for behavior when unsure; never for invocation (catalog/orchestration skill are the invocation authority). Body-only edits; new row in the skills table.
 ### scripts/generate-protocol-catalog.js + protocol-catalog.json
 - Payload-key extraction per request site; `payloadKeys` per verb; `"dynamic"` for non-literal payloads; regenerated catalog checked in.
 ### src/services/agentPromptBuilder.ts
@@ -98,7 +104,7 @@ Key risks: (1) payload extraction over-claiming on dynamic call sites — mitiga
 - `npm run parity:check` green (tolerates the new catalog field).
 - Grep: composed coder prompt with a replace-mode override still contains `COMPLETION REPORT:` exactly once.
 ### Manual / behavioral
-- Give a fresh agent session the contracts doc and ask "how do I know a dispatched plan is finished?" — correct answer (mtime advance, no board move) without reading source.
+- In a fresh agent session, invoke the `switchboard-contracts` skill and ask "how do I know a dispatched plan is finished?" — correct answer (mtime advance, no board move) without reading source. Confirm the skill is present in an *installed* (non-dev) workspace after plugin install.
 - `GET /catalog` shows `payloadKeys` for a sampled verb; calling that verb over HTTP with exactly those fields succeeds.
 - Set a deliberately stripped prompt override for the coder role, dispatch a throwaway plan → the coder still receives the completion directive and the card's light clears on its final plan-file edit.
 
