@@ -24,8 +24,8 @@ All three are the same underlying gap: the system's *conventions* live in code a
 
 ## User Review Required
 - **Doc location — resolved (user decision):** it ships as a **skill**, `.agents/skills/switchboard-contracts/SKILL.md`, because the `docs/` folder is not deployed with the extension while `.agents/skills/` is distributed with the plugin. (A new skill folder also sidesteps the overwrite:false propagation freeze that affects *updates* to existing skills — new files copy cleanly on install.)
-- **Override guard behavior.** Proposed: unconditionally re-append `CODING_COMPLETION_REPORT_DIRECTIVE` after any override is applied for code-touching roles (composition guarantee), rather than merely warning. Confirm — a user who *deliberately* wants a coder that never edits plan files would need to know this is not overridable.
-- Otherwise: None.
+- **Override guard behavior — resolved (user decision, 2026-07-10): hard guarantee.** Unconditionally re-append `CODING_COMPLETION_REPORT_DIRECTIVE` after any override is applied for code-touching roles (idempotent — never double-append). The directive is the completion-protocol handshake, not a stylistic choice, and is deliberately non-overridable.
+- Otherwise: None — no open questions.
 
 ## Scope
 
