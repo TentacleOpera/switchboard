@@ -706,19 +706,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'persistPanelsSetting', enabled });
                     break;
                 }
-                case 'getHideGuidedSetupSetting':
-                    this.postMessage({
-                        type: 'hideGuidedSetupSetting',
-                        enabled: this._taskViewerProvider.handleGetHideGuidedSetupSetting()
-                    });
-                    break;
-
                 case 'setExcludeReviewedBacklogSetting':
                     await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
-                    break;
-                case 'setHideGuidedSetup':
-                    await this._taskViewerProvider.handleSetHideGuidedSetupSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'setPersistPanelsSetting': {

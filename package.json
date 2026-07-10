@@ -731,11 +731,6 @@
           "default": false,
           "description": "Automatically reopen Kanban, Project, Planning, and Design panels when VS Code restarts."
         },
-        "switchboard.hideGuidedSetup": {
-          "type": "boolean",
-          "default": false,
-          "description": "Hide the Guided Setup button in the sidebar (for users who have completed onboarding)."
-        },
         "switchboard.theme.cyberPanel": {
           "type": "boolean",
           "default": false,

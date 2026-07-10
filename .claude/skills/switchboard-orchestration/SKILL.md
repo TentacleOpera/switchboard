@@ -14,6 +14,12 @@ Switchboard's LocalApiServer runs inside the VS Code extension and is the **sole
 `kanban.db`. You never touch the DB directly — you call these endpoints. The board is the source
 of truth; the UI is just one view of it.
 
+> **Behavior vs. invocation.** This skill is the *invocation* authority (endpoints, verbs,
+> payload fields). For *behavior* contracts — how the system behaves (cards move on coding
+> start, completion = plan-file mtime advance, plan files are write-once-at-the-end, subtask
+> column exclusion) — consult the **`switchboard-contracts`** skill. Never consult that skill
+> for invocation; never consult this skill for behavior conventions.
+
 ---
 
 ## 1. Bootstrap

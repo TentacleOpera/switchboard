@@ -4670,15 +4670,6 @@ Each plan file must include:
         await config.update('excludeReviewedBacklogFromDropdown', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
-    public handleGetHideGuidedSetupSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('hideGuidedSetup', false);
-    }
-
-    public async handleSetHideGuidedSetupSetting(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('hideGuidedSetup', enabled, vscode.ConfigurationTarget.Global);
-        await config.update('hideGuidedSetup', undefined, vscode.ConfigurationTarget.Workspace);
-    }
 
 
 
@@ -5082,11 +5073,6 @@ Each plan file must include:
             enabled: this.handleGetJulesAutoSyncSetting()
         });
 
-        this.postMessage({
-            type: 'hideGuidedSetupSetting',
-            enabled: this.handleGetHideGuidedSetupSetting()
-        });
-
 
 
         const designSystemDocSetting = this.handleGetDesignSystemDocSetting();
@@ -5132,11 +5118,6 @@ Each plan file must include:
         this._setupPanelProvider.postMessage({
             type: 'julesAutoSyncSetting',
             enabled: this.handleGetJulesAutoSyncSetting()
-        });
-
-        this._setupPanelProvider.postMessage({
-            type: 'hideGuidedSetupSetting',
-            enabled: this.handleGetHideGuidedSetupSetting()
         });
 
 
@@ -10121,9 +10102,6 @@ Each plan file must include:
                         break;
                     case 'runSetupIDEs':
                         vscode.commands.executeCommand('switchboard.setupIDEs');
-                        break;
-                    case 'guidedSetup':
-                        await this._handleGuidedSetup();
                         break;
                     case 'dispatchProjectManager':
                         await this._handleDispatchProjectManager();
@@ -22165,51 +22143,6 @@ What would you like to find?`;
         return !!found && found.exitStatus === undefined;
     }
 
-    private async _handleGuidedSetup(): Promise<void> {
-        const workspaceRoot = this._getWorkspaceRoot();
-        if (!workspaceRoot) {
-            vscode.window.showErrorMessage('No workspace root open.');
-            return;
-        }
-
-        try {
-            // 1. Check for registered terminal agent
-            const hasAgent = await this._hasRegisteredTerminalAgent();
-            if (!hasAgent) {
-                const prompt = `You are onboarding a Switchboard user. Read docs/how_to_use_switchboard.md and docs/switchboard_user_manual.md (specifically ## 2. Installation & First-Time Setup and ## 3. Agent Roles & Configuration), then walk me through registering a terminal agent interactively — one step at a time, checking I've done each before moving on. Point out the AGENT SETUP button in the sidebar. Focus only on this; don't dump the whole manual.`;
-                await vscode.env.clipboard.writeText(prompt);
-                vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through agent setup.');
-                return;
-            }
-
-            // 2. Check for plans exist
-            const hasPlans = await this._hasPlans(workspaceRoot);
-            if (!hasPlans) {
-                const prompt = `You are onboarding a Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 4. The AUTOBAN (Kanban Board) and ## 17. Core Workflows), then walk me through the kanban board interactively — one step at a time, checking I've done each before moving on. Focus on how to create a plan and drag a card to dispatch it. Focus only on this; don't dump the whole manual.`;
-                await vscode.env.clipboard.writeText(prompt);
-                vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through creating and running plans.');
-                return;
-            }
-
-            // 3. Check for constitution exists
-            const constitutionPath = getConstitutionPath(this._context, workspaceRoot);
-            const hasConstitution = fs.existsSync(constitutionPath);
-            if (!hasConstitution) {
-                const prompt = `You are onboarding a Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 8. Projects, Features & Governance) and study the Project panel structure in project.html, then walk me through establishing a project constitution interactively — one step at a time, checking I've done each before moving on. Focus only on this; don't dump the whole manual.`;
-                await vscode.env.clipboard.writeText(prompt);
-                vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through setting up a project constitution.');
-                return;
-            }
-
-            // 4. All three present -> advanced tips
-            const prompt = `You are onboarding an experienced Switchboard user. Read docs/switchboard_user_manual.md (specifically ## 5. Planning Tools & Workflows, ## 7. Multi-Repo Control Plane, ## 9. Design Panel (Google Stitch + Claude), ## 30. Remote Control (provider-agnostic), and the /improve-plan and features tooling), then walk me through advanced tips and features interactively — one step at a time, checking if I want to learn about each. Focus only on this; don't dump the whole manual.`;
-            await vscode.env.clipboard.writeText(prompt);
-            vscode.window.showInformationMessage('Guided setup prompt copied — paste it into your agent chat (Cmd/Ctrl+V) to get walked through advanced features and tips.');
-        } catch (err: any) {
-            vscode.window.showErrorMessage(`Couldn't copy to clipboard: ${err?.message || err}`);
-        }
-    }
-
     /**
      * Dispatch the switchboard-manage skill prompt to a registered/open Project
      * Manager terminal, or copy it to the clipboard as a fallback (same pattern
@@ -22283,35 +22216,6 @@ What would you like to find?`;
                     `Couldn't copy to clipboard: ${err?.message || err}`
                 );
             }
-        }
-    }
-
-    private async _hasRegisteredTerminalAgent(): Promise<boolean> {
-        const statePath = this._resolveStateFilePath();
-        if (!statePath) return false;
-        try {
-            if (fs.existsSync(statePath)) {
-                const content = await fs.promises.readFile(statePath, 'utf8');
-                const state = JSON.parse(content);
-                return Object.keys(state.terminals || {}).length > 0;
-            }
-        } catch (e) {
-            // ignore
-        }
-        return false;
-    }
-
-    private async _hasPlans(workspaceRoot: string): Promise<boolean> {
-        try {
-            const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-            if (!fs.existsSync(plansDir)) {
-                return false;
-            }
-            const files = await fs.promises.readdir(plansDir);
-            const planFiles = files.filter((f: string) => f.endsWith('.md') && !f.startsWith('brain_'));
-            return planFiles.length > 0;
-        } catch {
-            return false;
         }
     }
 }

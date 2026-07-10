@@ -140,6 +140,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         source: 'skills/tuning', name: 'tuning', invocation: 'no-user',
         descriptionFallback: 'Tune Switchboard agent behavior and workflow settings.'
     },
+    // switchboard-contracts — agent-facing behavior reference (conventions/contracts).
+    // Pure info doc: model-loadable (no-user), no Bash. Distinct from the invocation
+    // authority (switchboard-orchestration + GET /catalog) — this answers "how does the
+    // system behave?", never "how do I call X?".
+    { source: 'skills/switchboard-contracts', name: 'switchboard-contracts', invocation: 'no-user' },
 
     // Discoverable `/switchboard-*` aliases — same sources as the canonical skills
     // above, added so typing `/switchboard-` surfaces the whole family (the `/switchboard`

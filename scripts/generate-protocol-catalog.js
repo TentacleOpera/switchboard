@@ -113,6 +113,218 @@ function lineOf(content, index) {
 }
 
 /**
+ * Statically extract the top-level key names of an object literal whose opening `{`
+ * is at `braceOpenIdx` in `content`. Returns { keys, dynamic }:
+ *   - `keys`: the literal's top-level key names (string[]), in source order.
+ *   - `dynamic`: true if the literal cannot be statically keyed — any spread (`...x`),
+ *     computed key (`[k]`), or a non-object-literal argument (caller checks the latter).
+ *
+ * Honest under-claiming: a wrong `payloadKeys` list is worse than `"dynamic"` because
+ * agents trust it. Prefer flagging dynamic over guessing. Nested objects/arrays are
+ * descended into for brace matching but their keys are NOT collected (only top-level
+ * keys of the message literal are payload fields). String/template-literal contents are
+ * skipped so braces/colons inside them do not corrupt the parse.
+ */
+function extractPayloadKeys(content, braceOpenIdx) {
+    const keys = [];
+    let dynamic = false;
+    const n = content.length;
+    let i = braceOpenIdx;
+    if (content[i] !== '{') return { keys, dynamic: true };
+    let depth = 0;
+    // `expectKey` is true at positions where a top-level key may start: just after the
+    // opening `{` or after a top-level `,`. At depth 1 only.
+    let expectKey = true;
+    while (i < n) {
+        const ch = content[i];
+        // Whitespace — skip, preserve expectKey.
+        if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i++; continue; }
+        if (depth === 1 && expectKey) {
+            // We're at a key-start position inside the message object.
+            // A `}` here means the object is closing (e.g. after a trailing comma or
+            // right after a nested value whose close re-armed expectKey) — return the
+            // collected keys, do not bail. A `,` here is an elision — skip it.
+            if (ch === '}') { return { keys, dynamic }; }
+            if (ch === ',') { i++; continue; }
+            if (ch === '.') {
+                // Possible spread `...x`
+                if (content[i + 1] === '.' && content[i + 2] === '.') {
+                    dynamic = true;
+                    return { keys, dynamic };
+                }
+                // Otherwise unexpected leading dot — treat conservatively.
+                dynamic = true;
+                return { keys, dynamic };
+            }
+            if (ch === '[') {
+                // Computed key `[expr]:` → dynamic.
+                dynamic = true;
+                return { keys, dynamic };
+            }
+            if (ch === "'" || ch === '"') {
+                // Quoted key: 'key': value  /  "key": value
+                const quote = ch;
+                let j = i + 1;
+                let str = '';
+                while (j < n) {
+                    const c = content[j];
+                    if (c === '\\') { str += content[j + 1] || ''; j += 2; continue; }
+                    if (c === quote) break;
+                    str += c; j++;
+                }
+                // j now at closing quote. Skip whitespace, expect ':'.
+                let k = j + 1;
+                while (k < n && /\s/.test(content[k])) k++;
+                if (content[k] === ':') {
+                    keys.push(str);
+                    expectKey = false;
+                    i = k + 1;
+                    continue;
+                }
+                // Quoted literal not followed by ':' — not a keyed field. Conservative.
+                dynamic = true;
+                return { keys, dynamic };
+            }
+            if (/[A-Za-z_$]/.test(ch)) {
+                // Identifier key or shorthand. Read identifier.
+                let j = i;
+                let id = '';
+                while (j < n && /[A-Za-z0-9_$]/.test(content[j])) { id += content[j]; j++; }
+                let k = j;
+                while (k < n && /\s/.test(content[k])) k++;
+                if (content[k] === ':') {
+                    keys.push(id);
+                    expectKey = false;
+                    i = k + 1;
+                    continue;
+                }
+                if (content[k] === ',' || content[k] === '}') {
+                    // Shorthand: { tabKey } → key 'tabKey'. Leave i on the `,`/`}` and
+                    // set expectKey=false so the structural branch below re-arms
+                    // expectKey (`,` → true) or closes the literal (`}` → depth 0).
+                    keys.push(id);
+                    expectKey = false;
+                    i = k;
+                    continue;
+                }
+                // Identifier followed by something else (e.g. `(` method shorthand) —
+                // not a simple payload key. Conservative: flag dynamic.
+                dynamic = true;
+                return { keys, dynamic };
+            }
+            // Unexpected key-start char — conservative.
+            dynamic = true;
+            return { keys, dynamic };
+        }
+        // Not at a key-start (or depth != 1): handle structural chars & strings.
+        if (ch === '{') { depth++; i++; continue; }
+        if (ch === '}') {
+            depth--;
+            if (depth === 0) return { keys, dynamic };
+            // Do NOT re-arm expectKey here: after a nested value closes, the next token
+            // is either `,` (which re-arms) or the outer `}` (which closes). Re-arming
+            // here left expectKey=true at the outer `}`, bailing dynamic on literals
+            // whose last field was a nested object/array.
+            i++;
+            continue;
+        }
+        if (ch === '[') { depth++; i++; continue; }
+        if (ch === ']') { depth--; i++; continue; }
+        // Parentheses bump depth too, so commas inside call args / parenthesized
+        // expressions (e.g. `slice(0, idx)`) do NOT re-arm expectKey at the object's
+        // top level and identifiers inside them are not misread as keys.
+        if (ch === '(') { depth++; i++; continue; }
+        if (ch === ')') { depth--; i++; continue; }
+        if (ch === ',' ) {
+            if (depth === 1) { expectKey = true; }
+            i++;
+            continue;
+        }
+        if (ch === ':') { i++; continue; } // value separator (we already consumed key:`:`)
+        if (ch === "'" || ch === '"') {
+            // Skip a string literal (value side).
+            const quote = ch;
+            let j = i + 1;
+            while (j < n) {
+                const c = content[j];
+                if (c === '\\') { j += 2; continue; }
+                if (c === quote) { j++; break; }
+                j++;
+            }
+            i = j;
+            continue;
+        }
+        if (ch === '`') {
+            // Template literal — skip, accounting for ${...} interpolations (which may
+            // contain nested braces/strings). Track brace depth inside interpolations.
+            let j = i + 1;
+            while (j < n) {
+                const c = content[j];
+                if (c === '\\') { j += 2; continue; }
+                if (c === '`') { j++; break; }
+                if (c === '$' && content[j + 1] === '{') {
+                    // Interpolation: skip until matching }, tracking braces/strings.
+                    j += 2;
+                    let d = 1;
+                    while (j < n && d > 0) {
+                        const ic = content[j];
+                        if (ic === '\\') { j += 2; continue; }
+                        if (ic === '{') { d++; j++; continue; }
+                        if (ic === '}') { d--; j++; continue; }
+                        if (ic === "'" || ic === '"') {
+                            const iq = ic;
+                            j++;
+                            while (j < n) {
+                                const jc = content[j];
+                                if (jc === '\\') { j += 2; continue; }
+                                if (jc === iq) { j++; break; }
+                                j++;
+                            }
+                            continue;
+                        }
+                        if (ic === '`') {
+                            // Nested template literal — recurse-ish: skip it simply.
+                            j++;
+                            let nd = 1;
+                            while (j < n && nd > 0) {
+                                if (content[j] === '\\') { j += 2; continue; }
+                                if (content[j] === '`') { nd--; }
+                                j++;
+                            }
+                            continue;
+                        }
+                        j++;
+                    }
+                    continue;
+                }
+                j++;
+            }
+            i = j;
+            continue;
+        }
+        // Line comment
+        if (ch === '/' && content[i + 1] === '/') {
+            let j = i + 2;
+            while (j < n && content[j] !== '\n') j++;
+            i = j;
+            continue;
+        }
+        // Block comment
+        if (ch === '/' && content[i + 1] === '*') {
+            let j = i + 2;
+            while (j < n && !(content[j] === '*' && content[j + 1] === '/')) j++;
+            i = j + 2;
+            continue;
+        }
+        // Any other char (value content, operators, numbers) — skip.
+        i++;
+    }
+    // Ran off the end without closing the literal — conservative.
+    return { keys, dynamic: true };
+}
+
+
+/**
  * Scan webview + provider sources for postMessage call sites.
  * - `postMessage({type: '...'})` → webview→host (direction: 'request')
  * - `*.postMessage({type: '...'})` where the receiver is a webview/panel
@@ -150,6 +362,13 @@ function extractWebviewSites() {
                 receiver: receiver || null,
             };
             if (providerName) site.provider = providerName;
+            // Payload-key extraction: brace-match the object literal starting at the `{`
+            // inside the matched `postMessage({…})` and read its top-level keys. Sites
+            // whose payload is not statically keyable (spread/computed/non-literal) get
+            // `payloadKeys: "dynamic"` — never guess.
+            const braceIdx = m.index + m[0].indexOf('{');
+            const pk = extractPayloadKeys(content, braceIdx);
+            site.payloadKeys = pk.dynamic ? 'dynamic' : pk.keys;
             sites.push(site);
         }
         // Routed push sites via the broadcast chokepoint:
@@ -168,6 +387,9 @@ function extractWebviewSites() {
                 receiver: `pushTo:${m[2]}`,
             };
             if (providerName) site.provider = providerName;
+            const braceIdx = m.index + m[0].indexOf('{');
+            const pk = extractPayloadKeys(content, braceIdx);
+            site.payloadKeys = pk.dynamic ? 'dynamic' : pk.keys;
             sites.push(site);
         }
         dynRe.lastIndex = 0;
@@ -304,6 +526,35 @@ function buildCatalog() {
         });
     }
 
+    // Per-verb payload-key aggregation. Each site already carries `payloadKeys`
+    // (string[] | "dynamic"). Aggregate across every site for a verb: if all sites
+    // agree on the same key set, that set is the verb's payload; if any site is
+    // "dynamic" or two sites disagree, the verb is "dynamic" (conservative — a wrong
+    // list is worse than "dynamic" because agents trust it). `siteCount` records how
+    // many call sites contributed, so a single-site verb is distinguishable from one
+    // confirmed by many.
+    const verbPayloads = {};
+    const byVerb = new Map();
+    for (const s of sites) {
+        if (!byVerb.has(s.verb)) byVerb.set(s.verb, []);
+        byVerb.get(s.verb).push(s);
+    }
+    for (const verb of Array.from(byVerb.keys()).sort()) {
+        const verbSites = byVerb.get(verb);
+        const sigs = verbSites.map(s => (s.payloadKeys === 'dynamic' ? 'dynamic' : s.payloadKeys.join(',')));
+        const unique = Array.from(new Set(sigs));
+        let payloadKeys;
+        if (unique.length === 1 && unique[0] !== 'dynamic') {
+            payloadKeys = verbSites[0].payloadKeys;
+        } else if (unique.length === 1 && unique[0] === 'dynamic') {
+            payloadKeys = 'dynamic';
+        } else {
+            // Mixed or dynamic-among-literal → conservative.
+            payloadKeys = 'dynamic';
+        }
+        verbPayloads[verb] = { payloadKeys, siteCount: verbSites.length };
+    }
+
     const apiEndpoints = extractApiEndpoints();
 
     return {
@@ -322,6 +573,7 @@ function buildCatalog() {
         },
         providers,
         verbs: verbTable,
+        verbPayloads,
         pushSites: sites.filter(s => s.direction === 'push'),
         requestSites: sites.filter(s => s.direction === 'request'),
         apiEndpoints,

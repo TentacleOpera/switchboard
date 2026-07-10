@@ -569,7 +569,33 @@ If all three sections already exist with substantive content, leave them untouch
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion report (which still goes to each subtask's own plan file); do not skip either. Do NOT skip this step.`;
+// CODING_COMPLETION_REPORT_DIRECTIVE is the completion-protocol handshake. It is the
+// sole signal the completion-detection chain keys on: the activity-light OFF-switch
+// (GlobalPlanWatcherService — clears working state on the first plan-file mtime advance
+// after dispatch), the autoban wake, and the switchboard-manage skill's Column Oversight
+// pass all depend on the dispatched agent editing the plan file at the end. The directive
+// is deliberately NON-overridable for code-touching roles: ensureCompletionDirective()
+// re-appends it idempotently AFTER any defaultPromptOverride is applied, so a `replace`-
+// mode role override cannot silently drop the handshake and leave cards stuck on. Do NOT
+// treat this as prose, move it before the override application, or remove the post-override
+// placement — the three consumers above will break silently (cards never clear, oversight
+// passes time out on work that succeeded).
 export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing the plan, append a brief summary (3-5 sentences) to the END of the original plan file. Include: what you implemented, files changed, and any issues encountered. This edit signals task completion to the kanban board — the file watcher detects it and clears the card's working-state light. Do NOT skip this step.`;
+
+/**
+ * Idempotent completion-directive guard. Appends CODING_COMPLETION_REPORT_DIRECTIVE to
+ * `text` only if the directive's sentinel (`COMPLETION REPORT:`) is not already present,
+ * so the directive is never double-appended. This is the post-override guarantee that
+ * keeps the completion handshake present for code-touching roles even when a `replace`-
+ * mode defaultPromptOverride wipes the composed base. See the load-bearing comment on
+ * CODING_COMPLETION_REPORT_DIRECTIVE for the consumers that depend on this.
+ */
+export function ensureCompletionDirective(text: string): string {
+    if (!text.includes('COMPLETION REPORT:')) {
+        return text + '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+    }
+    return text;
+}
 
 
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
@@ -1030,6 +1056,13 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
         }
+        // Reviewer's completion signal is a base-embedded step-6 "update the plan file"
+        // instruction, which a `replace`-mode defaultPromptOverride drops (it lives inside
+        // `base`). Normalise reviewer onto the same idempotent completion directive as
+        // coder/lead/intern so its completion handshake is override-proof — without this,
+        // a reviewer `replace` override silently breaks completion detection (the card's
+        // working-state light never clears).
+        baseInstructions = ensureCompletionDirective(baseInstructions);
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
@@ -1139,7 +1172,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+        baseInstructions = ensureCompletionDirective(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -1191,7 +1224,7 @@ For each plan:
             if (cavemanOutputEnabled) {
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
-            baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+            baseInstructions = ensureCompletionDirective(baseInstructions);
 
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
@@ -1235,7 +1268,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+        baseInstructions = ensureCompletionDirective(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -1273,7 +1306,7 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions += '\n\n' + CODING_COMPLETION_REPORT_DIRECTIVE;
+        baseInstructions = ensureCompletionDirective(baseInstructions);
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -1634,6 +1667,25 @@ export function buildCustomAgentPrompt(
         if (mode === 'prepend') prompt = `${text}\n\n${prompt}`;
         else if (mode === 'append') prompt = `${prompt}\n\n${text}`;
         else if (mode === 'replace') prompt = `${text}\n\nPLANS TO PROCESS:\n${planList}`;
+    }
+
+    // Completion-directive guard for custom agents. buildCustomAgentPrompt never composes
+    // CODING_COMPLETION_REPORT_DIRECTIVE into the prompt (unlike the built-in coder/lead/
+    // intern path), and a `replace`-mode override discards every composed block — so a
+    // code-touching custom agent currently has NO completion handshake, leaving its card's
+    // working-state light stuck on after it finishes. There is no `role` here and
+    // CustomAgentAddons carries no explicit code-touching flag, so infer "touches code"
+    // from git policy: a commit/push strategy that writes (whenDone / pushWhenDone) with
+    // the git guardrail (gitProhibition / gitProhibitionEnabled) OFF ⇒ the agent edits code
+    // and needs the completion signal. Read-only custom agents (guardrail on, or no write
+    // strategy) are left alone. Idempotent — never double-appends.
+    const customGitCommit = (addons as any)?.gitCommitStrategy;
+    const customGitPush = (addons as any)?.gitPushStrategy;
+    const customGuardrailOn = (addons as any)?.gitProhibition ?? addons?.gitProhibitionEnabled;
+    const customWritesCode =
+        (customGitCommit === 'whenDone' || customGitPush === 'pushWhenDone') && !customGuardrailOn;
+    if (customWritesCode) {
+        prompt = ensureCompletionDirective(prompt);
     }
 
     return normalizeNewlines(prompt);

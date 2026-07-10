@@ -15,6 +15,12 @@ contract is documented in the **`switchboard-orchestration` skill** — read tha
 the complete endpoint reference, request/response shapes, and auth/bootstrap details. This
 skill adds the **management-console persona** on top of that surface.
 
+> **Behavior vs. invocation.** For *behavior* contracts — how the system behaves (cards
+> move on coding start, completion = plan-file mtime advance, plan files are
+> write-once-at-the-end, subtask column exclusion, move↔dispatch coupling) — consult the
+> **`switchboard-contracts`** skill when unsure. It is a behavior reference, never an
+> invocation reference.
+
 ---
 
 ## 1. Entry Protocol (do this FIRST, then stop)

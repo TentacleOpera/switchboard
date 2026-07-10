@@ -117,6 +117,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `switchboard-manage` | Host-agnostic management console — drive the board, plans, features, and dispatch from any agentic coding host with VS Code minimised. Consultative persona: report state on entry, then wait for user direction. Automation is opt-in only. Replaces the old human `/switchboard-orchestrator` slash command. |
 | `switchboard-orchestration` | Fleet coding/review agents working inside orchestration worktrees — discover the API port, read board/features/plans/worktrees, file requests to the orchestrator, and read the session log via HTTP endpoints. |
 | `switchboard-mcp` | Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts with no shell/filesystem) to LocalApiServer. Claude Desktop reaches the management surface via this MCP server, not shell. Use the in-extension **Connect Claude Desktop** button (Setup panel) to write the config entry. |
+| `switchboard-contracts` | Agent-facing *behavior* contracts — consult when unsure how the system behaves (cards move on coding start, completion = plan-file mtime advance, plan files are write-once-at-the-end, subtask column exclusion). Never for invocation — use `switchboard-orchestration` + `GET /catalog` for that. |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 

@@ -7502,55 +7502,16 @@ Read the current content above. Determine what's missing. Produce a complete fea
         sourceFolder?: string
     ): Promise<void> {
         try {
-            let docPath: string | null = null;
-
-            if (sourceId === 'local-folder') {
-                if (!sourceFolder) {
-                    throw new Error('sourceFolder is required');
-                }
-                const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, sourceId)
-                    || this._getLocalFolderService(workspaceRoot);
-                const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-                const allowedPaths = localFolderService.getFolderPaths();
-                if (!allowedPaths.includes(resolvedSourceFolder)) {
-                    throw new Error('sourceFolder is not a configured folder path');
-                }
-                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
-                docPath = path.join(resolvedSourceFolder, cleanDocId);
-                try {
-                    await fs.promises.access(docPath, fs.constants.R_OK);
-                } catch {
-                    docPath = null;
-                }
-            } else if (sourceId === 'antigravity') {
-                // For antigravity: docId is already an absolute path to the artifact
-                const localFolderService = this._getLocalFolderService(workspaceRoot);
-                const result = await localFolderService.fetchAntigravityArtifact(docId);
-                if (result.success) {
-                    docPath = docId;
-                } else {
-                    docPath = null;
-                }
-            } else {
-                if (this._cacheService) {
-                    const rawSlug = (docName || sourceId)
-                        .toLowerCase()
-                        .replace(/[^a-z0-9]+/g, '_')
-                        .replace(/^_+|_+$/g, '')
-                        .slice(0, 60) || sourceId;
-                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
-                    docPath = await this._cacheService.resolveImportedDocPath(rawSlug, workspaceId);
-                }
+            // Source-agnostic: the frontend guard ensures sourceFolder is present
+            // for every source that can fire Link Doc (local-folder, planning-html-folder).
+            // Tree node ids are `${folderIndex}:${relativePath}` — strip the prefix.
+            if (!sourceFolder) {
+                throw new Error('sourceFolder is required');
             }
-
-            if (!docPath) {
-                vscode.window.showErrorMessage('Document not found');
-                return;
-            }
-
-            const docRef = docPath;
-            await vscode.env.clipboard.writeText(docRef);
-            showTemporaryNotification(`Document path copied to clipboard: ${docRef}`);
+            const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+            const docPath = path.resolve(sourceFolder, cleanDocId);
+            await vscode.env.clipboard.writeText(docPath);
+            showTemporaryNotification(`Document path copied to clipboard: ${docPath}`);
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to link to document: ${String(err)}`);
         }

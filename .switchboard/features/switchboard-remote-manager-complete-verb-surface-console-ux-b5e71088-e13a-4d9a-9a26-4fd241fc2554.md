@@ -13,8 +13,8 @@ Make /switchboard-manage a genuinely complete manager while VS Code runs minimis
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Feature A · A2b — Generic Verb Passthrough (VS Code running)](../plans/a2b-generic-verb-passthrough-vscode-running.md) — **DONE**
-- [x] [/switchboard-manage — Skill UX Overhaul](../plans/switchboard-manage-skill-ux-overhaul.md) — **DONE**
+- [ ] [Feature A · A2b — Generic Verb Passthrough (VS Code running)](../plans/a2b-generic-verb-passthrough-vscode-running.md) — **CODE REVIEWED**
+- [ ] [/switchboard-manage — Skill UX Overhaul](../plans/switchboard-manage-skill-ux-overhaul.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -67,3 +67,6 @@ Ship **A2b (the passthrough) first** — it makes the verbs reachable. The **Man
 **Manage launcher tooltip updated:**
 - `implementation.html`: `btn-quick-manage` label kept as "Manage"; tooltip updated to mention onboarding + board driving as the single front door.
 
+
+## Review Findings
+Reviewer pass (2026-07-10) across both subtasks: A2b (passthrough) verified correct as shipped — dispatchers, allowlist generator, shim deletion, and parity gate all match the plan with gates green. The Skill UX subtask's SKILL.md and webview deletions were faithful, but the host-side `guidedSetup`/`hideGuidedSetup` removal and the "Get Started / Manage" relabel had not been done despite the Completion Report above implying full delivery — the review completed them (TaskViewerProvider, SetupPanelProvider, package.json, implementation.html) and regenerated catalog + allowlist (606 arms / 518 verbs). All gates (`catalog:check`, `parity:check`, `mirror:check`) pass post-fix; repo grep for guidedSetup in src/ is clean. Remaining risk: the WS read-delivery smoke test and the skill's behavioral flows (tour, column oversight) need a live VS Code session to exercise. Note: the pre-review auto-commit also bundles unrelated skill-propagation content-hash work (extension.ts, ControlPlaneMigrationService, check-claude-mirror.js) belonging to a different plan.
