@@ -58,7 +58,7 @@ The skill was authored as a **status reporter + thin endpoint map**, not as a **
    - **Design & Artifacts** — Design panel / Stitch verbs (`POST /design/verb/<name>`), generate a diagram (`generate-diagram`), PRD / design-system docs.
    - **Features & Board** — reorganize features (`POST /kanban/features/reconcile`), move/complete cards, browse/filter.
    - **External PM** — ClickUp / Linear (`/api/clickup`, `/api/linear`, `get-tickets`).
-   - **Automation** — oversee a column (attended sequential pass — see #8), run one pass / arm / disarm (`/orchestration/start|stop`).
+   - **Automation** — oversee a column (attended sequential pass — see #8), manage a project start to end (project pipeline — see #10), run one pass / arm / disarm (`/orchestration/start|stop`). If `oversight-state.md` shows an interrupted pass, this category leads with "Resume the interrupted pass" instead.
    - **Setup & Tour** — guided setup (onboarding) + guided tour (feature walkthrough) — see #4.
 3. **Setup-state awareness on entry.** Cheaply detect gaps from local files (no heavy API): is a terminal agent registered, do plans exist (`$ROOT/.switchboard/plans/*.md`), does a constitution exist (`getConstitutionPath`). If any gap, surface **Setup & Tour → Guided setup** at the *top* of the menu with a one-line nudge; if all present, it's a normal menu item.
 4. **Subsume Guided Setup + Guided Tour into the skill (interactive, no clipboard).** When the user picks guided setup, walk them through the missing step interactively **one step at a time, verifying each before advancing**, reading the same doc sections `_handleGuidedSetup` cited (preserve the mapping in Current State). Guided tour = a feature walkthrough for set-up users. This replaces the staged clipboard prompts.
