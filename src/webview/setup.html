@@ -594,13 +594,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div class="hint-text" style="margin-bottom: 8px; line-height: 1.5;">Connect Claude Desktop to this workspace's Switchboard board via a local MCP server. Writes an idempotent <code style="font-size:10px;">switchboard-mcp</code> entry into Claude Desktop's config with the workspace root pre-filled. Restart Claude Desktop after connecting.</div>
                         <button id="btn-connect-claude-desktop" class="action-btn" style="width: 100%;">CONNECT CLAUDE DESKTOP</button>
                     </div>
-                    <label style="display:flex; align-items:flex-start; gap:8px; margin-top:8px;">
-                        <input id="hide-guided-setup-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                        <div style="display:flex; flex-direction:column; gap:4px;">
-                            <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Hide the Guided Setup button in the sidebar</span>
-                            <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Hide the onboarding button from the Quick Actions view once you are fully set up.</span>
-                        </div>
-                    </label>
                 </div>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     GIT IGNORE STRATEGY
@@ -2016,7 +2009,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
                     vscode.postMessage({ type: 'getExcludeReviewedBacklogSetting' });
                     vscode.postMessage({ type: 'getPersistPanelsSetting' });
-                    vscode.postMessage({ type: 'getHideGuidedSetupSetting' });
                     vscode.postMessage({ type: 'getProtocolTarget' });
                 },
                 'database': () => {
@@ -4264,10 +4256,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'setExcludeReviewedBacklogSetting', enabled: e.target.checked });
         });
 
-        document.getElementById('hide-guided-setup-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'setHideGuidedSetup', enabled: e.target.checked });
-        });
-
         document.getElementById('persist-panels-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setPersistPanelsSetting', enabled: e.target.checked });
         });
@@ -4838,13 +4826,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'excludeReviewedBacklogSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('exclude-reviewed-backlog-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
-                    });
-                    break;
-                }
-                case 'hideGuidedSetupSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('hide-guided-setup-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
                     });
                     break;

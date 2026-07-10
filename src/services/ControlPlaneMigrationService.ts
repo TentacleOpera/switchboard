@@ -689,12 +689,14 @@ export class ControlPlaneMigrationService {
         const needsAgentMigration = this._shouldRefreshAgentVersion(parentDir, extensionPath);
 
         const bundledAgentDir = path.join(extensionPath, BUNDLED_AGENT_DIR);
+        let agentsChanged = false;
         if (fs.existsSync(bundledAgentDir)) {
-            await this._copyDirectoryRecursive(
+            const written = await this._copyDirectoryRecursive(
                 bundledAgentDir,
                 path.join(parentDir, '.agents'),
-                { overwrite: false, overwriteWorkflows: needsAgentMigration }
+                { overwrite: false, overwriteIfDiffers: true }
             );
+            agentsChanged = written > 0;
         }
 
         const targets = this._getProtocolTargets(parentDir);
@@ -710,10 +712,11 @@ export class ControlPlaneMigrationService {
         // Claude Code layer: CLAUDE.md managed block (initial seed) + .claude/ skills
         // mirror + settings allow-list. Activation-time scaffolding handles ongoing
         // in-place CLAUDE.md updates; here we only seed the file if absent.
-        // The mirror is version-gated on the SAME predicate used for workflow files
-        // (needsAgentMigration) so generated skills are only overwritten on version
-        // change — not on every bootstrap. The CLAUDE.md seed is file-absence-gated
-        // (one-time initial seed); ongoing updates are handled by the activation site.
+        // The mirror regenerates when the version changed (needsAgentMigration) OR
+        // when .agents content changed this run (agentsChanged) — not version-only —
+        // so a skill-content fix with no version bump still rebuilds the .claude copy.
+        // The CLAUDE.md seed is file-absence-gated (one-time initial seed); ongoing
+        // updates are handled by the activation site.
         if (targets.claude) {
             try {
                 if (fs.existsSync(bundledAgentsFile)) {
@@ -725,7 +728,7 @@ export class ControlPlaneMigrationService {
                         await fs.promises.writeFile(claudeFile, block, 'utf8');
                     }
                 }
-                if (needsAgentMigration) {
+                if (needsAgentMigration || agentsChanged) {
                     const version = this._getExtensionVersion(extensionPath);
                     generateClaudeMirror(parentDir, version);
                 }
@@ -1033,17 +1036,18 @@ export class ControlPlaneMigrationService {
     private static async _copyDirectoryRecursive(
         sourceDir: string,
         targetDir: string,
-        options: { overwrite: boolean; overwriteWorkflows?: boolean },
+        options: { overwrite: boolean; overwriteWorkflows?: boolean; overwriteIfDiffers?: boolean },
         basePath: string = ''
-    ): Promise<void> {
+    ): Promise<number> {
         await fs.promises.mkdir(targetDir, { recursive: true });
         const entries = await fs.promises.readdir(sourceDir, { withFileTypes: true });
+        let written = 0;
         for (const entry of entries) {
             const sourcePath = path.join(sourceDir, entry.name);
             const targetPath = path.join(targetDir, entry.name);
             const entryRelativePath = basePath ? path.join(basePath, entry.name) : entry.name;
             if (entry.isDirectory()) {
-                await this._copyDirectoryRecursive(sourcePath, targetPath, options, entryRelativePath);
+                written += await this._copyDirectoryRecursive(sourcePath, targetPath, options, entryRelativePath);
                 continue;
             }
             // Skip blocklisted files (consolidated into workflows, etc.)
@@ -1052,11 +1056,42 @@ export class ControlPlaneMigrationService {
             }
             const isWorkflowFile = entryRelativePath.startsWith('workflows' + path.sep) && entry.name.endsWith('.md');
             const shouldOverwrite = options.overwrite || (isWorkflowFile && options.overwriteWorkflows);
-            if (!shouldOverwrite && fs.existsSync(targetPath)) {
-                continue;
+            const targetExists = fs.existsSync(targetPath);
+            if (!shouldOverwrite) {
+                if (options.overwriteIfDiffers && targetExists) {
+                    // Content-hash self-healing: overwrite iff bundle content differs from
+                    // workspace content. Fail-safe: skip (do not overwrite) on hash error.
+                    const differs = await this._existsAndDiffers(sourcePath, targetPath);
+                    if (!differs) {
+                        continue;
+                    }
+                    // falls through to copy (overwrite)
+                } else if (targetExists) {
+                    continue;
+                }
             }
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
             await fs.promises.copyFile(sourcePath, targetPath);
+            written += 1;
+        }
+        return written;
+    }
+
+    /**
+     * Content-hash compare for the overwriteIfDiffers path. Returns true iff both files
+     * hash successfully AND their sha256 differs. Returns false (skip, do not overwrite)
+     * on any I/O / hash error — fail-safe, never clobbers blindly.
+     */
+    private static async _existsAndDiffers(sourcePath: string, targetPath: string): Promise<boolean> {
+        try {
+            const [srcHash, destHash] = await Promise.all([
+                this.hashFile(sourcePath),
+                this.hashFile(targetPath),
+            ]);
+            return srcHash !== destHash;
+        } catch (err) {
+            console.warn(`[ControlPlaneMigrationService] hash compare failed for ${path.basename(targetPath)}, skipping:`, err);
+            return false;
         }
     }
 

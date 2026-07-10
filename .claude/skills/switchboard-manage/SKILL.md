@@ -46,56 +46,106 @@ verify-before-mutate and for mutations.**
    - Cross-check that `ROOT` appears in `health.roots`; if not, warn the user they are
      outside a registered Switchboard workspace and stop. **No other API call at entry.**
 
-3. **Read board state from LOCAL markdown, scoped to `ROOT`:**
-   - **Per-column plan counts** via `grep -c 'planId:'` on the local state files — never load
-     the big files into context. Use the pre-coding columns and terminal columns:
-     ```bash
-     grep -c 'planId:' "$ROOT/.switchboard/kanban-state-created.md"           # CREATED
-     grep -c 'planId:' "$ROOT/.switchboard/kanban-state-plan-reviewed.md"     # PLAN REVIEWED
-     grep -c 'planId:' "$ROOT/.switchboard/kanban-state-lead-coded.md"        # LEAD CODED
-     grep -c 'planId:' "$ROOT/.switchboard/kanban-state-coder-coded.md"       # CODER CODED
-     grep -c 'planId:' "$ROOT/.switchboard/kanban-state-intern-coded.md"      # INTERN CODED
-     grep -c 'planId:' "$ROOT/.switchboard/kanban-state-backlog.md"           # BACKLOG
-     grep -c 'planId:' "$ROOT/.switchboard/kanban-state-code-reviewed.md"     # CODE REVIEWED (collapsed to one line)
-     ```
+3. **Read board state from LOCAL markdown — one compact line.** Count non-empty pre-code
+   columns and collapse terminal columns to a single total. Never load the big files into
+   context — use `grep -c`:
+   ```bash
+   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-created.md"           # CREATED
+   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-plan-reviewed.md"     # PLAN REVIEWED
+   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-backlog.md"           # BACKLOG
+   # Terminal columns — collapse to one total:
+   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-lead-coded.md"        # LEAD CODED
+   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-coder-coded.md"       # CODER CODED
+   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-intern-coded.md"      # INTERN CODED
+   grep -c 'planId:' "$ROOT/.switchboard/kanban-state-code-reviewed.md"     # CODE REVIEWED
+   ```
+   Display as one line, e.g.:
+   `Board: CREATED 6 · PLAN REVIEWED 3 · BACKLOG 31 · terminal 1143. Updated <ts>.`
    - **Feature rows** are counted separately (`… feature -->`) so column counts are not
-     inflated. For feature status, list the names and files in `$ROOT/.switchboard/features/*.md`.
+     inflated. **Do NOT list feature names on entry** — the user didn't ask for them.
    - **Display the `Updated:` timestamp** from `$ROOT/.switchboard/kanban-board.md` so
      staleness is explicit.
    - **Scope:** if an active project filter is set, say so; otherwise report the whole
      workspace and say so.
 
-4. **Report concisely, then stop.** Lead with actionable pre-code columns and feature
-   names/status; collapse terminal columns (e.g. `CODE REVIEWED: 1083`) to a single count line.
-   **Never display raw UUIDs in the entry report.**
-   **No API board query, no `/catalog`, no automation, no eager action.**
+4. **Detect setup gaps (cheap, local, no API).** Check three things from local files:
+   - **Terminal agent registered?** `grep -c '"terminals"' "$ROOT/.switchboard/state.json"` or
+     check if `state.json` has non-empty `terminals` object.
+   - **Plans exist?** `ls "$ROOT/.switchboard/plans/"*.md 2>/dev/null | wc -l` (exclude `brain_*`).
+   - **Constitution exists?** Check `$ROOT/.switchboard/constitution.md` or
+     `$ROOT/AGENTS.md` / `$ROOT/CLAUDE.md` (constitution files).
+   If any gap exists, surface **Setup & Tour → Guided setup** at the **top** of the menu
+   with a one-line nudge (e.g. "⚠ No terminal agent registered — Guided setup recommended").
+   If all present, Setup & Tour is a normal menu item.
+
+5. **Report concisely, then present the menu, then stop.** A few lines: liveness +
+   one-line board snapshot + setup-gap nudge (if any) + the menu below. **No feature list,
+   no UUIDs, no wall of text.** **No API board query, no `/catalog`, no automation, no
+   eager action.**
 
 ---
 
-## 2. User-Directed Actions
+## 2. Menu (pick one — wait for the user)
 
 > **Every API call carries `workspaceRoot=$ROOT`.** The server multiplexes workspace roots;
 > a bare call silently targets the *primary* root — the wrong workspace. This is not optional.
 > Use `?workspaceRoot=$ROOT` for reads and a `"workspaceRoot"` body field for writes.
 
-Each action maps to an existing endpoint or skill. Wait for the user to pick one.
+> **Read/write contract:** **Command verbs** (move/trigger/dispatch/create/delete/reconcile/
+> complete) are fully actionable via `POST /<panel>/verb/<name>` — side effect happens,
+> `{success:true}` returns. **Read verbs** (`get*`/`fetch*`/`load*`) over the verb rail return
+> only `{success:true}` — their data arrives on the **WS hub** — so for reads, use the
+> **dedicated GET endpoints** (`/kanban/board`, `/kanban/plans`, `/kanban/plan`) instead.
 
-| Action | How |
-|--------|-----|
-| **Browse the board** | `GET /kanban/board?workspaceRoot=$ROOT` (whole workspace; filter client-side) |
-| **Filter by column / feature** | `GET /kanban/plans?workspaceRoot=$ROOT&column=<col>` or `&featureId=<feature-plan-id>` |
-| **Examine a plan** | `GET /kanban/plan?workspaceRoot=$ROOT&planId=<id>` (resolve the plan ID from the offline path/slug index — see §4) |
-| **Write new plans** | Use `switchboard-chat` planning behaviour → write `.md` files to `$ROOT/.switchboard/plans/`, then `POST /kanban/plans/import` with `{"workspaceRoot": "$ROOT"}` |
-| **Move / complete cards** | `POST /kanban/move` with `{"workspaceRoot": "$ROOT", ...}` (the plan can be referenced by `sessionId` or `planFile` path) |
-| **Add a single plan to a feature** | `POST /kanban/features/assign` with `{"workspaceRoot": "$ROOT", "feature": "<name|path|slug|id>", "plan": "<path|slug|id>"}` — additive, never detaches |
-| **Set project / complexity** | `PUT /kanban/plans/project` and `PUT /kanban/plans/complexity` with `{"workspaceRoot": "$ROOT", ...}` |
-| **Reorganize features (declarative)** | `POST /kanban/features/reconcile` with `{"workspaceRoot": "$ROOT", ...}` — see §3 |
-| **Feature ops (imperative verbs)** | `/kanban/feature/create`, `/kanban/feature/assign`, `/kanban/feature/remove`, `/kanban/feature/split` — all accept `workspaceRoot`; `/kanban/features/assign` resolves refs |
-| **Dispatch a feature's coding** | `POST /kanban/orchestration/dispatch` with `{"workspaceRoot": "$ROOT", ...}` |
-| **Focus-code a single plan** | Dispatch with a single-plan feature or direct prompt |
-| **Drive ClickUp / Linear** | `/api/clickup/*`, `/api/linear/*`, `/task/*` (see `switchboard-orchestration` skill) |
-| **Edit docs / constitution / PRD / plan files** | Filesystem access — edit directly (hosts with fs access only) |
-| **Discover newly-added verbs** | `GET /catalog` — only when the user asks for an action not in this table |
+### Plan
+- **Write coding plans** — Use `switchboard-chat` planning behaviour → write `.md` files to
+  `$ROOT/.switchboard/plans/`, then `POST /kanban/plans/import` with `{"workspaceRoot": "$ROOT"}`.
+- **Improve a plan** — `/improve-plan` (local) or `improve-remote-plan` (Linear-stored).
+
+### Code
+- **Advance a card to a coding column** — `POST /kanban/move` (persist the move first), then
+  `POST /kanban/verb/promptOnDrop` or `POST /kanban/verb/triggerAction` to fire the role prompt.
+- **Focus-code a single plan** — Dispatch with a single-plan feature or direct prompt.
+- **Dispatch a feature's coding** — `POST /kanban/orchestration/dispatch` with `{"workspaceRoot": "$ROOT", ...}`.
+
+### Design & Artifacts
+- **Design panel / Stitch verbs** — `POST /design/verb/<name>` (e.g. `stitchGenerate`,
+  `createBrief`, `renderMarkdownLive`).
+- **Generate a diagram** — `generate-diagram` skill.
+- **PRD / design-system docs** — `POST /planning/verb/invokePrdBuilder`,
+  `POST /planning/verb/invokeSystemBuilder`, or edit files directly (fs-capable hosts).
+
+### Features & Board
+- **Reorganize features (declarative)** — `POST /kanban/features/reconcile` — see §3.
+- **Feature ops (imperative)** — `/kanban/feature/create`, `/kanban/feature/assign`,
+  `/kanban/feature/remove`, `/kanban/feature/split`.
+- **Move / complete cards** — `POST /kanban/move` (by `sessionId` or `planFile` path).
+- **Browse / filter** — `GET /kanban/board?workspaceRoot=$ROOT` (whole workspace);
+  `GET /kanban/plans?workspaceRoot=$ROOT&column=<col>` or `&featureId=<feature-plan-id>`.
+- **Set project / complexity** — `PUT /kanban/plans/project` and `PUT /kanban/plans/complexity`.
+
+### External PM
+- **ClickUp / Linear** — `/api/clickup/*`, `/api/linear/*`, `/task/*` (see `switchboard-orchestration` skill).
+- **Get tickets** — `get-tickets` skill.
+
+### Automation
+- **Oversee a column (attended sequential pass)** — see §6 below. If
+  `$ROOT/.switchboard/oversight-state.md` shows an interrupted pass, lead with
+  "Resume the interrupted pass" instead.
+- **Manage a project start to end** — see §7 below (project pipeline).
+- **Run one pass now** — drive group → dispatch → verify-via-git → merge inline, in this session.
+- **Arm / disarm the unattended engine** — `POST /orchestration/start` / `POST /orchestration/stop`.
+
+### Setup & Tour
+- **Guided setup (onboarding)** — see §5 below. Interactive, one step at a time.
+- **Guided tour (feature walkthrough)** — see §5 below. For set-up users.
+
+> **Claude Desktop** reaches this surface via the **local stdio MCP server**
+> (`@switchboard/mcp` / `switchboard-mcp`), not shell — it has no shell or
+> filesystem. The MCP server is a stateless thin HTTP client of the same
+> `LocalApiServer` surface this skill drives; the curated `switchboard_*` tools
+> map 1:1 to the endpoints above. Use the in-extension **Connect Claude Desktop**
+> button (Setup panel) to write the config entry idempotently.
 
 For the complete endpoint reference (request bodies, response shapes, error codes), read
 the **`switchboard-orchestration` skill** — this skill does not duplicate that contract.
@@ -167,50 +217,186 @@ endpoints that still require it (`/kanban/move`, `/kanban/plan`).
 
 ---
 
-## 5. Automation (opt-in ONLY — never the default)
+## 5. Guided Setup & Tour (interactive — no clipboard)
 
-Automation is **one explicit choice**, offered when the user asks for it — never run on
-entry, never run eagerly.
+When the user picks **Guided setup** from the menu, walk them through the missing step
+**interactively, one step at a time, verifying each before advancing**. This replaces the
+old clipboard-prompt flow. Read the same doc sections the old `_handleGuidedSetup` cited
+— these docs are the right context here (conceptual/behavioral: what columns mean, agent
+roles, workflows). For how-to-invoke questions outside onboarding, use the
+`switchboard-orchestration` skill and `GET /catalog`, not the docs (see Hard Rule 11):
 
-- **"Run one pass now"** — drive group → dispatch → verify-via-git → merge inline, in this
-  session. You stay in control and report each step.
-- **"Arm the unattended engine"** — `POST /orchestration/start` arms the real self-waking
-  engine (terminal + kickoff + autoban clock) — the same thing the AUTOMATION tab button
-  does. The engine then runs unattended per the `switchboard-orchestrator` workflow.
-  ```bash
-  curl -s -X POST "$BASE/orchestration/start" -H 'Content-Type: application/json' -d '{}'
-  ```
-- **"Stop"** — `POST /orchestration/stop` disarms the engine (disables orchestration,
-  stops the autoban clock, persists state, broadcasts).
-  ```bash
-  curl -s -X POST "$BASE/orchestration/stop" -H 'Content-Type: application/json' -d '{}'
-  ```
+1. **No terminal agent registered?** Read `docs/how_to_use_switchboard.md` and
+   `docs/switchboard_user_manual.md` §2 (Installation & First-Time Setup) and §3 (Agent
+   Roles & Configuration). Walk the user through registering a terminal agent — one step
+   at a time. Point out the AGENT SETUP button in the sidebar. Verify before advancing.
 
-The unattended automation persona (`.agents/workflows/switchboard-orchestrator.md`) is
-**engine-launched by file path** — it is not loaded by this skill. This skill is
-consultative; the engine is the unattended path. They are separate entry points.
+2. **No plans exist?** Read `docs/switchboard_user_manual.md` §4 (The AUTOBAN / Kanban
+   Board) and §17 (Core Workflows). Walk the user through creating a plan and dragging a
+   card to dispatch it. Verify before advancing.
+
+3. **No constitution?** Read `docs/switchboard_user_manual.md` §8 (Projects, Features &
+   Governance) and study the Project panel structure in `project.html`. Walk the user
+   through establishing a project constitution. Verify before advancing.
+
+4. **All three present → Guided tour.** Read `docs/switchboard_user_manual.md` §5 (Planning
+   Tools & Workflows), §7 (Multi-Repo Control Plane), §9 (Design Panel / Google Stitch +
+   Claude), §30 (Remote Control), and the `/improve-plan` and features tooling. Walk the
+   user through advanced features interactively — one feature at a time, checking if they
+   want to learn about each.
+
+**Hard rule:** never dump the whole manual. One topic at a time, verify, advance.
 
 ---
 
-## 6. Hard Rules
+## 6. Column Oversight — Attended Sequential Pass
 
-1. **Default is never automation.** Report state, then wait.
-2. **No eager action on entry.** No research, no grouping, no dispatch until the user asks.
-3. **Local markdown first for read-only status.** The API is for verify-before-mutate and
+The agent-supervised equivalent of single-column autoban: you replace the automation timer
+with observed completion. Triggered by "progress through each plan in `<column>`" or
+"oversee the board".
+
+### Protocol
+
+1. **Resolve once:** source column S (the queue) and target column T (the next/coding
+   column whose configured drop action fires the role prompt) — from the user's words, or
+   inferred from board structure and confirmed in one line. Queue = planIds from
+   `$ROOT/.switchboard/kanban-state-<S>.md` in file order, **excluding feature rows and
+   epic subtasks** (epic subtasks carry their own `kanban_column` and must not leak into
+   column sweeps). Report queue size + plan names, then start.
+
+2. **Precondition:** a terminal agent must be registered — otherwise dispatch falls back to
+   clipboard and the loop waits forever. Refuse to start and route to Guided setup instead.
+
+3. **Loop (WIP = 1, oldest first):**
+   - **(a) Move + dispatch:** move the card to T via `POST /kanban/move` with
+     `workspaceRoot` — **persist the move *before* dispatch** (known move↔dispatch coupling).
+     Then fire T's configured prompt: `POST /kanban/verb/promptOnDrop` or
+     `POST /kanban/verb/triggerAction`. Record the dispatch timestamp + plan file path.
+   - **(b) Poll for completion cheaply and locally:** `stat` the plan file, no API board
+     fetches. Use blocking sleep-loop chunks (`until <signal>; do sleep 60; done`, ≤10 min
+     per shell invocation, re-invoke until signal or timeout).
+   - **(c) Completion signal:** the **first plan-file mtime advance after the dispatch
+     timestamp** — a single `stat` comparison, exactly mirroring the activity-light
+     OFF-switch in `GlobalPlanWatcherService`. No grace period, no content check, no board
+     check. (Cards move on coding *start*, never finish; the dispatch flow does not write
+     the plan file; coders write the plan file exactly once, at the very end.)
+   - **(d) Timeout:** stop the entire pass, report the stuck card, never re-dispatch, never
+     skip silently. Default stuck threshold = `switchboard.activityLight.timeoutMs`
+     (default 10 min; user-tunable upward for long plans).
+   - **(e) On completion:** report one line (plan, duration, landing column) and advance
+     the next card.
+
+4. **Termination:** queue empty → summary report. Any API error or user interruption →
+   stop and report; leave the board as-is; never move a card backward.
+
+5. **Hard guardrails:** never arms `/orchestration/start` — this mode is session-scoped and
+   dies with the conversation. One card in flight at a time. A card is dispatched at most
+   once per pass.
+
+### Durable pass state (context-compaction survival)
+
+A 20-plan pass runs for hours; the supervising conversation will be summarized/compacted
+mid-pass. The pass persists its state to `$ROOT/.switchboard/oversight-state.md` — queue
+(remaining planIds/files in order), in-flight card + its dispatch timestamp, completed list
+with durations, pass parameters (S, T, poll interval, stuck threshold) — **rewritten after
+every state change** (dispatch, completion, halt). Every wake/poll iteration re-reads this
+file as ground truth instead of trusting conversation memory. On entry, if the file exists
+with an in-flight card, offer to resume the pass rather than start a new one.
+
+### Durable pass record (audit log)
+
+On every pass event (dispatch, completion, halt/timeout, pass end), **append** a
+timestamped entry to `$ROOT/.switchboard/oversight-log.md` (append-only): pass parameters,
+per-card outcome + duration, halt reason if any. Only after writing the final pass summary
+to the log is `oversight-state.md` deleted. "What did the last pass do?" is answered by
+reading the log tail — never from conversation memory.
+
+### End-of-pass digest — read the cards, don't copy them
+
+The log stays **mechanics-only** (which plans were actioned, outcome, duration). At pass
+end — or whenever the user asks "what happened?" — take the actioned-plan list from the
+log and **read those plan files' content** (their trailing status / review sections), then
+report the digest: per plan, landing status, key implementation notes, remaining risks, and
+one aggregated **"Open questions across the pass"** list. Substance lives in the cards once;
+the log is just the index of which cards to read.
+
+---
+
+## 7. Project Pipeline — Manage a Project Start to End
+
+A thin orchestration layer over the Column Oversight primitive, for "manage project `<X>`
+from start to end" requests.
+
+1. **Resolve scope once:** filter the board to the named project's plans (kanban-state tags
+   / `GET /kanban/plans`); read the project's feature files' `## Dependencies & sequencing`
+   sections to derive plan order; where no ordering is stated, oldest-first within column.
+
+2. **Walk the pipeline stage by stage:** for each pre-terminal stage transition the board
+   defines (e.g. PLAN REVIEWED → coding column → review column), run the same Column
+   Oversight loop (move-dispatch-watch, WIP 1, same completion signal, same stuck threshold)
+   scoped to the project's cards only.
+
+3. **Same state file** (`oversight-state.md` gains a `stage` field); same termination and
+   guardrails. Report a stage summary between stages and, at the end, the same end-of-pass
+   digest per stage plus a project-level rollup (every plan's final status, accumulated
+   risks, and the aggregated open-questions list across all stages).
+
+4. **Judgment boundary:** the manager may choose *order* within the dependency constraints
+   and may pause to flag a plan that looks unready (missing sections, unresolved User Review
+   items) — it may NOT skip stages, batch-dispatch, or reduce plans' scope. Anything
+   ambiguous → stop and ask.
+
+---
+
+## 8. Hard Rules
+
+1. **You are the manager, never the coder.** Never edit project source files, never spawn
+   subagents to implement plans, never "just do it yourself" — regardless of how the
+   request is phrased ("manage this project", "use your best judgment"). Execution happens
+   only through dispatched terminal agents via the board. Your write surface is
+   plan/feature/doc markdown and the API.
+
+2. **Default is never automation.** Report state, then wait.
+
+3. **No eager action on entry.** No research, no grouping, no dispatch until the user asks.
+
+4. **Local markdown first for read-only status.** The API is for verify-before-mutate and
    for mutations.
-4. **Every API call carries `workspaceRoot=$ROOT`.** A bare call silently targets the primary
+
+5. **Every API call carries `workspaceRoot=$ROOT`.** A bare call silently targets the primary
    root — the wrong workspace.
-5. **Deletes execute immediately** — no confirm gates, no "are you sure?" (project rule).
-6. **All writes via API/scripts**, never direct `kanban.db` writes. The extension is the
+
+6. **Deletes execute immediately** — no confirm gates, no "are you sure?" (project rule).
+
+7. **All writes via API/scripts**, never direct `kanban.db` writes. The extension is the
    sole DB writer.
-7. **Never display raw UUIDs** in the entry report. Resolve them internally when an action
+
+8. **Never display raw UUIDs** in the entry report. Resolve them internally when an action
    needs one.
-8. **Project pin** — if the user names a project, filter to it. If none is named, omit the
+
+9. **Project pin** — if the user names a project, filter to it. If none is named, omit the
    filter. **Never ask** which project — act on what the user said.
-9. **State the capability ceiling honestly.** Against today's surface you can: read
-   everything; create/delete/move/complete plans; all feature ops; set project/complexity
-   per plan; dispatch a feature's coding; drive ClickUp/Linear; and (fs-capable hosts)
-   edit docs/constitution/PRD/plan files. You **cannot yet**: control most settings,
-   drive/observe terminals, create worktrees, create projects/columns — those need the
-   transport-parity endpoints. `GET /catalog` is how you discover newly-available verbs
-   without a skill rewrite. **Ships useful now; grows automatically.**
+
+10. **State the capability ceiling honestly.** The verb surface is **complete for commands**
+    — every board/plan/feature/panel action a webview click can do, an HTTP client can do
+    too (via `POST /<panel>/verb/<name>`, allowlist-gated by construction). **Read verbs**
+    over the generic rail return only `{success:true}` — their data arrives on the WS hub —
+    so reads use the **dedicated GET endpoints** (`/kanban/board`, `/kanban/plans`,
+    `/kanban/plan`, `get-state.js`). The remaining ceiling is **synchronous read-backs over
+    the verb rail** (deferred — request-id correlation is a future enhancement) and anything
+    requiring a **UI** (terminal observation, visual panel interactions). `GET /catalog` is
+    how you discover newly-available verbs without a skill rewrite. **Ships useful now;
+    grows automatically.**
+
+11. **Docs for concepts, skill + catalog for invocation.** When you are unsure *what
+    something means* or *how the system behaves* (column semantics, agent roles, complexity
+    routing, AUTOBAN, plan watcher, features vs projects, constitution), consult
+    `docs/switchboard_user_manual.md` (authoritative system-behavior reference, §4 and §5
+    especially) and `docs/how_to_use_switchboard.md` (practice-level: lifecycle, batching,
+    feature orchestration, quota tactics — small enough to read whole). When you are unsure
+    *how to trigger something*, the authorities are the **`switchboard-orchestration` skill**
+    and `GET /catalog` — **never** the docs. The docs describe the VS Code UI (buttons,
+    panels, drag-and-drop); an agent that reaches for the manual to answer "how do I invoke
+    X" will find "click the ⚡ button" and tell the user to go click things — the opposite of
+    the goal. You drive HTTP; you have filesystem access to read the docs anytime. Use them
+    for judgment, never for invocation.

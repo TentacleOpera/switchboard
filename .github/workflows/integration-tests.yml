@@ -37,6 +37,9 @@ jobs:
       - name: Push-routing ratchet (Gap A)
         run: npm run push-routing:check
 
+      - name: Claude mirror drift check
+        run: npm run mirror:check
+
       - name: Run integration suite
         run: npm run test:integration:all
 

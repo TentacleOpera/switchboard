@@ -1,7 +1,7 @@
 
 import { HostSeams, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
-import { TaskViewerService, TaskViewerServiceContext } from './taskViewerService';
+import { TASKVIEWER_VERBS } from '../generated/verbAllowlist';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
@@ -274,129 +274,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
 
     public async handleServiceVerb(verb: string, payload: any): Promise<any> {
-        if (!this._taskViewerService) {
+        if (!this._broadcaster) {
             this._initTaskViewerService();
         }
-        const svc = this._taskViewerService;
-        if (!svc) {
-            throw new Error('TaskViewerService unavailable — no workspace root resolved');
+        if (!TASKVIEWER_VERBS.has(verb)) {
+            throw new Error(`Unknown TaskViewer verb: '${verb}'`);
         }
-        const p = payload ?? {};
-        switch (verb) {
-            default:
-                throw new Error(`Unknown or not-yet-extracted TaskViewer verb: '${verb}'`);
-            case 'addAutobanTerminal': return await svc['addAutobanTerminal'](p);
-            case 'airlock_export': return await svc['airlock_export'](p);
-            case 'airlock_openFolder': return await svc['airlock_openFolder'](p);
-            case 'airlock_openNotebookLM': return await svc['airlock_openNotebookLM'](p);
-            case 'airlock_sendToCoder': return await svc['airlock_sendToCoder'](p);
-            case 'airlock_syncRepo': return await svc['airlock_syncRepo'](p);
-            case 'claimPlan': return await svc['claimPlan'](p);
-            case 'clickupImportTask': return await svc['clickupImportTask'](p);
-            case 'clickupLoadFolders': return await svc['clickupLoadFolders'](p);
-            case 'clickupLoadLists': return await svc['clickupLoadLists'](p);
-            case 'clickupLoadProject': return await svc['clickupLoadProject'](p);
-            case 'clickupLoadSpaceTags': return await svc['clickupLoadSpaceTags'](p);
-            case 'clickupLoadSpaces': return await svc['clickupLoadSpaces'](p);
-            case 'clickupLoadTaskDetails': return await svc['clickupLoadTaskDetails'](p);
-            case 'clickupSaveFolderSelection': return await svc['clickupSaveFolderSelection'](p);
-            case 'clickupSaveListSelection': return await svc['clickupSaveListSelection'](p);
-            case 'clickupSaveSpaceSelection': return await svc['clickupSaveSpaceSelection'](p);
-            case 'clickupUpdateTaskTags': return await svc['clickupUpdateTaskTags'](p);
-            case 'closeChatAgent': return await svc['closeChatAgent'](p);
-            case 'closeTerminal': return await svc['closeTerminal'](p);
-            case 'completePlan': return await svc['completePlan'](p);
-            case 'copyPlanLink': return await svc['copyPlanLink'](p);
-            case 'copyTextToClipboard': return await svc['copyTextToClipboard'](p);
-            case 'createAgentGrid': return await svc['createAgentGrid'](p);
-            case 'createAgentGridEditor': return await svc['createAgentGridEditor'](p);
-            case 'createDraftPlanTicket': return await svc['createDraftPlanTicket'](p);
-            case 'deletePlan': return await svc['deletePlan'](p);
-            case 'deregisterAllTerminals': return await svc['deregisterAllTerminals'](p);
-            case 'dispatchProjectManager': return await svc['dispatchProjectManager'](p);
-            case 'editDbPath': return await svc['editDbPath'](p);
-            case 'executeLocal': return await svc['executeLocal'](p);
-            case 'executeRemote': return await svc['executeRemote'](p);
-            case 'fetchNotionContent': return await svc['fetchNotionContent'](p);
-            case 'finishOnboarding': return await svc['finishOnboarding'](p);
-            case 'focus': return await svc['focus'](p);
-            case 'focusTerminal': return await svc['focusTerminal'](p);
-            case 'generateContextMap': return await svc['generateContextMap'](p);
-            case 'getAccurateCodingSetting': return await svc['getAccurateCodingSetting'](p);
-            case 'getAdvancedReviewerSetting': return await svc['getAdvancedReviewerSetting'](p);
-            case 'getDbPath': return await svc['getDbPath'](p);
-            case 'getDefaultPromptOverrides': return await svc['getDefaultPromptOverrides'](p);
-            case 'getDefaultPromptPreviews': return await svc['getDefaultPromptPreviews'](p);
-            case 'getJulesAutoSyncSetting': return await svc['getJulesAutoSyncSetting'](p);
-            case 'getLeadChallengeSetting': return await svc['getLeadChallengeSetting'](p);
-            case 'getMcpMonitorConfig': return await svc['getMcpMonitorConfig'](p);
-            case 'getNotionFetchState': return await svc['getNotionFetchState'](p);
-            case 'getRecentActivity': return await svc['getRecentActivity'](p);
-            case 'getRecoverablePlans': return await svc['getRecoverablePlans'](p);
-            case 'getStartupCommands': return await svc['getStartupCommands'](p);
-            case 'getVisibleAgents': return await svc['getVisibleAgents'](p);
-            case 'guidedSetup': return await svc['guidedSetup'](p);
-            case 'importPlans': return await svc['importPlans'](p);
-            case 'initializeProtocols': return await svc['initializeProtocols'](p);
-            case 'kanban_workflowEvent': return await svc['kanban_workflowEvent'](p);
-            case 'linearImportAndSendToPlanner': return await svc['linearImportAndSendToPlanner'](p);
-            case 'linearImportTask': return await svc['linearImportTask'](p);
-            case 'linearLoadAutomationCatalog': return await svc['linearLoadAutomationCatalog'](p);
-            case 'linearLoadProject': return await svc['linearLoadProject'](p);
-            case 'linearLoadProjects': return await svc['linearLoadProjects'](p);
-            case 'linearLoadTaskDetails': return await svc['linearLoadTaskDetails'](p);
-            case 'linearSaveProjectSelection': return await svc['linearSaveProjectSelection'](p);
-            case 'linearUpdateIssueLabels': return await svc['linearUpdateIssueLabels'](p);
-            case 'memoClear': return await svc['memoClear'](p);
-            case 'memoGeneratePrompt': return await svc['memoGeneratePrompt'](p);
-            case 'memoLoad': return await svc['memoLoad'](p);
-            case 'memoSave': return await svc['memoSave'](p);
-            case 'openDesignPanel': return await svc['openDesignPanel'](p);
-            case 'openDocs': return await svc['openDocs'](p);
-            case 'openExternalUrl': return await svc['openExternalUrl'](p);
-            case 'openKanban': return await svc['openKanban'](p);
-            case 'openPlanningPanel': return await svc['openPlanningPanel'](p);
-            case 'openProjectPanel': return await svc['openProjectPanel'](p);
-            case 'openSetupPanel': return await svc['openSetupPanel'](p);
-            case 'pipelinePause': return await svc['pipelinePause'](p);
-            case 'pipelineSetInterval': return await svc['pipelineSetInterval'](p);
-            case 'pipelineStart': return await svc['pipelineStart'](p);
-            case 'pipelineStop': return await svc['pipelineStop'](p);
-            case 'pipelineUnpause': return await svc['pipelineUnpause'](p);
-            case 'queryArchives': return await svc['queryArchives'](p);
-            case 'ready': return await svc['ready'](p);
-            case 'recoverPlanFromSidebar': return await svc['recoverPlanFromSidebar'](p);
-            case 'registerAllTerminals': return await svc['registerAllTerminals'](p);
-            case 'removeAutobanTerminal': return await svc['removeAutobanTerminal'](p);
-            case 'renameTerminal': return await svc['renameTerminal'](p);
-            case 'requestContextFile': return await svc['requestContextFile'](p);
-            case 'resetAutobanPools': return await svc['resetAutobanPools'](p);
-            case 'resetDatabase': return await svc['resetDatabase'](p);
-            case 'restorePlan': return await svc['restorePlan'](p);
-            case 'reviewPlan': return await svc['reviewPlan'](p);
-            case 'runSetup': return await svc['runSetup'](p);
-            case 'runSetupIDEs': return await svc['runSetupIDEs'](p);
-            case 'saveDefaultPromptOverrides': return await svc['saveDefaultPromptOverrides'](p);
-            case 'saveStartupCommands': return await svc['saveStartupCommands'](p);
-            case 'scaffoldMultiRepo': return await svc['scaffoldMultiRepo'](p);
-            case 'sendAnalystMessage': return await svc['sendAnalystMessage'](p);
-            case 'sendToTerminal': return await svc['sendToTerminal'](p);
-            case 'setActiveSubTab': return await svc['setActiveSubTab'](p);
-            case 'setActiveTab': return await svc['setActiveTab'](p);
-            case 'setChatAgentRole': return await svc['setChatAgentRole'](p);
-            case 'setCustomDbPath': return await svc['setCustomDbPath'](p);
-            case 'setLocalDb': return await svc['setLocalDb'](p);
-            case 'setMcpMonitorConfig': return await svc['setMcpMonitorConfig'](p);
-            case 'setPresetDbPath': return await svc['setPresetDbPath'](p);
-            case 'setTerminalRole': return await svc['setTerminalRole'](p);
-            case 'showInfo': return await svc['showInfo'](p);
-            case 'showWarning': return await svc['showWarning'](p);
-            case 'testDbConnection': return await svc['testDbConnection'](p);
-            case 'toggleSilentSetup': return await svc['toggleSilentSetup'](p);
-            case 'triggerAgentAction': return await svc['triggerAgentAction'](p);
-            case 'updateAutobanState': return await svc['updateAutobanState'](p);
-            case 'viewPlan': return await svc['viewPlan'](p);
-        }
+        // VS Code is the host here; _handleMessage runs in-process. Command verbs
+        // return the route layer's {success:true} ack (most _handleMessage impls are
+        // void); read verbs emit their result over the WS hub (see plan).
+        // `type` is set LAST so a payload `type` field can never override the
+        // allowlist-checked verb, regardless of caller.
+        return this._handleMessage({ ...(payload ?? {}), type: verb });
     }
 
 
@@ -405,7 +294,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!workspaceRoot) {
             this._hostSeams = undefined;
             this._broadcaster = undefined;
-            this._taskViewerService = undefined;
             return;
         }
         this._hostSeams = createVscodeHostSeams(workspaceRoot);
@@ -414,22 +302,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         } else {
             this._broadcaster.setWebview(this._view?.webview);
         }
-        const ctx: TaskViewerServiceContext = {
-            workspaceRoot,
-            seams: this._hostSeams,
-            broadcaster: this._broadcaster,
-            handleMessage: async (msg) => this._handleMessage(msg),
-        };
-        if (this._taskViewerService) {
-            this._taskViewerService.setContext(ctx);
-        } else {
-            this._taskViewerService = new TaskViewerService(ctx);
-        }
     }
 
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
-    private _taskViewerService?: TaskViewerService;
     private _messageListener?: (message: any) => Promise<any>;
 
     public static readonly viewType = 'switchboard-view';

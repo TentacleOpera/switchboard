@@ -477,23 +477,42 @@ export async function activate(context: vscode.ExtensionContext) {
         // mirror (which runs after seeding) sees the correct gate.
         const needsAgentRefresh = shouldRefreshAgentWorkspaceFiles(context.extensionUri.fsPath, workspaceRoot);
 
-        // Activation-time skill seeding: copy any new skill files to workspace that don't already exist.
+        // Activation-time skill seeding: copy bundled skill files into the workspace.
         // MUST run BEFORE the .claude mirror so source .agents/skills/ is populated on a fresh install.
+        // Content-hash self-healing: an existing bundled skill file is overwritten when its
+        // content differs from the bundle (so dev-repo skill fixes reach already-seeded
+        // workspaces without a version bump). User-authored (non-bundled) skills are never
+        // touched — the loop only iterates files present in the bundle. Fail-safe: if hashing
+        // either side throws, skip (do not overwrite) and log — never clobber on an I/O error.
+        let agentsChanged = false;
         try {
             const bundledSkillsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'skills');
             const skillFiles = await crawlDirectory(bundledSkillsUri);
             for (const relativePath of skillFiles) {
+                const srcUri = vscode.Uri.joinPath(bundledSkillsUri, relativePath);
                 const destUri = vscode.Uri.joinPath(vscode.Uri.file(workspaceRoot), '.agents', 'skills', relativePath);
                 try {
-                    await vscode.workspace.fs.stat(destUri); // exists → skip to preserve user customizations
+                    await vscode.workspace.fs.stat(destUri);
+                    // dest exists → overwrite iff bundle content differs (content-hash refresh)
+                    try {
+                        const [srcHash, destHash] = await Promise.all([
+                            ControlPlaneMigrationService.hashFile(srcUri.fsPath),
+                            ControlPlaneMigrationService.hashFile(destUri.fsPath),
+                        ]);
+                        if (srcHash !== destHash) {
+                            await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
+                            await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
+                            agentsChanged = true;
+                        }
+                    } catch (hashErr) {
+                        // Fail-safe: skip on hash error, never clobber blindly
+                        console.warn(`[Switchboard] Skill hash compare failed for ${relativePath}, skipping:`, hashErr);
+                    }
                 } catch {
-                    // Ensure destination parent directory exists
+                    // dest absent → copy new file
                     await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                    await vscode.workspace.fs.copy(
-                        vscode.Uri.joinPath(bundledSkillsUri, relativePath),
-                        destUri,
-                        { overwrite: false }
-                    );
+                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
+                    agentsChanged = true;
                 }
             }
         } catch (err) {
@@ -501,8 +520,11 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         // Scaffold protocol layers AFTER skill seeding so the .claude/ mirror reads
-        // a populated .agents/skills/ source.
-        if (needsAgentRefresh) {
+        // a populated .agents/skills/ source. Regenerate the mirror when the extension
+        // version changed OR when .agents content changed this run (agentsChanged) —
+        // not version-only — so a skill-content fix with no version bump still rebuilds
+        // the .claude copy the agent loads.
+        if (needsAgentRefresh || agentsChanged) {
             try {
                 await scaffoldProtocolLayers(
                     vscode.Uri.file(workspaceRoot),
@@ -3574,9 +3596,24 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
             continue;
         }
 
-        // Existing behavior: skip if file already exists (preserves user customizations)
+        // Content-hash self-healing for non-workflow files (skills, etc.): copy if absent,
+        // overwrite iff bundle content differs from workspace content. Fail-safe: skip on
+        // hash error, never clobber blindly. User-authored (non-bundled) files are never
+        // touched — the loop only iterates files present in the bundle.
         try {
             await vscode.workspace.fs.stat(destUri);
+            // dest exists → overwrite iff content differs
+            try {
+                const [srcHash, destHash] = await Promise.all([
+                    ControlPlaneMigrationService.hashFile(srcUri.fsPath),
+                    ControlPlaneMigrationService.hashFile(destUri.fsPath),
+                ]);
+                if (srcHash !== destHash) {
+                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
+                }
+            } catch (hashErr) {
+                console.warn(`[Setup] Agent file hash compare failed for ${relativePath}, skipping:`, hashErr);
+            }
         } catch {
             await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
         }

@@ -29,6 +29,7 @@ import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
+import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import type { AutobanConfigState } from './autobanState';
@@ -6505,158 +6506,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!svc) {
             throw new Error('Kanban service unavailable — no workspace root resolved');
         }
-        const p = payload ?? {};
-        switch (verb) {
-            case 'selectPlan':      return await svc.selectPlan(p);
-            case 'openPlanByPath':  return await svc.openPlanByPath(p);
-            case 'refresh':         return await svc.refresh();
-            case 'scanFoldersNow':  return await svc.scanFoldersNow();
-            case 'focusTerminal':   return await svc.focusTerminal(p);
-            case 'fileExists':      return await svc.fileExists(p);
-            // NOTE: `default` is placed here for readability, but the `case`s BELOW it
-            // are still reachable — ECMAScript matches case labels regardless of order,
-            // and the `throw` only fires when NO label matches. Do not delete them.
-            default:
-                throw new Error(`Unknown or not-yet-extracted Kanban verb: '${verb}'`);
-            case 'abandonWorktree': return await svc['abandonWorktree'](p);
-            case 'addAutobanTerminal': return await svc['addAutobanTerminal'](p);
-            case 'addSubtaskToFeature': return await svc['addSubtaskToFeature'](p);
-            case 'archiveSelected': return await svc['archiveSelected'](p);
-            case 'assignSelectedToProject': return await svc['assignSelectedToProject'](p);
-            case 'batchDispatchLow': return await svc['batchDispatchLow'](p);
-            case 'batchLowComplexity': return await svc['batchLowComplexity'](p);
-            case 'batchPlannerPrompt': return await svc['batchPlannerPrompt'](p);
-            case 'chatCopyPrompt': return await svc['chatCopyPrompt'](p);
-            case 'checkMcpMonitorAuth': return await svc['checkMcpMonitorAuth'](p);
-            case 'cleanupWorktree': return await svc['cleanupWorktree'](p);
-            case 'codeMapConfirm': return await svc['codeMapConfirm'](p);
-            case 'codeMapSelected': return await svc['codeMapSelected'](p);
-            case 'coder': return await svc['coder'](p);
-            case 'completeAll': return await svc['completeAll'](p);
-            case 'completePlan': return await svc['completePlan'](p);
-            case 'completeSelected': return await svc['completeSelected'](p);
-            case 'copyChatWorkflow': return await svc['copyChatWorkflow'](p);
-            case 'copyExecutePrompt': return await svc['copyExecutePrompt'](p);
-            case 'copyGatherPrompt': return await svc['copyGatherPrompt'](p);
-            case 'copyPlanLink': return await svc['copyPlanLink'](p);
-            case 'copyPrdPrompt': return await svc['copyPrdPrompt'](p);
-            case 'copyWorktreeMergePrompt': return await svc['copyWorktreeMergePrompt'](p);
-            case 'createFeature': return await svc['createFeature'](p);
-            case 'createPlan': return await svc['createPlan'](p);
-            case 'createWorktree': return await svc['createWorktree'](p);
-            case 'createWorktreeForFeature': return await svc['createWorktreeForFeature'](p);
-            case 'createWorktreeForProject': return await svc['createWorktreeForProject'](p);
-            case 'deleteCustomAgent': return await svc['deleteCustomAgent'](p);
-            case 'deleteFeature': return await svc['deleteFeature'](p);
-            case 'deleteKanbanColumn': return await svc['deleteKanbanColumn'](p);
-            case 'exportAgentAsSkill': return await svc['exportAgentAsSkill'](p);
-            case 'generateAntigravityPrompt': return await svc['generateAntigravityPrompt'](p);
-            case 'getAutoArchiveConfig': return await svc['getAutoArchiveConfig'](p);
-            case 'getCustomAgents': return await svc['getCustomAgents'](p);
-            case 'getDbPath': return await svc['getDbPath'](p);
-            case 'getDefaultPromptOverrides': return await svc['getDefaultPromptOverrides'](p);
-            case 'getDefaultPromptPreviews': return await svc['getDefaultPromptPreviews'](p);
-            case 'getFeatureDetails': return await svc['getFeatureDetails'](p);
-            case 'getFeatureWorktreeMode': return await svc['getFeatureWorktreeMode'](p);
-            case 'getKanbanStructure': return await svc['getKanbanStructure'](p);
-            case 'getPersonaForRole': return await svc['getPersonaForRole'](p);
-            case 'getPromptPreview': return await svc['getPromptPreview'](p);
-            case 'getPromptsConfig': return await svc['getPromptsConfig'](p);
-            case 'getRemoteConfig': return await svc['getRemoteConfig'](p);
-            case 'getSafetySession': return await svc['getSafetySession'](p);
-            case 'getSetting': return await svc['getSetting'](p);
-            case 'getStartupCommands': return await svc['getStartupCommands'](p);
-            case 'getUATData': return await svc['getUATData'](p);
-            case 'getWorktreeConfig': return await svc['getWorktreeConfig'](p);
-            case 'getWorktreeStatuses': return await svc['getWorktreeStatuses'](p);
-            case 'importFromClipboard': return await svc['importFromClipboard'](p);
-            case 'intern': return await svc['intern'](p);
-            case 'julesLowComplexity': return await svc['julesLowComplexity'](p);
-            case 'julesSelected': return await svc['julesSelected'](p);
-            case 'launchMcpMonitorTerminal': return await svc['launchMcpMonitorTerminal'](p);
-            case 'lead': return await svc['lead'](p);
-            case 'moveAll': return await svc['moveAll'](p);
-            case 'moveCardBackwards': return await svc['moveCardBackwards'](p);
-            case 'moveCardForward': return await svc['moveCardForward'](p);
-            case 'moveSelected': return await svc['moveSelected'](p);
-            case 'openSetupPanel': return await svc['openSetupPanel'](p);
-            case 'openWorktreeTerminals': return await svc['openWorktreeTerminals'](p);
-            case 'pauseLiveSync': return await svc['pauseLiveSync'](p);
-            case 'planner': return await svc['planner'](p);
-            case 'promoteToFeature': return await svc['promoteToFeature'](p);
-            case 'promptAll': return await svc['promptAll'](p);
-            case 'promptOnDrop': return await svc['promptOnDrop'](p);
-            case 'promptSelected': return await svc['promptSelected'](p);
-            case 'rePlanSelected': return await svc['rePlanSelected'](p);
-            case 'ready': return await svc['ready'](p);
-            case 'reassignPlansWorkspace': return await svc['reassignPlansWorkspace'](p);
-            case 'recoverAll': return await svc['recoverAll'](p);
-            case 'recoverSelected': return await svc['recoverSelected'](p);
-            case 'removeAutobanTerminal': return await svc['removeAutobanTerminal'](p);
-            case 'removeSubtaskFromFeature': return await svc['removeSubtaskFromFeature'](p);
-            case 'renderMcpMonitorPreview': return await svc['renderMcpMonitorPreview'](p);
-            case 'resetAutobanPools': return await svc['resetAutobanPools'](p);
-            case 'resetAutobanTimers': return await svc['resetAutobanTimers'](p);
-            case 'restoreKanbanDefaults': return await svc['restoreKanbanDefaults'](p);
-            case 'resumeLiveSync': return await svc['resumeLiveSync'](p);
-            case 'reviewPlan': return await svc['reviewPlan'](p);
-            case 'reviewer': return await svc['reviewer'](p);
-            case 'runNotionRemoteSetup': return await svc['runNotionRemoteSetup'](p);
-            case 'saveAutoArchiveConfig': return await svc['saveAutoArchiveConfig'](p);
-            case 'saveCustomAgent': return await svc['saveCustomAgent'](p);
-            case 'saveDefaultPromptOverrides': return await svc['saveDefaultPromptOverrides'](p);
-            case 'saveIntegrationAutoPullSettings': return await svc['saveIntegrationAutoPullSettings'](p);
-            case 'saveKanbanColumn': return await svc['saveKanbanColumn'](p);
-            case 'savePromptsConfig': return await svc['savePromptsConfig'](p);
-            case 'saveSetting': return await svc['saveSetting'](p);
-            case 'saveStartupCommands': return await svc['saveStartupCommands'](p);
-            case 'sendToBacklog': return await svc['sendToBacklog'](p);
-            case 'sendToNew': return await svc['sendToNew'](p);
-            case 'setColumnDragDropMode': return await svc['setColumnDragDropMode'](p);
-            case 'setFeatureWorkflowMode': return await svc['setFeatureWorkflowMode'](p);
-            case 'setFeatureWorktreeMode': return await svc['setFeatureWorktreeMode'](p);
-            case 'setMcpMonitorConfig': return await svc['setMcpMonitorConfig'](p);
-            case 'setPairProgrammingMode': return await svc['setPairProgrammingMode'](p);
-            case 'setProjectOverride': return await svc['setProjectOverride'](p);
-            case 'setRemoteConfig': return await svc['setRemoteConfig'](p);
-            case 'setSuppressMainTerminals': return await svc['setSuppressMainTerminals'](p);
-            case 'setUATCheckState': return await svc['setUATCheckState'](p);
-            case 'setWorkspaceOverride': return await svc['setWorkspaceOverride'](p);
-            case 'showInfo': return await svc['showInfo'](p);
-            case 'showWarning': return await svc['showWarning'](p);
-            case 'startMcpMonitorPolling': return await svc['startMcpMonitorPolling'](p);
-            case 'startRemoteControl': return await svc['startRemoteControl'](p);
-            case 'stopMcpMonitorPolling': return await svc['stopMcpMonitorPolling'](p);
-            case 'stopMcpMonitorTerminal': return await svc['stopMcpMonitorTerminal'](p);
-            case 'stopRemoteControl': return await svc['stopRemoteControl'](p);
-            case 'suggestFeatures': return await svc['suggestFeatures'](p);
-            case 'tester': return await svc['tester'](p);
-            case 'testingFailed': return await svc['testingFailed'](p);
-            case 'toggleAllowUnknownComplexityAutoMove': return await svc['toggleAllowUnknownComplexityAutoMove'](p);
-            case 'toggleAutoban': return await svc['toggleAutoban'](p);
-            case 'toggleAutobanPause': return await svc['toggleAutobanPause'](p);
-            case 'toggleBacklogView': return await svc['toggleBacklogView'](p);
-            case 'toggleClearTerminalBeforePrompt': return await svc['toggleClearTerminalBeforePrompt'](p);
-            case 'toggleCliTriggers': return await svc['toggleCliTriggers'](p);
-            case 'toggleDynamicComplexityRouting': return await svc['toggleDynamicComplexityRouting'](p);
-            case 'toggleKanbanColumnVisibility': return await svc['toggleKanbanColumnVisibility'](p);
-            case 'toggleWorktreeAgentsOpenWithGrid': return await svc['toggleWorktreeAgentsOpenWithGrid'](p);
-            case 'triggerAction': return await svc['triggerAction'](p);
-            case 'triggerBatchAction': return await svc['triggerBatchAction'](p);
-            case 'uncompleteCard': return await svc['uncompleteCard'](p);
-            case 'updateAutobanConfig': return await svc['updateAutobanConfig'](p);
-            case 'updateClearTerminalBeforePromptDelay': return await svc['updateClearTerminalBeforePromptDelay'](p);
-            case 'updateFeatureConfig': return await svc['updateFeatureConfig'](p);
-            case 'updateKanbanStructure': return await svc['updateKanbanStructure'](p);
-            case 'updateRoutingConfig': return await svc['updateRoutingConfig'](p);
-            case 'addProject': return await svc['addProject'](p);
-            case 'deleteProject': return await svc['deleteProject'](p);
-            case 'selectWorkspace': return await svc['selectWorkspace'](p);
-            case 'setAutomationMode': return await svc['setAutomationMode'](p);
-            case 'setProjectFilter': return await svc['setProjectFilter'](p);
-            case 'startOrchestrator': return await svc['startOrchestrator'](p);
-            case 'stopOrchestrator': return await svc['stopOrchestrator'](p);
+        if (!KANBAN_VERBS.has(verb)) {
+            throw new Error(`Unknown Kanban verb: '${verb}'`);
         }
+        // VS Code is the host here; _handleMessage runs in-process. Command verbs
+        // return the route layer's {success:true} ack (most _handleMessage impls are
+        // void); read verbs emit their result over the WS hub (see plan).
+        // `type` is set LAST so a payload `type` field can never override the
+        // allowlist-checked verb, regardless of caller.
+        // Genuine service methods (selectPlan, openPlanByPath, refresh, etc.) are
+        // called from _handleMessage arms — the passthrough reaches them via the
+        // same path webview clicks take.
+        return this._handleMessage({ ...(payload ?? {}), type: verb });
     }
 
 

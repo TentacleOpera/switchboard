@@ -304,6 +304,67 @@ async function run() {
                 '.md files in workflows/ SHOULD be overwritten');
         }
 
+        // ── Test 12: overwriteIfDiffers overwrites an existing differing skill file ──
+        {
+            const sourceDir = path.join(tempRoot, 'source-12');
+            const targetDir = path.join(tempRoot, 'target-12');
+
+            await fs.promises.mkdir(path.join(sourceDir, 'skills', 'demo'), { recursive: true });
+            await fs.promises.writeFile(path.join(sourceDir, 'skills', 'demo', 'SKILL.md'), '# fresh skill content', 'utf8');
+
+            await fs.promises.mkdir(path.join(targetDir, 'skills', 'demo'), { recursive: true });
+            await fs.promises.writeFile(path.join(targetDir, 'skills', 'demo', 'SKILL.md'), '# STALE skill content', 'utf8');
+
+            const written = await ControlPlaneMigrationService._copyDirectoryRecursive(
+                sourceDir, targetDir,
+                { overwrite: false, overwriteIfDiffers: true }
+            );
+
+            const content = await fs.promises.readFile(path.join(targetDir, 'skills', 'demo', 'SKILL.md'), 'utf8');
+            assert.strictEqual(content, '# fresh skill content',
+                'overwriteIfDiffers should overwrite an existing skill whose content differs');
+            assert.ok(written >= 1, 'overwriteIfDiffers overwrite should report at least one file written');
+        }
+
+        // ── Test 13: overwriteIfDiffers skips an identical target (idempotent) ──
+        {
+            const sourceDir = path.join(tempRoot, 'source-13');
+            const targetDir = path.join(tempRoot, 'target-13');
+
+            await fs.promises.mkdir(path.join(sourceDir, 'skills', 'demo'), { recursive: true });
+            await fs.promises.writeFile(path.join(sourceDir, 'skills', 'demo', 'SKILL.md'), '# same content', 'utf8');
+
+            await fs.promises.mkdir(path.join(targetDir, 'skills', 'demo'), { recursive: true });
+            await fs.promises.writeFile(path.join(targetDir, 'skills', 'demo', 'SKILL.md'), '# same content', 'utf8');
+
+            const written = await ControlPlaneMigrationService._copyDirectoryRecursive(
+                sourceDir, targetDir,
+                { overwrite: false, overwriteIfDiffers: true }
+            );
+
+            assert.strictEqual(written, 0,
+                'overwriteIfDiffers should NOT write (and report 0) when content is identical');
+        }
+
+        // ── Test 14: overwriteIfDiffers never creates a file absent from the source ──
+        {
+            const sourceDir = path.join(tempRoot, 'source-14');
+            const targetDir = path.join(tempRoot, 'target-14');
+
+            await fs.promises.mkdir(sourceDir, { recursive: true });
+            await fs.promises.mkdir(path.join(targetDir, 'skills', 'orphan'), { recursive: true });
+            await fs.promises.writeFile(path.join(targetDir, 'skills', 'orphan', 'SKILL.md'), '# user-authored', 'utf8');
+
+            await ControlPlaneMigrationService._copyDirectoryRecursive(
+                sourceDir, targetDir,
+                { overwrite: false, overwriteIfDiffers: true }
+            );
+
+            const content = await fs.promises.readFile(path.join(targetDir, 'skills', 'orphan', 'SKILL.md'), 'utf8');
+            assert.strictEqual(content, '# user-authored',
+                'A file absent from the source must never be touched by overwriteIfDiffers');
+        }
+
     } finally {
         await fs.promises.rm(tempRoot, { recursive: true, force: true });
         vscodeMock.restore();

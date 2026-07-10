@@ -1,7 +1,7 @@
 
 import { HostSeams, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
-import { PlanningService, PlanningServiceContext } from './planningService';
+import { PLANNING_VERBS } from '../generated/verbAllowlist';
 import * as vscode from 'vscode';
 import { showTemporaryNotification } from '../utils/showTemporaryNotification';
 import * as path from 'path';
@@ -74,190 +74,18 @@ interface KanbanPlanSummary {
 export class PlanningPanelProvider {
 
     public async handleServiceVerb(verb: string, payload: any): Promise<any> {
-        if (!this._planningService) {
+        if (!this._broadcaster) {
             this._initPlanningService();
         }
-        const svc = this._planningService;
-        if (!svc) {
-            throw new Error('PlanningService unavailable — no workspace root resolved');
+        if (!PLANNING_VERBS.has(verb)) {
+            throw new Error(`Unknown Planning verb: '${verb}'`);
         }
-        const p = payload ?? {};
-        switch (verb) {
-            default:
-                throw new Error(`Unknown or not-yet-extracted Planning verb: '${verb}'`);
-            case 'addConstitutionPath': return await svc['addConstitutionPath'](p);
-            case 'addLocalFolder': return await svc['addLocalFolder'](p);
-            case 'addPlanningHtmlFolder': return await svc['addPlanningHtmlFolder'](p);
-            case 'addSubtaskToFeature': return await svc['addSubtaskToFeature'](p);
-            case 'addTicketsFolder': return await svc['addTicketsFolder'](p);
-            case 'airlock_export': return await svc['airlock_export'](p);
-            case 'airlock_openAIStudio': return await svc['airlock_openAIStudio'](p);
-            case 'airlock_openFolder': return await svc['airlock_openFolder'](p);
-            case 'airlock_openNotebookLM': return await svc['airlock_openNotebookLM'](p);
-            case 'appendToPlannerPrompt': return await svc['appendToPlannerPrompt'](p);
-            case 'browseTicketsFolder': return await svc['browseTicketsFolder'](p);
-            case 'changeTicketStatus': return await svc['changeTicketStatus'](p);
-            case 'clickupCreateTask': return await svc['clickupCreateTask'](p);
-            case 'clickupImportTask': return await svc['clickupImportTask'](p);
-            case 'clickupLoadFolders': return await svc['clickupLoadFolders'](p);
-            case 'clickupLoadListStatuses': return await svc['clickupLoadListStatuses'](p);
-            case 'clickupLoadLists': return await svc['clickupLoadLists'](p);
-            case 'clickupLoadProject': return await svc['clickupLoadProject'](p);
-            case 'clickupLoadSpaceTags': return await svc['clickupLoadSpaceTags'](p);
-            case 'clickupLoadSpaces': return await svc['clickupLoadSpaces'](p);
-            case 'clickupLoadTaskDetails': return await svc['clickupLoadTaskDetails'](p);
-            case 'clickupSaveFolderSelection': return await svc['clickupSaveFolderSelection'](p);
-            case 'clickupSaveListSelection': return await svc['clickupSaveListSelection'](p);
-            case 'clickupSaveSpaceSelection': return await svc['clickupSaveSpaceSelection'](p);
-            case 'clickupUpdateTaskAssignees': return await svc['clickupUpdateTaskAssignees'](p);
-            case 'clickupUpdateTaskPriority': return await svc['clickupUpdateTaskPriority'](p);
-            case 'clickupUpdateTaskTags': return await svc['clickupUpdateTaskTags'](p);
-            case 'convertToSubtask': return await svc['convertToSubtask'](p);
-            case 'copyArchitectPrompt': return await svc['copyArchitectPrompt'](p);
-            case 'copyArtifactPrompt': return await svc['copyArtifactPrompt'](p);
-            case 'copyChatPrompt': return await svc['copyChatPrompt'](p);
-            case 'copyConstitutionPrompt': return await svc['copyConstitutionPrompt'](p);
-            case 'copyConstitutionUpdatePrompt': return await svc['copyConstitutionUpdatePrompt'](p);
-            case 'copyDiagramPrompt': return await svc['copyDiagramPrompt'](p);
-            case 'copyFeaturePlannerPrompt': return await svc['copyFeaturePlannerPrompt'](p);
-            case 'copyInsightLink': return await svc['copyInsightLink'](p);
-            case 'copyKanbanPlanPrompt': return await svc['copyKanbanPlanPrompt'](p);
-            case 'copyPrdBuildPrompt': return await svc['copyPrdBuildPrompt'](p);
-            case 'copyRefinePrompt': return await svc['copyRefinePrompt'](p);
-            case 'copySystemBuildPrompt': return await svc['copySystemBuildPrompt'](p);
-            case 'copyToClipboard': return await svc['copyToClipboard'](p);
-            case 'createDevDoc': return await svc['createDevDoc'](p);
-            case 'createFeature': return await svc['createFeature'](p);
-            case 'createLocalDoc': return await svc['createLocalDoc'](p);
-            case 'createOnlineDocument': return await svc['createOnlineDocument'](p);
-            case 'createPlan': return await svc['createPlan'](p);
-            case 'deleteConstitutionFile': return await svc['deleteConstitutionFile'](p);
-            case 'deleteDevDoc': return await svc['deleteDevDoc'](p);
-            case 'deleteFeature': return await svc['deleteFeature'](p);
-            case 'deleteImportedDoc': return await svc['deleteImportedDoc'](p);
-            case 'deleteInsight': return await svc['deleteInsight'](p);
-            case 'deleteKanbanPlan': return await svc['deleteKanbanPlan'](p);
-            case 'deleteLocalDoc': return await svc['deleteLocalDoc'](p);
-            case 'deleteTicketConfirmed': return await svc['deleteTicketConfirmed'](p);
-            case 'downloadAttachment': return await svc['downloadAttachment'](p);
-            case 'draftImproveDevDoc': return await svc['draftImproveDevDoc'](p);
-            case 'editTicket': return await svc['editTicket'](p);
-            case 'fetchAntigravityArtifact': return await svc['fetchAntigravityArtifact'](p);
-            case 'fetchChildren': return await svc['fetchChildren'](p);
-            case 'fetchContainers': return await svc['fetchContainers'](p);
-            case 'fetchDocPages': return await svc['fetchDocPages'](p);
-            case 'fetchDocsFile': return await svc['fetchDocsFile'](p);
-            case 'fetchFilteredDocs': return await svc['fetchFilteredDocs'](p);
-            case 'fetchImportedDocs': return await svc['fetchImportedDocs'](p);
-            case 'fetchKanbanPlanLog': return await svc['fetchKanbanPlanLog'](p);
-            case 'fetchKanbanPlanPreview': return await svc['fetchKanbanPlanPreview'](p);
-            case 'fetchKanbanPlans': return await svc['fetchKanbanPlans'](p);
-            case 'fetchMoveTargets': return await svc['fetchMoveTargets'](p);
-            case 'fetchPageContent': return await svc['fetchPageContent'](p);
-            case 'fetchPreview': return await svc['fetchPreview'](p);
-            case 'fetchRoots': return await svc['fetchRoots'](p);
-            case 'getConstitutionPaths': return await svc['getConstitutionPaths'](p);
-            case 'getConstitutionStatus': return await svc['getConstitutionStatus'](p);
-            case 'getFeatureDetails': return await svc['getFeatureDetails'](p);
-            case 'getProjectContextEnabled': return await svc['getProjectContextEnabled'](p);
-            case 'getProjectPrd': return await svc['getProjectPrd'](p);
-            case 'getSyncConfig': return await svc['getSyncConfig'](p);
-            case 'getTicketSyncStatuses': return await svc['getTicketSyncStatuses'](p);
-            case 'importAllTickets': return await svc['importAllTickets'](p);
-            case 'importDevDocFromClipboard': return await svc['importDevDocFromClipboard'](p);
-            case 'importFullDoc': return await svc['importFullDoc'](p);
-            case 'importNotebookLMPlans': return await svc['importNotebookLMPlans'](p);
-            case 'importPlans': return await svc['importPlans'](p);
-            case 'importPlansFromClipboard': return await svc['importPlansFromClipboard'](p);
-            case 'importResearchDoc': return await svc['importResearchDoc'](p);
-            case 'importTicketSubtasks': return await svc['importTicketSubtasks'](p);
-            case 'invalidateClickUpCache': return await svc['invalidateClickUpCache'](p);
-            case 'invokeConstitutionBuilder': return await svc['invokeConstitutionBuilder'](p);
-            case 'invokeConstitutionUpdater': return await svc['invokeConstitutionUpdater'](p);
-            case 'invokePrdBuilder': return await svc['invokePrdBuilder'](p);
-            case 'invokeSystemBuilder': return await svc['invokeSystemBuilder'](p);
-            case 'linearCreateIssue': return await svc['linearCreateIssue'](p);
-            case 'linearImportTask': return await svc['linearImportTask'](p);
-            case 'linearLoadAutomationCatalog': return await svc['linearLoadAutomationCatalog'](p);
-            case 'linearLoadProject': return await svc['linearLoadProject'](p);
-            case 'linearLoadProjects': return await svc['linearLoadProjects'](p);
-            case 'linearLoadTaskDetails': return await svc['linearLoadTaskDetails'](p);
-            case 'linearSaveProjectSelection': return await svc['linearSaveProjectSelection'](p);
-            case 'linearUpdateIssueAssignee': return await svc['linearUpdateIssueAssignee'](p);
-            case 'linearUpdateIssueLabels': return await svc['linearUpdateIssueLabels'](p);
-            case 'linearUpdateIssuePriority': return await svc['linearUpdateIssuePriority'](p);
-            case 'linkToDocument': return await svc['linkToDocument'](p);
-            case 'linkToFolder': return await svc['linkToFolder'](p);
-            case 'listLocalFolders': return await svc['listLocalFolders'](p);
-            case 'listLocalTicketFiles': return await svc['listLocalTicketFiles'](p);
-            case 'listPlanningHtmlFolders': return await svc['listPlanningHtmlFolders'](p);
-            case 'listTicketsFolders': return await svc['listTicketsFolders'](p);
-            case 'loadConstitutionFiles': return await svc['loadConstitutionFiles'](p);
-            case 'loadDevDocs': return await svc['loadDevDocs'](p);
-            case 'loadInsights': return await svc['loadInsights'](p);
-            case 'loadTicketAssignees': return await svc['loadTicketAssignees'](p);
-            case 'loadTicketComments': return await svc['loadTicketComments'](p);
-            case 'moveKanbanPlanColumn': return await svc['moveKanbanPlanColumn'](p);
-            case 'moveTicket': return await svc['moveTicket'](p);
-            case 'notebookDefaultRoot': return await svc['notebookDefaultRoot'](p);
-            case 'openArchitectTerminal': return await svc['openArchitectTerminal'](p);
-            case 'openAttachment': return await svc['openAttachment'](p);
-            case 'openExternalUrl': return await svc['openExternalUrl'](p);
-            case 'openKanbanPlan': return await svc['openKanbanPlan'](p);
-            case 'persistTabState': return await svc['persistTabState'](p);
-            case 'planAutoFetchRunNow': return await svc['planAutoFetchRunNow'](p);
-            case 'planShown': return await svc['planShown'](p);
-            case 'postTicketComment': return await svc['postTicketComment'](p);
-            case 'postTicketReply': return await svc['postTicketReply'](p);
-            case 'pushTicket': return await svc['pushTicket'](p);
-            case 'readConstitutionFile': return await svc['readConstitutionFile'](p);
-            case 'readDevDoc': return await svc['readDevDoc'](p);
-            case 'readInsight': return await svc['readInsight'](p);
-            case 'readLocalTicketFile': return await svc['readLocalTicketFile'](p);
-            case 'refineFeature': return await svc['refineFeature'](p);
-            case 'refreshSource': return await svc['refreshSource'](p);
-            case 'refreshTicketsDelta': return await svc['refreshTicketsDelta'](p);
-            case 'removeConstitutionPath': return await svc['removeConstitutionPath'](p);
-            case 'removeLocalFolder': return await svc['removeLocalFolder'](p);
-            case 'removePlanningHtmlFolder': return await svc['removePlanningHtmlFolder'](p);
-            case 'removeSubtaskFromFeature': return await svc['removeSubtaskFromFeature'](p);
-            case 'removeTicketsFolder': return await svc['removeTicketsFolder'](p);
-            case 'renderMarkdownLive': return await svc['renderMarkdownLive'](p);
-            case 'resolveDuplicate': return await svc['resolveDuplicate'](p);
-            case 'revealAttachment': return await svc['revealAttachment'](p);
-            case 'runTuningExtract': return await svc['runTuningExtract'](p);
-            case 'runTuningGovernance': return await svc['runTuningGovernance'](p);
-            case 'saveConstitutionFile': return await svc['saveConstitutionFile'](p);
-            case 'saveDevDoc': return await svc['saveDevDoc'](p);
-            case 'saveFileContent': return await svc['saveFileContent'](p);
-            case 'saveLocalTicketFile': return await svc['saveLocalTicketFile'](p);
-            case 'saveOnlineDocFile': return await svc['saveOnlineDocFile'](p);
-            case 'savePlanningContainerSelection': return await svc['savePlanningContainerSelection'](p);
-            case 'saveProjectPrd': return await svc['saveProjectPrd'](p);
-            case 'saveTicketsFolder': return await svc['saveTicketsFolder'](p);
-            case 'saveTicketsFolderPaths': return await svc['saveTicketsFolderPaths'](p);
-            case 'sendArtifactPromptToTerminal': return await svc['sendArtifactPromptToTerminal'](p);
-            case 'serveAndOpenHtml': return await svc['serveAndOpenHtml'](p);
-            case 'setConstitutionPath': return await svc['setConstitutionPath'](p);
-            case 'setKanbanPlanComplexity': return await svc['setKanbanPlanComplexity'](p);
-            case 'setPlanAutoFetchEnabled': return await svc['setPlanAutoFetchEnabled'](p);
-            case 'setProjectContextEnabled': return await svc['setProjectContextEnabled'](p);
-            case 'setUploadLocation': return await svc['setUploadLocation'](p);
-            case 'setupTicketsWatcher': return await svc['setupTicketsWatcher'](p);
-            case 'submitComment': return await svc['submitComment'](p);
-            case 'switchTicketsProvider': return await svc['switchTicketsProvider'](p);
-            case 'syncAllTickets': return await svc['syncAllTickets'](p);
-            case 'syncDocToOnline': return await svc['syncDocToOnline'](p);
-            case 'syncToSource': return await svc['syncToSource'](p);
-            case 'ticketsAskAgent': return await svc['ticketsAskAgent'](p);
-            case 'ticketsDefaultRoot': return await svc['ticketsDefaultRoot'](p);
-            case 'ticketsRootChanged': return await svc['ticketsRootChanged'](p);
-            case 'toggleConstitutionAddon': return await svc['toggleConstitutionAddon'](p);
-            case 'updateFeatureConfig': return await svc['updateFeatureConfig'](p);
-            case 'updateInsightStatus': return await svc['updateInsightStatus'](p);
-            case 'uploadPlanAttachment': return await svc['uploadPlanAttachment'](p);
-            case 'viewAttachments': return await svc['viewAttachments'](p);
-        }
+        // VS Code is the host here; _handleMessage runs in-process. Command verbs
+        // return the route layer's {success:true} ack (most _handleMessage impls are
+        // void); read verbs emit their result over the WS hub (see plan).
+        // `type` is set LAST so a payload `type` field can never override the
+        // allowlist-checked verb, regardless of caller.
+        return this._handleMessage({ ...(payload ?? {}), type: verb });
     }
 
 
@@ -266,7 +94,6 @@ export class PlanningPanelProvider {
         if (!workspaceRoot) {
             this._hostSeams = undefined;
             this._broadcaster = undefined;
-            this._planningService = undefined;
             return;
         }
         this._hostSeams = createVscodeHostSeams(workspaceRoot);
@@ -274,17 +101,6 @@ export class PlanningPanelProvider {
             this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
-        }
-        const ctx: PlanningServiceContext = {
-            workspaceRoot,
-            seams: this._hostSeams,
-            broadcaster: this._broadcaster,
-            handleMessage: async (msg) => this._handleMessage(msg),
-        };
-        if (this._planningService) {
-            this._planningService.setContext(ctx);
-        } else {
-            this._planningService = new PlanningService(ctx);
         }
     }
 
@@ -294,7 +110,6 @@ export class PlanningPanelProvider {
 
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
-    private _planningService?: PlanningService;
 
     private static readonly IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg']);
     private _panel: vscode.WebviewPanel | undefined;

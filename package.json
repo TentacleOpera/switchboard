@@ -9,7 +9,7 @@
     "orchestration",
     "multi-agent"
   ],
-  "version": "1.7.6",
+  "version": "1.7.7",
   "main": "./dist/extension.js",
   "publisher": "TurnZero",
   "repository": {
@@ -825,10 +825,11 @@
     "test:contract:request-id-wire": "node src/test/research-modal-request-id-wire-contract.test.js",
     "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node src/test/integrations/run-integration-tests.js all",
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\"",
-    "catalog:generate": "node scripts/generate-protocol-catalog.js --write",
-    "catalog:check": "node scripts/generate-protocol-catalog.js",
+    "catalog:generate": "node scripts/generate-protocol-catalog.js --write && node scripts/generate-verb-allowlist.js --write",
+    "catalog:check": "node scripts/generate-protocol-catalog.js && node scripts/generate-verb-allowlist.js",
     "parity:check": "node scripts/check-protocol-parity.js",
     "push-routing:check": "node scripts/check-push-routing.js",
+    "mirror:check": "node scripts/check-claude-mirror.js",
     "release": "bash scripts/publish-release.sh"
   },
   "devDependencies": {

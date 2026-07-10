@@ -2,6 +2,7 @@
 import { HostSeams, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import { SetupService, SetupServiceContext } from './setupService';
+import { SETUP_VERBS } from '../generated/verbAllowlist';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -28,132 +29,18 @@ export class SetupPanelProvider implements vscode.Disposable {
         if (!this._setupService) {
             this._initSetupService();
         }
-        const svc = this._setupService;
-        if (!svc) {
+        if (!this._setupService) {
             throw new Error('SetupService unavailable — no workspace root resolved');
         }
-        const p = payload ?? {};
-        switch (verb) {
-            default:
-                throw new Error(`Unknown or not-yet-extracted Setup verb: '${verb}'`);
-            case 'applyClickUpConfig': return await svc['applyClickUpConfig'](p);
-            case 'applyLinearConfig': return await svc['applyLinearConfig'](p);
-            case 'applyNotionConfig': return await svc['applyNotionConfig'](p);
-            case 'autoCreateNotionDatabase': return await svc['autoCreateNotionDatabase'](p);
-            case 'backupToNotion': return await svc['backupToNotion'](p);
-            case 'browseParentFolder': return await svc['browseParentFolder'](p);
-            case 'browseTicketsFolder': return await svc['browseTicketsFolder'](p);
-            case 'browseWorkspaceMappingDbPath': return await svc['browseWorkspaceMappingDbPath'](p);
-            case 'browseWorkspaceMappingFolder': return await svc['browseWorkspaceMappingFolder'](p);
-            case 'clearControlPlaneCache': return await svc['clearControlPlaneCache'](p);
-            case 'configureNotionBackup': return await svc['configureNotionBackup'](p);
-            case 'copyDbSettingsToGlobal': return await svc['copyDbSettingsToGlobal'](p);
-            case 'copyLinearAgentSkill': return await svc['copyLinearAgentSkill'](p);
-            case 'detectControlPlaneCandidate': return await svc['detectControlPlaneCandidate'](p);
-            case 'enableTriagePipeline': return await svc['enableTriagePipeline'](p);
-            case 'executeControlPlaneFreshSetup': return await svc['executeControlPlaneFreshSetup'](p);
-            case 'executeControlPlaneMigration': return await svc['executeControlPlaneMigration'](p);
-            case 'exportPromptSettings': return await svc['exportPromptSettings'](p);
-            case 'getAccurateCodingSetting': return await svc['getAccurateCodingSetting'](p);
-            case 'getAdvancedReviewerSetting': return await svc['getAdvancedReviewerSetting'](p);
-            case 'getAgentDirCleanupState': return await svc['getAgentDirCleanupState'](p);
-            case 'getAllDbPaths': return await svc['getAllDbPaths'](p);
-            case 'getAutoCommitOnCodeReviewSetting': return await svc['getAutoCommitOnCodeReviewSetting'](p);
-            case 'getColourKanbanIconsSetting': return await svc['getColourKanbanIconsSetting'](p);
-            case 'getControlPlaneStatus': return await svc['getControlPlaneStatus'](p);
-            case 'getCustomAgents': return await svc['getCustomAgents'](p);
-            case 'getCyberAnimationDisabledSetting': return await svc['getCyberAnimationDisabledSetting'](p);
-            case 'getCyberScanlinesDisabledSetting': return await svc['getCyberScanlinesDisabledSetting'](p);
-            case 'getDbPath': return await svc['getDbPath'](p);
-            case 'getDefaultPromptOverrides': return await svc['getDefaultPromptOverrides'](p);
-            case 'getDefaultPromptPreviews': return await svc['getDefaultPromptPreviews'](p);
-            case 'getDesignSystemDocSetting': return await svc['getDesignSystemDocSetting'](p);
-            case 'getExcludeReviewedBacklogSetting': return await svc['getExcludeReviewedBacklogSetting'](p);
-            case 'getGitIgnoreConfig': return await svc['getGitIgnoreConfig'](p);
-            case 'getHideGuidedSetupSetting': return await svc['getHideGuidedSetupSetting'](p);
-            case 'getIntegrationSetupStates': return await svc['getIntegrationSetupStates'](p);
-            case 'getKanbanStructure': return await svc['getKanbanStructure'](p);
-            case 'getLeadChallengeSetting': return await svc['getLeadChallengeSetting'](p);
-            case 'getMemoHotkey': return await svc['getMemoHotkey'](p);
-            case 'getPersistPanelsSetting': return await svc['getPersistPanelsSetting'](p);
-            case 'getPixelFontSetting': return await svc['getPixelFontSetting'](p);
-            case 'getPlanScannerConfig': return await svc['getPlanScannerConfig'](p);
-            case 'getPlanningSources': return await svc['getPlanningSources'](p);
-            case 'getProjectContextSyncStatus': return await svc['getProjectContextSyncStatus'](p);
-            case 'getProtocolTarget': return await svc['getProtocolTarget'](p);
-            case 'getRemoteConfig': return await svc['getRemoteConfig'](p);
-            case 'getRemoteHealth': return await svc['getRemoteHealth'](p);
-            case 'getStartupCommands': return await svc['getStartupCommands'](p);
-            case 'getStatusShowArtifactsSetting': return await svc['getStatusShowArtifactsSetting'](p);
-            case 'getStatusShowDesignSetting': return await svc['getStatusShowDesignSetting'](p);
-            case 'getStatusShowKanbanSetting': return await svc['getStatusShowKanbanSetting'](p);
-            case 'getStatusShowMemoSetting': return await svc['getStatusShowMemoSetting'](p);
-            case 'getStatusShowProjectSetting': return await svc['getStatusShowProjectSetting'](p);
-            case 'getStatusShowTerminalsSetting': return await svc['getStatusShowTerminalsSetting'](p);
-            case 'getThemeSetting': return await svc['getThemeSetting'](p);
-            case 'getUltracodeAnimationSetting': return await svc['getUltracodeAnimationSetting'](p);
-            case 'getVisibleAgents': return await svc['getVisibleAgents'](p);
-            case 'getWorkspaceMappings': return await svc['getWorkspaceMappings'](p);
-            case 'importPromptSettings': return await svc['importPromptSettings'](p);
-            case 'initControlPlaneGit': return await svc['initControlPlaneGit'](p);
-            case 'initializeWorkspaceDatabase': return await svc['initializeWorkspaceDatabase'](p);
-            case 'linearBrowseProjects': return await svc['linearBrowseProjects'](p);
-            case 'listTicketsFolders': return await svc['listTicketsFolders'](p);
-            case 'openDocs': return await svc['openDocs'](p);
-            case 'openKanban': return await svc['openKanban'](p);
-            case 'openKeybindings': return await svc['openKeybindings'](p);
-            case 'performAgentDirCleanup': return await svc['performAgentDirCleanup'](p);
-            case 'previewControlPlaneMigration': return await svc['previewControlPlaneMigration'](p);
-            case 'projectContextSyncNow': return await svc['projectContextSyncNow'](p);
-            case 'ready': return await svc['ready'](p);
-            case 'resetDatabase': return await svc['resetDatabase'](p);
-            case 'resetExplicitControlPlaneRoot': return await svc['resetExplicitControlPlaneRoot'](p);
-            case 'restoreFromNotion': return await svc['restoreFromNotion'](p);
-            case 'restoreKanbanDefaults': return await svc['restoreKanbanDefaults'](p);
-            case 'runNotionRemoteSetup': return await svc['runNotionRemoteSetup'](p);
-            case 'runSetup': return await svc['runSetup'](p);
-            case 'saveClickUpAutomation': return await svc['saveClickUpAutomation'](p);
-            case 'saveClickUpMappings': return await svc['saveClickUpMappings'](p);
-            case 'saveDefaultPromptOverrides': return await svc['saveDefaultPromptOverrides'](p);
-            case 'saveLinearAutomation': return await svc['saveLinearAutomation'](p);
-            case 'saveMemoHotkey': return await svc['saveMemoHotkey'](p);
-            case 'savePlanningSources': return await svc['savePlanningSources'](p);
-            case 'saveStartupCommands': return await svc['saveStartupCommands'](p);
-            case 'saveTicketsAutoSync': return await svc['saveTicketsAutoSync'](p);
-            case 'saveTicketsFolder': return await svc['saveTicketsFolder'](p);
-            case 'saveWorkspaceMappings': return await svc['saveWorkspaceMappings'](p);
-            case 'scaffoldMultiRepo': return await svc['scaffoldMultiRepo'](p);
-            case 'setBoardStateExport': return await svc['setBoardStateExport'](p);
-            case 'setBoardStateExportRemoteUrl': return await svc['setBoardStateExportRemoteUrl'](p);
-            case 'setColourKanbanIconsSetting': return await svc['setColourKanbanIconsSetting'](p);
-            case 'setCustomDbPath': return await svc['setCustomDbPath'](p);
-            case 'setCyberAnimationDisabledSetting': return await svc['setCyberAnimationDisabledSetting'](p);
-            case 'setCyberScanlinesDisabledSetting': return await svc['setCyberScanlinesDisabledSetting'](p);
-            case 'setExcludeReviewedBacklogSetting': return await svc['setExcludeReviewedBacklogSetting'](p);
-            case 'setExplicitControlPlaneRoot': return await svc['setExplicitControlPlaneRoot'](p);
-            case 'setHideGuidedSetup': return await svc['setHideGuidedSetup'](p);
-            case 'setLocalDb': return await svc['setLocalDb'](p);
-            case 'setPersistPanelsSetting': return await svc['setPersistPanelsSetting'](p);
-            case 'setPixelFontSetting': return await svc['setPixelFontSetting'](p);
-            case 'setPlanScannerConfig': return await svc['setPlanScannerConfig'](p);
-            case 'setPresetDbPath': return await svc['setPresetDbPath'](p);
-            case 'setProjectContextSyncEnabled': return await svc['setProjectContextSyncEnabled'](p);
-            case 'setProtocolTarget': return await svc['setProtocolTarget'](p);
-            case 'setRemoteConfig': return await svc['setRemoteConfig'](p);
-            case 'setStatusShowArtifactsSetting': return await svc['setStatusShowArtifactsSetting'](p);
-            case 'setStatusShowDesignSetting': return await svc['setStatusShowDesignSetting'](p);
-            case 'setStatusShowKanbanSetting': return await svc['setStatusShowKanbanSetting'](p);
-            case 'setStatusShowMemoSetting': return await svc['setStatusShowMemoSetting'](p);
-            case 'setStatusShowProjectSetting': return await svc['setStatusShowProjectSetting'](p);
-            case 'setStatusShowTerminalsSetting': return await svc['setStatusShowTerminalsSetting'](p);
-            case 'setThemeSetting': return await svc['setThemeSetting'](p);
-            case 'setUltracodeAnimationSetting': return await svc['setUltracodeAnimationSetting'](p);
-            case 'setWorkspaceMappingEnabled': return await svc['setWorkspaceMappingEnabled'](p);
-            case 'startRemoteControl': return await svc['startRemoteControl'](p);
-            case 'stopRemoteControl': return await svc['stopRemoteControl'](p);
-            case 'updateGitIgnoreConfig': return await svc['updateGitIgnoreConfig'](p);
-            case 'updateKanbanStructure': return await svc['updateKanbanStructure'](p);
+        if (!SETUP_VERBS.has(verb)) {
+            throw new Error(`Unknown Setup verb: '${verb}'`);
         }
+        // VS Code is the host here; _handleMessage runs in-process. Command verbs
+        // return the route layer's {success:true} ack (most _handleMessage impls are
+        // void); read verbs emit their result over the WS hub (see plan).
+        // `type` is set LAST so a payload `type` field can never override the
+        // allowlist-checked verb, regardless of caller.
+        return this._handleMessage({ ...(payload ?? {}), type: verb });
     }
 
 

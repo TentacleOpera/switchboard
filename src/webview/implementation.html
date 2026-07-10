@@ -1531,10 +1531,8 @@
             </div>
             <button id="btn-quick-manage" class="secondary-btn is-teal w-full"
               style="margin-top: 6px;"
-              title="Activate the Switchboard management console in a terminal agent (or copy the prompt if no PM terminal is registered)">Manage</button>
+              title="Activate the Switchboard management console in a terminal agent (or copy the prompt if no PM terminal is registered). Onboards new users and drives the board — the single front door.">Manage</button>
             <button id="btn-quick-setup" class="secondary-btn w-full" style="margin-top: 6px;">Setup</button>
-            <button id="btn-guided-setup" class="secondary-btn w-full" style="margin-top: 6px;"
-                title="Copy a tutorial prompt tailored to your next setup step, then paste it into an agent chat">Guided Setup</button>
         </div>
 
         <!-- HEADER: PLAN SELECTION -->
@@ -1800,8 +1798,6 @@
         if (btnQuickManage) btnQuickManage.addEventListener('click', () => vscode.postMessage({ type: 'dispatchProjectManager' }));
         const btnQuickSetup = document.getElementById('btn-quick-setup');
         if (btnQuickSetup) btnQuickSetup.addEventListener('click', () => vscode.postMessage({ type: 'openSetupPanel' }));
-        const btnGuidedSetup = document.getElementById('btn-guided-setup');
-        if (btnGuidedSetup) btnGuidedSetup.addEventListener('click', () => vscode.postMessage({ type: 'guidedSetup' }));
         const btnQuickDesign = document.getElementById('btn-quick-design');
         if (btnQuickDesign) btnQuickDesign.addEventListener('click', () => vscode.postMessage({ type: 'openDesignPanel' }));
         const btnQuickProject = document.getElementById('btn-quick-project');
@@ -2186,13 +2182,6 @@
                     }
                     toggleOnboarding(message.needsSetup === true);
                     break;
-                case 'hideGuidedSetupSetting': {
-                    const btn = document.getElementById('btn-guided-setup');
-                    if (btn) {
-                        btn.style.display = message.enabled ? 'none' : '';
-                    }
-                    break;
-                }
                 case 'memoContent': {
                     const textarea = document.getElementById('memo-textarea');
                     if (textarea) {
