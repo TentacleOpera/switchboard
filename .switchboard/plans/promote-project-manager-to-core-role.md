@@ -51,8 +51,8 @@ The PM role was added to the agents tab's **Optional** group (`src/webview/kanba
 ### Routine
 - Two-line HTML move + one boolean default + docs touch-up.
 ### Complex / Risky
-- **Saved-state migration semantics:** the three-tier visibility persistence (machine-global file → globalState → legacy state.json) merges saved maps over defaults. Verify a saved map that *lacks* the `project_manager` key inherits the new `true` default (it does — spread order), and one that has it `false` stays `false`. Do not write a migration that force-flips saved state.
-- **Default terminal grid:** confirm whatever builds the default agent grid/registration honors the new visibility so a fresh setup actually opens a PM terminal (this is the point of the change).
+- **Saved-state migration semantics:** the three-tier visibility persistence (machine-global file → globalState → legacy state.json) merges saved maps over defaults. Verify a saved map that *lacks* the `project_manager` key inherits the new `true` default (it does — spread order), and one that has it `false` stays `false`. Do not write a migration that force-flips saved state. *(Clarification, verified 2026-07-10: all three tiers return `{ ...defaults, ...saved }` — `TaskViewerProvider.ts:4536-4540`, `:4544-4548`, `:4557` — so the semantics hold identically in every tier.)*
+- **Default terminal grid:** confirm whatever builds the default agent grid/registration honors the new visibility so a fresh setup actually opens a PM terminal (this is the point of the change). *(Clarification, verified 2026-07-10: the webview grid is driven entirely by the pushed defaults-merged `visibleAgents` map — `postAgentState` at `TaskViewerProvider.ts:5087-5088` and `postSetupPanelState` at `:5124-5125`; the webview `visibleAgents` handler is at `kanban.html:7142`. Flipping the default is sufficient for the grid; still manually verify the fresh-profile terminal-open path end-to-end per the Verification Plan.)*
 
 ## Edge-Case & Dependency Audit
 - **Race conditions:** none — static defaults + markup.
@@ -61,6 +61,9 @@ The PM role was added to the agents tab's **Optional** group (`src/webview/kanba
 
 ## Dependencies
 - None hard. Pairs with `board-selected-plans-to-manager-targeted-pass.md` under the PM-integration feature.
+
+## Adversarial Synthesis
+Key risks: (1) accidentally force-flipping users who explicitly saved `project_manager: false` — mitigated by not writing any migration and relying on the verified `{...defaults, ...saved}` spread order in all three persistence tiers; (2) a setup flow that filters roles by a hardcoded core/optional list rather than the visibility map — mitigated by the Implementation Step 3 grep for `project_manager` optionality assumptions. Blast radius is small (one boolean, two HTML lines); the fresh-profile manual check is the real gate.
 
 ## Proposed Changes
 ### src/webview/kanban.html
@@ -79,4 +82,8 @@ The PM role was added to the agents tab's **Optional** group (`src/webview/kanba
 - Existing profile whose saved map predates the PM key: becomes checked (inherits new default).
 
 ---
-**Recommendation:** Complexity 2 → Send to Coder.
+> **Superseded:** Complexity 2 → Send to Coder.
+> **Reason:** The routing map is Intern 1–3 / Coder 4–6 / Lead 7–10; complexity 2 routes to Intern. The change is a two-line HTML move plus one boolean default — squarely intern-grade with the migration semantics already verified in the plan.
+> **Replaced with:** Complexity 2 → Send to Intern.
+
+**Recommendation:** Complexity 2 → Send to Intern.
