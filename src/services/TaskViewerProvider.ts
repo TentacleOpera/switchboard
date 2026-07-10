@@ -1841,6 +1841,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }
                 }
 
+                // Remove empty known subdirectories so the .switchboard dir can be removed
+                const subDirsToClean = ['plans', 'archive', 'inbox', 'features'];
+                for (const subDir of subDirsToClean) {
+                    const subDirPath = path.join(switchboardDir, subDir);
+                    try {
+                        const entries = await fs.promises.readdir(subDirPath);
+                        if (entries.length === 0) {
+                            await fs.promises.rmdir(subDirPath);
+                        }
+                    } catch { /* not present — skip */ }
+                }
+
                 // Remove empty .switchboard dir
                 try {
                     const remaining = await fs.promises.readdir(switchboardDir);
@@ -11771,9 +11783,15 @@ What would you like to find?`;
             foldersToWatch.push(workspaceRoot);
         }
 
+        // Guard: filter out mapped child workspaceFolders — they must never get .switchboard/
+        const { isAllowedSwitchboardLocation } = require('../utils/switchboardLocationGuard');
+        const safeFolders = foldersToWatch.filter(folder =>
+            isAllowedSwitchboardLocation(folder, folder)
+        );
+
         // Initialize plans directories for all folders to watch
         const watchDirs: string[] = [];
-        for (const folder of foldersToWatch) {
+        for (const folder of safeFolders) {
             const plansRootDir = path.join(folder, '.switchboard', 'plans');
             if (!fs.existsSync(plansRootDir)) {
                 try {
@@ -11811,7 +11829,7 @@ What would you like to find?`;
 
         // Create VS Code watchers for each folder
         const vsCodeWatchers: vscode.Disposable[] = [];
-        for (const folder of foldersToWatch) {
+        for (const folder of safeFolders) {
             const watcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(folder, '.switchboard/plans/**/*.md')
             );

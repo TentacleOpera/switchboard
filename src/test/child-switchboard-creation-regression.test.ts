@@ -132,4 +132,44 @@ suite('Child Switchboard Creation Regression', () => {
             mock.restore();
         }
     });
+
+    test('5. _setupPlanWatcher scenario — child IS workspaceRoot, guard blocks', () => {
+        // Reproduces the exact bug: _kanbanProvider is null at construction time,
+        // so effectiveRoot falls back to the raw workspaceRoot. If the workspaceRoot
+        // is a child folder, the guard must still block it.
+        const mappingsConfig = {
+            enabled: true,
+            mappings: [
+                {
+                    workspaceFolders: ['~/Documents/GitHub/autism360-analytics'],
+                    parentFolder: '~/Documents/Gitlab'
+                }
+            ]
+        };
+        const mock = installVsCodeMock(mappingsConfig);
+        try {
+            const guardPath = path.resolve(__dirname, '..', 'utils', 'switchboardLocationGuard');
+            delete require.cache[require.resolve(guardPath)];
+            const { isAllowedSwitchboardLocation } = require(guardPath);
+
+            const home = os.homedir();
+            const childResolved = path.join(home, 'Documents', 'GitHub', 'autism360-analytics');
+            const parentResolved = path.join(home, 'Documents', 'Gitlab');
+
+            // The child IS the workspaceRoot (as happens when _kanbanProvider is null)
+            assert.strictEqual(
+                isAllowedSwitchboardLocation(childResolved, childResolved),
+                false,
+                'Should block child folder even when it is the workspaceRoot — this is the _setupPlanWatcher bug scenario'
+            );
+            // The parent must still be allowed
+            assert.strictEqual(
+                isAllowedSwitchboardLocation(parentResolved, childResolved),
+                true,
+                'Should allow the configured parentFolder'
+            );
+        } finally {
+            mock.restore();
+        }
+    });
 });

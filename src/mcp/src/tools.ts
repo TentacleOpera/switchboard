@@ -8,7 +8,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { call, type CallSuccess, type SwitchboardError } from './bootstrap.js';
+import { call, type CallOptions, type CallSuccess, type SwitchboardError } from './bootstrap.js';
 import { MUTATING_RULES } from './persona.js';
 
 export interface ToolContext {
@@ -53,18 +53,22 @@ const workspaceRootSchema = z.string().optional().describe('Workspace root path 
  */
 export function registerTools(server: McpServer, ctx: ToolContext): void {
     const { workspaceRoot, token } = ctx;
+    // Bind the ctx defaults (default workspace root + token) into every call.
+    // call() is a 3-arg pure helper (opts, defaultRoot, defaultToken); each tool
+    // supplies only the per-request opts and lets the closure inject the defaults.
+    const doCall = (o: CallOptions) => call(o, workspaceRoot, token);
 
     // --- Read tools ---
 
     server.registerTool('board_read', {
         description: 'Read the full Switchboard kanban board (all columns, cards, and plan summaries). Use this on entry to report board state, then wait for direction.',
         inputSchema: { workspaceRoot: workspaceRootSchema }
-    }, async (args) => toReadResult(await call({ method: 'GET', path: '/kanban/board', workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toReadResult(await doCall({ method: 'GET', path: '/kanban/board', workspaceRoot: args.workspaceRoot, token })));
 
     server.registerTool('columns_read', {
         description: 'Read the kanban column layout ({builtIn, custom}).',
         inputSchema: { workspaceRoot: workspaceRootSchema }
-    }, async (args) => toReadResult(await call({ method: 'GET', path: '/kanban/columns', workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toReadResult(await doCall({ method: 'GET', path: '/kanban/columns', workspaceRoot: args.workspaceRoot, token })));
 
     server.registerTool('plan_read', {
         description: 'Read a single plan (including its .data.content) by planId, or list plans by column/featureId. Pass planId for a single plan; pass column or featureId for a list.',
@@ -76,24 +80,24 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         }
     }, async (args) => {
         if (args.planId) {
-            return toReadResult(await call({ method: 'GET', path: `/kanban/plan?planId=${encodeURIComponent(args.planId)}`, workspaceRoot: args.workspaceRoot, token }));
+            return toReadResult(await doCall({ method: 'GET', path: `/kanban/plan?planId=${encodeURIComponent(args.planId)}`, workspaceRoot: args.workspaceRoot, token }));
         }
         const params = new URLSearchParams();
         if (args.column) params.set('column', args.column);
         if (args.featureId) params.set('featureId', args.featureId);
         const qs = params.toString();
-        return toReadResult(await call({ method: 'GET', path: `/kanban/plans${qs ? '?' + qs : ''}`, workspaceRoot: args.workspaceRoot, token }));
+        return toReadResult(await doCall({ method: 'GET', path: `/kanban/plans${qs ? '?' + qs : ''}`, workspaceRoot: args.workspaceRoot, token }));
     });
 
     server.registerTool('catalog_read', {
         description: 'Read the LocalApiServer protocol catalog (apiEndpoints[] with {path, method, prefix}). Auth-gated.',
         inputSchema: { workspaceRoot: workspaceRootSchema }
-    }, async (args) => toReadResult(await call({ method: 'GET', path: '/catalog', workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toReadResult(await doCall({ method: 'GET', path: '/catalog', workspaceRoot: args.workspaceRoot, token })));
 
     server.registerTool('worktree_list', {
         description: 'List orchestration worktrees.',
         inputSchema: { workspaceRoot: workspaceRootSchema }
-    }, async (args) => toReadResult(await call({ method: 'GET', path: '/worktree/list', workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toReadResult(await doCall({ method: 'GET', path: '/worktree/list', workspaceRoot: args.workspaceRoot, token })));
 
     // --- Plan CRUD ---
 
@@ -107,7 +111,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             complexity: z.number().optional().describe('Complexity score (1-10).'),
             workspaceRoot: workspaceRootSchema
         }
-    }, async (args) => toResult(await call({ method: 'POST', path: '/kanban/plans', body: args, workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toResult(await doCall({ method: 'POST', path: '/kanban/plans', body: args, workspaceRoot: args.workspaceRoot, token })));
 
     server.registerTool('plan_delete', {
         description: 'Delete a plan by planId. Pass deleteFile=true to also remove the .md file; without deleteFile the file remains and the plan re-appears on the next import_plans scan.' + MUTATING_RULES,
@@ -119,7 +123,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     }, async (args) => {
         const params = new URLSearchParams({ planId: args.planId });
         if (args.deleteFile) params.set('deleteFile', 'true');
-        return toResult(await call({ method: 'DELETE', path: `/kanban/plans?${params.toString()}`, workspaceRoot: args.workspaceRoot, token }));
+        return toResult(await doCall({ method: 'DELETE', path: `/kanban/plans?${params.toString()}`, workspaceRoot: args.workspaceRoot, token }));
     });
 
     server.registerTool('plan_set_project', {
@@ -129,7 +133,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             project: z.string().nullable().describe('Project name, or null/empty to unpin.'),
             workspaceRoot: workspaceRootSchema
         }
-    }, async (args) => toResult(await call({ method: 'PUT', path: '/kanban/plans/project', body: { planId: args.planId, project: args.project, workspaceRoot: args.workspaceRoot }, workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toResult(await doCall({ method: 'PUT', path: '/kanban/plans/project', body: { planId: args.planId, project: args.project, workspaceRoot: args.workspaceRoot }, workspaceRoot: args.workspaceRoot, token })));
 
     server.registerTool('plan_set_complexity', {
         description: 'Set a plan\'s complexity score (1-10).' + MUTATING_RULES,
@@ -138,7 +142,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             complexity: z.number().min(1).max(10),
             workspaceRoot: workspaceRootSchema
         }
-    }, async (args) => toResult(await call({ method: 'PUT', path: '/kanban/plans/complexity', body: { planId: args.planId, complexity: args.complexity, workspaceRoot: args.workspaceRoot }, workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toResult(await doCall({ method: 'PUT', path: '/kanban/plans/complexity', body: { planId: args.planId, complexity: args.complexity, workspaceRoot: args.workspaceRoot }, workspaceRoot: args.workspaceRoot, token })));
 
     // --- Movement ---
 
@@ -155,7 +159,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         if (args.planId) body.planId = args.planId;
         if (args.sessionId) body.sessionId = args.sessionId;
         if (args.workspaceRoot) body.workspaceRoot = args.workspaceRoot;
-        return toResult(await call({ method: 'POST', path: '/kanban/move', body, workspaceRoot: args.workspaceRoot, token }));
+        return toResult(await doCall({ method: 'POST', path: '/kanban/move', body, workspaceRoot: args.workspaceRoot, token }));
     });
 
     // --- Features ---
@@ -178,7 +182,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             'reconcile': '/kanban/features/reconcile'
         };
         const p = verbMap[args.verb] || '/kanban/features/reconcile';
-        return toResult(await call({ method: 'POST', path: p, body: { ...args.payload, workspaceRoot: args.workspaceRoot }, workspaceRoot: args.workspaceRoot, token }));
+        return toResult(await doCall({ method: 'POST', path: p, body: { ...args.payload, workspaceRoot: args.workspaceRoot }, workspaceRoot: args.workspaceRoot, token }));
     });
 
     // --- Orchestration ---
@@ -194,7 +198,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         // absolute root, so default to the env-configured ctx root (which the
         // server would also fall back to). Only override for multi-root.
         const root = args.workspaceRoot?.trim() ? args.workspaceRoot : workspaceRoot;
-        return toResult(await call({ method: 'POST', path: '/kanban/orchestration/dispatch', body: { featurePlanId: args.featurePlanId, workspaceRoot: root }, workspaceRoot: root, token }));
+        return toResult(await doCall({ method: 'POST', path: '/kanban/orchestration/dispatch', body: { featurePlanId: args.featurePlanId, workspaceRoot: root }, workspaceRoot: root, token }));
     });
 
     // --- Worktree cleanup ---
@@ -211,7 +215,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         if (args.worktreeId) body.worktreeId = args.worktreeId;
         if (args.branch) body.branch = args.branch;
         if (args.workspaceRoot) body.workspaceRoot = args.workspaceRoot;
-        return toResult(await call({ method: 'POST', path: '/worktree/cleanup', body, workspaceRoot: args.workspaceRoot, token }));
+        return toResult(await doCall({ method: 'POST', path: '/worktree/cleanup', body, workspaceRoot: args.workspaceRoot, token }));
     });
 
     // --- ClickUp / Linear raw proxy (tokens stay server-side) ---
@@ -222,7 +226,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             body: z.record(z.unknown()).describe('ClickUp API request body (passed through to LocalApiServer).'),
             workspaceRoot: workspaceRootSchema
         }
-    }, async (args) => toResult(await call({ method: 'POST', path: '/api/clickup', body: args.body, workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toResult(await doCall({ method: 'POST', path: '/api/clickup', body: args.body, workspaceRoot: args.workspaceRoot, token })));
 
     server.registerTool('linear_request', {
         description: 'Raw proxy to the Linear API via LocalApiServer (POST /api/linear). The Linear token stays server-side; pass the upstream Linear GraphQL request body.',
@@ -230,7 +234,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             body: z.record(z.unknown()).describe('Linear API request body (passed through to LocalApiServer).'),
             workspaceRoot: workspaceRootSchema
         }
-    }, async (args) => toResult(await call({ method: 'POST', path: '/api/linear', body: args.body, workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toResult(await doCall({ method: 'POST', path: '/api/linear', body: args.body, workspaceRoot: args.workspaceRoot, token })));
 
     // --- Generic passthrough (long tail + future endpoints) ---
 
@@ -242,5 +246,5 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
             body: z.record(z.unknown()).optional().describe('Request body (for POST/PUT).'),
             workspaceRoot: workspaceRootSchema
         }
-    }, async (args) => toResult(await call({ method: args.method.toUpperCase(), path: args.path, body: args.body, workspaceRoot: args.workspaceRoot, token })));
+    }, async (args) => toResult(await doCall({ method: args.method.toUpperCase(), path: args.path, body: args.body, workspaceRoot: args.workspaceRoot, token })));
 }

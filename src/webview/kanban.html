@@ -2612,7 +2612,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <!-- Left Side: Workspace/Project controls -->
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
             <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
-            <button class="strip-btn is-teal" id="btn-feature-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
             <button id="btn-delete-project" class="strip-icon-btn" data-tooltip="Select a project to delete" disabled>
                 <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
@@ -2625,6 +2624,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </button>
             <button class="strip-icon-btn" id="btn-remote-control" data-tooltip="Start or stop remote control">
                 <img src="{{ICON_REMOTE}}" alt="Remote Control">
+            </button>
+            <button class="strip-icon-btn" id="btn-create-worktree" data-tooltip="Create a worktree for the selected feature, or for the active project / workspace">
+                <img src="{{ICON_WORKTREE}}" alt="Create Worktree">
             </button>
 
             <!-- Spacer to push right-side controls to the right -->
@@ -2671,7 +2673,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </button>
                 <button class="strip-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">CHAT PROMPT</button>
                 <button class="strip-btn" id="btn-suggest-features" data-tooltip="Scan pre-coding columns and copy a prompt asking an agent to propose feature groupings">SUGGEST FEATURES</button>
-                <button class="strip-btn" id="btn-create-worktree" data-tooltip="Create a worktree for the selected feature, or for the active project / workspace">CREATE WORKTREE</button>
+                <button class="strip-btn is-teal" id="btn-feature-action" data-tooltip="Convert selected plans to feature or manage existing feature" disabled>PROMOTE TO FEATURE</button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <div id="wt-indicator" style="display:none; margin-left:auto; align-items:center; gap:4px; font-size:10px; color:var(--text-secondary);">
                     <span style="opacity:0.6;">⎇</span>

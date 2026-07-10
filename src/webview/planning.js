@@ -8150,14 +8150,13 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    const ARTIFACT_UPLOAD_PROMPT = ({ url, folder, filename }) =>
+    const ARTIFACT_UPLOAD_PROMPT = ({ folder, filename }) =>
         `Publish a local document back to claude.ai as an Artifact.\n\n` +
         `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability enabled.\n\n` +
         `1. Read the file: ${folder ? folder + '/' : ''}${filename}\n` +
         `2. Verify it is publish-ready before uploading — the host re-wraps and blocks external resources: ensure there are NO <!DOCTYPE>/<html>/<head>/<body> wrappers (strip them if an editor re-added any), and ALL assets are inlined as data: URIs / inline <style>/<script> (no external fonts, CSS, JS, or images — they render locally but silently disappear once published). If an edit introduced an external resource, inline it before publishing.\n` +
         `3. If it contains a \`switchboard-artifact-source:\` marker comment, redeploy to that existing URL by passing it as the Artifact tool's \`url\`. ` +
         `NOTE: this only overwrites if I own that artifact. If the tool returns a permission error, publish as a NEW artifact instead and tell me the new url.\n` +
-        (url ? `   (Expected source url: ${url})\n` : ``) +
         `4. If there is no marker, publish as a new Artifact and report the new url.\n` +
         `5. Preserve (or refresh) the marker comment, and use the file's <title>/first heading as the artifact title.`;
 
@@ -8166,16 +8165,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
         return paths[0] || '';
     };
 
-    const getArtifactUrlInput = () => {
-        const input = document.getElementById('planning-html-artifact-url');
-        return (input ? input.value.trim() : '');
-    };
-
     function buildArtifactPrompt() {
-        const url = getArtifactUrlInput();
         const folder = state.activeDocSourceFolder || getHtmlFolderFallback();
-        const filename = state.activeDocName || (url ? url.split('/').pop() + '.html' : 'artifact.html');
-        return { prompt: ARTIFACT_UPLOAD_PROMPT({ url, folder, filename }), kind: 'upload' };
+        const filename = state.activeDocName || 'artifact.html';
+        return { prompt: ARTIFACT_UPLOAD_PROMPT({ folder, filename }), kind: 'upload' };
     }
 
     const btnCopyPrompt = document.getElementById('btn-copy-artifact-prompt');

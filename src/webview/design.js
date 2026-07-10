@@ -4460,14 +4460,13 @@
     // Upload-only (no download direction). Reads the shared state.activeDocName /
     // state.activeDocSourceFolder set by the shared selectDoc handler, guarded by
     // state.activeSource === 'html-folder' so it only fires on an HTML-folder selection.
-    const CLAUDE_ARTIFACT_UPLOAD_PROMPT = ({ url, folder, filename }) =>
+    const CLAUDE_ARTIFACT_UPLOAD_PROMPT = ({ folder, filename }) =>
         `Publish a local document back to claude.ai as an Artifact.\n\n` +
         `PREREQUISITES: This requires a Claude Code Team or Enterprise plan with the Artifacts capability enabled.\n\n` +
         `1. Read the file: ${folder ? folder + '/' : ''}${filename}\n` +
         `2. Verify it is publish-ready before uploading — the host re-wraps and blocks external resources: ensure there are NO <!DOCTYPE>/<html>/<head>/<body> wrappers (strip them if an editor re-added any), and ALL assets are inlined as data: URIs / inline <style>/<script> (no external fonts, CSS, JS, or images — they render locally but silently disappear once published). If an edit introduced an external resource, inline it before publishing.\n` +
         `3. If it contains a \`switchboard-artifact-source:\` marker comment, redeploy to that existing URL by passing it as the Artifact tool's \`url\`. ` +
         `NOTE: this only overwrites if I own that artifact. If the tool returns a permission error, publish as a NEW artifact instead and tell me the new url.\n` +
-        (url ? `   (Expected source url: ${url})\n` : ``) +
         `4. If there is no marker, publish as a new Artifact and report the new url.\n` +
         `5. Preserve (or refresh) the marker comment, and use the file's <title>/first heading as the artifact title.`;
 
@@ -4484,9 +4483,7 @@
         if (!['.html', '.htm', '.md', '.markdown'].includes(ext)) {
             return { error: 'Artifacts support HTML or Markdown files — select an .html or .md file.' };
         }
-        const urlInput = document.getElementById('design-html-artifact-url');
-        const url = urlInput ? urlInput.value.trim() : '';
-        return { prompt: CLAUDE_ARTIFACT_UPLOAD_PROMPT({ url, folder, filename }) };
+        return { prompt: CLAUDE_ARTIFACT_UPLOAD_PROMPT({ folder, filename }) };
     }
 
     document.getElementById('btn-copy-design-html-artifact-prompt')?.addEventListener('click', () => {
