@@ -40,6 +40,7 @@ import { showTemporaryNotification } from './utils/showTemporaryNotification';
 import { PlanAutoFetchService } from './services/PlanAutoFetchService';
 import { MigrationService } from './services/MigrationService';
 import { runConnectClaudeDesktop } from './services/ClaudeDesktopConnector';
+import { exportCoworkSkill } from './services/CoworkSkillExporter';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -1054,6 +1055,10 @@ export async function activate(context: vscode.ExtensionContext) {
         );
     });
     context.subscriptions.push(connectClaudeDesktopDisposable);
+    const exportCoworkSkillDisposable = vscode.commands.registerCommand('switchboard.exportCoworkSkill', async () => {
+        await exportCoworkSkill();
+    });
+    context.subscriptions.push(exportCoworkSkillDisposable);
     const scaffoldMultiRepoDisposable = vscode.commands.registerCommand('switchboard.scaffoldMultiRepo', async () => {
         await vscode.commands.executeCommand('switchboard.openSetupPanel', 'control-plane:fresh-setup');
     });

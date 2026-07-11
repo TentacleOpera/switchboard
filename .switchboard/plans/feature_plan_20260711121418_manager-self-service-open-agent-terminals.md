@@ -197,3 +197,7 @@ getSelectedWorkspaceRoot: () => this._kanbanProvider?.getCurrentWorkspaceRoot() 
 
 ---
 **Recommendation:** Complexity 3 → Send to Intern.
+
+## Review Findings
+
+Direct reviewer pass (2026-07-11). `getSelectedWorkspaceRoot` added to the `LocalApiServer` options interface and wired in `TaskViewerProvider.ts` (`() => this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null`); `/health` surfaces it with the same never-fail `try/catch … ?? null` guard as `terminals` and conditionally spreads it so headless harnesses omit the field (older-extension fallback intact); the dispatch 409 body now teaches the `createAgentGrid` recovery path; the orchestration skill `/health` example + endpoint table updated in both copies. Both referenced verbs confirmed present in the allowlist (`selectWorkspace`∈KANBAN_VERBS, `createAgentGrid`∈TASKVIEWER_VERBS). No CRITICAL/MAJOR findings, so no code fixes applied. NIT (deferred): `$ROOT`-vs-`selectedWorkspaceRoot` is an exact string compare in skill prose, so a trailing-slash/normalization mismatch could fire a spurious `selectWorkspace` — bounded by the plan's already-accepted shared-state risk and the `project` pass-through. Files changed: `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, both skill copies. Validation: `catalog:check` ✅ / `parity:check` ✅ (no new verbs); mirror bodies in sync.

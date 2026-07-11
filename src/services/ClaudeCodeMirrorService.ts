@@ -54,15 +54,21 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     { source: 'workflows/improve-feature.md', name: 'improve-feature', invocation: 'default' },
     // /switchboard-split — split one plan into Complex/Risky + Routine files (remote splitter).
     { source: 'workflows/switchboard-split.md', name: 'switchboard-split', invocation: 'default' },
-    { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'default' },
-    // /switchboard-manage — Host-agnostic management console. Consultative persona:
-    // report board state on entry, then wait for user direction. Automation is opt-in
-    // only. Replaces the old /switchboard-orchestrator human command (which loaded the
-    // unattended automation persona — a footgun for a human opening a management view).
+    // switchboard-chat — demoted from a standalone front door to an internal skill
+    // the /switchboard router loads (cloud plan-brake persona). no-user: model-loadable,
+    // hidden from the slash menu. The typed command may still work in Antigravity (workflows
+    // are only surfaced when typed) but is no longer advertised as a front door.
+    { source: 'workflows/switchboard-chat.md', name: 'switchboard-chat', invocation: 'no-user' },
+    // switchboard-manage — Host-agnostic management console. Demoted from a standalone
+    // front door to the internal skill the /switchboard router routes to on local
+    // board-driving intent. no-user: model-loadable, hidden from the slash menu.
     // The engine still launches the automation persona by file path
     // (TaskViewerProvider.startOrchestratorFromKanban), so repointing the human command
     // does not break the machine launch.
-    { source: 'skills/switchboard-manage', name: 'switchboard-manage', invocation: 'no-model', allowedTools: 'Bash' },
+    {
+        source: 'skills/switchboard-manage', name: 'switchboard-manage', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Host-agnostic, low-noise management console for Switchboard — local state first, workspace-scoped API actions.'
+    },
     // NOTE: `/sw` and `/sw-remote` were retired 2026-07-03 — superseded by the
     // `/switchboard` front door, which detects local vs remote and routes planning
     // (local → switchboard-chat; remote → the sw-remote.md playbook, still shipped
@@ -70,50 +76,114 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // Remote-session skills — operate on Linear/feature files directly, used when the
     // VS Code extension is off (claude.ai / Claude Code web). Both were previously
     // authored only under .claude/ and so never shipped to user workspaces.
-    { source: 'skills/improve-remote-plan', name: 'improve-remote-plan', invocation: 'default', allowedTools: 'Bash' },
-    { source: 'skills/create-feature', name: 'create-feature', invocation: 'default' },
+    {
+        source: 'skills/improve-remote-plan', name: 'improve-remote-plan', invocation: 'default', allowedTools: 'Bash',
+        descriptionFallback: 'Improve a Switchboard plan stored in Linear — reads, deepens, writes back via the LocalApiServer GraphQL proxy without touching git. Use in remote sessions.'
+    },
+    {
+        source: 'skills/create-feature', name: 'create-feature', invocation: 'default',
+        descriptionFallback: 'Create a Switchboard feature from a remote session by writing the feature file directly — use when the VS Code extension is not running and create-feature.js is unreachable'
+    },
     // Create a feature from a known set of plans when the extension is running.
-    { source: 'skills/create-feature-from-plans', name: 'create-feature-from-plans', invocation: 'default' },
+    {
+        source: 'skills/create-feature-from-plans', name: 'create-feature-from-plans', invocation: 'default',
+        descriptionFallback: 'Create a Switchboard feature from a known set of plans — no discovery, just mechanics. Use when the user already knows which plans to group.'
+    },
 
     // Side-effecting proxy skills → disable-model-invocation (explicit /name only).
-    { source: 'skills/clickup-api', name: 'clickup-api', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup-fetch', name: 'clickup-fetch', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup-create-task', name: 'clickup-create-task', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup-modify-task', name: 'clickup-modify-task', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup-attach', name: 'clickup-attach', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup-create-subpage', name: 'clickup-create-subpage', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/linear-api', name: 'linear-api', invocation: 'no-model', allowedTools: 'Bash' },
+    {
+        source: 'skills/clickup-api', name: 'clickup-api', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Make direct ClickUp API calls via LocalApiServer proxy'
+    },
+    {
+        source: 'skills/clickup-fetch', name: 'clickup-fetch', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Fetch ClickUp tasks/lists with automatic name resolution'
+    },
+    {
+        source: 'skills/clickup-create-task', name: 'clickup-create-task', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Create ClickUp tasks with optional subtasks via LocalApiServer'
+    },
+    {
+        source: 'skills/clickup-modify-task', name: 'clickup-modify-task', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Update ClickUp task properties via LocalApiServer'
+    },
+    {
+        source: 'skills/clickup-attach', name: 'clickup-attach', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Attach files to ClickUp tasks via LocalApiServer'
+    },
+    {
+        source: 'skills/clickup-create-subpage', name: 'clickup-create-subpage', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Create doc pages in ClickUp via LocalApiServer'
+    },
+    {
+        source: 'skills/linear-api', name: 'linear-api', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Make direct Linear GraphQL API calls via LocalApiServer proxy'
+    },
     // Move-task proxy skills — sources existed under .agents/ but were missing from
     // the manifest, so they never generated into user workspaces.
-    { source: 'skills/clickup-move-task', name: 'clickup-move-task', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/linear-move-issue', name: 'linear-move-issue', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/notion-api', name: 'notion-api', invocation: 'no-model', allowedTools: 'Bash' },
+    {
+        source: 'skills/clickup-move-task', name: 'clickup-move-task', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Move a ClickUp task to a different list via LocalApiServer'
+    },
+    {
+        source: 'skills/linear-move-issue', name: 'linear-move-issue', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Move a Linear issue to a different project via LocalApiServer'
+    },
+    {
+        source: 'skills/notion-api', name: 'notion-api', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Post replies back to a Notion-driven Remote Control card via the LocalApiServer bridge'
+    },
     {
         source: 'skills/get-tickets', name: 'get-tickets', invocation: 'no-model', allowedTools: 'Bash',
         descriptionFallback: 'Fetch tickets from the local Switchboard API proxy (ClickUp/Linear) for the current workspace.'
     },
-    { source: 'skills/generate-diagram', name: 'generate-diagram', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/kanban_operations', name: 'kanban-operations', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/worktree-cleanup', name: 'worktree-cleanup', invocation: 'no-model', allowedTools: 'Bash' },
+    {
+        source: 'skills/generate-diagram', name: 'generate-diagram', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Generate architectural diagrams via LocalApiServer'
+    },
+    {
+        source: 'skills/kanban_operations', name: 'kanban-operations', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Move kanban cards and query kanban state via direct database access.'
+    },
+    {
+        source: 'skills/worktree-cleanup', name: 'worktree-cleanup', invocation: 'no-model', allowedTools: 'Bash',
+        descriptionFallback: 'Mark a worktree merged and clean it up (kind-aware) via LocalApiServer'
+    },
     { source: 'skills/refine_ticket.md', name: 'refine-ticket', invocation: 'no-model' },
     { source: 'skills/refine_feature.md', name: 'refine-feature', invocation: 'no-model' },
 
     // Model-invocable procedure skills — an agent loads these by description and
-    // follows the flow directly (no button click required).
-    { source: 'skills/group-into-features', name: 'group-into-features', invocation: 'default', allowedTools: 'Bash' },
+    // follows the flow directly (no button click required). no-user: model-loadable,
+    // not surfaced as a slash command (the /switchboard router invokes them).
+    {
+        source: 'skills/group-into-features', name: 'group-into-features', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Group loose Switchboard plans into features — scan pre-coding columns, cluster by capability, propose all groupings for one approval, then create features via create-feature.js'
+    },
     // Orchestration HTTP surface — read endpoints + request channel for fleet agents
     // working inside orchestration worktrees. Model-invocable (agents discover it by
     // description when they need to file a request or read board state).
-    { source: 'skills/switchboard-orchestration', name: 'switchboard-orchestration', invocation: 'default', allowedTools: 'Bash' },
+    {
+        source: 'skills/switchboard-orchestration', name: 'switchboard-orchestration', invocation: 'default', allowedTools: 'Bash',
+        descriptionFallback: 'Switchboard orchestration HTTP surface — the complete LocalApiServer contract for external AI coding tools and fleet agents. Discover the port, read the board/plans/features/worktrees/inbox/session-log, manage plan lifecycle, move cards, group and split features, dispatch fan-out, file requests to the orchestrator, and merge/clean up worktrees — all over localhost HTTP. Includes end-to-end workflows for a fleet coder inside a worktree and for an external orchestrator driving the board.'
+    },
 
     // Pure info-retrieval / read-only skills → user-invokable:false + rich description.
     {
         source: 'skills/archive', name: 'archive', invocation: 'no-user', allowedTools: 'Bash',
         descriptionFallback: 'Query and manage the DuckDB archive of historical plans and conversations.'
     },
-    { source: 'skills/query_archive', name: 'query-archive', invocation: 'no-user', allowedTools: 'Bash' },
-    { source: 'skills/query-switchboard-kanban', name: 'query-switchboard-kanban', invocation: 'no-user', allowedTools: 'Bash' },
-    { source: 'skills/query-kanban-plans', name: 'query-kanban-plans', invocation: 'no-user', allowedTools: 'Bash' },
+    {
+        source: 'skills/query_archive', name: 'query-archive', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Query the DuckDB archive directly using duckdb CLI.'
+    },
+    {
+        source: 'skills/query-switchboard-kanban', name: 'query-switchboard-kanban', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Query kanban state using direct SQL access to kanban.db'
+    },
+    {
+        source: 'skills/query-kanban-plans', name: 'query-kanban-plans', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Query the Kanban database for plans by workspace name, project, and features.'
+    },
     {
         source: 'skills/web-research', name: 'web-research', invocation: 'no-user',
         allowedTools: 'Read, Glob, Grep, WebSearch, WebFetch',
@@ -144,28 +214,54 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // Pure info doc: model-loadable (no-user), no Bash. Distinct from the invocation
     // authority (switchboard-orchestration + GET /catalog) — this answers "how does the
     // system behave?", never "how do I call X?".
-    { source: 'skills/switchboard-contracts', name: 'switchboard-contracts', invocation: 'no-user' },
+    {
+        source: 'skills/switchboard-contracts', name: 'switchboard-contracts', invocation: 'no-user',
+        descriptionFallback: 'System behavior contracts for agents driving Switchboard — consult when unsure how the system behaves; never for invocation. This doc answers how the system behaves. It never answers how to invoke something — for invocation, use the switchboard-orchestration skill and GET /catalog.'
+    },
 
-    // Discoverable `/switchboard-*` aliases — same sources as the canonical skills
-    // above, added so typing `/switchboard-` surfaces the whole family (the `/switchboard`
-    // router points at these). Additive: the canonical names keep working.
-    { source: 'workflows/improve-plan.md', name: 'switchboard-plan', invocation: 'default' },
-    { source: 'workflows/improve-feature.md', name: 'switchboard-feature', invocation: 'default' },
-    { source: 'skills/improve-remote-plan', name: 'switchboard-remote-plan', invocation: 'default', allowedTools: 'Bash' },
-    { source: 'skills/notion-api', name: 'switchboard-notion', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/linear-api', name: 'switchboard-linear', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/clickup-api', name: 'switchboard-clickup', invocation: 'no-model', allowedTools: 'Bash' },
-    { source: 'skills/kanban_operations', name: 'switchboard-kanban', invocation: 'no-model', allowedTools: 'Bash' },
+    // `/switchboard-*` aliases — same sources as the canonical skills above. Demoted
+    // to no-user (model-loadable, not surfaced as slash commands) so the canonical
+    // user-facing surface stays `/switchboard` + `/memo`. The /switchboard router
+    // loads these by name when routing; the canonical names keep working too.
+    { source: 'workflows/improve-plan.md', name: 'switchboard-plan', invocation: 'no-user' },
+    { source: 'workflows/improve-feature.md', name: 'switchboard-feature', invocation: 'no-user' },
+    {
+        source: 'skills/improve-remote-plan', name: 'switchboard-remote-plan', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Improve a Switchboard plan stored in Linear — reads, deepens, writes back via the LocalApiServer GraphQL proxy without touching git. Use in remote sessions.'
+    },
+    {
+        source: 'skills/notion-api', name: 'switchboard-notion', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Post replies back to a Notion-driven Remote Control card via the LocalApiServer bridge'
+    },
+    {
+        source: 'skills/linear-api', name: 'switchboard-linear', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Make direct Linear GraphQL API calls via LocalApiServer proxy'
+    },
+    {
+        source: 'skills/clickup-api', name: 'switchboard-clickup', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Make direct ClickUp API calls via LocalApiServer proxy'
+    },
+    {
+        source: 'skills/kanban_operations', name: 'switchboard-kanban', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Move kanban cards and query kanban state via direct database access.'
+    },
     {
         source: 'skills/web-research', name: 'switchboard-research', invocation: 'no-user',
         allowedTools: 'Read, Glob, Grep, WebSearch, WebFetch',
         descriptionFallback: 'Run comprehensive multi-source web research and synthesize a cited summary.'
     },
-    // switchboard-mcp — local stdio MCP server bridging Claude Desktop (and
-    // other MCP-only hosts) to LocalApiServer. Directory-form skill (the
-    // dynamic scan only auto-picks flat switchboard-*.md files, so it must be
-    // in the manifest or Claude Code never generates it into .claude/skills/).
-    { source: 'skills/switchboard-mcp', name: 'switchboard-mcp', invocation: 'no-user' },
+    // switchboard-mcp — transport layer (local stdio MCP server) bridging MCP-only
+    // hosts (Claude Desktop, Claude Cowork via the exported switchboard-cowork skill)
+    // to LocalApiServer. Demoted from a front door to transport: no-user (model-loadable,
+    // not user-facing). Directory-form skill (the dynamic scan only auto-picks flat
+    // switchboard-*.md files, so it must be in the manifest or Claude Code never
+    // generates it into .claude/skills/). The switchboard-cowork skill bundle carries
+    // this transport; do NOT rename the key (the activation-time scrubber deletes
+    // `switchboard`-keyed MCP entries — the sanctioned key is `switchboard-mcp`).
+    {
+        source: 'skills/switchboard-mcp', name: 'switchboard-mcp', invocation: 'no-user',
+        descriptionFallback: 'Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts) to Switchboard\'s LocalApiServer HTTP surface'
+    },
 ];
 
 const GENERATED_MANIFEST_FILE = '.switchboard-generated.json';
@@ -201,7 +297,7 @@ export const CLAUDE_PREAMBLE = `${CLAUDE_PROTOCOL_HEADER}
 > **Claude Code note.** The Switchboard protocol below was authored for the Antigravity host. In Claude Code:
 > - \`view_file <path>\` → use the **Read** tool.
 > - \`send_message\` and role-routing (reviewer, lead, etc.) are **Antigravity-only** — ignore them here.
-> - To run a workflow, invoke its native slash command (e.g. \`/memo\`, \`/improve-plan\`, \`/switchboard-chat\`) or read the skill at \`.claude/skills/<name>/SKILL.md\`.
+> - To run a workflow, invoke its native slash command (e.g. \`/switchboard\`, \`/memo\`, \`/improve-plan\`) or read the skill at \`.claude/skills/<name>/SKILL.md\`.
 > - The ClickUp / Linear / kanban skills shell out via \`.agents/skills/_lib/sb_api_call.sh\` and work as-is, provided the Switchboard extension (and its API server) is running.`;
 
 /**

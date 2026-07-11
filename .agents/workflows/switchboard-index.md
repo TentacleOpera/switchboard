@@ -24,11 +24,31 @@ If the user types `/switchboard <request>` (a request is already attached), skip
 
 ## Route by intent (behind the scenes)
 
-Match the request to a skill and invoke it. Environment detection is silent: check whether `.switchboard/api-server-port.txt` exists (walk up from the working directory). Present → **local** (extension running; every skill works). Absent → **remote** (headless/cloud; git, file, and MCP skills work). Use this only to pick the right route — never narrate it.
+Match the request to a skill and invoke it. Environment detection is silent and 3-way — it picks the route, never narrates which environment was detected:
+
+| Environment | Signal | Behavior |
+| :--- | :--- | :--- |
+| **Local** (IDE / Antigravity desktop app) | `.switchboard/api-server-port.txt` present **and** the LocalApiServer answers a live health check (`curl -s http://127.0.0.1:$PORT/health`) | **Management console** hub — board-driving, can launch a planning/chat session on request. Routed on board-driving intent (see below). |
+| **Cloud remote** (Claude/Codex remote VM) | Shell available, `.switchboard/` present in the repo, **no** reachable server | **Plan-mode brake** — stop, plan, do not code until a plan is approved. |
+| **Claude Cowork** | Handled by the separate `switchboard-cowork` skill (exported from the Setup panel) — not this detection path | Routes through the bundled MCP transport. |
+
+**Health-check, not just file-presence.** A stale port file (extension crashed/closed) must not misdetect local. Probe the port file **and** hit `/health` with a short timeout. On file-present-but-unreachable, fall through to the cloud/plan-mode branch — the documented safe default (planning, not destructive board action). State the detected mode in one line only if the user asks or a route decision needs explaining; never announce it unprompted.
+
+**Bare `/switchboard` (no request attached) always shows the friendly opener above** — never a status read-out, regardless of environment. The local→console route fires only once the user expresses board-driving intent (either `/switchboard <request>` with a board action, or a follow-up in the opened session). Only then does the management console's Entry Protocol read-out appear.
+
+### Local branch (board-driving intent)
+
+Route to the **`switchboard-manage`** skill body (read `.claude/skills/switchboard-manage/SKILL.md` or the `.agents/skills/switchboard-manage/SKILL.md` source) — the management-console persona. It drives the board over the localhost HTTP API and can launch a planning/chat session on request (absorbing the old `switchboard-chat` consultative-planning persona as a sub-action: "start a planning session" inside the console).
+
+### Cloud branch (plan-mode brake)
+
+Route to the **plan-brake behavior** — the consultative planning persona (the old `switchboard-chat` body, read `.agents/workflows/switchboard-chat.md`). Explicitly withhold all code changes until a plan is written and the user explicitly approves implementation. This is the highest-value job in a cloud VM: stop the agent from spinning up a branch and coding immediately when the user only wanted to plan.
+
+### Intent → skill table
 
 | The user wants to… | Use |
 | :--- | :--- |
-| Plan / consult on what to build | **`switchboard-chat`** (writes plan files you merge on the branch). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
+| Plan / consult on what to build | Local → **`switchboard-manage`** console's planning sub-action; Cloud → plan-brake persona (`switchboard-chat` body). If they want Linear/Notion tracking, use the `sw-remote.md` playbook instead. |
 | Capture ideas rapidly, no analysis | **`memo`** ("start memo capture" → `process memo`) |
 | Deepen / adversarially review **one** plan | **`improve-plan`** |
 | Reconcile & restructure a **feature's** subtasks | **`improve-feature`** |
@@ -50,4 +70,4 @@ Match the request to a skill and invoke it. Environment detection is silent: che
 - **Chain when natural**, e.g. planning → `create-feature` → `improve-feature`.
 - **Surface a gap only when a request actually hits one.** A few skills need the running extension (`clickup-*`, `improve-remote-plan`, live `kanban.db`/DuckDB reads). In a remote session, don't preemptively warn about them — only if the user asks for one, say the direct route needs the extension and offer the remote equivalent (plan work → plain plan-file edits with `**Feature:**`/`**Project:**` frontmatter; board moves → Notion/Linear MCP).
 - **Only ask a question if genuinely ambiguous**, and then just one; otherwise pick the best fit and proceed.
-- **`/switchboard` is the only front door.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them.
+- **`/switchboard` + `/memo` are the only front doors.** `/sw` and `/sw-remote` were retired and folded into this router — do not tell users to type them. `switchboard-chat` and `switchboard-manage` are now internal skills this router loads — not separate commands the user needs to know. The workflow verbs (`improve-plan`, `improve-feature`, `switchboard-split`) remain typeable for power users but are not advertised as front doors.

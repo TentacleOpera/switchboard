@@ -79,6 +79,10 @@
         "title": "Switchboard: Connect Claude Desktop"
       },
       {
+        "command": "switchboard.exportCoworkSkill",
+        "title": "Switchboard: Set Up Cowork"
+      },
+      {
         "command": "switchboard.scaffoldMultiRepo",
         "title": "Multi-Repo: Scaffold Control Plane",
         "category": "Switchboard"

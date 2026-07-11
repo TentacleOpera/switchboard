@@ -222,3 +222,7 @@ extension)"** label. Step 3's shell-discipline callout stays with the fallback.
 
 ---
 **Recommendation:** Complexity 4 → Send to Coder.
+
+## Review Findings
+
+Direct reviewer pass (2026-07-11). Implementation in `src/services/KanbanDatabase.ts` `_writeLocalBoardMirror()` is plan-compliant: `activeFilter` folded into the content hash deterministically (no write loop — verified against the `setConfig`→`_persist`→`_scheduleLocalMirror` chain), snapshot appended inside the existing atomic temp+rename write, canonical uppercase column IDs. No CRITICAL/MAJOR findings, so no code fixes applied. NITs (all plan-faithful or scope-consistent, deferred): `TICKET UPDATER` omitted from POST_CODE so it prints in the board line instead of folding into `terminal N`; `COMPLETED` row is always 0 because `getBoard()` excludes completed plans; feature cards in post-code columns show in the table but not the board line. Validation: `catalog:check` ✅ / `parity:check` ✅; auto-export tests assert existence + per-column content only, so the appended section breaks nothing; no `kanban-board.md` consumer parses the index for planIds. Remaining risk: snapshot lags a just-made move by the debounce window — same freshness contract as the state files, made explicit by the `Updated:` timestamp.

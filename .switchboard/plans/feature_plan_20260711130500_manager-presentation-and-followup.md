@@ -250,3 +250,7 @@ Same body edits (mirror frontmatter untouched).
 
 ---
 **Recommendation:** Complexity 3 → Send to Intern.
+
+## Review Findings
+
+Direct reviewer pass (2026-07-11). Prose-only change in `switchboard-manage/SKILL.md` (both copies): the consolidated Presentation & follow-up callout is inserted between "Local-first for lists" and "Verb-rail payload trap"; Hard Rule 8 extended to "raw UUIDs, plan filenames, or file paths" with a §2 cross-ref; the Browse/filter bullet gains the follow-the-callout pointer. Verified the callout references only real response fields — `dispatchedAgent` is returned at `LocalApiServer.ts:675` and is nullable, and the callout explicitly handles the empty/prompt-mode case ("never invent a recipient"). The offer is phrased as a question with Hard Rules 2/3 left untouched (no eager-action regression), and the numbered-titles→internal-planId mechanism keeps UUID hygiene intact. No CRITICAL/MAJOR findings; no code surface, no fixes required. Validation: `.agents`↔`.claude` manage body byte-identical; no catalog/allowlist impact (`catalog:check` ✅ / `parity:check` ✅). No remaining risks.

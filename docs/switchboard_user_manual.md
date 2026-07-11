@@ -819,13 +819,19 @@ All commands registered in `extension.ts` and declared in `package.json`:
 
 ## 22. IDE Chat Commands
 
-These are slash commands available in IDE chat agents (Windsurf, Cursor, Antigravity) when the Switchboard workflow files are installed:
+Switchboard exposes **two front doors** in IDE chat agents (Windsurf, Cursor, Antigravity, Claude Code):
 
-- **`/switchboard-chat`** — PM consultation workflow. Activate to get planning advice and project management guidance.
-- **`/improve-plan`** — Deep planning and adversarial review. Runs a multi-phase workflow to write, critique, and refine plans.
-- **`/archive`** — Search the DuckDB plan archive for historical plans and conversations.
-- **`/export`** — Save the current conversation to the archive for future reference.
+- **`/switchboard`** — The single adaptive front door. Detects its environment (local IDE with the extension running → management console; cloud remote VM → plan-mode brake) and routes accordingly. Bare invocation shows a friendly opener; attach a request or follow up to route to the right skill. Start here when unsure.
 - **`/memo`** — Enter memo capture mode. Appends each message verbatim to `.switchboard/memo.md` without analysis or action. Process entries via the Memo sub-tab in the sidebar, or send `process memo` to exit and create one plan per entry. Clear the conversation to leave without processing.
+
+**Power-user verbs** (typeable but not advertised as front doors — the `/switchboard` router invokes them as needed):
+
+- **`/improve-plan`** — Deep planning and adversarial review. Runs a multi-phase workflow to write, critique, and refine plans.
+- **`/improve-feature`** — Reconcile & restructure a feature's subtasks.
+- **`/switchboard-split`** — Split one plan into Complex/Risky + Routine tiers.
+- **`/accuracy`** — High-accuracy mode with self-review.
+
+**Claude Cowork** is served by a dedicated `switchboard-cowork` skill, exported as a `.zip` from the Setup panel's **"Set up Cowork"** button. Upload it in Cowork's Settings > Capabilities. It bundles the local MCP transport so Cowork can drive the board.
 
 ---
 
@@ -1646,9 +1652,9 @@ Switchboard's planning workflows are not limited to VS Code. You can drive the p
 - The Switchboard extension must be open in VS Code so that `kanban-board.md` stays up to date (it is written on every board change).
 - `kanban-board.md` must not be gitignored (Switchboard manages this automatically from Setup → Git Ignore Strategy → `targetedGitignore`).
 
-### Entering planning mode: `/sw`
+### Entering planning mode: `/switchboard`
 
-Type `/sw` in any claude.ai chat. This loads the Switchboard Operator persona: a consultative planner that gathers requirements, challenges assumptions, and produces implementation plans — but does not write code until you approve a plan.
+Type `/switchboard` in any claude.ai chat. In a cloud/remote session (no reachable local API), this loads the plan-mode brake persona: a consultative planner that gathers requirements, challenges assumptions, and produces implementation plans — but does not write code until you approve a plan.
 
 Once active, the skill reads `.switchboard/kanban-board.md` so you can address your board by column:
 
@@ -1658,20 +1664,24 @@ Once active, the skill reads `.switchboard/kanban-board.md` so you can address y
 
 ### Available workflows on claude.ai
 
-All slash-command workflows work on claude.ai:
+The two front doors plus the power-user verbs work on claude.ai:
 
 | Command | What it does |
 |---------|--------------|
-| `/sw` | Enter consultative planning mode (Switchboard Operator) |
-| `/improve-plan` | Deep-plan a draft with dependency checks and adversarial review |
+| `/switchboard` | Single adaptive front door — plan-mode brake in cloud sessions |
 | `/memo` | Capture a burst of ideas as plan stubs — exits with `process memo` |
+| `/improve-plan` | Deep-plan a draft with dependency checks and adversarial review |
+| `/improve-feature` | Reconcile & restructure a feature's subtasks |
+| `/switchboard-split` | Split one plan into Complex/Risky + Routine tiers |
 | `/accuracy` | High-accuracy mode with self-review for precision tasks |
+
+> **Note:** `/sw` and `/sw-remote` were retired and folded into `/switchboard`. Use `/switchboard` instead.
 
 ### Chaining: triage then bulk-improve
 
-The most powerful pattern is to chain `/sw` with `/improve-plan` across a whole column:
+The most powerful pattern is to chain `/switchboard` with `/improve-plan` across a whole column:
 
-1. Type `/sw` and ask Claude to list everything in a column (e.g. "show me all Created plans").
+1. Type `/switchboard` and ask Claude to list everything in a column (e.g. "show me all Created plans").
 2. Claude reads `kanban-board.md` and lists the plans with titles and file paths.
 3. Say "run `/improve-plan` on each of those" — Claude works through all of them in the same session, one after another, producing improved plan files it commits back to `.switchboard/plans/`.
 

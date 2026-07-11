@@ -96,6 +96,13 @@ const extensionConfig = {
                 {
                     from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
                     to: 'sql-wasm.wasm'
+                },
+                {
+                    // switchboard-cowork skill source — copied to dist/ so the
+                    // CoworkSkillExporter can read it at runtime and zip it on demand.
+                    // Source lives under src/ (ignored by .vscodeignore) but dist/ ships.
+                    from: path.resolve(__dirname, 'src', 'cowork-skill', 'switchboard-cowork'),
+                    to: 'cowork-skill/switchboard-cowork'
                 }
             ]
         })

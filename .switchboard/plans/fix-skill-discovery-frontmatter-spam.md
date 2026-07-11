@@ -156,3 +156,9 @@ Key risks: (1) a blank Claude Code description if any alias entry sharing a stri
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder.** Ready to execute; no open decisions. Land this before the companion front-door plan.
+
+---
+
+## Completion Summary
+
+Implemented the frontmatter strip + `descriptionFallback` backfill. Scanned `.agents/skills/*/SKILL.md` and found **32** directory skill files with leading `---` frontmatter (plan estimated 31; one more exists on disk — all covered). Backfilled `descriptionFallback` on every `MIRROR_MANIFEST` entry whose `source` resolves to a stripped directory and lacked a fallback — including all shared-source aliases (`switchboard-remote-plan`, `switchboard-notion`, `switchboard-linear`, `switchboard-clickup`, `switchboard-kanban`) — so Claude Code mirror output stays byte-equivalent (verified existing fallbacks on `get-tickets`/`archive`/`web-research`/`deep-planning`/`complexity-scoring`/`advise-research`/`constitution-builder`/`tuning`/`switchboard-research` already match their source descriptions). Stripped the leading `---`…`---` block from all 32 files, leaving the markdown body intact; asserted post-edit no target begins with `---`. Reference audit confirmed all 32 stripped skills retain a live reference in `AGENTS.md` (no orphans, no new references needed). Files changed: `src/services/ClaudeCodeMirrorService.ts` (manifest backfill) + 32 `.agents/skills/*/SKILL.md` source files. No orphans found; no `parseSource` code change required (confirmed it already tolerates frontmatter-less sources). Per session directive, compilation and automated tests were skipped — verification was by inspection + the strip-idempotency and manifest-completeness assertions above.

@@ -20,9 +20,9 @@ Make the manager console feel like a manager: natural-language plan lists and di
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Faster Manage-Skill Startup: Manager Snapshot Section in kanban-board.md](../plans/feature_plan_20260711120046_manager-snapshot-kanban-board.md) — **CODER CODED**
-- [ ] [Manager Self-Service: Open Agent Terminals via the API Instead of Sending the User to the IDE](../plans/feature_plan_20260711121418_manager-self-service-open-agent-terminals.md) — **CODER CODED**
-- [ ] [Manager Console: Natural-Language Presentation & Follow-Up Offer for Plan Lists and Dispatch Reports](../plans/feature_plan_20260711130500_manager-presentation-and-followup.md) — **CODER CODED**
+- [ ] [Faster Manage-Skill Startup: Manager Snapshot Section in kanban-board.md](../plans/feature_plan_20260711120046_manager-snapshot-kanban-board.md) — **CODE REVIEWED**
+- [ ] [Manager Self-Service: Open Agent Terminals via the API Instead of Sending the User to the IDE](../plans/feature_plan_20260711121418_manager-self-service-open-agent-terminals.md) — **CODE REVIEWED**
+- [ ] [Manager Console: Natural-Language Presentation & Follow-Up Offer for Plan Lists and Dispatch Reports](../plans/feature_plan_20260711130500_manager-presentation-and-followup.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Completion Report

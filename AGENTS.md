@@ -1,6 +1,7 @@
 <!-- switchboard:agents-protocol:start -->
 <!-- switchboard:agents-protocol:start -->
 <!-- switchboard:agents-protocol:start -->
+<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
@@ -25,7 +26,7 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 | `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
 | `/switchboard-manage` | **`switchboard-manage.md`** | Management console — thin router that reads and follows the `switchboard-manage` skill: entry snapshot → categorized menu → wait for direction. |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
-| `/switchboard-orchestrator` *(system-launched)* | **`switchboard-orchestrator.md`** | Orchestration-mode batch manager — system-woken persona that groups plans into features (confirm gate off + `Miscellaneous` sweep), fans out to per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Launched by the toolbar's Start Automation button in Orchestration mode; not for ad-hoc use. |
+| `/switchboard-orchestrator` *(system-launched)* | **`switchboard-orchestrator.md`** | Orchestration-mode batch manager — system-woken persona that groups plans into features (confirm gate off + `Miscellaneous` sweep), fans out to per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Launched by the AUTOMATION tab's Start orchestrator; not for ad-hoc use. |
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -115,7 +116,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `create-feature-from-plans` | Create a Switchboard feature from a known set of plans when the extension is running — runs create-feature.js |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
 | `worktree-cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
-| `switchboard-orchestrator` | Launched by the Orchestration automation mode (toolbar Start Automation button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). Manual `/switchboard-orchestrator` is for deliberate resume/debug only. |
+| `switchboard-orchestrator` | Launched by the Orchestration automation mode (Start orchestrator button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). Manual `/switchboard-orchestrator` is for deliberate resume/debug only. |
 | `switchboard-manage` | Host-agnostic management console — drive the board, plans, features, and dispatch from any agentic coding host with VS Code minimised. Consultative persona: report state on entry, then wait for user direction. Automation is opt-in only. Replaces the old human `/switchboard-orchestrator` slash command. |
 | `switchboard-orchestration` | Fleet coding/review agents working inside orchestration worktrees — discover the API port, read board/features/plans/worktrees, file requests to the orchestrator, and read the session log via HTTP endpoints. |
 | `switchboard-mcp` | Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts with no shell/filesystem) to LocalApiServer. Claude Desktop reaches the management surface via this MCP server, not shell. Use the in-extension **Connect Claude Desktop** button (Setup panel) to write the config entry. |
@@ -164,6 +165,7 @@ Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both pa
 
 > **System backstop:** the importer is resolve-only. An unknown pin (or one equal to a workspace name / a literal `<...>` placeholder) leaves the plan unassigned instead of auto-creating a `projects` row. Only the user creates projects (on the board). The protocol above is the first line of defense; the import guard is the non-negotiable backstop.
 
+<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->

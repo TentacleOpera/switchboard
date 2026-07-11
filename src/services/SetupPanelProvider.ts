@@ -15,6 +15,7 @@ import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { exportCoworkSkill } from './CoworkSkillExporter';
 
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
     handleGetControlPlaneStatus?: (workspaceRoot?: string) => Promise<any>;
@@ -619,6 +620,9 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'connectClaudeDesktop':
                     await vscode.commands.executeCommand('switchboard.connectClaudeDesktop');
+                    break;
+                case 'setupCowork':
+                    await vscode.commands.executeCommand('switchboard.exportCoworkSkill');
                     break;
                 case 'saveStartupCommands':
                     if (this._setupService) {

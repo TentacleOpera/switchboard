@@ -30,7 +30,7 @@ PORT=$(cat .switchboard/api-server-port.txt)
 BASE="http://127.0.0.1:$PORT"
 
 # Confirm Switchboard is up before anything else.
-curl -s "$BASE/health"     # -> { status: 'ok', port, roots: [...], terminals: [...], terminalCount, selectedWorkspaceRoot }
+curl -s "$BASE/health"     # -> { status: 'ok', port, roots: [...] }
 ```
 
 If `.switchboard/api-server-port.txt` is missing or `/health` fails, Switchboard is **not running** —
@@ -57,7 +57,7 @@ primary workspace.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /health` | `{ status, port, roots, terminals?, terminalCount?, selectedWorkspaceRoot? }` — liveness + workspace roots + live terminal agents + board's selected workspace root |
+| `GET /health` | `{ status, port, roots }` — liveness + workspace roots |
 | `GET /kanban/board` | Full board: every active plan record for the workspace |
 | `GET /kanban/plans?column=<col>` | Plans filtered to one column |
 | `GET /kanban/plans?featureId=<id>` | Subtasks of a feature |
