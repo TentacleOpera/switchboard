@@ -1,8 +1,3 @@
----
-name: Group Into Features
-description: Group loose Switchboard plans into features — scan pre-coding columns, cluster by capability, propose all groupings for one approval, then create features via create-feature.js
----
-
 # Skill: Group Into Features
 
 You are grouping loose Switchboard plans into features. Follow this flow exactly — do not create any feature before the user approves.

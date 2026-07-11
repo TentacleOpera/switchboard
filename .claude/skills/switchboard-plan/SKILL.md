@@ -1,6 +1,7 @@
 ---
 name: switchboard-plan
 description: Deep planning, dependency checks, and adversarial review
+user-invokable: false
 ---
 
 # Improve Plan

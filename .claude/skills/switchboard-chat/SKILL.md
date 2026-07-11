@@ -1,6 +1,7 @@
 ---
 name: switchboard-chat
 description: Consultative planning mode (Switchboard Operator)
+user-invokable: false
 ---
 
 # Consultation & Planning Mode

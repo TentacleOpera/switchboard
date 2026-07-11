@@ -1,8 +1,3 @@
----
-name: Notion Reply Bridge
-description: Post replies back to a Notion-driven Remote Control card via the LocalApiServer bridge
----
-
 # Notion Reply Bridge
 
 ## When to Use

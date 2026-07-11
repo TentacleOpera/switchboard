@@ -2,6 +2,7 @@
 name: switchboard-remote-plan
 description: Improve a Switchboard plan stored in Linear — reads, deepens, writes back via the LocalApiServer GraphQL proxy without touching git. Use in remote sessions.
 allowed-tools: Bash
+user-invokable: false
 ---
 
 # Improve Remote Plan (Linear)

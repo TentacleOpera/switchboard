@@ -2,7 +2,7 @@
 name: switchboard-manage
 description: Host-agnostic, low-noise management console for Switchboard — local state first, workspace-scoped API actions.
 allowed-tools: Bash
-disable-model-invocation: true
+user-invokable: false
 ---
 
 # Skill: Switchboard Manage — Host-Agnostic Management Console

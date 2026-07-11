@@ -1,8 +1,3 @@
----
-name: ClickUp Move Task
-description: Move a ClickUp task to a different list via LocalApiServer
----
-
 # Move ClickUp Task
 
 ## When to Use

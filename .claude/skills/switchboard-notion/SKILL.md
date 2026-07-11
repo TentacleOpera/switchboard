@@ -2,7 +2,7 @@
 name: switchboard-notion
 description: Post replies back to a Notion-driven Remote Control card via the LocalApiServer bridge
 allowed-tools: Bash
-disable-model-invocation: true
+user-invokable: false
 ---
 
 # Notion Reply Bridge

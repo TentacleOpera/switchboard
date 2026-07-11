@@ -2,7 +2,7 @@
 name: switchboard-linear
 description: Make direct Linear GraphQL API calls via LocalApiServer proxy
 allowed-tools: Bash
-disable-model-invocation: true
+user-invokable: false
 ---
 
 # Linear API Proxy

@@ -2,6 +2,7 @@
 name: group-into-features
 description: Group loose Switchboard plans into features — scan pre-coding columns, cluster by capability, propose all groupings for one approval, then create features via create-feature.js
 allowed-tools: Bash
+user-invokable: false
 ---
 
 # Skill: Group Into Features

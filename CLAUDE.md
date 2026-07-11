@@ -25,13 +25,11 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 > **Claude Code note.** The Switchboard protocol below was authored for the Antigravity host. In Claude Code:
 > - `view_file <path>` → use the **Read** tool.
 > - `send_message` and role-routing (reviewer, lead, etc.) are **Antigravity-only** — ignore them here.
-> - To run a workflow, invoke its native slash command (e.g. `/memo`, `/improve-plan`, `/switchboard-chat`) or read the skill at `.claude/skills/<name>/SKILL.md`.
+> - To run a workflow, invoke its native slash command (e.g. `/switchboard`, `/memo`, `/improve-plan`) or read the skill at `.claude/skills/<name>/SKILL.md`.
 > - The ClickUp / Linear / kanban skills shell out via `.agents/skills/_lib/sb_api_call.sh` and work as-is, provided the Switchboard extension (and its API server) is running.
 
 ---
 
-<!-- switchboard:agents-protocol:start -->
-<!-- switchboard:agents-protocol:start -->
 <!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
@@ -49,13 +47,13 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
-| `/switchboard` | **`switchboard-index.md`** | Front door — detects local vs remote and routes the request to the right Switchboard skill. Start here when unsure which skill to use. |
+| `/switchboard` | **`switchboard-index.md`** | **The single adaptive front door** (with `/memo`). Detects its environment (local IDE with a live API → management console; cloud remote → plan-mode brake) and routes the request to the right internal skill. Start here when unsure. |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
 | `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for a feature use `/improve-feature`. |
 | `/improve-feature` | **`improve-feature.md`** | Reconcile & restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. Supports a high/low complexity-tier mode. |
 | `/switchboard-split` | **`switchboard-split.md`** | Split one plan into a Complex/Risky file + a Routine companion so the tiers can be coded separately. Remote-safe (file writes). |
-| `/switchboard-chat` | **`switchboard-chat.md`** | Local consultative planning mode. (Reached via `/switchboard` in local mode; `/sw` retired. Avoid `/chat` — clashes with the native CLI reset command.) |
-| `/switchboard-manage` | **`switchboard-manage.md`** | Management console — thin router that reads and follows the `switchboard-manage` skill: entry snapshot → categorized menu → wait for direction. |
+| *(internal, not a front door)* | **`switchboard-chat.md`** | Consultative planning persona. **Not a user front door** — the `/switchboard` router loads it as the cloud plan-mode brake (and as the console's "start a planning session" sub-action). Do not advertise `/switchboard-chat`. |
+| *(internal, not a front door)* | **`switchboard-manage.md`** | Management console persona (entry snapshot → categorized menu → wait for direction). **Not a user front door** — the `/switchboard` router loads it on local board-driving intent. Do not advertise `/switchboard-manage`. |
 | `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
 | `/switchboard-orchestrator` *(system-launched)* | **`switchboard-orchestrator.md`** | Orchestration-mode batch manager — system-woken persona that groups plans into features (confirm gate off + `Miscellaneous` sweep), fans out to per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Launched by the AUTOMATION tab's Start orchestrator; not for ad-hoc use. |
 
@@ -196,9 +194,5 @@ Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both pa
 
 > **System backstop:** the importer is resolve-only. An unknown pin (or one equal to a workspace name / a literal `<...>` placeholder) leaves the plan unassigned instead of auto-creating a `projects` row. Only the user creates projects (on the board). The protocol above is the first line of defense; the import guard is the non-negotiable backstop.
 
-<!-- switchboard:agents-protocol:end -->
-<!-- switchboard:agents-protocol:end -->
-<!-- switchboard:agents-protocol:end -->
-<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
 <!-- switchboard:claude-protocol:end -->

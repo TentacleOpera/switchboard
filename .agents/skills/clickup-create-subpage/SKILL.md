@@ -1,8 +1,3 @@
----
-name: ClickUp Create Subpage
-description: Create doc pages in ClickUp via LocalApiServer
----
-
 # Create ClickUp Doc Subpage
 
 ## When to Use

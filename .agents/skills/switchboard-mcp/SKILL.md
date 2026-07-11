@@ -1,8 +1,3 @@
----
-name: Switchboard MCP
-description: Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts) to Switchboard's LocalApiServer HTTP surface
----
-
 # Switchboard MCP
 
 ## When to Use

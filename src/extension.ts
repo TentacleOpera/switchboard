@@ -235,9 +235,95 @@ function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: 
     return false;
 }
 
+/**
+ * Predicate: a folder is Switchboard-managed iff `<root>/.switchboard/` exists
+ * as a directory. This is the definitive opt-in marker — it is what makes a
+ * folder eligible for control-plane refresh, and it aligns with the version
+ * stamp's write path (`<root>/.switchboard/.agent_version.json`). Folders
+ * without it are never scaffolded (prevents littering unrelated open repos).
+ */
+function isSwitchboardManagedFolder(root: string): boolean {
+    try {
+        const dir = path.join(root, '.switchboard');
+        return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+    } catch {
+        return false;
+    }
+}
 
+/**
+ * Per-folder control-plane refresh: content-hash skill seed + version-gated
+ * protocol scaffold + per-folder version stamp. Extracted from the old
+ * single-root activation block; behavior is byte-equivalent for one folder.
+ *
+ * Ordering contract (preserved from the original :477-479 block):
+ *   1. Capture `needsAgentRefresh` BEFORE seeding (seeding must not pre-stamp).
+ *   2. Content-hash skill seed loop.
+ *   3. Scaffold + stamp iff `needsAgentRefresh || agentsChanged`.
+ */
+async function refreshWorkspaceControlPlane(
+    root: string,
+    context: vscode.ExtensionContext
+): Promise<void> {
+    // 1. Capture refresh decision BEFORE seeding stamps the version.
+    const needsAgentRefresh = shouldRefreshAgentWorkspaceFiles(context.extensionUri.fsPath, root);
 
+    // 2. Content-hash skill seed loop (per-file fault tolerance).
+    let agentsChanged = false;
+    try {
+        const bundledSkillsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'skills');
+        const skillFiles = await crawlDirectory(bundledSkillsUri);
+        for (const relativePath of skillFiles) {
+            const srcUri = vscode.Uri.joinPath(bundledSkillsUri, relativePath);
+            const destUri = vscode.Uri.joinPath(vscode.Uri.file(root), '.agents', 'skills', relativePath);
+            try {
+                await vscode.workspace.fs.stat(destUri);
+                // dest exists → overwrite iff bundle content differs (content-hash refresh)
+                try {
+                    const [srcHash, destHash] = await Promise.all([
+                        ControlPlaneMigrationService.hashFile(srcUri.fsPath),
+                        ControlPlaneMigrationService.hashFile(destUri.fsPath),
+                    ]);
+                    if (srcHash !== destHash) {
+                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
+                        await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
+                        agentsChanged = true;
+                    }
+                } catch (hashErr) {
+                    console.warn(`[Switchboard] Skill content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
+                }
+            } catch {
+                // dest absent → copy new file.
+                try {
+                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
+                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
+                    agentsChanged = true;
+                } catch (copyErr) {
+                    console.warn(`[Switchboard] Skill seed copy failed for ${relativePath}, skipping:`, copyErr);
+                }
+            }
+        }
+    } catch (err) {
+        console.error(`[Switchboard] Skill-file seed failed for ${root}, continuing:`, err);
+    }
 
+    // 3. Scaffold protocol layers + stamp version iff refresh needed.
+    if (needsAgentRefresh || agentsChanged) {
+        try {
+            await scaffoldProtocolLayers(
+                vscode.Uri.file(root),
+                context.extensionUri,
+                'Migration'
+            );
+            const currentVersion = getExtensionVersion(context.extensionUri.fsPath);
+            if (currentVersion) {
+                setLastCopiedAgentVersion(root, currentVersion);
+            }
+        } catch (err) {
+            console.error(`[Switchboard] Protocol-file migration failed for ${root}, continuing:`, err);
+        }
+    }
+}
 
 // Terminal Registry: Store terminal references for input forwarding
 const registeredTerminals = new Map<string, vscode.Terminal>();
@@ -469,83 +555,30 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     }
 
-    // Version-gated protocol migration: when the extension version changes,
-    // ensure the workspace protocol files (AGENTS.md / CLAUDE.md + .claude/ mirror)
-    // are updated to the latest bundled version. Gated on the SAME predicate the
-    // workflow-file migration uses so upgrade behavior is consistent.
-    if (workspaceRoot) {
-        // Capture the refresh decision BEFORE seeding stamps the version, so the
-        // mirror (which runs after seeding) sees the correct gate.
-        const needsAgentRefresh = shouldRefreshAgentWorkspaceFiles(context.extensionUri.fsPath, workspaceRoot);
-
-        // Activation-time skill seeding: copy bundled skill files into the workspace.
-        // MUST run BEFORE the .claude mirror so source .agents/skills/ is populated on a fresh install.
-        // Content-hash self-healing: an existing bundled skill file is overwritten when its
-        // content differs from the bundle (so dev-repo skill fixes reach already-seeded
-        // workspaces without a version bump). User-authored (non-bundled) skills are never
-        // touched — the loop only iterates files present in the bundle. Fail-safe: if hashing
-        // either side throws, skip (do not overwrite) and log — never clobber on an I/O error.
-        let agentsChanged = false;
+    // Multi-root control-plane refresh: refresh every Switchboard-managed folder
+    // (mapping parents ∪ open managed folders), not just the focused one. The
+    // mappings list is the user-maintained distribution list; open folders cover
+    // the normal single-folder install. Dedupe by resolved path. Per-folder
+    // try/catch so one bad folder never aborts the others.
+    const { getMappingsFromIndex } = require('./services/WorkspaceIdentityService');
+    const mappingCfg = getMappingsFromIndex();
+    const refreshTargets = new Set<string>();
+    for (const m of (mappingCfg.enabled ? mappingCfg.mappings : [])) {
+        if (!m.parentFolder) continue;
+        const expanded = m.parentFolder.startsWith('~')
+            ? path.join(os.homedir(), m.parentFolder.slice(1))
+            : m.parentFolder;
+        refreshTargets.add(path.resolve(expanded));
+    }
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        refreshTargets.add(path.resolve(folder.uri.fsPath));
+    }
+    for (const root of refreshTargets) {
+        if (!isSwitchboardManagedFolder(root)) continue;
         try {
-            const bundledSkillsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'skills');
-            const skillFiles = await crawlDirectory(bundledSkillsUri);
-            for (const relativePath of skillFiles) {
-                const srcUri = vscode.Uri.joinPath(bundledSkillsUri, relativePath);
-                const destUri = vscode.Uri.joinPath(vscode.Uri.file(workspaceRoot), '.agents', 'skills', relativePath);
-                try {
-                    await vscode.workspace.fs.stat(destUri);
-                    // dest exists → overwrite iff bundle content differs (content-hash refresh)
-                    try {
-                        const [srcHash, destHash] = await Promise.all([
-                            ControlPlaneMigrationService.hashFile(srcUri.fsPath),
-                            ControlPlaneMigrationService.hashFile(destUri.fsPath),
-                        ]);
-                        if (srcHash !== destHash) {
-                            await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                            await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
-                            agentsChanged = true;
-                        }
-                    } catch (hashErr) {
-                        // Fail-safe: skip on hash error/write error, never clobber blindly,
-                        // never abort the loop — remaining files still refresh.
-                        console.warn(`[Switchboard] Skill content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
-                    }
-                } catch {
-                    // dest absent → copy new file. Per-file failure tolerance: one
-                    // unwritable file must not abort the refresh for the rest.
-                    try {
-                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-                        await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
-                        agentsChanged = true;
-                    } catch (copyErr) {
-                        console.warn(`[Switchboard] Skill seed copy failed for ${relativePath}, skipping:`, copyErr);
-                    }
-                }
-            }
+            await refreshWorkspaceControlPlane(root, context);
         } catch (err) {
-            console.error('[Switchboard] Skill-file seed failed, continuing activation:', err);
-        }
-
-        // Scaffold protocol layers AFTER skill seeding so the .claude/ mirror reads
-        // a populated .agents/skills/ source. Regenerate the mirror when the extension
-        // version changed OR when .agents content changed this run (agentsChanged) —
-        // not version-only — so a skill-content fix with no version bump still rebuilds
-        // the .claude copy the agent loads.
-        if (needsAgentRefresh || agentsChanged) {
-            try {
-                await scaffoldProtocolLayers(
-                    vscode.Uri.file(workspaceRoot),
-                    context.extensionUri,
-                    'Migration'
-                );
-                // Record the version so the migration doesn't re-run on every activation.
-                const currentVersion = getExtensionVersion(context.extensionUri.fsPath);
-                if (currentVersion) {
-                    setLastCopiedAgentVersion(workspaceRoot, currentVersion);
-                }
-            } catch (err) {
-                console.error('[Switchboard] Protocol-file migration failed, continuing activation:', err);
-            }
+            console.error(`[Switchboard] Control-plane refresh failed for ${root}, continuing:`, err);
         }
     }
 

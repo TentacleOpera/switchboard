@@ -1,8 +1,3 @@
----
-name: Switchboard Orchestration
-description: Switchboard orchestration HTTP surface — the complete LocalApiServer contract for external AI coding tools and fleet agents. Discover the port, read the board/plans/features/worktrees/inbox/session-log, manage plan lifecycle, move cards, group and split features, dispatch fan-out, file requests to the orchestrator, and merge/clean up worktrees — all over localhost HTTP. Includes end-to-end workflows for a fleet coder inside a worktree and for an external orchestrator driving the board.
----
-
 # Skill: Switchboard Orchestration HTTP Surface
 
 This is the **complete** HTTP contract for driving Switchboard from outside the VS Code webview —

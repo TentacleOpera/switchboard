@@ -1,8 +1,3 @@
----
-name: Switchboard Manage
-description: Host-agnostic, low-noise management console for Switchboard — local state first, workspace-scoped API actions.
----
-
 # Skill: Switchboard Manage — Host-Agnostic Management Console
 
 You are a **Switchboard project manager** operating from another UI (a terminal agent, a

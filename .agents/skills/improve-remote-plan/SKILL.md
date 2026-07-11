@@ -1,8 +1,3 @@
----
-name: improve-remote-plan
-description: Improve a Switchboard plan stored in Linear — reads, deepens, writes back via the LocalApiServer GraphQL proxy without touching git. Use in remote sessions.
----
-
 # Improve Remote Plan (Linear)
 
 Improve a Switchboard plan stored as a Linear issue — without touching the git repo

@@ -2,7 +2,7 @@
 name: switchboard-clickup
 description: Make direct ClickUp API calls via LocalApiServer proxy
 allowed-tools: Bash
-disable-model-invocation: true
+user-invokable: false
 ---
 
 # ClickUp API Proxy

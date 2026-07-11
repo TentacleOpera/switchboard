@@ -1,8 +1,3 @@
----
-name: Switchboard Contracts
-description: System behavior contracts for agents driving Switchboard — consult when unsure how the system behaves; never for invocation. This doc answers how the system behaves. It never answers how to invoke something — for invocation, use the switchboard-orchestration skill and GET /catalog.
----
-
 # Skill: Switchboard Contracts — Agent-Facing Behavior Reference
 
 > **Scope.** This is a *behavior* reference, not an *invocation* reference. It answers

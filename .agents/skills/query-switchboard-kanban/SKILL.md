@@ -1,8 +1,3 @@
----
-name: Query Switchboard Kanban
-description: Query kanban state using direct SQL access to kanban.db
----
-
 # Query Switchboard Kanban
 
 Query kanban board state using direct SQL access to the kanban database. This skill is READ-ONLY — execution agents must never use SQL UPDATE/DELETE/INSERT on the kanban database.

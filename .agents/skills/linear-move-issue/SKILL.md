@@ -1,8 +1,3 @@
----
-name: Linear Move Issue
-description: Move a Linear issue to a different project via LocalApiServer
----
-
 # Move Linear Issue
 
 ## When to Use

@@ -1,8 +1,3 @@
----
-name: Query Kanban Plans
-description: Query the Kanban database for plans by workspace name, project, and features.
----
-
 # Query Kanban Plans
 
 Ready-made SQL templates for querying the Switchboard Kanban `plans` table by workspace name, project, and feature/subtask relationships.

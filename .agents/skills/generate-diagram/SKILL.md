@@ -1,8 +1,3 @@
----
-name: Generate Architectural Diagram
-description: Generate architectural diagrams via LocalApiServer
----
-
 # Generate Architectural Diagram
 
 ## When to Use

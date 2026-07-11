@@ -1,8 +1,3 @@
----
-name: Query Archive
-description: Query the DuckDB archive directly using duckdb CLI.
----
-
 # Query Archive
 
 Query archived plans using the DuckDB CLI directly.

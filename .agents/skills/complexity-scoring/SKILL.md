@@ -1,8 +1,3 @@
----
-name: Complexity Scoring
-description: Score the complexity of a planned change on a 1–10 scale to route it to the right workflow.
----
-
 # Skill: Complexity Scoring
 
 ## Overview

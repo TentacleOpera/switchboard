@@ -1,8 +1,3 @@
----
-name: create-feature
-description: Create a Switchboard feature from a remote session by writing the feature file directly — use when the VS Code extension is not running and create-feature.js is unreachable
----
-
 # Create Feature (Remote Session)
 
 Create a Switchboard feature by writing the feature file directly to

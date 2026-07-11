@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
-  "version": "1.7.7",
-  "generatedAt": "2026-07-11T06:26:03.519Z",
+  "version": "1.7.8",
+  "generatedAt": "2026-07-11T06:39:49.723Z",
   "skills": [
     {
       "source": "workflows/switchboard-index.md",

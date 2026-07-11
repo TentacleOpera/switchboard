@@ -1,8 +1,3 @@
----
-name: create-feature-from-plans
-description: Create a Switchboard feature from a known set of plans — no discovery, just mechanics. Use when the user already knows which plans to group.
----
-
 # Create Feature from Plans (Direct)
 
 Create a Switchboard feature when the user already knows which plans belong

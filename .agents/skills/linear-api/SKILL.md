@@ -1,8 +1,3 @@
----
-name: Linear API
-description: Make direct Linear GraphQL API calls via LocalApiServer proxy
----
-
 # Linear API Proxy
 
 ## When to Use

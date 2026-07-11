@@ -1,8 +1,3 @@
----
-name: Kanban Operations
-description: Move kanban cards and query kanban state via direct database access.
----
-
 > ⚠️ **MANUAL FALLBACK ONLY** — The `move-card.js` script is an override/recovery mechanism. Do NOT run it automatically during standard workflow routing. Use it ONLY when the user has explicitly requested a card move. The `get-state.js` script is read-only and may be used freely.
 
 # Kanban Operations

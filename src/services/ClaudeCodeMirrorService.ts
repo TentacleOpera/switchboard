@@ -301,12 +301,27 @@ export const CLAUDE_PREAMBLE = `${CLAUDE_PROTOCOL_HEADER}
 > - The ClickUp / Linear / kanban skills shell out via \`.agents/skills/_lib/sb_api_call.sh\` and work as-is, provided the Switchboard extension (and its API server) is running.`;
 
 /**
+ * Strip any managed-block boundary markers (`<!-- switchboard:agents-protocol:start/end -->`)
+ * from content. The bundled AGENTS.md source is itself a managed protocol file (this repo
+ * is a Switchboard workspace), so it carries its own marker pair. Left in place, each
+ * activation would re-wrap those markers and accumulate a redundant pair (2/2, 3/3, …).
+ * Removing them here means `buildManagedInner` always emits marker-free inner content and
+ * the surrounding wrap produces exactly one clean pair.
+ */
+function stripProtocolMarkers(content: string): string {
+    return content
+        .split('\n')
+        .filter(line => !/^\s*<!--\s*switchboard:agents-protocol:(start|end)\s*-->\s*$/.test(line))
+        .join('\n');
+}
+
+/**
  * Build the inner content (between markers) of a managed protocol block.
  * When a preamble is supplied (CLAUDE.md), it is prepended above the bundled
  * source body; otherwise the source body is used verbatim (AGENTS.md).
  */
 export function buildManagedInner(sourceContent: string, preamble?: string): string {
-    const body = sourceContent.trimEnd();
+    const body = stripProtocolMarkers(sourceContent).trim();
     if (preamble && preamble.trim().length > 0) {
         return `${preamble.trimEnd()}\n\n---\n\n${body}`;
     }
