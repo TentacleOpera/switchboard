@@ -62,18 +62,20 @@ Worst-case misdetection (a local IDE with the extension turned off) degrades to 
 
 ### C. Introduce `switchboard-cowork` as a Setup-panel export
 - Author a self-contained `switchboard-cowork` skill: setup instructions + usage guidance + the MCP-transport wiring, written so a Cowork user interacts naturally and never invokes MCP or "goes through channels" manually.
-- Add a **"Set up Cowork"** button to the Setup panel (`src/webview/setup.html`, alongside the existing `btn-connect-claude-desktop` at `:595`) that **exports this skill as an uploadable bundle** for the user to drop into their Cowork project folder.
+- Add a **"Set up Cowork"** button to the Setup panel (`src/webview/setup.html`, alongside the existing `btn-connect-claude-desktop` at `:595`) that **exports this skill as a `.zip` the user uploads into Cowork**.
 
-  > **Superseded:** "Mirror the existing 'Connect Claude Desktop' button pattern (same panel, same export-artifact approach) — reuse that infrastructure rather than inventing a new one."
-  > **Reason:** The "Connect Claude Desktop" button is **not** an artifact-exporter. `connectClaudeDesktop` (`src/services/ClaudeDesktopConnector.ts:66-109`) idempotently *writes an MCP entry into `claude_desktop_config.json` on the local machine*. Cowork is sandboxed — the extension cannot write into the user's Cowork project folder — so the mechanism must be a **file/bundle export the user picks up**, not a config write. The correct in-repo precedent is the Setup panel's export-to-file buttons: `btn-export-prompts` → `exportPromptSettings` (writes `.switchboard/settings.json`, `setup.html:667`) and the Board State Export block (`:719-737`).
-  > **Replaced with:** Reuse the Setup-panel **button + `SetupPanelProvider` message-handler** infrastructure and the **export-to-file** mechanism from `btn-export-prompts` / board-state-export (generate the bundle from the single in-repo source, offer it via save-dialog or write to a known path the user uploads). Reuse `connectClaudeDesktop` only if/where Cowork also needs a local MCP config entry — but the *skill delivery* is an export, not a config write.
+  > **Superseded:** "Mirror the existing 'Connect Claude Desktop' button pattern (same panel, same export-artifact approach)" / "export … for the user to **drop into their Cowork project folder**."
+  > **Reason:** Two grounded corrections. (1) The "Connect Claude Desktop" button is **not** an artifact-exporter — `connectClaudeDesktop` (`src/services/ClaudeDesktopConnector.ts:66-109`) idempotently *writes an MCP entry into `claude_desktop_config.json`*. (2) Cowork's documented skill-load path is **upload a `.zip` (skill directory at the zip root) → enable it in Settings > Capabilities** (same as Claude.ai chat) — there is no "drop it in the project folder and it's auto-discovered" step. So the export must produce a zip the user uploads, not a loose folder.
+  > **Replaced with:** Reuse the Setup-panel **button + `SetupPanelProvider` message-handler** infra and the **export-to-file** mechanism from `btn-export-prompts` / board-state-export (`setup.html:667`, `:719-737`), but produce a **`.zip` with the `switchboard-cowork/` skill directory at the zip root**. Hand-off UX: "download this zip, then upload it in Cowork's Settings > Capabilities."
 
-- Generate the bundle from the single in-repo source at button-press time (no hand-maintained copy) so it can't drift.
-- Keep the bundle out of the scanned `.agents/skills/` tree so it never appears in Antigravity/Claude Code menus.
+- **Frontmatter constraints (verified):** the skill follows the platform-agnostic Agent Skills spec, so one `SKILL.md` works across Claude.ai/Cowork/Claude Code. Required frontmatter: `name` (lowercase/hyphens, ≤64 chars, **must match the directory name** `switchboard-cowork`) and `description`. **Claude.ai/Cowork caps `description` at 200 characters** (the spec allows 1024) — keep the Cowork skill's description ≤200 chars or it is rejected/truncated on that surface.
+- Generate the zip from the single in-repo source at button-press time (no hand-maintained copy) so it can't drift.
+- Keep the source out of the scanned `.agents/skills/` tree so it never appears in Antigravity/Claude Code menus.
 
 ### D. Reduce `switchboard-mcp` to transport
 - Reframe `switchboard-mcp` as the transport layer consumed by `switchboard-cowork`; remove it from front-door/discoverable surfaces. Companion-plan strip already covers its source frontmatter (Antigravity-invisible); this plan updates its `MIRROR_MANIFEST:168` category so CC stops treating it as a user-facing skill.
 - **Do not** rename the manifest entry key or re-introduce an MCP server keyed `switchboard` — the extension's activation-time scrubber deletes `switchboard`-keyed MCP entries and SIGKILLs orphan MCP PIDs from six host configs; the sanctioned key is `switchboard-mcp`. Leave that wiring exactly as-is; this is a docs/category demotion only, not an MCP-server change.
+- **Transport mechanism (confirmed).** Cowork is the **local desktop app**. `switchboard-mcp` is the **local stdio** MCP server the Cowork app runs to reach the local `LocalApiServer` — the desktop app's sandbox can't hit `localhost` directly, so the bundled stdio server is the bridge. This is exactly the existing, intended wiring; §C's `switchboard-cowork` bundle carries it. No change to the transport itself.
 
 ### E. Keep the workflow verbs routable but unsurfaced
 - Ensure `improve-plan`, `improve-feature`, `switchboard-split`, `group-into-features`, `constitution-builder`, `tuning` remain invokable by the front door / model but are not surfaced as discoverable slash commands.
@@ -92,8 +94,7 @@ Worst-case misdetection (a local IDE with the extension turned off) degrades to 
 
 ## User Review Required
 
-- **Cowork bundle-delivery mechanism** — save-dialog export vs. write-to-known-path vs. clipboard. Recommended: match the export-to-file precedent (`exportPromptSettings`). Confirm the exact hand-off UX with the user, since it depends on how Cowork ingests a dropped-in skill folder (see Uncertain Assumptions).
-- Everything else (routing table, demotions, opener resolution) is decided in Design Decisions above — no open product calls.
+- None. Cowork is the local desktop app, reached via the bundled `switchboard-mcp` stdio bridge to `LocalApiServer` — the plan's existing intent. Routing table, demotions, opener resolution, and `.zip`-upload delivery are all decided above.
 
 ## Dependencies
 
@@ -108,7 +109,7 @@ Worst-case misdetection (a local IDE with the extension turned off) degrades to 
 
 ### Complex / Risky
 - **The adaptive-router redesign** (§A): 3-way environment resolution + live health check + safe fallback + preserving the friendly opener (Decision 8). New behavior on the most user-visible surface.
-- **Cowork export** (§C): a new export artifact + a host (Cowork) whose skill-ingestion contract is not verified in-repo (Uncertain Assumptions).
+- **Cowork export** (§C): a new `.zip` export artifact (skill dir at zip root, ≤200-char description) + authoring a self-contained `switchboard-cowork` skill that bundles the local `switchboard-mcp` transport.
 - **Cross-surface coordination** with the companion plan on `MIRROR_MANIFEST` and `AGENTS.md` — ordering-sensitive; a botched sequence blanks descriptions or drops references.
 - **Workflow vs. skill demotion asymmetry** (§B/§E): the two source types demote differently; treating them uniformly leaves either a typed command live or a body unreachable.
 
@@ -159,20 +160,22 @@ Key risks: environment misdetection stranding a user in the wrong mode (stale po
 - Session directive: **skip compilation and automated test runs.** Verify by inspection + a manual routing smoke test.
 - **Routing smoke test from `/switchboard`:** in each environment (local w/ extension up, local w/ extension down, cloud remote) confirm the correct route and that a bare invocation shows the friendly opener (never a status read-out). Confirm present-but-dead port file → plan-mode.
 - **Discoverability check:** confirm `switchboard-chat`, `switchboard-manage`, `switchboard-mcp`, and the verb skills no longer appear as user slash commands in Claude Code or Antigravity, while remaining model-loadable/routable.
-- **Cowork export check:** press "Set up Cowork", confirm a bundle is produced from the in-repo source and lands where the user can pick it up; confirm the bundle is NOT written into `.agents/skills/`.
+- **Cowork export check:** press "Set up Cowork", confirm a `.zip` is produced from the in-repo source with the `switchboard-cowork/` skill dir at the zip root and a `SKILL.md` whose `name` matches the dir and whose `description` is ≤200 chars; confirm the source is NOT under `.agents/skills/`.
 - **Doc consistency check:** `AGENTS.md`/manual describe exactly two doors and the Cowork flow, and retain the companion's reference-audit entries.
 
-## Uncertain Assumptions
+## Confirmed Delivery Mechanics (web research, 2026-07-11)
 
-The following are NOT verified in-repo and the user was advised to run web research to confirm them before implementation:
+Cowork is local (the desktop app) — that was always the design. The research confirmed the concrete *delivery* mechanics for the Cowork skill, which are what shape §C:
 
-- **Claude Cowork's skill-ingestion contract** — whether Cowork loads a skill by the user dropping a skill folder/bundle into the Cowork project directory (and in what format), and exactly how Cowork reaches an MCP transport from inside its sandbox. The in-repo precedent (`switchboard-mcp`, `ClaudeDesktopConnector`) is proven for **Claude Desktop**, not verified for **Cowork**; Cowork is newer and its behavior may differ or have changed. This directly shapes §C's export format and the "Set up Cowork" hand-off UX.
+- **Skill delivery = upload a `.zip` (skill dir at the zip root) → enable in Settings > Capabilities**, same as Claude.ai chat. There is no "drop the folder in your Cowork project directory and it's auto-discovered" step — the export must be an uploadable zip. → drove the §C delivery correction (the original "drop into project folder" wording was wrong).
+- **Frontmatter:** Agent Skills spec — `name` (lowercase/hyphens, ≤64, must match the dir name) + `description`; **Claude.ai/Cowork cap `description` at 200 chars** (the spec allows 1024). → §C constraint.
+- **Transport:** the Cowork desktop app reaches a local server via a **bundled local stdio MCP server** — exactly the `switchboard-mcp` bridge to `LocalApiServer` the plan already intends. → confirms §D's wiring; no change needed.
 
 ## Risks
 
 - **Environment misdetection** stranding a user in the wrong mode. Mitigated by the file-presence + live-health-check probe with plan-mode as the documented safe fallback and a clear in-session statement of which mode was detected and why.
 - **Cowork export drift** — the exported `switchboard-cowork` bundle can go stale vs the in-repo source. Mitigated by generating the export from a single source at button-press time (no hand-maintained copy).
-- **Cowork ingestion mismatch** — if Cowork does not load dropped-in skill folders as assumed, §C's delivery mechanism is wrong. Mitigated by confirming the contract (Uncertain Assumptions) before building the export.
+- **Cowork delivery-format mismatch** — Cowork loads a skill from an uploaded `.zip` (dir at zip root), not a loose folder, and caps `description` at 200 chars. Mitigated by exporting a correctly-structured zip and asserting the description length (§C, Verification).
 - **Control-plane doc edits require approval** (system files) — batch them and request explicit sign-off before writing.
 - **Overlap-hiding regressions** — hiding a workflow verb that some prompt still expects as a typed command. Mitigated by the companion plan's reference audit plus the routing smoke test.
 - **Cross-plan ordering** — landing this before the companion blanks CC descriptions. Mitigated by the hard dependency + sequence.
