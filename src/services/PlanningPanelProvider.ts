@@ -9788,19 +9788,12 @@ Read the current content above. Determine what's missing. Produce a complete fea
             });
             allColumns.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
         }
-        if (!plans || plans.length === 0) {
-            return allColumns.filter(col => {
-                if (!col.hideWhenNoAgent) return true;
-                if (col.role && visibleAgents[col.role] !== false) return true;
-                return false;
-            });
-        }
-        const occupiedColumns = new Set(plans.map(p => p.column));
+        const occupiedColumns = new Set(plans?.map(p => p.column) || []);
         return allColumns.filter(col => {
-            if (!col.hideWhenNoAgent) return true;
-            if (col.role && visibleAgents[col.role] !== false) return true;
-            if (occupiedColumns.has(col.id)) return true;
-            return false;
+            if (col.featureOnly) return occupiedColumns.has(col.id);
+            if (!col.role) return true;
+            if (visibleAgents[col.role] !== false) return true;
+            return occupiedColumns.has(col.id);
         });
     }
 

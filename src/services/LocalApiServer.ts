@@ -682,6 +682,10 @@ export class LocalApiServer {
             }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanDispatch error:', err);
+            if (err instanceof Error && err.name === 'KanbanDispatchError') {
+                fail(400, err.message);
+                return;
+            }
             fail(500, err instanceof Error ? err.message : 'kanbanDispatch failed');
         }
     }

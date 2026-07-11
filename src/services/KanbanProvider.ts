@@ -1618,6 +1618,18 @@ export class KanbanProvider implements vscode.Disposable {
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
+            // Column occupancy must be computed from the full workspace (not filtered by
+            // project/repo), otherwise a hidden column that holds a card in another project
+            // would be dropped and its card would render in CREATED.
+            const filterActive = this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER || !!this._repoScopeFilter;
+            const allActiveRows = filterActive && workspaceId && typeof (db as any).getBoard === 'function'
+                ? await db.getBoard(workspaceId)
+                : activeRows;
+            const allActiveRowsFiltered = filterActive ? filterGhostPlans(allActiveRows) : activeRowsFiltered;
+            const allCards: Array<{ column: string }> = allActiveRowsFiltered.map(row => ({
+                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED'
+            }));
+
             // Subtask counts must be computed workspace-wide (unfiltered), NOT from the
             // project-filtered rows above — otherwise subtasks in a different project (or
             // any assigned project while the board shows "__unassigned__") are excluded and
@@ -1676,7 +1688,7 @@ export class KanbanProvider implements vscode.Disposable {
                 ]);
                 columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
                 visibleAgents = await this._getVisibleAgents(resolvedWorkspaceRoot);
-                columns = this._filterDynamicColumns(columns, visibleAgents, cards);
+                columns = this._filterDynamicColumns(columns, visibleAgents, allCards);
             } catch {
                 columns = await this._buildKanbanColumns([]);
             }
@@ -3511,19 +3523,25 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         })));
     }
 
-    /** Remove columns flagged hideWhenNoAgent when their role has no visible agent AND no cards occupy the column. */
+    /**
+     * Apply the single, uniform visibility rule to dynamic columns.
+     * - featureOnly columns: only render when they hold a card.
+     * - fixed columns (no role): always render.
+     * - role columns: render if the role's agent is ticked OR the column holds a card.
+     *   Occupancy must be computed from the full workspace card set (unfiltered by
+     *   project/repo) so cards in a hidden column do not masquerade as CREATED.
+     */
     private _filterDynamicColumns(
         columns: KanbanColumnDefinition[],
         visibleAgents: Record<string, boolean>,
-        cards: KanbanCard[]
+        cards: Array<{ column: string }>
     ): KanbanColumnDefinition[] {
         const occupiedColumns = new Set(cards.map(c => c.column));
         return columns.filter(col => {
             if (col.featureOnly) return occupiedColumns.has(col.id);
-            if (!col.hideWhenNoAgent) return true;
-            if (col.role && visibleAgents[col.role] !== false) return true;
-            if (occupiedColumns.has(col.id)) return true;
-            return false;
+            if (!col.role) return true;
+            if (visibleAgents[col.role] !== false) return true;
+            return occupiedColumns.has(col.id);
         });
     }
 
@@ -4564,7 +4582,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
-                planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/workflows/improve-plan.md'),
+                planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md'),
                 lead: leadConfig?.addons?.workflowFilePath || '',
                 coder: coderConfig?.addons?.workflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.workflowFilePath || '',
@@ -4599,7 +4617,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
-            plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/workflows/improve-plan.md'),
+            plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md'),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
                 lead: leadConfig?.addons?.skipCompilation ?? true,
@@ -5168,7 +5186,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (col.dragDropMode === 'disabled') {
                 return true;
             }
-            if (col.hideWhenNoAgent && col.role && visibleAgents[col.role] === false) {
+            if (col.role && visibleAgents[col.role] === false) {
                 return true;
             }
             return false;
@@ -6412,10 +6430,57 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
-    /** Map a resolved dispatch role to its target Kanban column. */
-    private _targetColumnForDispatchRole(role: 'lead' | 'coder' | 'intern'): string {
-        if (role === 'intern') return 'INTERN CODED';
-        return role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
+    /**
+     * Validate that a role column is currently visible. If not, degrade to the
+     * nearest visible coding column (intern → coder → lead). If no coding column
+     * is visible, throw a KanbanDispatchError so the caller can surface a clear
+     * failure instead of routing to a hidden column.
+     */
+    private _validateOrDegradeCodingColumn(targetColumn: 'INTERN CODED' | 'CODER CODED' | 'LEAD CODED', visibleAgents: Record<string, boolean>): string {
+        const roleForColumn: Record<string, 'intern' | 'coder' | 'lead'> = {
+            'INTERN CODED': 'intern',
+            'CODER CODED': 'coder',
+            'LEAD CODED': 'lead'
+        };
+        const role = roleForColumn[targetColumn];
+        if (role && visibleAgents[role] !== false) {
+            return targetColumn;
+        }
+
+        const order: Array<'lead' | 'coder' | 'intern'> = ['lead', 'coder', 'intern'];
+        const targetIdx = order.indexOf(role ?? 'lead');
+        let nearestDist = Infinity;
+        let nearestIdx = Infinity;
+        let nearestRole: 'lead' | 'coder' | 'intern' | null = null;
+        for (let i = 0; i < order.length; i++) {
+            const candidate = order[i];
+            if (visibleAgents[candidate] !== false) {
+                const dist = Math.abs(i - targetIdx);
+                if (dist < nearestDist || (dist === nearestDist && i < nearestIdx)) {
+                    nearestDist = dist;
+                    nearestIdx = i;
+                    nearestRole = candidate;
+                }
+            }
+        }
+
+        if (nearestRole) {
+            const degradedColumn = nearestRole === 'intern' ? 'INTERN CODED' : nearestRole === 'coder' ? 'CODER CODED' : 'LEAD CODED';
+            if (degradedColumn !== targetColumn) {
+                console.log(`[KanbanProvider] Dispatch target ${targetColumn} is hidden; degrading to ${degradedColumn}`);
+            }
+            return degradedColumn;
+        }
+
+        const err = new Error(`No coding agent is currently enabled (lead/coder/intern are all hidden). Route the card manually or enable a coding agent in Setup.`);
+        (err as any).name = 'KanbanDispatchError';
+        throw err;
+    }
+
+    /** Map a resolved dispatch role to its target Kanban column, degrading if hidden. */
+    private _targetColumnForDispatchRole(role: 'lead' | 'coder' | 'intern', visibleAgents: Record<string, boolean>): string {
+        const targetColumn = role === 'intern' ? 'INTERN CODED' : role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
+        return this._validateOrDegradeCodingColumn(targetColumn, visibleAgents);
     }
 
     /**
@@ -6528,20 +6593,26 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * omits targetColumn. Delegates to resolveRoutedRole — the single source of
      * truth the board itself uses (custom routing map if configured, else the
      * default bands 1–4 intern / 5–6 coder / 7+ lead, plus the pair-programming
-     * intern→coder bypass). Routing disabled or complexity unknown → lead, same
-     * as the board.
+     * intern→coder bypass). If the resolved target column is hidden, degrade to
+     * the nearest visible coding column. If no coding column is visible, throw a
+     * KanbanDispatchError so the API can return a 4xx instead of a hidden fallback.
      */
-    public resolveAutoDispatchColumn(complexity: string | undefined | null): { targetColumn: string; reason: string } {
+    public async resolveAutoDispatchColumn(workspaceRoot: string | undefined | null, complexity: string | undefined | null): Promise<{ targetColumn: string; reason: string }> {
+        const resolvedWorkspaceRoot = workspaceRoot ? this._resolveWorkspaceRoot(workspaceRoot) : (this._currentWorkspaceRoot || '');
+        const visibleAgents = resolvedWorkspaceRoot ? await this._getVisibleAgents(resolvedWorkspaceRoot) : {};
         if (!this._dynamicComplexityRoutingEnabled) {
-            return { targetColumn: 'LEAD CODED', reason: 'dynamic complexity routing off → lead' };
+            const targetColumn = this._validateOrDegradeCodingColumn('LEAD CODED', visibleAgents);
+            return { targetColumn, reason: 'dynamic complexity routing off' };
         }
         const score = parseComplexityScore(String(complexity ?? ''));
         if (!(score >= 1 && score <= 10)) {
-            return { targetColumn: 'LEAD CODED', reason: 'complexity unknown → lead' };
+            const targetColumn = this._validateOrDegradeCodingColumn('LEAD CODED', visibleAgents);
+            return { targetColumn, reason: 'complexity unknown' };
         }
         const role = this.resolveRoutedRole(score);
-        const targetColumn = role === 'intern' ? 'INTERN CODED' : role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
-        return { targetColumn, reason: `complexity ${score} → ${role} (board routing rule)` };
+        const baseTarget = role === 'intern' ? 'INTERN CODED' : role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
+        const targetColumn = this._validateOrDegradeCodingColumn(baseTarget, visibleAgents);
+        return { targetColumn, reason: `complexity ${score} → ${role} (degraded if hidden)` };
     }
 
     public async handleServiceVerb(verb: string, payload: any): Promise<any> {
@@ -7818,9 +7889,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // workflow-event write is preserved via recordRunSheetForColumnMove.
                 if (sourceColumn === 'PLAN REVIEWED') {
                     const groups = await this._partitionByComplexityRoute(workspaceRoot, sessionIds);
+                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                    if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                        vscode.window.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                        break;
+                    }
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
-                        const targetCol = this._targetColumnForDispatchRole(role);
+                        const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
                         const allMovedSids: string[] = [];
                         for (const sid of sids) {
                             await this.moveCardToColumn(workspaceRoot, sid, targetCol);
@@ -7948,10 +8024,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         break;
                     }
                     const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                    if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                        vscode.window.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                        break;
+                    }
                     const movedParts: string[] = [];
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
-                        const targetCol = this._targetColumnForDispatchRole(role);
+                        const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
+                        const dispatchRole = this._columnToRole(targetCol) || role;
                         const movedSids: string[] = [];
                         const dispatchSids: string[] = [];
                         const failures: { id: string; sourceColumn: string; reason: string }[] = [];
@@ -7974,9 +8056,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
-                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchSids[0], undefined, workspaceRoot);
+                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot);
                             } else {
-                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchSids, undefined, workspaceRoot);
+                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -8086,10 +8168,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         break;
                     }
                     const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                    if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                        vscode.window.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                        break;
+                    }
                     const movedParts: string[] = [];
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
-                        const targetCol = this._targetColumnForDispatchRole(role);
+                        const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
+                        const dispatchRole = this._columnToRole(targetCol) || role;
                         const movedSids: string[] = [];
                         const dispatchSids: string[] = [];
                         const failures: { id: string; sourceColumn: string; reason: string }[] = [];
@@ -8112,9 +8200,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
-                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchSids[0], undefined, workspaceRoot);
+                                await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot);
                             } else {
-                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchSids, undefined, workspaceRoot);
+                                await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -8301,9 +8389,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(msg.sessionIds);
                     if (knownIds.length > 0) {
                         const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                            vscode.window.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                            break;
+                        }
                         for (const [role, sids] of groups) {
                             if (sids.length === 0) { continue; }
-                            const targetCol = this._targetColumnForDispatchRole(role);
+                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
                             const movedSids: string[] = [];
                             for (const sid of sids) {
                                 await this.moveCardToColumn(workspaceRoot, sid, targetCol);
@@ -8389,10 +8482,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
                     if (knownIds.length > 0) {
                         const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                            vscode.window.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                            break;
+                        }
                         const movedParts: string[] = [];
                         for (const [role, sids] of groups) {
                             if (sids.length === 0) { continue; }
-                            const targetCol = this._targetColumnForDispatchRole(role);
+                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
                             // Persist via moveCardToColumn (DB-first, feature-cascade aware) — matches the
                             // pre-conversion kanbanForwardMove path which routed through moveCardToColumn.
                             // A direct db.updateColumn would skip the feature subtask cascade and orphan

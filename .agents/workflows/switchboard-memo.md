@@ -1,6 +1,7 @@
 ---
-description: Memo capture mode. Enter by saying "start memo capture" (or the /memo command) in chat; then append-only, no analysis; exit with `process memo`.
+description: Memo capture mode — append-only, no analysis; exit with process memo
 ---
+
 
 # Memo Capture Mode
 

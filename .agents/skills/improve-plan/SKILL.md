@@ -1,7 +1,3 @@
----
-description: Deep planning, dependency checks, and adversarial review
----
-
 # Improve Plan
 
 Use this workflow to strengthen an existing feature plan in a single fluid pass.

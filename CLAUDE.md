@@ -30,7 +30,6 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 
 ---
 
-<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
@@ -193,6 +192,4 @@ State the pin in your reply ("Pinning to *<name>*") so a wrong snapshot is visib
 Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both parse. The .md metadata is the carrier — the plan watcher reads it directly on import.
 
 > **System backstop:** the importer is resolve-only. An unknown pin (or one equal to a workspace name / a literal `<...>` placeholder) leaves the plan unassigned instead of auto-creating a `projects` row. Only the user creates projects (on the board). The protocol above is the first line of defense; the import guard is the non-negotiable backstop.
-
-<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:claude-protocol:end -->

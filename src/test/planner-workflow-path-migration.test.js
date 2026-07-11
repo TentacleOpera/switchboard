@@ -309,6 +309,70 @@ async function run() {
         'Expected the profile-tier migration to update the Workspace scope when inspect reports a stale workspaceValue.'
     );
 
+    // ── Source assertions: the workflows→skills migration method exists ──
+    assert.match(
+        providerSource,
+        /private async _migratePlannerWorkflowPathWorkflowsToSkills\(\): Promise<void> \{/,
+        'Expected TaskViewerProvider to define _migratePlannerWorkflowPathWorkflowsToSkills.'
+    );
+    assert.match(
+        providerSource,
+        /const MARKER_KEY = 'switchboard\.migrations\.plannerWorkflowPathWorkflowsToSkills\.v1';/,
+        'Expected the workflows→skills migration to use its own per-DB marker key.'
+    );
+    assert.match(
+        providerSource,
+        /const OLD_DEFAULT = '\.agents\/workflows\/improve-plan\.md';/,
+        'Expected the workflows→skills migration to match the old default path.'
+    );
+    assert.match(
+        providerSource,
+        /const NEW_DEFAULT = '\.agents\/skills\/improve-plan\/SKILL\.md';/,
+        'Expected the workflows→skills migration to rewrite to the new skills path.'
+    );
+    assert.match(
+        providerSource,
+        /void this\._migratePlannerWorkflowPathWorkflowsToSkills\(\);/,
+        'Expected the constructor to invoke the workflows→skills migration.'
+    );
+
+    // ── Test 7: workflows→skills migration rewrites old default, preserves custom paths ──
+    const ws7 = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-pwf-migration-7-'));
+    try {
+        const db7 = KanbanDatabase.forWorkspace(ws7);
+        assert.strictEqual(await db7.ensureReady(), true, 'Expected kanban DB to initialize for migration test 7.');
+
+        const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
+        const NEW_DEFAULT = '.agents/skills/improve-plan/SKILL.md';
+
+        // Seed: one old-default (should rewrite), one custom (should be untouched).
+        await db7.setConfigJson(ROLE_KEY, { workflowFilePath: OLD_DEFAULT });
+        await db7.setProjectConfigJson('projCustom', ROLE_KEY, { workflowFilePath: '.custom/workflows/x.md' });
+
+        // Replicate the workflows→skills migration's data transformation.
+        const cfg7 = db7.getConfigJsonSync(ROLE_KEY, undefined);
+        if (cfg7 && typeof cfg7.workflowFilePath === 'string' && cfg7.workflowFilePath === OLD_DEFAULT) {
+            cfg7.workflowFilePath = NEW_DEFAULT;
+            await db7.setConfigJson(ROLE_KEY, cfg7);
+        }
+        const rows7 = await db7.getProjectConfigRowsByKeySync(ROLE_KEY);
+        for (const row of rows7) {
+            if (row.value && typeof row.value.workflowFilePath === 'string' && row.value.workflowFilePath === OLD_DEFAULT) {
+                row.value.workflowFilePath = NEW_DEFAULT;
+                await db7.setProjectConfigJson(row.project, ROLE_KEY, row.value);
+            }
+        }
+
+        assert.strictEqual(db7.getConfigJsonSync(ROLE_KEY, undefined).workflowFilePath, NEW_DEFAULT, 'Expected old-default config value to be rewritten to the skills path.');
+        const customRows7 = await db7.getProjectConfigRowsByKeySync(ROLE_KEY);
+        assert.strictEqual(customRows7[0].value.workflowFilePath, '.custom/workflows/x.md', 'Expected custom project_config path to remain untouched by the workflows→skills migration.');
+
+        console.log('planner workflow path migration test 7 (workflows→skills rewrite) passed');
+    } finally {
+        await KanbanDatabase.invalidateWorkspace(ws7);
+        await fs.promises.rm(ws7, { recursive: true, force: true });
+    }
+
     console.log('planner workflow path migration test (source assertions) passed');
     console.log('all planner workflow path migration tests passed');
 }

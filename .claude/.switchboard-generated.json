@@ -1,43 +1,8 @@
 {
   "generator": "ClaudeCodeMirrorService",
-  "version": "1.7.8",
-  "generatedAt": "2026-07-11T06:39:49.723Z",
+  "version": "1.7.9",
+  "generatedAt": "2026-07-11T21:21:10.924Z",
   "skills": [
-    {
-      "source": "workflows/switchboard-index.md",
-      "name": "switchboard",
-      "relPath": ".claude/skills/switchboard/SKILL.md"
-    },
-    {
-      "source": "workflows/memo.md",
-      "name": "memo",
-      "relPath": ".claude/skills/memo/SKILL.md"
-    },
-    {
-      "source": "workflows/accuracy.md",
-      "name": "accuracy",
-      "relPath": ".claude/skills/accuracy/SKILL.md"
-    },
-    {
-      "source": "workflows/improve-plan.md",
-      "name": "improve-plan",
-      "relPath": ".claude/skills/improve-plan/SKILL.md"
-    },
-    {
-      "source": "workflows/improve-feature.md",
-      "name": "improve-feature",
-      "relPath": ".claude/skills/improve-feature/SKILL.md"
-    },
-    {
-      "source": "workflows/switchboard-split.md",
-      "name": "switchboard-split",
-      "relPath": ".claude/skills/switchboard-split/SKILL.md"
-    },
-    {
-      "source": "workflows/switchboard-chat.md",
-      "name": "switchboard-chat",
-      "relPath": ".claude/skills/switchboard-chat/SKILL.md"
-    },
     {
       "source": "skills/switchboard-manage",
       "name": "switchboard-manage",
@@ -202,16 +167,6 @@
       "source": "skills/switchboard-contracts",
       "name": "switchboard-contracts",
       "relPath": ".claude/skills/switchboard-contracts/SKILL.md"
-    },
-    {
-      "source": "workflows/improve-plan.md",
-      "name": "switchboard-plan",
-      "relPath": ".claude/skills/switchboard-plan/SKILL.md"
-    },
-    {
-      "source": "workflows/improve-feature.md",
-      "name": "switchboard-feature",
-      "relPath": ".claude/skills/switchboard-feature/SKILL.md"
     },
     {
       "source": "skills/improve-remote-plan",

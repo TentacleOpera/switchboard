@@ -517,6 +517,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // DB tiers are per-workspace and gated by a per-DB marker, so they run
         // regardless of the profile flag — a workspace opened later self-migrates.
         void this._migratePlannerWorkflowPathDbTiers();
+        // 2026-07-12 four-front-doors refactor: rewrite persisted plannerWorkflowPath
+        // values that still point at the old workflows/ default to the new skills/ path.
+        // Runs after the .agent→.agents normalization so the two rewrites compose.
+        void this._migratePlannerWorkflowPathWorkflowsToSkills();
         this._pipeline = new PipelineOrchestrator(
             () => this._postPipelineState(),
             async (role, sessionId, instruction) => {
@@ -1188,6 +1192,73 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /** 2026-07-12 four-front-doors refactor: rewrite persisted plannerWorkflowPath
+     *  values that still point at the old default (`.agents/workflows/improve-plan.md`)
+     *  to the new skills path (`.agents/skills/improve-plan/SKILL.md`). Only exact
+     *  old-default matches are rewritten — user-custom paths are preserved untouched.
+     *  Gated per-DB by `switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1`.
+     *  Runs after the `.agent→.agents` normalization so the two rewrites compose
+     *  (`.agent/workflows/improve-plan.md` → `.agents/workflows/…` → skills path). */
+    private async _migratePlannerWorkflowPathWorkflowsToSkills(): Promise<void> {
+        const ROLE_KEY = 'switchboard.prompts.roleConfig_planner';
+        const MARKER_KEY = 'switchboard.migrations.plannerWorkflowPathWorkflowsToSkills.v1';
+        const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
+        const NEW_DEFAULT = '.agents/skills/improve-plan/SKILL.md';
+
+        const roots: string[] = [];
+        const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
+        if (activeRoot) roots.push(activeRoot);
+        for (const folder of vscode.workspace.workspaceFolders ?? []) {
+            const r = folder.uri.fsPath;
+            if (r && !roots.includes(r)) roots.push(r);
+        }
+
+        for (const root of roots) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                if (!(await db.ensureReady())) continue;
+
+                const done = db.getConfigJsonSync<boolean>(MARKER_KEY, false);
+                if (done) continue;
+
+                // Workspace DB `config` tier.
+                try {
+                    const cfg = db.getConfigJsonSync<any>(ROLE_KEY, undefined);
+                    if (cfg && typeof cfg === 'object' && typeof cfg.workflowFilePath === 'string'
+                        && cfg.workflowFilePath === OLD_DEFAULT) {
+                        cfg.workflowFilePath = NEW_DEFAULT;
+                        await db.setConfigJson(ROLE_KEY, cfg);
+                    }
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] planner workflowFilePath workflows→skills config-tier migration failed for ${root}:`, e);
+                }
+
+                // `project_config` tier — scan every project for the key.
+                try {
+                    const rows = await db.getProjectConfigRowsByKeySync<any>(ROLE_KEY);
+                    for (const row of rows) {
+                        const v = row.value;
+                        if (v && typeof v === 'object' && typeof v.workflowFilePath === 'string'
+                            && v.workflowFilePath === OLD_DEFAULT) {
+                            v.workflowFilePath = NEW_DEFAULT;
+                            await db.setProjectConfigJson(row.project, ROLE_KEY, v);
+                        }
+                    }
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] planner workflowFilePath workflows→skills project_config-tier migration failed for ${root}:`, e);
+                }
+
+                try {
+                    await db.setConfigJson(MARKER_KEY, true);
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] planner workflowFilePath workflows→skills per-DB marker write failed for ${root}:`, e);
+                }
+            } catch (e) {
+                console.error(`[TaskViewerProvider] planner workflowFilePath workflows→skills DB-tier migration failed for ${root}:`, e);
+            }
+        }
+    }
+
     /** Structural emptiness: an array with items, or an object with at least one key. */
     private _isNonEmptyAgentConfig(value: unknown): boolean {
         if (Array.isArray(value)) return value.length > 0;
@@ -1290,7 +1361,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (!this._kanbanProvider) {
                     return { targetColumn: 'LEAD CODED', reason: 'kanban provider unavailable — defaulting to lead' };
                 }
-                return this._kanbanProvider.resolveAutoDispatchColumn(complexity);
+                return this._kanbanProvider.resolveAutoDispatchColumn(_wsRoot, complexity);
             },
             moveCard: async (wsRoot, sessionId, targetColumn, planFile) => {
                 // Route the kanban_operations fallback script's move through the
@@ -8086,12 +8157,12 @@ Each plan file must include:
             this._refreshTerminalStatuses();
         }
 
-        // Inject the kickoff prompt. The persona workflow (.agents/workflows/switchboard-orchestrator.md)
+        // Inject the kickoff prompt. The persona workflow (.agents/skills/switchboard-orchestrator/SKILL.md)
         // encodes the full Kickoff Protocol; this prompt points the agent at it and injects
         // the runtime context (UNATTENDED flag, workspace root, active project filter, and
         // the fan-out endpoint). The dispatch path uses sendRobustText (clipboard-paste for
         // long payloads).
-        const personaPath = path.join(root, '.agents', 'workflows', 'switchboard-orchestrator.md');
+        const personaPath = path.join(root, '.agents', 'skills', 'switchboard-orchestrator', 'SKILL.md');
         let projectFilter = '';
         try {
             const db = await this._getKanbanDb(root);
@@ -8103,7 +8174,7 @@ Each plan file must include:
         try {
             await fs.promises.access(personaPath);
             kickoffPrompt = [
-                `You are the Switchboard orchestrator. Read and follow .agents/workflows/switchboard-orchestrator.md now — begin with the Kickoff Protocol.`,
+                `You are the Switchboard orchestrator. Read and follow .agents/skills/switchboard-orchestrator/SKILL.md now — begin with the Kickoff Protocol.`,
                 ``,
                 `UNATTENDED=true`,
                 `WORKSPACE_ROOT=${root}`,
@@ -8115,7 +8186,7 @@ Each plan file must include:
                 `Then report "kickoff complete, sleeping" and STOP. Do not poll — the system wakes you later.`
             ].join('\n');
         } catch {
-            kickoffPrompt = `You are the Switchboard orchestrator. The orchestrator workflow is not yet installed (.agents/workflows/switchboard-orchestrator.md). Stand by — do not take autonomous action.`;
+            kickoffPrompt = `You are the Switchboard orchestrator. The orchestrator workflow is not yet installed (.agents/skills/switchboard-orchestrator/SKILL.md). Stand by — do not take autonomous action.`;
         }
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
@@ -9615,7 +9686,7 @@ Each plan file must include:
             const recoveryPreamble = forceRecover
                 ? `Previous wake did not report completion — recover: check for an interrupted triage or merge before proceeding.\n`
                 : '';
-            const wakePrompt = `${recoveryPreamble}You are the Switchboard orchestrator. The system woke you. Read and follow .agents/workflows/switchboard-orchestrator.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
+            const wakePrompt = `${recoveryPreamble}You are the Switchboard orchestrator. The system woke you. Read and follow .agents/skills/switchboard-orchestrator/SKILL.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
             let ok = false;
             try {
                 ok = await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt, { orchestrationWake: true });
@@ -17374,7 +17445,7 @@ What would you like to find?`;
             return basePayload;
         }
 
-        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/workflows/accuracy.md step-by-step while implementing this task.`;
+        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/skills/accuracy/SKILL.md step-by-step while implementing this task.`;
         return `${basePayload}${accuracyInstruction}`;
     }
 
@@ -22194,7 +22265,7 @@ What would you like to find?`;
         }
 
         // 2. Build the manage prompt (static string + port interpolation only).
-        const prompt = `Read ${workspaceRoot}/.agents/skills/switchboard-manage/SKILL.md and follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour), then wait for my direction. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.`;
+        const prompt = `Read ${workspaceRoot}/.agents/workflows/switchboard.md and follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour), then wait for my direction. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.`;
 
         // 3. Deliver via the shared PM-terminal-else-clipboard path.
         await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
@@ -22275,7 +22346,7 @@ What would you like to find?`;
             `${i + 1}. planId=${p.planId} | "${p.topic}" | file=${p.planFile} | column=${p.kanbanColumn} | complexity=${p.complexity}`
         ).join('\n');
 
-        return `Read ${workspaceRoot}/.agents/skills/switchboard-manage/SKILL.md and follow its §6 "Targeted pass" variant exactly — the plan list below IS the queue (board order); skip source-column resolution. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.
+        return `Read ${workspaceRoot}/.agents/workflows/switchboard.md and follow its §6 "Targeted pass" variant exactly — the plan list below IS the queue (board order); skip source-column resolution. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.
 
 TARGETED PASS — run exactly these plans autonomously:
 ${planList}

@@ -3514,7 +3514,23 @@ async function cleanupLegacyAgentFiles(workspaceRoot: string): Promise<void> {
         'workflows/handoff-lead.md',
         'workflows/handoff-relay.md',
         'workflows/challenge.md',
-        'workflows/chat.md', // Renamed to switchboard-chat.md
+        'workflows/chat.md', // Renamed to switchboard-chat.md (now switchboard-cloud.md)
+        // 2026-07-12 four-front-doors refactor: retired workflow files relocated to
+        // .agents/skills/ (internal) or .agents/workflows/switchboard-*.md (doors).
+        // Without this cleanup, Antigravity keeps showing the old slash commands on
+        // existing installs after the update (the copy step never deletes source-removed
+        // files). Reload the window / start a fresh conversation before checking the
+        // slash menu — Antigravity's picker registry is session-cached.
+        'workflows/switchboard-index.md',
+        'workflows/switchboard-manage.md',
+        'workflows/switchboard-split.md',
+        'workflows/switchboard-chat.md',
+        'workflows/sw-remote.md',
+        'workflows/memo.md',
+        'workflows/improve-plan.md',
+        'workflows/improve-feature.md',
+        'workflows/accuracy.md',
+        'workflows/switchboard-orchestrator.md',
     ];
     // Only operate on .agents/ (Switchboard's managed directory). A pre-existing
     // .agent/ belongs to the user and must be left byte-for-byte untouched — the
@@ -3691,6 +3707,19 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         '.agents/workflows/handoff-relay.md',
         '.agents/workflows/challenge.md',
         '.agents/personas/switchboard_operator.md',
+        // 2026-07-12 four-front-doors refactor: retired workflow files (relocated to
+        // skills/ or renamed to switchboard-*.md doors). Remove from existing installs
+        // so Antigravity's slash menu stops showing the old commands after update.
+        '.agents/workflows/switchboard-index.md',
+        '.agents/workflows/switchboard-manage.md',
+        '.agents/workflows/switchboard-split.md',
+        '.agents/workflows/switchboard-chat.md',
+        '.agents/workflows/sw-remote.md',
+        '.agents/workflows/memo.md',
+        '.agents/workflows/improve-plan.md',
+        '.agents/workflows/improve-feature.md',
+        '.agents/workflows/accuracy.md',
+        '.agents/workflows/switchboard-orchestrator.md',
     ];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);
@@ -3710,7 +3739,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     try {
         await vscode.workspace.fs.stat(readmeUri);
     } catch {
-        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, session logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use the **Prompts tab** to inject delegation instructions for external agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.`;
+        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, session logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use the **Prompts tab** to inject delegation instructions for external agents.\n- Use \`/switchboard\` for the management console (plan, dispatch, track, automate).`;
         await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(readmeContent, 'utf8'));
     }
 

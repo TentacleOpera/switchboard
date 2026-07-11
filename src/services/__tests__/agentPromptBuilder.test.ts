@@ -20,7 +20,7 @@ suite('agentPromptBuilder', () => {
                 accurateCodingEnabled: true
             });
             assert.ok(prompt.includes('Accuracy Mode'), 'Should include Accuracy Mode header');
-            assert.ok(prompt.includes('.agents/workflows/accuracy.md'), 'Should include reference to accuracy workflow');
+            assert.ok(prompt.includes('.agents/skills/accuracy/SKILL.md'), 'Should include reference to accuracy workflow');
         });
 
         test('accurateCodingEnabled: false omits Accuracy Mode instructions', () => {
@@ -293,13 +293,13 @@ suite('agentPromptBuilder', () => {
     suite('feature-aware workflow routing', () => {
         test('feature-mode planner prompt uses improve-feature workflow path', () => {
             const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
-            assert.ok(prompt.includes('Read .agents/workflows/improve-feature.md and follow it step-by-step'), 'Should route to improve-feature.md');
+            assert.ok(prompt.includes('Read .agents/skills/improve-feature/SKILL.md and follow it step-by-step'), 'Should route to improve-feature SKILL.md');
             assert.ok(!prompt.includes('improve-plan.md'), 'Should NOT include improve-plan.md');
         });
 
         test('isFeature on plan (no subtasks) uses improve-feature workflow path', () => {
             const prompt = buildKanbanBatchPrompt('planner', [{ topic: 'Lonely Feature', absolutePath: '/workspace/.switchboard/features/lonely.md', isFeature: true }], {});
-            assert.ok(prompt.includes('Read .agents/workflows/improve-feature.md and follow it step-by-step'), 'Should route to improve-feature.md');
+            assert.ok(prompt.includes('Read .agents/skills/improve-feature/SKILL.md and follow it step-by-step'), 'Should route to improve-feature SKILL.md');
         });
 
         test('feature-mode overrides custom plannerWorkflowPath', () => {
@@ -309,8 +309,8 @@ suite('agentPromptBuilder', () => {
         });
 
         test('non-feature planner prompt still uses configured workflow path (regression)', () => {
-            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { plannerWorkflowPath: '.agents/workflows/improve-plan.md' });
-            assert.ok(prompt.includes('improve-plan.md'), 'Should use default/configured plan workflow');
+            const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { plannerWorkflowPath: '.agents/skills/improve-plan/SKILL.md' });
+            assert.ok(prompt.includes('improve-plan/SKILL.md'), 'Should use default/configured plan workflow');
         });
 
         test('workflowFilePathEnabled: false emits no workflow path for feature-mode (regression)', () => {

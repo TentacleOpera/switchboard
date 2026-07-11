@@ -167,7 +167,7 @@ export interface PromptBuilderOptions {
     /** When true, reviewer appends a brief summary to the plan file instead of reproducing full sections. */
     reviewerCompactPlanUpdateEnabled?: boolean;
 
-    /** Path to the workflow file for the planner role. Defaults to .agents/workflows/improve-plan.md */
+    /** Path to the workflow file for the planner role. Defaults to .agents/skills/improve-plan/SKILL.md */
     plannerWorkflowPath?: string;
 
     /** Path/link to the project constitution. */
@@ -341,7 +341,7 @@ function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): st
         return basePayload;
     }
 
-    const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/workflows/accuracy.md step-by-step while implementing this task.`;
+    const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/skills/accuracy/SKILL.md step-by-step while implementing this task.`;
     return `${basePayload}${accuracyInstruction}`;
 }
 
@@ -712,7 +712,7 @@ export const DEEP_RESEARCH_DIRECTIVE =
     `TARGET SOURCE COUNT: 50-100 sources (soft target — prioritize quality over quantity).`;
 
 /**
- * DEFAULT_CHAT_BASE_INSTRUCTIONS must be kept in sync with .agents/workflows/switchboard-chat.md.
+ * DEFAULT_CHAT_BASE_INSTRUCTIONS must be kept in sync with .agents/workflows/switchboard-cloud.md.
  * If you update the workflow file, ensure this constant is updated to match.
  */
 export const DEFAULT_CHAT_BASE_INSTRUCTIONS = `You are in Consultation & Planning Mode. Your role is Product Manager and Architect: gather requirements, challenge assumptions, and draft implementation plans. You do not write or edit code.
@@ -740,8 +740,8 @@ export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project regardless of what project is active when the file is imported. Omit the line only if no project name is given above.`;
 }
 
-const DEFAULT_PLANNER_WORKFLOW = '.agents/workflows/improve-plan.md';
-const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/workflows/improve-feature.md';
+const DEFAULT_PLANNER_WORKFLOW = '.agents/skills/improve-plan/SKILL.md';
+const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/skills/improve-feature/SKILL.md';
 
 /** Roles that touch code and should receive the git safety guardrail. */
 const CODE_TOUCHING_ROLES = new Set(['lead', 'coder', 'intern', 'reviewer', 'tester']);
@@ -1620,7 +1620,7 @@ export function buildCustomAgentPrompt(
             : '\n\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.';
     }
     if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
-    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agents/workflows/accuracy.md step-by-step.`;
+    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agents/skills/accuracy/SKILL.md step-by-step.`;
     if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
     if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
     if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;

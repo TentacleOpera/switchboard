@@ -1,6 +1,7 @@
 ---
-description: Entry point for remote Switchboard planning sessions — orients Claude to use Linear/Notion MCP instead of local files
+description: Remote Switchboard control — drive plans via Linear or Notion when the local machine is off
 ---
+
 
 # Remote Switchboard Session Entry Point
 

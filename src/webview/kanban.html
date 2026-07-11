@@ -2978,14 +2978,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <div id="plannerWorkflowFilePathGroup">
                 <div class="input-group">
                   <label for="workflowFilePath">Workflow File Path:</label>
-                  <input type="text" id="workflowFilePath" value=".agents/workflows/improve-plan.md" />
+                  <input type="text" id="workflowFilePath" value=".agents/skills/improve-plan/SKILL.md" />
                   <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
                 </div>
                 <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px; font-family:var(--font-mono);"></div>
                 
                 <div class="example-paths">
                   <strong>Example paths:</strong>
-                  <code>.agents/workflows/improve-plan.md</code> (Switchboard Native)
+                  <code>.agents/skills/improve-plan/SKILL.md</code> (Switchboard Native)
                   <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
                   <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
                 </div>
@@ -3418,7 +3418,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
-                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agents/workflows/improve-plan.md';
+                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agents/skills/improve-plan/SKILL.md';
                 const plannerWorkflowEnabled = config.addons?.workflowFilePathEnabled !== false;
                 document.getElementById('plannerWorkflowEnabled').checked = plannerWorkflowEnabled;
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
@@ -3609,7 +3609,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const textInput = document.createElement('input');
                     textInput.type = 'text';
                     textInput.id = `addon_${addon.id}_path`;
-                    textInput.placeholder = 'e.g. .agents/workflows/accuracy.md';
+                    textInput.placeholder = 'e.g. .agents/skills/accuracy/SKILL.md';
                     textInput.style.display = isEnabled ? 'block' : 'none';
                     textInput.style.marginTop = '4px';
                     textInput.style.width = '100%';
@@ -4024,6 +4024,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let clearTerminalBeforePromptDelay = 2000;
 
         let collapseCodersEnabled = true;
+        let unrenderedColumnRefreshRequested = false;
         // Restore collapse toggle from webview state if available
         try {
             const savedState = vscode.getState();
@@ -5704,6 +5705,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         function renderBoard(cards, justFinishedIds = new Set()) {
             hideTooltip();
+            unrenderedColumnRefreshRequested = false;
             const viewState = captureBoardViewState();
             currentCards = cards;
             // Prune stale selectedCards entries so ASSIGN count and merge buttons stay accurate
@@ -5734,7 +5736,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
             }
             const buckets = {};
-            columns.forEach(c => buckets[c] = []);
+            [...columns, ...CODED_IDS].forEach(c => {
+                if (!buckets[c]) buckets[c] = [];
+            });
 
             // Filter/remap cards based on backlog view state
             let displayCards = cards;
@@ -5751,7 +5755,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
-                const col = columns.includes(effectiveCol) ? effectiveCol : 'CREATED';
+                const col = columns.includes(effectiveCol) ? effectiveCol : (CODED_IDS.includes(effectiveCol) ? effectiveCol : null);
+                if (!col) {
+                    // The server currently sends a card in a column it is not showing.
+                    // Ask for a one-shot refresh instead of pushing it into CREATED, which
+                    // would make hidden cards masquerade there.
+                    if (!unrenderedColumnRefreshRequested) {
+                        unrenderedColumnRefreshRequested = true;
+                        postKanbanMessage({ type: 'refresh' });
+                    }
+                    return;
+                }
                 const t = new Date(card.lastActivity).getTime();
                 card._ts = isNaN(t) ? 0 : t;
                 buckets[col].push(card);

@@ -218,6 +218,14 @@ Skipped this session per the operator's directive (SKIP COMPILATION / SKIP TESTS
 
 ---
 
+## Review Findings
+
+Reviewer pass (2026-07-11): implementation matches the plan. Files changed: `src/extension.ts` only — `isSwitchboardManagedFolder` (`:245`), extracted `refreshWorkspaceControlPlane` (`:264`, byte-equivalent to the removed `:476-550` block, ordering contract intact), and the mapping-parents ∪ open-folders loop (`:563-583`) with the `.switchboard/`-exists guard on every target and `~` expansion identical to `WorkspaceIdentityService:70`. Verified statically (compile/tests skipped per directive): imports resolve, no orphaned refs, mapping index (`:501`) built before the loop (`:576`), Setup/activation share the version stamp so idempotency holds. No CRITICAL/MAJOR issues; no code fixes applied. Remaining minor/deferred: activation loop reads `m.parentFolder` only (index falls back to `workspaceFolders[0]` — harmless since `setup.html` always writes `parentFolder`); per-folder bundle crawl/src-hash not hoisted (plan note 5, explicitly optional); a non-open `agents`-only mapping parent could gain a `.claude/` mirror (resource config resolves to window default) — accepted as bringing it to current protocol.
+
 ## Completion Summary
 
 Implemented the multi-root activation refresh fix in `src/extension.ts`. Extracted the single-root control-plane refresh block (old lines 476-550) into a new `refreshWorkspaceControlPlane(root, context)` function (lines 264-326) preserving the exact ordering contract (capture `needsAgentRefresh` before seed, seed, then scaffold+stamp). Added `isSwitchboardManagedFolder(root)` predicate (lines 245-252) — single-arm guard: `<root>/.switchboard/` directory exists. Replaced the `if (workspaceRoot)` gate in `activate` with a loop (lines 558-583) over the union of mapping parents (`getMappingsFromIndex()` with `~` expansion matching `buildMappingIndexFromDbs`) and open workspace folders, deduped via `Set<string>`, each filtered by the managed-folder guard with per-folder `try/catch`. No other files changed. No issues encountered; `performSetup`'s independent call-site and the shared `setLastCopiedAgentVersion` stamp path are untouched, preserving Setup/activation idempotency.
+
+## Reviewer Completion
+
+Reviewed the implemented change against this plan in-place (regression analysis on, compile/tests skipped per directive). Confirmed the extracted `refreshWorkspaceControlPlane` is byte-equivalent to the removed `:476-550` block, the `.switchboard/`-exists guard runs on every target (mapping parents included), the `~` expansion matches `WorkspaceIdentityService:70`, and the mapping index is built before the refresh loop. Only file touched by the review is this plan (no code fixes were required — no CRITICAL/MAJOR findings). Three NIT-level observations noted under Review Findings, all scoped-out or deferred by the plan itself.

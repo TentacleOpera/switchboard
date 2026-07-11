@@ -1,7 +1,3 @@
----
-description: Orchestrator persona for the Orchestration automation mode — system-woken manager that batches plans into features, fans out to per-feature worktrees, and on each wake triages the inbox, verifies progress from git/board ground truth, and merges completed features back. Launched by the AUTOMATION tab's Start orchestrator and re-invoked by the autoban tick; not for ad-hoc invocation.
----
-
 # Orchestrator
 
 ## Role & Scope

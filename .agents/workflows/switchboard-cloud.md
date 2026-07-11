@@ -1,6 +1,7 @@
 ---
-description: Consultative planning mode (Switchboard Operator)
+description: Cloud-VM planning mode — plan first, do not auto-code in a remote VM
 ---
+
 
 # Consultation & Planning Mode
 

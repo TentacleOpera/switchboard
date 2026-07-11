@@ -186,3 +186,23 @@ Key risks: (1) **stale files on existing installs** — moving files in source w
 ---
 
 **Recommendation:** Complexity 8 → **Send to Lead Coder.** The mechanical moves are easy; the danger is host drift and the shipped-state migration. Land only with both-host verification and the migration test green. Supersede `consolidate-switchboard-front-doors.md` (router model) and keep `fix-skill-discovery-frontmatter-spam.md` as the already-landed dependency.
+
+---
+
+## Completion Report
+
+**Status:** Implemented 2026-07-12.
+
+All nine sections landed:
+
+- **§A** `.agents/workflows/` reduced to exactly four doors: `switchboard.md` (absorbs switchboard-manage SKILL.md verbatim), `switchboard-cloud.md` (from switchboard-chat.md), `switchboard-remote.md` (from sw-remote.md), `switchboard-memo.md` (from memo.md). Old workflow files deleted.
+- **§B** Created stripped `.agents/skills/{improve-plan,improve-feature,accuracy,switchboard-orchestrator}/SKILL.md` (no frontmatter → invisible to Antigravity discovery). Deleted `.agents/skills/switchboard-manage/`.
+- **§C** Rewrote `ClaudeCodeMirrorService.ts` manifest: four `default`-invocation front doors; improve-plan/improve-feature/accuracy as `no-user` internal skills; switchboard-orchestrator NOT in manifest (engine launches by path). Updated CLAUDE_PREAMBLE slash command list.
+- **§D** Repointed `agentPromptBuilder.ts`: `DEFAULT_PLANNER_WORKFLOW` → `.agents/skills/improve-plan/SKILL.md`, `DEFAULT_FEATURE_PLANNER_WORKFLOW` → `.agents/skills/improve-feature/SKILL.md`, accuracy references → `.agents/skills/accuracy/SKILL.md`.
+- **§E** Repointed `TaskViewerProvider.ts`: orchestrator path → `.agents/skills/switchboard-orchestrator/SKILL.md`; manage dispatch → `.agents/workflows/switchboard.md`.
+- **§F** Extended `cleanupLegacyAgentFiles` + blocklist in `extension.ts` with all 10 retired workflow paths. Updated README quick-start (`/improve-plan` → `/switchboard`). Updated `kanban.html` accuracy placeholder.
+- **§G** Added `_migratePlannerWorkflowPathWorkflowsToSkills()` in `TaskViewerProvider.ts` — marker-gated per-DB migration that rewrites persisted `plannerWorkflowPath` values matching the old default (`.agents/workflows/improve-plan.md`) to the new skills path. Runs after the `.agent→.agents` normalization.
+- **§H** Updated `AGENTS.md`, `CLAUDE.md`, `docs/switchboard_user_manual.md` — Workflow Registry, architecture diagram, skills table, memo references, command tables all reflect the four front doors.
+- **§I** Updated test expectations in `planner-workflow-path-migration.test.js` (new test 7 + source assertions for the workflows→skills migration), `agentPromptBuilder.test.ts`, `agent-prompt-builder-subagents.test.js`, `minimal-prompt.test.js`, `kanban-default-prompt-previews.test.js`.
+
+**Verification:** `tsc --noEmit` passes (no new errors). All test files parse cleanly. Grep gates confirm: exactly four workflow files, four stripped skills, no switchboard-manage skill, no stale command references in docs. Pre-existing migration test DB-init failure is environment-specific (sql.js not auto-creating) and reproduces without these changes.

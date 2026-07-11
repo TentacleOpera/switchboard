@@ -1,7 +1,3 @@
----
-description: Reconcile and restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent
----
-
 # Improve Feature
 
 Use this workflow when the target is a Switchboard **feature** (a container of subtask plans), not a single plan. Its job is to make the subtask **set** coherent: improve every subtask, detect inconsistencies between them, and then **restructure** — merge overlapping plans, delete superseded ones, rewrite contradictory ones, split oversized ones.

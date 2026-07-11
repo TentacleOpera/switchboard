@@ -288,3 +288,19 @@ resume-prompt trips) — mitigated by the explicit hard boundary in Change 5; (2
 drifting into "eager" over time — mitigated by anchoring the offer as a one-line question and
 keeping Hard Rule 2 authority over *acting*; (3) stale line references if the sibling refactor
 lands first — mitigated by the binding sequencing note and the 1:1 contingency mapping.
+
+---
+
+## Completion Report
+
+**Status:** Implemented 2026-07-12.
+
+All five changes landed in `.agents/skills/switchboard-manage/SKILL.md`:
+
+1. **Humanized entry header + redefined column split** — entry snapshot now names every pre-CODE-REVIEWED column individually, omits CODE REVIEWED and everything after it, and humanizes the `Updated:` timestamp to relative/local form.
+2. **Broadened Hard Rule 8** — never leak UUIDs or plan filenames anywhere; added a list output template that shows titles + column + complexity only.
+3. **"Proactive, not eager" principle** — every turn past entry ends with a single one-line next-action question; never performs the next step without an explicit yes.
+4. **Humanized dispatch confirmation** — one-line confirmation with plan title + target column; killed async narration ("watching…", "still coding…").
+5. **§6b single-dispatch completion watch** — lightweight, session-scoped poll that checks plan-file mtime advance and offers to send to review on completion. Hard boundary: no state-file writes, no resume-prompt trips, no multi-plan batching.
+
+**Note:** The SKILL.md file was subsequently absorbed into `.agents/workflows/switchboard.md` and deleted by the sibling refactor plan (`refactor-switchboard-four-front-doors.md`). The voice changes survive verbatim in the new location.

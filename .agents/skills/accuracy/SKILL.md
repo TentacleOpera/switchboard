@@ -1,6 +1,3 @@
----
-description: Implement with high accuracy and self-review (invest effort up front to minimize rework)
----
 # Accuracy — Solo High-Accuracy Mode
 
 > This workflow trades tokens for correctness. It's designed for contexts where usage is free or low-cost, so the strategy is: **invest heavily in context-gathering and planning, verify at every gate, and red-team before finishing — to minimize rework rather than to save prompts.**

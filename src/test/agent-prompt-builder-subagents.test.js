@@ -214,9 +214,9 @@ function testCustomWorkflowPathGeneratesMinimalPrompt() {
 function testDefaultWorkflowPathGeneratesMinimalPrompt() {
     console.log('Testing default workflow path generates minimal prompt...');
     const prompt = buildKanbanBatchPrompt('planner', plans1, {
-        plannerWorkflowPath: '.agents/workflows/improve-plan.md'
+        plannerWorkflowPath: '.agents/skills/improve-plan/SKILL.md'
     });
-    assert.ok(prompt.includes('Read .agents/workflows/improve-plan.md and follow it step-by-step'), 'Default workflow should generate minimal "Read and follow" prompt');
+    assert.ok(prompt.includes('Read .agents/skills/improve-plan/SKILL.md and follow it step-by-step'), 'Default workflow should generate minimal "Read and follow" prompt');
     assert.ok(!prompt.includes('Please improve the following'), 'Default workflow should NOT include old full Switchboard prompt text');
     assert.ok(!prompt.includes('## Complexity Audit'), 'Default workflow should NOT include hardcoded Switchboard-specific sections');
     console.log('  PASS: Default workflow path generates minimal prompt');
