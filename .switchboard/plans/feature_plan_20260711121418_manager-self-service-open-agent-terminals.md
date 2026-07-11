@@ -42,8 +42,15 @@ is already a rail verb: `POST /kanban/verb/selectWorkspace` (`KanbanProvider.ts:
 exact dropdown arm: sets root, project filter, repo-scope, re-arms watchers).
 
 ## Metadata
-- **Tags:** feature, skill, api, manager, ux
+- **Tags:** feature, api, ux
 - **Complexity:** 3
+- **Feature:** 66ca830c-43b2-4406-974f-334b750c2208
+
+## User Review Required
+
+- `selectWorkspace` fired by the manager visibly switches the human's kanban view (shared
+  board state). The plan gates it behind a genuine root mismatch + user confirmation — flag
+  here so the reviewer explicitly accepts that a chat "yes" can move the IDE's board dropdown.
 
 ## Scope
 
@@ -112,6 +119,29 @@ exact dropdown arm: sets root, project filter, repo-scope, re-arms watchers).
   unchanged. `mirror:check` gates the skill copies. The `switchboard-orchestration` skill
   documents the `/health` response shape — update its response example to include
   `selectedWorkspaceRoot` (doc-only touch, both copies).
+- **Synchronous-registration claim (verified 2026-07-11, improve-feature pass):** inside
+  `createAgentGrid` (`extension.ts:2662`), `vscode.window.createTerminal(gridTermOpts)`
+  (rel. `extension.ts:~2880`) is followed by `registeredTerminals.set(suffixedName(agent.name),
+  terminal)` (`:~2895`) within the same awaited command — the verb's `{success:true}` really
+  does imply the dispatch pre-flight (`getRegisteredTerminals()`) will pass. Note the shell
+  *inside* the terminal (CLI agent boot) is still async — covered, as the plan states, by the
+  existing send machinery (send locks, clear-before-prompt delay), not by this plan.
+- **Options-interface line drift:** `getRegisteredTerminals` sits at `LocalApiServer.ts:143`
+  (not `:134` as first noted) — place `getSelectedWorkspaceRoot` beside it.
+
+## Dependencies
+
+- None — no `sess_` dependencies; self-contained within this feature.
+
+## Adversarial Synthesis
+
+Key risks: (1) `selectWorkspace` mutates shared board state and resets the project filter —
+mitigated by firing it only on a genuine root mismatch, passing `project` through, and never
+on same-root re-selection; (2) `createAgentGrid` returns `{success:true}` even when nothing
+opens (suppress-main / all-agents-unticked) — mitigated by exactly one confirming `GET
+/health` read and an honest "0 terminals" report, never a poll loop; (3) older extension
+builds lack `selectedWorkspaceRoot` — skill falls back to the manual nudge instead of firing
+`selectWorkspace` blind.
 
 ## Proposed Changes
 ### src/services/LocalApiServer.ts

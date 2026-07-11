@@ -51,8 +51,13 @@ call stays.
   columns named, post-code collapsed to `terminal N`, project-filter scope line).
 
 ## Metadata
-- **Tags:** feature, performance, skill, backend, manager
+- **Tags:** feature, performance, backend
 - **Complexity:** 4
+- **Feature:** 66ca830c-43b2-4406-974f-334b750c2208
+
+## User Review Required
+
+- None — additive mirror section + skill prose; no behavior removed, fallback path preserved for older builds.
 
 ## Scope
 
@@ -124,6 +129,27 @@ call stays.
 - **Dependencies:** none on other plans. No verb/endpoint changes → no catalog regen. The
   `switchboard-orchestration` skill and orchestrator persona read the state files, not the
   index sections — unaffected.
+- **Filter-change → rewrite chain (verified 2026-07-11, improve-feature pass):**
+  `setConfig()` (`KanbanDatabase.ts:4737-4744`) ends in `return this._persist()`, and the
+  persist tail calls `_scheduleLocalMirror()` on success (`KanbanDatabase.ts:8280`) — so a
+  filter-only change DOES schedule a mirror pass; the hash-input change (Scope #2) is what
+  makes that pass actually write instead of hash-skipping. Claim confirmed in source.
+- **Feature-only column in the board line:** the proposed `preCodeParts` push renders a
+  column holding only features as `CREATED 0` (plain-plan count zero). *Clarification:* when
+  `plain === 0 && feats > 0`, render `<COL> 0 (+<n> feature<s>)` so the line is not
+  misread as an empty column; the counts table already carries the split.
+
+## Dependencies
+
+- None — no `sess_` dependencies; self-contained within this feature.
+
+## Adversarial Synthesis
+
+Key risks: (1) snapshot staleness if the project filter is omitted from the content hash —
+mitigated by Scope #2 folding it into `serialized`; (2) grouping-logic drift between the
+writer and the skill's legacy awk fallback — mitigated by the skill consuming the writer's
+pre-formatted line verbatim, fallback labeled legacy-only; (3) column-ID casing — snapshot
+must emit canonical uppercase IDs, never slugs, or API calls built from it strand cards.
 
 ## Proposed Changes
 ### src/services/KanbanDatabase.ts
@@ -149,7 +175,9 @@ for (const [col, plans] of allColumns) {
     const plain = plans.length - feats;
     md += `| ${col} | ${plain} | ${feats} |\n`;
     if (POST_CODE.has(col)) { terminalTotal += plain; }
-    else if (plain > 0 || feats > 0) { preCodeParts.push(`${col} ${plain}`); }
+    else if (plain > 0 && feats > 0) { preCodeParts.push(`${col} ${plain} (+${feats} feature${feats === 1 ? '' : 's'})`); }
+    else if (plain > 0) { preCodeParts.push(`${col} ${plain}`); }
+    else if (feats > 0) { preCodeParts.push(`${col} 0 (+${feats} feature${feats === 1 ? '' : 's'})`); }
 }
 const boardLine = preCodeParts.length === 0 && terminalTotal === 0
     ? 'Board: (empty)'
@@ -158,6 +186,12 @@ md += `\n${boardLine}\n`;
 md += `\nActive project filter: ${activeFilter || '(none)'}\n`;
 md += `\n_Terminals are NOT in this file — check GET /health._\n`;
 ```
+
+> **Superseded:** `else if (plain > 0 || feats > 0) { preCodeParts.push(`${col} ${plain}`); }`
+> **Reason:** a column holding only feature cards rendered as `<COL> 0`, reading as an
+> empty column and hiding the features from the one-line summary.
+> **Replaced with:** the three-branch push above — plain-only, plain+features, and
+> feature-only columns each render explicitly (`CREATED 0 (+2 features)`).
 
 (Exact placement: build the snapshot before the existing temp+rename write of
 `kanban-board.md` so it ships in the same atomic write.)
