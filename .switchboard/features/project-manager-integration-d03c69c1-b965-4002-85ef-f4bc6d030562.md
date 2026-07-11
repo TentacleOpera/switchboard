@@ -20,7 +20,11 @@ Make the Project Manager a first-class citizen of the board: promote the PM from
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Board → Manager: "Run Selected Plans" Targeted Pass Button](../plans/board-selected-plans-to-manager-targeted-pass.md) — **PLAN REVIEWED**
-- [ ] [Promote Project Manager to a Core Role (Agents Tab)](../plans/promote-project-manager-to-core-role.md) — **PLAN REVIEWED**
+- [x] [Board → Manager: "Run Selected Plans" Targeted Pass Button](../plans/board-selected-plans-to-manager-targeted-pass.md) — **CODER CODED**
+- [x] [Promote Project Manager to a Core Role (Agents Tab)](../plans/promote-project-manager-to-core-role.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+Both subtasks implemented. **Promote PM to Core Role:** moved the Project Manager row from the Optional group into the Core group in `src/webview/kanban.html` (after Analyst, with `checked`), flipped the visibility default from `false` to `true` in both `src/services/TaskViewerProvider.ts` (`getVisibleAgents`) and `src/webview/sharedDefaults.js` (`DEFAULT_VISIBLE_AGENTS`). **Targeted Pass Button:** added a global toolbar button (`btn-manager-pass`) beside Create Worktree in `kanban.html` with the `{{ICON_MANAGER_PASS}}` icon (icons-125, wired in `KanbanProvider.ts` iconMap); added the `dispatchManagerForSelected` webview verb handler in `KanbanProvider.ts` (click-time plan-record resolution with feature-row + epic-subtask exclusion, 30-plan cap, unresolvable-id drop); extracted `_deliverPromptToPmTerminal` from `_handleDispatchProjectManager` in `TaskViewerProvider.ts` and added `_buildTargetedPassPrompt` + `handleDispatchManagerForSelected` (API-server pre-flight, two-lane prompt with `cardStage`/`plannerLane` fields); added §6a "Targeted Pass" subsection to `switchboard-manage/SKILL.md` (both `.agents` and `.claude` copies); regenerated `protocol-catalog.json` + `verbAllowlist.ts`. Files changed: `src/webview/kanban.html`, `src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`, `src/webview/sharedDefaults.js`, `.agents/skills/switchboard-manage/SKILL.md`, `.claude/skills/switchboard-manage/SKILL.md`, `protocol-catalog.json`, `src/generated/verbAllowlist.ts`. No issues encountered — `catalog:check` and `parity:check` pass; `mirror:check` has a pre-existing drift on `switchboard-contracts`/`switchboard-mcp` SKILL.md (unrelated to this feature).
 

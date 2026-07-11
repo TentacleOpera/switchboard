@@ -412,6 +412,41 @@ report the digest: per plan, landing status, key implementation notes, remaining
 one aggregated **"Open questions across the pass"** list. Substance lives in the cards once;
 the log is just the index of which cards to read.
 
+### 6a. Targeted Pass — Explicit Plan List as the Queue
+
+When the dispatch prompt carries an explicit plan list (from the board's "Run Selected Plans"
+toolbar button), that list **IS the queue** — in board order. Skip source-column resolution
+entirely. Every other rule of the §6 pass (preconditions, mtime completion signal, audit log,
+digest, guardrails) is unchanged. Mixed-column selections are fine: each card enters the
+appropriate lane from wherever it sits.
+
+**Two execution lanes** (the lane rules are prose-enforced — phrasing is absolute):
+
+- **Coding lane — WIP 1, review-gated.** One plan end-to-end at a time: dispatch to its coding
+  column (`POST /kanban/dispatch`, `targetColumn` omitted — complexity auto-routing decides) →
+  wait for the coding completion signal (first plan-file mtime advance after dispatch) → advance
+  the card to CODE REVIEWED (dispatching the reviewer via the same one-call endpoint) → wait for
+  the review completion signal (next mtime advance) → only then start the next plan. "In flight"
+  means anywhere between coding dispatch and review completion. Track the in-flight card's lane
+  stage via the **`cardStage`** field (values: `coding` | `review`) in `oversight-state.md` — do
+  NOT use `stage` (that is §7's pass-level pipeline stage field; reusing it creates two fields
+  with one name and different semantics).
+
+- **Planner lane — 2-minute cooldown, overlaps the coding lane.** Selected plans whose next stage
+  is planning (e.g. CREATED → PLAN REVIEWED, planner role) do **not** queue behind the coding
+  lane. Consecutive planner dispatches require **≥2 minutes** after the previous planner
+  dispatch's completion signal. Persist the cooldown timestamp in `oversight-state.md` under a
+  **`plannerLane`** field. The planner lane overlaps the coding lane.
+
+**Single-pass guard:** if `oversight-state.md` shows an in-flight pass, offer resume-or-refuse —
+never start a second concurrent loop.
+
+**Skip-complete rule:** cards already in a terminal/reviewed column are skipped with a one-line
+note rather than halting the pass.
+
+**Halt-on-failure:** halt the ENTIRE pass on any failure/timeout — never skip, never re-dispatch
+a halted card.
+
 ---
 
 ## 7. Project Pipeline — Manage a Project Start to End

@@ -4525,7 +4525,7 @@ Each plan file must include:
             mcp_monitor: false,
             claude_artifacts: false,
             phone_a_friend: false,
-            project_manager: false
+            project_manager: true
         };
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
@@ -22195,11 +22195,22 @@ What would you like to find?`;
         // 2. Build the manage prompt (static string + port interpolation only).
         const prompt = `Read ${workspaceRoot}/.agents/skills/switchboard-manage/SKILL.md and follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour), then wait for my direction. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.`;
 
-        // 3. Resolve the PM terminal — two-stage lookup matching sendPromptToAgentTerminal
-        //    and the Phone-a-Friend dispatch: registered terminals first, then open
-        //    terminals by normalized name. Falls back to the literal 'Project Manager'
-        //    so the open-terminals scan has a stable name to match against even when
-        //    no agent name is configured.
+        // 3. Deliver via the shared PM-terminal-else-clipboard path.
+        await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
+    }
+
+    /**
+     * Shared delivery plumbing for PM-terminal prompts: resolve the Project Manager
+     * terminal (registered → open-by-name → clipboard fallback) with send-lock +
+     * robust send. Extracted from _handleDispatchProjectManager so the targeted-pass
+     * handler reuses the identical delivery path without duplication.
+     */
+    private async _deliverPromptToPmTerminal(prompt: string, workspaceRoot: string): Promise<void> {
+        // Resolve the PM terminal — two-stage lookup matching sendPromptToAgentTerminal
+        // and the Phone-a-Friend dispatch: registered terminals first, then open
+        // terminals by normalized name. Falls back to the literal 'Project Manager'
+        // so the open-terminals scan has a stable name to match against even when
+        // no agent name is configured.
         const agentName = await this._getAgentNameForRole('project_manager', workspaceRoot)
             || 'Project Manager';
         const suffixedKey = this._suffixedName(agentName);
@@ -22241,5 +22252,72 @@ What would you like to find?`;
                 );
             }
         }
+    }
+
+    /**
+     * Build the targeted-pass prompt for a set of selected plans. The prompt embeds
+     * a frozen click-time plan list (board order) and instructs the PM agent to run
+     * the manage skill's §6 "Targeted pass" variant — two execution lanes:
+     *   - Coding lane: WIP 1, review-gated (a plan must pass CODE REVIEW before the
+     *     next starts).
+     *   - Planner lane: 2-minute cooldown between consecutive planner dispatches,
+     *     overlapping the coding lane.
+     * Per-card lane-stage is tracked via the `cardStage` field in oversight-state.md
+     * (named to avoid collision with §7's pass-level `stage` field).
+     */
+    private _buildTargetedPassPrompt(
+        plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[],
+        workspaceRoot: string,
+        port: number
+    ): string {
+        const planList = plans.map((p, i) =>
+            `${i + 1}. planId=${p.planId} | "${p.topic}" | file=${p.planFile} | column=${p.kanbanColumn} | complexity=${p.complexity}`
+        ).join('\n');
+
+        return `Read ${workspaceRoot}/.agents/skills/switchboard-manage/SKILL.md and follow its §6 "Targeted pass" variant exactly — the plan list below IS the queue (board order); skip source-column resolution. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.
+
+TARGETED PASS — run exactly these plans autonomously:
+${planList}
+
+Execution rules (from SKILL.md §6 Targeted pass):
+- Two lanes. Coding lane: WIP 1, review-gated — one plan end-to-end at a time (dispatch via POST /kanban/dispatch with targetColumn omitted so complexity auto-routing decides → wait for the coding completion signal = first plan-file mtime advance after dispatch → advance the card to CODE REVIEWED dispatching the reviewer via the same one-call endpoint → wait for the review completion signal = next mtime advance → only then start the next plan). "In flight" means anywhere between coding dispatch and review completion. Track the in-flight card's lane stage via the \`cardStage\` field (values: \`coding\` | \`review\`) in oversight-state.md — do NOT use \`stage\` (that is §7's pass-level pipeline stage field).
+- Planner lane: selected plans whose next stage is planning (e.g. CREATED → PLAN REVIEWED, planner role) do NOT queue behind the coding lane. Consecutive planner dispatches require ≥2 minutes after the previous planner dispatch's completion signal. Persist the cooldown timestamp in oversight-state.md under a \`plannerLane\` field. The planner lane overlaps the coding lane.
+- Autonomous within the pass: no per-card confirmation. Halt the ENTIRE pass on any failure/timeout — never skip, never re-dispatch a halted card. Cards already in a terminal/reviewed column: skip with a one-line note rather than halting.
+- Single-pass guard: if oversight-state.md shows an in-flight pass, offer resume-or-refuse — never start a second concurrent loop.
+- Durable state: rewrite oversight-state.md after every state change (dispatch, completion, lane transition, halt). Append to oversight-log.md on every pass event. At pass end, produce the end-of-pass digest (read the actioned plan files' content, report per-plan landing status + key notes + risks + aggregated open questions).`;
+    }
+
+    /**
+     * Handle a "Run Selected Plans" targeted-pass dispatch from the kanban board
+     * toolbar. The KanbanProvider resolves the cross-column selection into plan
+     * records at click time (excluding feature rows and epic subtasks host-side)
+     * and passes the frozen snapshot here. We pre-flight the API server, build the
+     * targeted-pass prompt, and deliver via the shared PM-terminal-else-clipboard
+     * path — identical to the Manage launcher.
+     */
+    public async handleDispatchManagerForSelected(
+        plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[],
+        workspaceRoot: string
+    ): Promise<void> {
+        if (plans.length === 0) {
+            vscode.window.showWarningMessage('No dispatchable plans in the selection.');
+            return;
+        }
+
+        // 1. Pre-flight: API server liveness — the manage skill needs it.
+        const port = this.getLocalApiServerPort();
+        const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
+        if (!serverAlive || port === 0) {
+            vscode.window.showErrorMessage(
+                'Switchboard API server is not running. Open the Switchboard panel and try again.'
+            );
+            return;
+        }
+
+        // 2. Build the targeted-pass prompt with the frozen plan list.
+        const prompt = this._buildTargetedPassPrompt(plans, workspaceRoot, port);
+
+        // 3. Deliver via the shared PM-terminal-else-clipboard path.
+        await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
     }
 }

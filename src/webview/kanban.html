@@ -2628,6 +2628,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="strip-icon-btn" id="btn-create-worktree" data-tooltip="Create a worktree for the selected feature, or for the active project / workspace">
                 <img src="{{ICON_WORKTREE}}" alt="Create Worktree">
             </button>
+            <button class="strip-icon-btn" id="btn-manager-pass" data-tooltip="Run selected plans autonomously via the Manager" disabled>
+                <img src="{{ICON_MANAGER_PASS}}" alt="Run Selected Plans">
+            </button>
 
             <!-- Spacer to push right-side controls to the right -->
             <div style="flex: 1;"></div>
@@ -2880,6 +2883,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Evaluates completed implementations against plans, checking for regressions and scope creep.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
           <div class="agent-description">Researches general-purpose technical queries and outlines plan dependencies.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="project_manager" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Project Manager</label><input type="text" data-role="project_manager" id="agents-tab-cmd-project-manager" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="agent-description">Host-agnostic management console — drives the board over the LocalApiServer HTTP API. Activate via the Manage button in the Implementation panel.</div>
 
           <!-- OPTIONAL -->
           <div class="agents-group-label">Optional</div>
@@ -2895,8 +2900,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <div class="agent-description">Terminal-only helper to download and upload claude.ai document artifacts.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="phone_a_friend" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Phone-a-Friend</label><input type="text" data-role="phone_a_friend" id="agents-tab-cmd-phone-a-friend" placeholder="e.g. agy --model flash" style="flex:1;"></div>
           <div class="agent-description">Automatic second-pass coder — receives a dispatch when a coder finishes a plan batch (requires the Phone-a-Friend addon enabled on the coding role).</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="project_manager" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Project Manager</label><input type="text" data-role="project_manager" id="agents-tab-cmd-project-manager" placeholder="e.g. claude" style="flex:1;"></div>
-          <div class="agent-description">Host-agnostic management console — drives the board over the LocalApiServer HTTP API. Activate via the Manage button in the Implementation panel.</div>
           <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
             <input id="agents-tab-jules-auto-sync" type="checkbox" style="width:auto;margin:0;">
             <span>Auto-sync repo before sending to Jules</span>
@@ -4151,6 +4154,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
 
+        document.getElementById('btn-manager-pass')?.addEventListener('click', () => {
+            // Collect the cross-column selection, pre-filtering feature rows webview-side
+            // (the extension host remains the authoritative filter for epic subtasks).
+            const sessionIds = [];
+            for (const [pid, val] of selectedCards.entries()) {
+                if (val && val.isFeature) continue;
+                if (pid) sessionIds.push(pid);
+            }
+            if (sessionIds.length === 0) return;
+            postKanbanMessage({
+                type: 'dispatchManagerForSelected',
+                sessionIds,
+                workspaceRoot: currentWorkspaceRoot
+            });
+        });
+
         btnDeleteProject?.addEventListener('click', () => {
             const select = document.getElementById('workspace-project-select');
             const selectedOption = select?.selectedOptions?.[0];
@@ -5327,6 +5346,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // without waiting for the next updateBoard broadcast.
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
+                    updateManagerPassButton();
                 });
             });
 
@@ -5639,6 +5659,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             btn.setAttribute('data-tooltip', 'Select a single feature to create its worktree');
         }
 
+        function updateManagerPassButton() {
+            const btn = document.getElementById('btn-manager-pass');
+            if (!btn) return;
+            // Count non-feature selected cards (feature rows are excluded from the pass).
+            let count = 0;
+            for (const [, val] of selectedCards.entries()) {
+                if (val && !val.isFeature) count++;
+            }
+            if (count === 0) {
+                btn.disabled = true;
+                btn.setAttribute('data-tooltip', 'Select plans to run an autonomous Manager pass');
+            } else {
+                btn.disabled = false;
+                btn.setAttribute('data-tooltip', `Run ${count} selected plan${count > 1 ? 's' : ''} autonomously via the Manager`);
+            }
+            btn.title = '';
+        }
+
 
 
         function renderBoard(cards, justFinishedIds = new Set()) {
@@ -5795,6 +5833,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateFeatureActionButton();
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
+                    updateManagerPassButton();
                 });
 
                 // Re-apply selection state after re-render
@@ -5901,6 +5940,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateReassignButtonVisibility();
             updateFeatureActionButton();
             updateCreateWorktreeButton();
+            updateManagerPassButton();
 
             // After DOM is in place: completion feedback.
             if (justFinishedIds.size > 0) {
@@ -6282,6 +6322,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 selectedCards.clear();
                 recomputeWorktreeIndicator();
                 updateCreateWorktreeButton();
+                updateManagerPassButton();
                 return;
             }
 
@@ -6738,6 +6779,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
+                    updateManagerPassButton();
                     break;
                 }
                 case 'moveCards': {
@@ -6784,6 +6826,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     currentFeatureWorktrees = nextFeatureWorktrees;
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
+                    updateManagerPassButton();
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
 
                     // Detect working -> idle transitions (and completions) for finish feedback.
@@ -6882,6 +6925,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     renderWorktreesTab();
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
+                    updateManagerPassButton();
                     break;
                 }
                 case 'worktreeStatuses': {
@@ -7535,6 +7579,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function updateFeatureActionButton() {
             recomputeWorktreeIndicator();
             updateCreateWorktreeButton();
+            updateManagerPassButton();
             const btn = document.getElementById('btn-feature-action');
             if (!btn) return;
             const selected = Array.from(selectedCards.values());

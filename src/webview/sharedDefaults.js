@@ -13,7 +13,7 @@ const DEFAULT_VISIBLE_AGENTS = {
     mcp_monitor: false,
     claude_designer: false,
     phone_a_friend: false,
-    project_manager: false
+    project_manager: true
 };
 
 // CRITICAL: DO NOT CHANGE DEFAULTS UNLESS SPECIFICALLY ASKED

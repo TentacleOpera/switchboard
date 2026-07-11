@@ -9475,6 +9475,76 @@ ${FOCUS_DIRECTIVE}`;
                 break;
             }
 
+            case 'dispatchManagerForSelected': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const sessionIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
+                if (sessionIds.length === 0) break;
+
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !await db.ensureReady()) break;
+
+                // Resolve each sessionId → plan record at click time (frozen snapshot).
+                // The webview pre-filters feature rows (isFeature), but the extension
+                // host is the authoritative filter: it MUST also exclude epic subtasks
+                // (plans with a featureId and isFeature !== 1) since the webview
+                // selection payload carries no epic linkage. Drop unresolvable ids
+                // with a warning rather than aborting the batch.
+                const plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[] = [];
+                const dropped: string[] = [];
+                for (const sid of sessionIds) {
+                    const record = await db.getPlanByPlanId(sid) ?? await db.getPlanBySessionId(sid);
+                    if (!record) {
+                        dropped.push(sid);
+                        continue;
+                    }
+                    // Exclude feature rows (isFeature === 1).
+                    if (record.isFeature && record.isFeature >= 1) {
+                        dropped.push(sid);
+                        continue;
+                    }
+                    // Exclude epic subtasks: plans with a non-empty featureId that
+                    // are not features themselves — these belong to a feature's
+                    // worktree and must not leak into a targeted pass.
+                    if (record.featureId && record.featureId !== '' && !(record.isFeature && record.isFeature >= 1)) {
+                        dropped.push(sid);
+                        continue;
+                    }
+                    plans.push({
+                        planId: record.planId,
+                        topic: record.topic,
+                        planFile: record.planFile,
+                        kanbanColumn: record.kanbanColumn,
+                        complexity: record.complexity
+                    });
+                }
+
+                if (dropped.length > 0) {
+                    console.warn(`[KanbanProvider] dispatchManagerForSelected: dropped ${dropped.length} unresolvable/feature/subtask id(s): ${dropped.join(', ')}`);
+                }
+
+                if (plans.length === 0) {
+                    vscode.window.showWarningMessage(
+                        'No dispatchable plans in the selection (feature rows and epic subtasks are excluded).'
+                    );
+                    break;
+                }
+
+                // Cap the embedded list to avoid prompt-size blowup.
+                const MAX_TARGETED_PASS_PLANS = 30;
+                if (plans.length > MAX_TARGETED_PASS_PLANS) {
+                    vscode.window.showErrorMessage(
+                        `Selection has ${plans.length} plans — the targeted pass caps at ${MAX_TARGETED_PASS_PLANS}. Select fewer or run a column pass.`
+                    );
+                    break;
+                }
+
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.handleDispatchManagerForSelected(plans, workspaceRoot);
+                }
+                break;
+            }
+
             case 'toggleWorktreeAgentsOpenWithGrid': {
                 const { worktreeId, enabled, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
@@ -10029,6 +10099,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             '{{ICON_WORKTREE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-68.png')).toString(),
             '{{ICON_WORKTREE_ACTIVE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-active.svg')).toString(),
             '{{ICON_WORKTREE_MERGED}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-merged.svg')).toString(),
+            '{{ICON_MANAGER_PASS}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-125.png')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);
