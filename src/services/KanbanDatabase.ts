@@ -8063,7 +8063,12 @@ FROM plans
             const allPlans = await this.getBoard(workspaceId);
 
             // Content-hash skip: don't rewrite if the serialized representation hasn't changed.
+            // The active project filter is folded in so a filter-only change (no card moves)
+            // still rewrites the mirror — otherwise the Manager Snapshot's filter scope line
+            // goes stale. getConfigSync is a sync DB read (cheap, same _db we hold here).
+            const activeFilter = String(this.getConfigSync('kanban.activeProjectFilter') || '');
             const serialized = JSON.stringify({
+                activeFilter,
                 allPlans: allPlans.map(p => ({
                     planId: p.planId,
                     kanbanColumn: p.kanbanColumn,
@@ -8150,6 +8155,42 @@ FROM plans
                 const slug = _columnSlug(col);
                 md += `| ${col} | [kanban-state-${slug}.md](./kanban-state-${slug}.md) |\n`;
             }
+
+            // Manager Snapshot — pre-digested board state for the switchboard-manage skill's
+            // entry protocol. One file read + /health replaces the multi-file awk counting
+            // pass. Counts are derived from the same allPlans array the per-column files were
+            // built from, so the snapshot is exactly as fresh as the state files. Column IDs
+            // are canonical uppercase (never slugs) — API calls built from this table must not
+            // strand cards. Custom columns appear by name in both the table and the board line.
+            // Live terminal registration is in-memory only and NOT included — /health is the
+            // sole truthful source (see the provenance note below).
+            md += `\n## Manager Snapshot\n\n`;
+            md += `| Column | Plans | Features |\n|---|---|---|\n`;
+            const POST_CODE = new Set(['CODED', 'LEAD CODED', 'CODER CODED', 'INTERN CODED',
+                'CODE REVIEWED', 'ACCEPTANCE TESTED', 'COMPLETED']);
+            let terminalTotal = 0;
+            const preCodeParts: string[] = [];
+            for (const [col, plans] of allColumns) {
+                const feats = plans.filter(p => p.isFeature).length;
+                const plain = plans.length - feats;
+                md += `| ${col} | ${plain} | ${feats} |\n`;
+                if (POST_CODE.has(col)) {
+                    terminalTotal += plain;
+                } else if (plain > 0 && feats > 0) {
+                    preCodeParts.push(`${col} ${plain} (+${feats} feature${feats === 1 ? '' : 's'})`);
+                } else if (plain > 0) {
+                    preCodeParts.push(`${col} ${plain}`);
+                } else if (feats > 0) {
+                    // Feature-only column: render explicitly so <COL> 0 is not misread as empty.
+                    preCodeParts.push(`${col} 0 (+${feats} feature${feats === 1 ? '' : 's'})`);
+                }
+            }
+            const boardLine = preCodeParts.length === 0 && terminalTotal === 0
+                ? 'Board: (empty)'
+                : `Board: ${[...preCodeParts, `terminal ${terminalTotal}`].join(' · ')}.`;
+            md += `\n${boardLine}\n`;
+            md += `\nActive project filter: ${activeFilter || '(none)'}\n`;
+            md += `\n_Terminals are NOT in this file — check GET /health._\n`;
 
             const oldJsonPath = path.join(exportRoot, '.switchboard', 'kanban-state.json');
             if (fs.existsSync(oldJsonPath)) {

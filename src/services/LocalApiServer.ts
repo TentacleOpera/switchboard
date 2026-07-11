@@ -142,6 +142,17 @@ interface LocalApiServerOptions {
      */
     getRegisteredTerminals?: () => string[];
     /**
+     * The board's currently selected workspace root (the kanban dropdown selection),
+     * or null when no provider is loaded. Surfaced on GET /health as
+     * `selectedWorkspaceRoot` so external managers (the switchboard-manage skill) can
+     * tell whether the board's selection matches the caller's `$ROOT` before opening
+     * the saved agent grid (createAgentGrid follows the board selection, not the
+     * caller's root — a mismatch needs a selectWorkspace pre-step). Optional — absent
+     * in headless/test harnesses (/health then omits the field, and the manager falls
+     * back to the manual nudge rather than firing selectWorkspace blind).
+     */
+    getSelectedWorkspaceRoot?: () => string | null;
+    /**
      * Pre-flight resolution for POST /kanban/dispatch: the target column's
      * configured role/spec and the CLI-triggers gate. Lets the endpoint reject
      * a doomed dispatch with a real error instead of letting the triggerAction
@@ -632,7 +643,7 @@ export class LocalApiServer {
                 let terminals: string[] | undefined;
                 try { terminals = this._options.getRegisteredTerminals?.(); } catch { /* health-style guard */ }
                 if (terminals !== undefined && terminals.length === 0) {
-                    fail(409, 'No terminal agent is live right now — dispatch would fall back to the clipboard and nothing would run. If you have set up agents before, just open your agent terminal(s) (AGENT SETUP tab / your saved agent grid) so they re-register; run Guided setup only if you have never configured one.');
+                    fail(409, 'No terminal agent is live right now — dispatch would fall back to the clipboard and nothing would run. If you have set up agents before, just open your agent terminal(s) (AGENT SETUP tab / your saved agent grid) so they re-register; run Guided setup only if you have never configured one. API callers can open the saved grid themselves: POST /taskViewer/verb/createAgentGrid (check /health.selectedWorkspaceRoot matches your root first; POST /kanban/verb/selectWorkspace if not).');
                     return;
                 }
             }
@@ -2484,12 +2495,17 @@ export class LocalApiServer {
                 try {
                     terminals = this._options.getRegisteredTerminals?.();
                 } catch { /* health must never fail on a callback error */ }
+                let selectedWorkspaceRoot: string | null | undefined;
+                try {
+                    selectedWorkspaceRoot = this._options.getSelectedWorkspaceRoot?.() ?? null;
+                } catch { /* health must never fail on a callback error */ }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     status: 'ok',
                     port: this._port,
                     roots: this._allRoots,
-                    ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {})
+                    ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {}),
+                    ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {})
                 }));
             } else if (pathname === '/metadata/clickup' && req.method === 'GET') {
                 await this._handleGetMetadata('clickup', res);

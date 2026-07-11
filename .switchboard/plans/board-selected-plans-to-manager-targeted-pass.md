@@ -108,3 +108,7 @@ Key risks: (1) the two-lane discipline is prose-enforced — an agent that mis-r
 
 ---
 **Recommendation:** Complexity 5 → Send to Coder.
+
+## Review Findings
+
+Reviewed 2026-07-11 (in-place reviewer pass, advanced regression analysis). Implementation matches the plan: global toolbar button + icons-125 icon, click-time frozen snapshot with host-side feature-row/epic-subtask exclusion and 30-plan cap, verbatim extraction of `_deliverPromptToPmTerminal` (send-lock keys, suffixed lookup, and clipboard wording preserved — sole existing caller unaffected), two-lane prompt with `cardStage`/`plannerLane`, SKILL.md §6a in both copies, catalog/allowlist regenerated. One MAJOR fixed: partial drops (feature rows/subtasks/unresolvable ids) were console-only — added a visible warning toast in `KanbanProvider.ts` per the plan's "visible note" requirement. Verification: `catalog:check` and `parity:check` green after the fix (compilation/tests skipped per dispatch). Remaining risks: lane discipline is prose-enforced (accepted in the plan); targeted-pass toasts reuse the frozen "Manage prompt" wording (NIT, deferred); multi-parent-workspace selections resolve against the active workspace's DB and degrade to a warning (matches sibling buttons' convention).

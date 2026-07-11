@@ -9530,6 +9530,12 @@ ${FOCUS_DIRECTIVE}`;
                     break;
                 }
 
+                if (dropped.length > 0) {
+                    vscode.window.showWarningMessage(
+                        `Targeted pass: ${dropped.length} selected card${dropped.length > 1 ? 's' : ''} excluded (feature rows, epic subtasks, or unresolvable) — dispatching the remaining ${plans.length}.`
+                    );
+                }
+
                 // Cap the embedded list to avoid prompt-size blowup.
                 const MAX_TARGETED_PASS_PLANS = 30;
                 if (plans.length > MAX_TARGETED_PASS_PLANS) {

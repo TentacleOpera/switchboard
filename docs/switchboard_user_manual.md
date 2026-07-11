@@ -91,6 +91,7 @@ Switchboard ships with the following built-in agent roles (defined in `agentConf
 | `reviewer` | Reviewer | Compares implementation to plans (Grumpy Principal Engineer persona). |
 | `tester` | Acceptance Tester | Validates finished work. |
 | `analyst` | Analyst | General research and context map generation. |
+| `project_manager` | Project Manager | Host-agnostic management console — drives the board over the LocalApiServer HTTP API. Core role, on by default; activated via the **Manage** button (and the board's **Run Selected Plans** targeted-pass button). |
 | `ticket_updater` | Ticket Updater | Reads imported tickets and posts short triage verdicts (severity, area, assessment, recommended action, routing) back to ClickUp/Linear as comments. Never overwrites the ticket description. |
 | `researcher` | Researcher | Research tasks. |
 | `splitter` | Splitter Agent | Splits large plans into sub-plans. |

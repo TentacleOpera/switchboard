@@ -1277,6 +1277,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 });
                 return names;
             },
+            getSelectedWorkspaceRoot: () => this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null,
             resolveKanbanDispatch: async (wsRoot, targetColumn) => {
                 if (!this._kanbanProvider) {
                     // No provider yet — report gates closed so /kanban/dispatch fails

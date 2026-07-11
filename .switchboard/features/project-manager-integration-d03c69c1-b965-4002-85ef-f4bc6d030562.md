@@ -20,11 +20,14 @@ Make the Project Manager a first-class citizen of the board: promote the PM from
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Board → Manager: "Run Selected Plans" Targeted Pass Button](../plans/board-selected-plans-to-manager-targeted-pass.md) — **CODER CODED**
-- [x] [Promote Project Manager to a Core Role (Agents Tab)](../plans/promote-project-manager-to-core-role.md) — **CODER CODED**
+- [ ] [Board → Manager: "Run Selected Plans" Targeted Pass Button](../plans/board-selected-plans-to-manager-targeted-pass.md) — **CODE REVIEWED**
+- [ ] [Promote Project Manager to a Core Role (Agents Tab)](../plans/promote-project-manager-to-core-role.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Completion Summary
 
 Both subtasks implemented. **Promote PM to Core Role:** moved the Project Manager row from the Optional group into the Core group in `src/webview/kanban.html` (after Analyst, with `checked`), flipped the visibility default from `false` to `true` in both `src/services/TaskViewerProvider.ts` (`getVisibleAgents`) and `src/webview/sharedDefaults.js` (`DEFAULT_VISIBLE_AGENTS`). **Targeted Pass Button:** added a global toolbar button (`btn-manager-pass`) beside Create Worktree in `kanban.html` with the `{{ICON_MANAGER_PASS}}` icon (icons-125, wired in `KanbanProvider.ts` iconMap); added the `dispatchManagerForSelected` webview verb handler in `KanbanProvider.ts` (click-time plan-record resolution with feature-row + epic-subtask exclusion, 30-plan cap, unresolvable-id drop); extracted `_deliverPromptToPmTerminal` from `_handleDispatchProjectManager` in `TaskViewerProvider.ts` and added `_buildTargetedPassPrompt` + `handleDispatchManagerForSelected` (API-server pre-flight, two-lane prompt with `cardStage`/`plannerLane` fields); added §6a "Targeted Pass" subsection to `switchboard-manage/SKILL.md` (both `.agents` and `.claude` copies); regenerated `protocol-catalog.json` + `verbAllowlist.ts`. Files changed: `src/webview/kanban.html`, `src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`, `src/webview/sharedDefaults.js`, `.agents/skills/switchboard-manage/SKILL.md`, `.claude/skills/switchboard-manage/SKILL.md`, `protocol-catalog.json`, `src/generated/verbAllowlist.ts`. No issues encountered — `catalog:check` and `parity:check` pass; `mirror:check` has a pre-existing drift on `switchboard-contracts`/`switchboard-mcp` SKILL.md (unrelated to this feature).
 
+## Review Findings
+
+Reviewed 2026-07-11 (in-place reviewer pass over both subtasks, advanced regression analysis). No CRITICALs. One MAJOR fixed on the targeted-pass subtask: partial exclusions (feature rows/epic subtasks/unresolvable ids) were console-only — added a visible warning toast in `src/services/KanbanProvider.ts`. One MINOR fixed on the promotion subtask: added the missing Project Manager row to `docs/switchboard_user_manual.md` §3. Regression trace clean: `_deliverPromptToPmTerminal` extraction is verbatim (Manage button behavior unchanged), no double-triggers or races (dispatch is read-only + send-locked), `updateManagerPassButton` paired at all selection-mutation sites, defaults parity holds across host and all webviews. `catalog:check` and `parity:check` green after fixes; deferred NITs: "Manage prompt" toast wording on targeted passes, dead sub-condition in the epic-subtask filter.

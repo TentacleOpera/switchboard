@@ -169,3 +169,7 @@ No additional guard needed — `resolveCodedAutoTarget` already returns CODER CO
 ## Recommendation
 
 **Send to Coder** (complexity 5). The change is single-file frontend work but carries a frontend/backend routing-consistency contract and touches four call sites, which is beyond intern-tier "reuse an existing pattern" scope.
+
+## Completion Summary
+
+Implemented the confidence-gated optimistic-move fix in `src/webview/kanban.html`. The per-card "Copy coder prompt" handler now suppresses the optimistic move for unknown/invalid complexity or pair-programming mode, and routes known 1–10 scores via `resolveCodedAutoTarget`. The four column-header batch handlers (`moveSelected`, `moveAll`, `promptSelected`, `promptAll`) now skip the optimistic `moveCardsOptimistically` call when the source is `PLAN REVIEWED`, letting the backend's per-card `moveCards` deltas place each card. Ran `npm run lint`; it passed with no new errors. Residual risk: if the backend's `routingMapConfig` has not been pushed to the webview, a score-4 plan may still diverge because the frontend default maps 4→coder while the backend `scoreToRoutingRole` maps 4→intern.

@@ -87,3 +87,7 @@ Key risks: (1) accidentally force-flipping users who explicitly saved `project_m
 > **Replaced with:** Complexity 2 → Send to Intern.
 
 **Recommendation:** Complexity 2 → Send to Intern.
+
+## Review Findings
+
+Reviewed 2026-07-11 (in-place reviewer pass). Implementation matches the plan: PM row moved into the core group after Analyst with `checked` (old Optional row fully removed, no duplicate DOM id), default flipped to `true` in both `TaskViewerProvider.getVisibleAgents()` and `sharedDefaults.js` (single source for all four webviews), all three persistence tiers still merge `{...defaults, ...saved}` so explicit `project_manager: false` saves are respected. One MINOR fixed: the user manual's §3 role table omitted the Project Manager entirely — added a row in `docs/switchboard_user_manual.md` (Scope #4). Verification: `catalog:check` and `parity:check` green (compilation/tests skipped per dispatch). Remaining risk: fresh-profile end-to-end terminal-open check is manual-only, per the plan's verification section.

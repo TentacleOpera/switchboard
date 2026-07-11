@@ -5217,7 +5217,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
                             // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
+                            // PLAN REVIEWED batches are complexity-routed per-card by the backend; a single
+                            // optimistic target would bounce mixed-complexity batches. Let the backend deltas drive.
+                            if (nextCol && column !== 'PLAN REVIEWED') {
                                 const domNextCol = resolveDomColumn(nextCol);
                                 const targetBody = document.getElementById('col-' + domNextCol);
                                 if (targetBody) {
@@ -5234,7 +5236,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const ids = getAllInColumn(column);
                             if (ids.length === 0) return;
                             // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
+                            // PLAN REVIEWED batches are complexity-routed per-card by the backend; a single
+                            // optimistic target would bounce mixed-complexity batches. Let the backend deltas drive.
+                            if (nextCol && column !== 'PLAN REVIEWED') {
                                 const domNextCol = resolveDomColumn(nextCol);
                                 const targetBody = document.getElementById('col-' + domNextCol);
                                 if (targetBody) {
@@ -5256,7 +5260,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
                             // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
+                            // PLAN REVIEWED batches are complexity-routed per-card by the backend; a single
+                            // optimistic target would bounce mixed-complexity batches. Let the backend deltas drive.
+                            if (nextCol && column !== 'PLAN REVIEWED') {
                                 const domNextCol = resolveDomColumn(nextCol);
                                 const targetBody = document.getElementById('col-' + domNextCol);
                                 if (targetBody) {
@@ -5273,7 +5279,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const ids = getAllInColumn(column);
                             if (ids.length === 0) return;
                             // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
+                            // PLAN REVIEWED batches are complexity-routed per-card by the backend; a single
+                            // optimistic target would bounce mixed-complexity batches. Let the backend deltas drive.
+                            if (nextCol && column !== 'PLAN REVIEWED') {
                                 const domNextCol = resolveDomColumn(nextCol);
                                 const targetBody = document.getElementById('col-' + domNextCol);
                                 if (targetBody) {
@@ -5517,17 +5525,32 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                 }
             }
-            autobanBtn.classList.toggle('is-active', isEnabled);
-            const tooltipText = isEnabled 
-                ? (watchCount > 0 ? `Stop automation engine (Watching ${watchCount} column(s))` : 'Stop automation engine')
-                : 'Start automation engine';
+            // The toolbar button is the single start control for every automation
+            // mode. Its action and active state are mode-aware:
+            //   single/multi-column  → toggles the autoban engine
+            //   antigravity-batch    → copies the one-shot batch prompt
+            //   orchestration        → starts/stops the orchestrator
+            let isActive = isEnabled;
+            let tooltipText;
+            if (currentAutomationMode === 'antigravity-batch') {
+                isActive = false;
+                tooltipText = 'Copy the Antigravity batch prompt (configure agent/column in the Automation tab)';
+            } else if (currentAutomationMode === 'orchestration') {
+                isActive = !!(autobanConfig && autobanConfig.orchestrationConfig && autobanConfig.orchestrationConfig.enabled);
+                tooltipText = isActive ? 'Stop the orchestrator' : 'Start the orchestrator';
+            } else {
+                tooltipText = isEnabled
+                    ? (watchCount > 0 ? `Stop automation engine (Watching ${watchCount} column(s))` : 'Stop automation engine')
+                    : 'Start automation engine';
+            }
+            autobanBtn.classList.toggle('is-active', isActive);
             autobanBtn.setAttribute('data-tooltip', tooltipText);
             autobanBtn.title = tooltipText;
             const img = autobanBtn.querySelector('img');
             if (img) {
-                img.alt = isEnabled ? 'Stop Automation' : 'Start Automation';
+                img.alt = isActive ? 'Stop Automation' : 'Start Automation';
             }
-            autobanBtn.style.display = (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration') ? 'none' : '';
+            autobanBtn.style.display = '';
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
@@ -5895,6 +5918,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
                         }
                         nextCol = getNextColumn(nextColSource);
+
+                        // PLAN REVIEWED advances are routed by the BACKEND (_partitionByComplexityRoute).
+                        // The optimistic move must either predict that exactly or not move at all —
+                        // otherwise the backend's moveCards delta bounces the card to the real column.
+                        if (column === 'PLAN REVIEWED' && dynamicComplexityRoutingEnabled) {
+                            const card = currentCards.find(c => (c.planId || c.sessionId) === sessionId);
+                            const score = parseInt(card?.complexity, 10);
+                            const pairModeActive =
+                                (document.getElementById('pairProgrammingModeSelect')?.value || 'off') !== 'off';
+                            if (isNaN(score) || pairModeActive || score < 1 || score > 10) {
+                                // Not confident the FE prediction matches the BE. Suppress the optimistic
+                                // cross-stage move; the backend moveCards delta is authoritative.
+                                nextCol = null;
+                            } else {
+                                // Confident: mirror the backend's complexity route so there is one clean move.
+                                const routedTarget = resolveCodedAutoTarget(card);
+                                if (routedTarget) nextCol = routedTarget;
+                            }
+                        }
 
                         if (nextCol) {
                             const domNextCol = resolveDomColumn(nextCol);
@@ -6971,28 +7013,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'antigravityPrompt': {
+                    // The prompt may have been requested from the in-tab COPY PROMPT
+                    // button or the toolbar Start Automation button — copy to the
+                    // clipboard either way; button feedback only if the tab is rendered.
                     const copyPromptBtn = document.getElementById('antigravity-copy-prompt-btn');
-                    if (copyPromptBtn && msg.prompt) {
-                        navigator.clipboard.writeText(msg.prompt).then(() => {
-                            copyPromptBtn.textContent = 'COPIED!';
-                            setTimeout(() => {
-                                copyPromptBtn.textContent = 'COPY PROMPT';
-                                copyPromptBtn.disabled = false;
-                            }, 2000);
-                        }).catch(err => {
-                            console.error('Failed to copy prompt:', err);
-                            copyPromptBtn.textContent = 'ERROR';
-                            setTimeout(() => {
-                                copyPromptBtn.textContent = 'COPY PROMPT';
-                                copyPromptBtn.disabled = false;
-                            }, 2000);
-                        });
-                    } else if (copyPromptBtn) {
-                        copyPromptBtn.textContent = msg.error ? 'NO PLANS' : 'ERROR';
+                    const flashCopyBtn = (text) => {
+                        if (!copyPromptBtn) return;
+                        copyPromptBtn.textContent = text;
                         setTimeout(() => {
                             copyPromptBtn.textContent = 'COPY PROMPT';
                             copyPromptBtn.disabled = false;
                         }, 2000);
+                    };
+                    if (msg.prompt) {
+                        navigator.clipboard.writeText(msg.prompt).then(() => {
+                            flashCopyBtn('COPIED!');
+                        }).catch(err => {
+                            console.error('Failed to copy prompt:', err);
+                            flashCopyBtn('ERROR');
+                        });
+                    } else {
+                        flashCopyBtn(msg.error ? 'NO PLANS' : 'ERROR');
                     }
                     break;
                 }
@@ -7740,6 +7781,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
         document.getElementById('btn-autoban')?.addEventListener('click', () => {
+            if (currentAutomationMode === 'antigravity-batch') {
+                // Mirror the in-tab COPY PROMPT button: one-shot batch prompt to clipboard
+                // using the agent/column/batch-size configured in the Automation tab.
+                if (!lastAntigravityAgent) {
+                    postKanbanMessage({ type: 'showWarning', message: 'Select an agent in the Automation tab first.' });
+                    return;
+                }
+                const inTabCopyBtn = document.getElementById('antigravity-copy-prompt-btn');
+                if (inTabCopyBtn) { inTabCopyBtn.textContent = 'LOADING...'; inTabCopyBtn.disabled = true; }
+                postKanbanMessage({
+                    type: 'generateAntigravityPrompt',
+                    agent: lastAntigravityAgent,
+                    column: lastAntigravityColumn,
+                    batchSize: lastAntigravityBatchSize,
+                    workspaceRoot: getActiveWorkspaceRoot()
+                });
+                return;
+            }
+            if (currentAutomationMode === 'orchestration') {
+                const running = !!(autobanConfig && autobanConfig.orchestrationConfig && autobanConfig.orchestrationConfig.enabled);
+                postKanbanMessage(running
+                    ? { type: 'stopOrchestrator' }
+                    : { type: 'startOrchestrator', workspaceRoot: getActiveWorkspaceRoot() });
+                return;
+            }
             const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
             postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
         });
@@ -8256,6 +8322,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             automationHeaderSpan.textContent = 'CONFIGURE AUTOMATION';
             automationHeader.appendChild(automationHeaderSpan);
             container.appendChild(automationHeader);
+
+            // How-to-start hint — the toolbar button is the start control for every mode.
+            const startHint = document.createElement('div');
+            startHint.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+            startHint.textContent = 'Configure a mode below, then start the automation by pressing the Start Automation icon button on the kanban board.';
+            container.appendChild(startHint);
 
             // Mode Selector
             const modeRow = document.createElement('div');
@@ -9457,22 +9529,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 };
                 renderOrchStatus();
                 orchSection.appendChild(statusLine);
-
-                // START/STOP button — NO confirm dialog (project hard rule; window.confirm
-                // is a silent no-op in the sandboxed webview). Acts immediately.
-                const orchBtn = document.createElement('button');
-                orchBtn.className = 'strip-btn';
-                orchBtn.textContent = orch.enabled ? 'STOP ORCHESTRATOR' : 'START ORCHESTRATOR';
-                orchBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px; margin:0 8px;';
-                orchBtn.addEventListener('click', () => {
-                    const isRunning = !!(state.orchestrationConfig && state.orchestrationConfig.enabled);
-                    if (isRunning) {
-                        postKanbanMessage({ type: 'stopOrchestrator' });
-                    } else {
-                        postKanbanMessage({ type: 'startOrchestrator', workspaceRoot: getActiveWorkspaceRoot() });
-                    }
-                });
-                orchSection.appendChild(orchBtn);
+                // Start/stop lives on the kanban toolbar's Start Automation button
+                // (mode-aware) — no in-tab start control.
             }
 
             return container;
