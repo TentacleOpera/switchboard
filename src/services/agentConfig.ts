@@ -58,6 +58,13 @@ export interface CustomAgentAddons {
     workflowFilePathEnabled?: boolean;
     workflowFilePath?: string;
 
+    // Feature-scoped levers (role-config-carried via the Prompts tab; the
+    // definition-level parser parseCustomAgentAddons deliberately does not copy these)
+    featureSubagentPolicy?: 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
+    featureCustomSubagentName?: string;
+    featureWorkflowFilePathEnabled?: boolean;
+    featureWorkflowFilePath?: string;
+
     // Feature ultracode/goal directive opt-in (built-in lead/coder/intern get this
     // automatically; custom roles must opt in)
     applyFeatureDirectives?: boolean;

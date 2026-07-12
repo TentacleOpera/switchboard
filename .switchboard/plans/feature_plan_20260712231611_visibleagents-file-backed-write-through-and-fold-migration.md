@@ -295,3 +295,7 @@ mechanical copy of the working `startupCommands` path, but the fold migration me
 agent configuration across three legacy stores on ~4,000 installs where a wrong
 precedence silently deletes a user's toggles or custom agents — a data-safety review,
 not plumbing.
+
+## Completion Summary
+
+Implemented file-backed write-through for `visibleAgents` and `customAgents` in `src/services/TaskViewerProvider.ts`: added a `mergeVisibleAgentsToGlobalFile` helper that merges a patch into the existing global file without clobbering file-only keys like `mcp_monitor`, and wired it into `handleToggleKanbanColumnVisibility`, `handleSaveStartupCommands`, `handleRestoreKanbanDefaults`, and `handleDeleteCustomAgent`. `customAgents` now writes through to the global file in `handleSaveCustomAgent`, `handleDeleteCustomAgent`, and `handleSaveStartupCommands`. Added a guarded `_foldAgentConfigToGlobalFile` migration that merges legacy `visibleAgents` toggles over the global file and only replaces `customAgents` when the legacy list is longer than the file's list; it is invoked from the constructor after the existing v2 seed. The getters remain file-first, and the global wipe guard is respected. No tests or compilation were run per the plan's skip directives.

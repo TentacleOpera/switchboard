@@ -1655,31 +1655,32 @@ export function buildCustomAgentPrompt(
                 { ...addons, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot);
     }
 
-    const featureSubagentPolicy = addons?.featureSubagentPolicy || 'default';
-    const noSubagentsEnabled = isFeature
-        ? featureSubagentPolicy === 'noSubagents'
-        : addons?.subagentPolicy === 'noSubagents';
-    const customSubagentName = isFeature
-        ? (featureSubagentPolicy === 'customSubagent' ? addons?.featureCustomSubagentName?.trim() : undefined)
-        : (addons?.subagentPolicy === 'customSubagent' ? addons?.customSubagentName?.trim() : undefined);
-    const useSubagentsEnabled = isFeature
-        ? (featureSubagentPolicy === 'useSubagents' || (featureSubagentPolicy === 'default' && addons?.useWorktreesPerPlan === true))
-        : (addons?.subagentPolicy === 'useSubagents' || (addons?.subagentPolicy === undefined && addons?.useSubagents === true));
-
     let subagentBlock = '';
-    if (noSubagentsEnabled) {
-        subagentBlock = NO_SUBAGENTS_DIRECTIVE;
-    } else if (customSubagentName) {
-        subagentBlock = CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE(customSubagentName);
-        if (plans.length > 1) {
-            subagentBlock += '\n\n' + `If your platform supports parallel sub-agents, dispatch one "${customSubagentName}" sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
+    if (isFeature) {
+        // Feature-scoped worktree/subagent levers: route through the shared helper
+        // so custom agents emit the same coherent clauses as built-in roles.
+        const featureSubagentPolicy = addons?.featureSubagentPolicy || 'default';
+        subagentBlock = buildFeatureSubagentClause(
+            featureSubagentPolicy,
+            addons?.featureCustomSubagentName,
+            addons?.useWorktreesPerPlan === true
+        ).trim();
+    } else {
+        // Non-feature dispatch — general Subagent Policy, unchanged from today.
+        const noSubagentsEnabled = addons?.subagentPolicy === 'noSubagents';
+        const customSubagentName = addons?.subagentPolicy === 'customSubagent' ? addons?.customSubagentName?.trim() : undefined;
+        const useSubagentsEnabled = addons?.subagentPolicy === 'useSubagents'
+            || (addons?.subagentPolicy === undefined && addons?.useSubagents === true);
+        if (noSubagentsEnabled) {
+            subagentBlock = NO_SUBAGENTS_DIRECTIVE;
+        } else if (customSubagentName) {
+            subagentBlock = CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE(customSubagentName);
+            if (plans.length > 1) {
+                subagentBlock += '\n\n' + `If your platform supports parallel sub-agents, dispatch one "${customSubagentName}" sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
+            }
+        } else if (plans.length > 1 && useSubagentsEnabled) {
+            subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
         }
-    } else if (plans.length > 1 && useSubagentsEnabled) {
-        subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
-    }
-
-    if (addons?.useWorktreesPerPlan && isFeature) {
-        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + WORKTREES_PER_PLAN_DIRECTIVE : WORKTREES_PER_PLAN_DIRECTIVE;
     }
 
     // §8 — Use shared BATCH_EXECUTION_RULES constant instead of inline copy.

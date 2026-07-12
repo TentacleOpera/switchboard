@@ -238,10 +238,11 @@ function buildSelector(el) {
             var isUniqueAmongSiblings = true;
             for (var i = 0; i < siblings.length; i++) {
                 var sib = siblings[i];
-                if (sib === current) {
-                    sameTagIndex = i + 1;
-                } else if (sib.tagName === current.tagName) {
-                    isUniqueAmongSiblings = false;
+                if (sib.tagName === current.tagName) {
+                    sameTagIndex++;
+                    if (sib !== current) {
+                        isUniqueAmongSiblings = false;
+                    }
                 }
             }
             if (!isUniqueAmongSiblings && sameTagIndex > 0) {

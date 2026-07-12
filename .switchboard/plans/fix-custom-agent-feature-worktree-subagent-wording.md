@@ -139,3 +139,7 @@ Key risks: (1) accidentally changing the non-feature custom-agent path — mitig
 > **Replaced with:** Complexity 4 → **Send to Coder.**
 
 **Recommendation:** Complexity 4 → **Send to Coder.** Mechanical convergence onto an existing, proven helper plus a four-field interface declaration; the real discipline is leaving the non-feature branch byte-identical, not deleting the still-used `WORKTREES_PER_PLAN_DIRECTIVE` constant, and not extending `parseCustomAgentAddons`.
+
+## Completion Report
+
+Implemented the custom-agent feature-dispatch wording convergence. Added the four missing feature-scoped fields (`featureSubagentPolicy`, `featureCustomSubagentName`, `featureWorkflowFilePathEnabled`, `featureWorkflowFilePath`) to `CustomAgentAddons` in `src/services/agentConfig.ts`. Rewrote `buildCustomAgentPrompt` in `src/services/agentPromptBuilder.ts` so the feature branch uses `buildFeatureSubagentClause` for coherent worktree/subagent wording, while the non-feature branch remains unchanged. Verified the independence matrix and non-feature regression with a focused runtime script, confirmed `npx tsc --noEmit` reports no new errors in the modified files, and left `WORKTREES_PER_PLAN_DIRECTIVE` intact in `AgentSkillExporter.ts`.

@@ -500,7 +500,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!migrated) {
             void this._runPhase0Migration();
         }
-        void this._migrateStartupCommandsToGlobalFile();
+        void this._migrateStartupCommandsToGlobalFile().then(() => this._foldAgentConfigToGlobalFile());
 
         // One-time migration of the persisted planner workflowFilePath from the
         // deprecated `.agent/` prefix to `.agents/` (the directory rename migrated
@@ -1057,6 +1057,95 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._context.globalState.update('switchboard.agents.globalFileSeed.v2', true);
         } catch (e) {
             console.error('[TaskViewerProvider] agent-config global-file migration failed:', e);
+        }
+    }
+
+    /**
+     * One-time fold of the machine-global agent config for installs where the
+     * cross-IDE file already has a partial value (e.g. mcp_monitor seeded by
+     * setVisibleAgent) while the real legacy toggles live in globalState or the
+     * workspace DB. Merges legacy visibleAgents over the file (base=file) and
+     * updates the customAgents list only when the legacy list is longer than the
+     * file's list. Runs after the v2 seed so both paths stay idempotent.
+     */
+    private async _foldAgentConfigToGlobalFile(): Promise<void> {
+        try {
+            if (this._context.globalState.get<boolean>('switchboard.agents.fileFold.v1')) {
+                return;
+            }
+
+            // Candidate workspace roots in priority order: active first, then
+            // any other folder open in this window. De-duped.
+            const roots: string[] = [];
+            const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
+            if (activeRoot) roots.push(activeRoot);
+            for (const folder of vscode.workspace.workspaceFolders ?? []) {
+                const r = folder.uri.fsPath;
+                if (r && !roots.includes(r)) roots.push(r);
+            }
+
+            // visibleAgents: file is the base, legacy toggles overlay. Prefer globalState,
+            // then fall back to the most complete per-workspace DB config.
+            let visibleAgentsLegacy: Record<string, boolean> | undefined;
+            const globalVisibleAgents = this._context.globalState.get<Record<string, boolean>>('switchboard.agents.visibleAgents');
+            if (this._isNonEmptyAgentConfig(globalVisibleAgents)) {
+                visibleAgentsLegacy = globalVisibleAgents;
+            } else {
+                const candidates: Array<{ value: Record<string, boolean>; score: number; priority: number }> = [];
+                let priority = 0;
+                for (const r of roots) {
+                    let v: unknown;
+                    try {
+                        v = KanbanDatabase.forWorkspace(r).getConfigJsonSync<unknown>('agents.visibleAgents', undefined);
+                    } catch { /* db not ready / unreadable — skip */ }
+                    if (this._isNonEmptyAgentConfig(v) && typeof v === 'object' && !Array.isArray(v)) {
+                        const value = v as Record<string, boolean>;
+                        candidates.push({ value, score: Object.keys(value).length, priority });
+                    }
+                    priority++;
+                }
+                if (candidates.length > 0) {
+                    candidates.sort((x, y) => (y.score - x.score) || (x.priority - y.priority));
+                    visibleAgentsLegacy = candidates[0].value;
+                }
+            }
+            if (this._isNonEmptyAgentConfig(visibleAgentsLegacy)) {
+                await this.mergeVisibleAgentsToGlobalFile(visibleAgentsLegacy!);
+            }
+
+            // customAgents: replace with the most-populated legacy list, but never
+            // overwrite a populated file list with a shorter one.
+            const candidates: Array<{ value: unknown; score: number; priority: number }> = [];
+            let priority = 0;
+            for (const r of roots) {
+                let v: unknown;
+                try {
+                    v = KanbanDatabase.forWorkspace(r).getConfigJsonSync<unknown>('agents.customAgents', undefined);
+                } catch { /* db not ready / unreadable — skip */ }
+                if (this._isNonEmptyAgentConfig(v)) {
+                    candidates.push({ value: v, score: this._agentConfigScore(v), priority });
+                }
+                priority++;
+            }
+            const gs = this._context.globalState.get<unknown>('switchboard.agents.customAgents');
+            if (this._isNonEmptyAgentConfig(gs)) {
+                candidates.push({ value: gs, score: this._agentConfigScore(gs), priority });
+            }
+
+            if (candidates.length > 0) {
+                candidates.sort((x, y) => (y.score - x.score) || (x.priority - y.priority));
+                const bestLegacy = candidates[0].value;
+                const fileValue = GlobalIntegrationConfigService.getAgentConfigSync<unknown>('customAgents');
+                if (!this._isNonEmptyAgentConfig(fileValue)) {
+                    await GlobalIntegrationConfigService.setAgentConfig('customAgents', bestLegacy);
+                } else if (this._agentConfigScore(fileValue) < this._agentConfigScore(bestLegacy)) {
+                    await GlobalIntegrationConfigService.setAgentConfig('customAgents', bestLegacy);
+                }
+            }
+
+            await this._context.globalState.update('switchboard.agents.fileFold.v1', true);
+        } catch (e) {
+            console.error('[TaskViewerProvider] agent-config fold migration failed:', e);
         }
     }
 
@@ -9111,6 +9200,8 @@ Each plan file must include:
 
             const resolvedWorkspaceRoot = this._resolveWorkspaceRoot() ?? undefined;
 
+            let removedCustomRoles: string[] = [];
+
             if (
                 data.commands
                 || visibleAgentsPatch
@@ -9132,22 +9223,21 @@ Each plan file must include:
                     }
 
                     if (sanitizedCustomAgents !== undefined) {
+                        const oldCustomRoles = new Set(parseCustomAgents(state.customAgents).map((agent: CustomAgentConfig) => agent.role));
                         state.customAgents = sanitizedCustomAgents;
                         const customRoles = new Set(sanitizedCustomAgents.map(agent => agent.role));
 
+                        removedCustomRoles = [...oldCustomRoles].filter(role => role.startsWith('custom_agent_') && !customRoles.has(role));
+
                         if (state.visibleAgents && typeof state.visibleAgents === 'object') {
-                            for (const role of Object.keys(state.visibleAgents)) {
-                                if (role.startsWith('custom_agent_') && !customRoles.has(role)) {
-                                    delete state.visibleAgents[role];
-                                }
+                            for (const role of removedCustomRoles) {
+                                delete state.visibleAgents[role];
                             }
                         }
 
                         if (state.startupCommands && typeof state.startupCommands === 'object') {
-                            for (const role of Object.keys(state.startupCommands)) {
-                                if (role.startsWith('custom_agent_') && !customRoles.has(role)) {
-                                    delete state.startupCommands[role];
-                                }
+                            for (const role of removedCustomRoles) {
+                                delete state.startupCommands[role];
                             }
                         }
                     }
@@ -9178,6 +9268,15 @@ Each plan file must include:
             // globalState/DB copies in sync for older code paths.
             if (data.commands) {
                 await GlobalIntegrationConfigService.setAgentStartupCommands(data.commands);
+            }
+
+            // Persist visibleAgents and customAgents to the machine-global, cross-IDE store
+            // with merge-safe semantics so file-only keys (e.g. mcp_monitor) are not clobbered.
+            if (visibleAgentsPatch || removedCustomRoles.length > 0) {
+                await this.mergeVisibleAgentsToGlobalFile(visibleAgentsPatch || {}, removedCustomRoles);
+            }
+            if (sanitizedCustomAgents !== undefined) {
+                await GlobalIntegrationConfigService.setAgentConfig('customAgents', sanitizedCustomAgents);
             }
 
             if (visibleAgentsPatch) {
@@ -9285,6 +9384,8 @@ Each plan file must include:
             }
         });
 
+        await this.mergeVisibleAgentsToGlobalFile({}, [...builtInColumnRoles]);
+
         await this._kanbanProvider?.cleanupKanbanColumnState(resolvedRoot, { clearAll: true });
         this._kanbanProvider?.sendVisibleAgents();
 
@@ -9341,6 +9442,7 @@ Each plan file must include:
             }
             state.visibleAgents[columnId] = visible;
         });
+        await this.mergeVisibleAgentsToGlobalFile({ [columnId]: visible });
         this._kanbanProvider?.sendVisibleAgents();
         await Promise.all([
             this._postSidebarConfigurationState(resolvedRoot),
@@ -9353,12 +9455,15 @@ Each plan file must include:
         if (!resolvedRoot) {
             return;
         }
+        let nextCustomAgents: CustomAgentConfig[];
         await this.updateState((state: any) => {
             const existing = parseCustomAgents(state.customAgents);
             const filtered = existing.filter((a: CustomAgentConfig) => a.id !== agent.id);
             filtered.push(agent);
+            nextCustomAgents = filtered;
             state.customAgents = filtered;
         });
+        await GlobalIntegrationConfigService.setAgentConfig('customAgents', nextCustomAgents!);
         this._kanbanProvider?.sendVisibleAgents();
         await Promise.all([
             this._postSidebarConfigurationState(resolvedRoot),
@@ -9390,10 +9495,14 @@ Each plan file must include:
             // ignore
         }
 
+        let deletedRole: string | undefined = undefined;
+        let nextCustomAgents: CustomAgentConfig[] = [];
+
         await this.updateState((state: any) => {
             const existing = parseCustomAgents(state.customAgents);
-            const deletedRole = existing.find((a: CustomAgentConfig) => a.id === agentId)?.role;
-            state.customAgents = existing.filter((a: CustomAgentConfig) => a.id !== agentId);
+            deletedRole = existing.find((a: CustomAgentConfig) => a.id === agentId)?.role;
+            nextCustomAgents = existing.filter((a: CustomAgentConfig) => a.id !== agentId);
+            state.customAgents = nextCustomAgents;
             if (deletedRole) {
                 if (state.visibleAgents) {
                     delete state.visibleAgents[deletedRole];
@@ -9403,6 +9512,12 @@ Each plan file must include:
                 }
             }
         });
+
+        if (deletedRole) {
+            await this.mergeVisibleAgentsToGlobalFile({}, [deletedRole]);
+        }
+        await GlobalIntegrationConfigService.setAgentConfig('customAgents', nextCustomAgents);
+
         this._kanbanProvider?.sendVisibleAgents();
         await Promise.all([
             this._postSidebarConfigurationState(resolvedRoot),
@@ -22316,10 +22431,35 @@ What would you like to find?`;
         this.refresh();
     }
 
+    /**
+     * Merge a patch into the machine-global visibleAgents map without clobbering
+     * file-only keys (e.g. mcp_monitor). Optional deleteKeys remove stale entries.
+     * Skips an empty write when the result would be blank and the file already has
+     * keys, because the wipe guard would silently drop it.
+     */
+    private async mergeVisibleAgentsToGlobalFile(patch: Record<string, boolean>, deleteKeys?: string[]): Promise<void> {
+        const current = await GlobalIntegrationConfigService.getAgentConfig<Record<string, boolean>>('visibleAgents') || {};
+        const next: Record<string, boolean> = { ...current };
+        if (deleteKeys) {
+            for (const key of deleteKeys) {
+                delete next[key];
+            }
+        }
+        for (const [key, value] of Object.entries(patch)) {
+            next[key] = value;
+        }
+        if (Object.keys(next).length === 0) {
+            const currentKeys = Object.keys(current);
+            if (currentKeys.length > 0) {
+                console.warn('[TaskViewerProvider] mergeVisibleAgentsToGlobalFile: empty remainder after merge/delete; skipping write to avoid wipe guard refusal.');
+                return;
+            }
+        }
+        await GlobalIntegrationConfigService.setAgentConfig('visibleAgents', next);
+    }
+
     public async setVisibleAgent(role: string, visible: boolean): Promise<void> {
-        const config = await GlobalIntegrationConfigService.getAgentConfig<Record<string, boolean>>('visibleAgents') || {};
-        config[role] = visible;
-        await GlobalIntegrationConfigService.setAgentConfig('visibleAgents', config);
+        await this.mergeVisibleAgentsToGlobalFile({ [role]: visible });
     }
 
     private _isMcpMonitorTerminalRunning(targetRole: string): boolean {
