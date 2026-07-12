@@ -1679,8 +1679,8 @@
                     el.scrollIntoView({ behavior: 'instant', block: 'center' });
                     // Fallback: if scrollIntoView raced the post-innerHTML layout,
                     // re-check the element's visible bounds after a short delay and
-                    // correct via offsetTop. Re-query the node in case the list
-                    // re-rendered before the timeout fired.
+                    // correct via viewport-rect math. Re-query the node in case the
+                    // list re-rendered before the timeout fired.
                     setTimeout(() => {
                         if (kanbanListPane) {
                             const liveEl = kanbanListPane.querySelector(

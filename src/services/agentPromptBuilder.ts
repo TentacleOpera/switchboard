@@ -743,6 +743,27 @@ export function PROJECT_LINE_DIRECTIVE(project: string): string {
 const DEFAULT_PLANNER_WORKFLOW = '.agents/skills/improve-plan/SKILL.md';
 const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/skills/improve-feature/SKILL.md';
 
+/** Map of retired workflow paths (the four files the four-front-doors refactor
+ *  relocated from `.agents/workflows/` to `.agents/skills/<name>/SKILL.md`) to
+ *  their new skills paths. Targets are kept in sync with the canonical constants
+ *  above where they exist. Used by `normalizeRetiredWorkflowPath` — the read-time
+ *  guard that ensures a persisted stale path can never hand an agent a dead file
+ *  reference, regardless of which tier it survived in. */
+export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
+    '.agents/workflows/improve-plan.md': DEFAULT_PLANNER_WORKFLOW,
+    '.agents/workflows/improve-feature.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
+    '.agents/workflows/accuracy.md': '.agents/skills/accuracy/SKILL.md',
+    '.agents/workflows/switchboard-orchestrator.md': '.agents/skills/switchboard-orchestrator/SKILL.md',
+};
+
+/** Rewrite a retired relocated workflow path to its new skills path. Any other
+ *  value (custom path, absolute path, already-correct skills path) is returned
+ *  unchanged. Pure function, no injection surface. */
+export function normalizeRetiredWorkflowPath(p: string): string {
+    if (typeof p !== 'string') return p as any;
+    return RETIRED_WORKFLOW_PATH_MAP[p] ?? p;
+}
+
 /** Roles that touch code and should receive the git safety guardrail. */
 const CODE_TOUCHING_ROLES = new Set(['lead', 'coder', 'intern', 'reviewer', 'tester']);
 

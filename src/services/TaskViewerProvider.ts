@@ -512,7 +512,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const wfProfileMigrated = this._context.globalState.get<boolean>(
             'switchboard.plannerWorkflowPathAgentToAgents.v1', false);
         if (!wfProfileMigrated) {
-            void this._migratePlannerWorkflowPathProfileTiers();
+            // .agent→.agents first, THEN workflows→skills, so the two compose:
+            // .agent/workflows/improve-plan.md → .agents/workflows/improve-plan.md → skills path.
+            void this._migratePlannerWorkflowPathProfileTiers()
+                .then(() => this._migratePlannerWorkflowPathProfileTiersWorkflowsToSkills());
+        } else {
+            // .agent→.agents already ran in a prior session (value is already .agents/workflows/…);
+            // still need the skills rewrite on the profile tiers, gated by its own profile marker.
+            void this._migratePlannerWorkflowPathProfileTiersWorkflowsToSkills();
         }
         // DB tiers are per-workspace and gated by a per-DB marker, so they run
         // regardless of the profile flag — a workspace opened later self-migrates.
@@ -1259,6 +1266,80 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             } catch (e) {
                 console.error(`[TaskViewerProvider] planner workflowFilePath workflows→skills DB-tier migration failed for ${root}:`, e);
+            }
+        }
+    }
+
+    /** 2026-07-12 four-front-doors refactor: the profile-tier (globalState role
+     *  config + VS Code `planner.workflowPath` setting) counterpart to
+     *  `_migratePlannerWorkflowPathWorkflowsToSkills`. The DB-tier rewrite landed
+     *  but the profile tiers were never ported, so on a dev/UAT machine where the
+     *  stale value lives in globalState (the tier the Prompts tab reads and
+     *  re-saves) the dead path survived. This rewrites an exact-match
+     *  `.agents/workflows/improve-plan.md` → `.agents/skills/improve-plan/SKILL.md`
+     *  in both profile tiers, preserving any other/custom value untouched. Gated
+     *  by `switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1` (a distinct
+     *  globalState marker — never reuse the DB or `.agent→.agents` markers). The
+     *  flag is set only after both tiers are attempted (each in its own try/catch)
+     *  so a partial failure is retried on next activation. Must be sequenced after
+     *  `_migratePlannerWorkflowPathProfileTiers` when both run in one session so
+     *  the two rewrites compose (`.agent/workflows/…` → `.agents/workflows/…` →
+     *  skills path); see the constructor wiring. */
+    private async _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills(): Promise<void> {
+        const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
+        const NEW_DEFAULT = '.agents/skills/improve-plan/SKILL.md';
+        const PROFILE_MARKER = 'switchboard.plannerWorkflowPathWorkflowsToSkills.profile.v1';
+
+        // Already-migrated this profile — no re-entry.
+        if (this._context.globalState.get<boolean>(PROFILE_MARKER, false)) return;
+
+        let globalStateOk = false;
+        let settingOk = false;
+
+        // 1. GlobalState tier — read via getRoleConfig, rewrite via saveRoleConfig.
+        try {
+            const cfg = this.getRoleConfig('roleConfig_planner') as any;
+            if (cfg && typeof cfg === 'object' && typeof cfg.workflowFilePath === 'string'
+                && cfg.workflowFilePath === OLD_DEFAULT) {
+                cfg.workflowFilePath = NEW_DEFAULT;
+                await this.saveRoleConfig('roleConfig_planner', cfg);
+            }
+            globalStateOk = true;
+        } catch (e) {
+            console.error('[TaskViewerProvider] planner workflowFilePath workflows→skills globalState migration failed:', e);
+        }
+
+        // 2. VS Code setting tier — update to the scope `inspect` reports as the
+        //    source of the stale value (no blind Global promotion).
+        try {
+            const conf = vscode.workspace.getConfiguration('switchboard');
+            const inspect = conf.inspect<string>('planner.workflowPath');
+            const globalValue = inspect?.globalValue;
+            const workspaceValue = inspect?.workspaceValue;
+            if (typeof globalValue === 'string' && globalValue === OLD_DEFAULT) {
+                await conf.update(
+                    'planner.workflowPath',
+                    NEW_DEFAULT,
+                    vscode.ConfigurationTarget.Global
+                );
+            } else if (typeof workspaceValue === 'string' && workspaceValue === OLD_DEFAULT) {
+                await conf.update(
+                    'planner.workflowPath',
+                    NEW_DEFAULT,
+                    vscode.ConfigurationTarget.Workspace
+                );
+            }
+            settingOk = true;
+        } catch (e) {
+            console.error('[TaskViewerProvider] planner workflowFilePath workflows→skills VS Code setting migration failed:', e);
+        }
+
+        // 3. Set the per-profile marker only after both tiers attempted.
+        if (globalStateOk && settingOk) {
+            try {
+                await this._context.globalState.update(PROFILE_MARKER, true);
+            } catch (e) {
+                console.error('[TaskViewerProvider] planner workflowFilePath workflows→skills profile flag write failed:', e);
             }
         }
     }

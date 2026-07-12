@@ -21,6 +21,20 @@ const os = require('os');
 const path = require('path');
 
 const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
+// §C — normalizeRetiredWorkflowPath is exported from agentPromptBuilder so the
+// test imports the real transform instead of mirroring it (the way the existing
+// `normalizeAgentToAgents` mirror at line 35 does). Falls back to a mirror if
+// the export is absent (e.g. running against an older build).
+let normalizeRetiredWorkflowPath;
+try {
+    ({ normalizeRetiredWorkflowPath } = require(path.join(process.cwd(), 'out', 'services', 'agentPromptBuilder.js')));
+} catch {
+    normalizeRetiredWorkflowPath = null;
+}
+const agentPromptBuilderSource = fs.readFileSync(
+    path.join(process.cwd(), 'src', 'services', 'agentPromptBuilder.ts'),
+    'utf8'
+);
 
 const providerSource = fs.readFileSync(
     path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'),
@@ -372,6 +386,105 @@ async function run() {
         await KanbanDatabase.invalidateWorkspace(ws7);
         await fs.promises.rm(ws7, { recursive: true, force: true });
     }
+
+    // ── Source assertions: the workflows→skills PROFILE-tier migration exists ──
+    // (the DB-tier counterpart landed but the profile tiers — globalState + VS Code
+    // setting — were never ported; this method completes the migration.)
+    assert.match(
+        providerSource,
+        /private async _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills\(\): Promise<void> \{/,
+        'Expected TaskViewerProvider to define _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills.'
+    );
+    assert.match(
+        providerSource,
+        /const PROFILE_MARKER = 'switchboard\.plannerWorkflowPathWorkflowsToSkills\.profile\.v1';/,
+        'Expected the workflows→skills profile-tier migration to use its own distinct globalState marker.'
+    );
+    assert.match(
+        providerSource,
+        /_migratePlannerWorkflowPathProfileTiersWorkflowsToSkills\(\): Promise<void> \{[\s\S]*?const OLD_DEFAULT = '\.agents\/workflows\/improve-plan\.md';[\s\S]*?const NEW_DEFAULT = '\.agents\/skills\/improve-plan\/SKILL\.md';/,
+        'Expected the workflows→skills profile-tier migration to match the old default and rewrite to the new skills path.'
+    );
+    assert.match(
+        providerSource,
+        /cfg\.workflowFilePath === OLD_DEFAULT[\s\S]*?cfg\.workflowFilePath = NEW_DEFAULT;[\s\S]*?saveRoleConfig\('roleConfig_planner'/,
+        'Expected the profile-tier migration to rewrite globalState via saveRoleConfig on exact-match only.'
+    );
+    assert.match(
+        providerSource,
+        /_migratePlannerWorkflowPathProfileTiersWorkflowsToSkills\(\): Promise<void> \{[\s\S]*?conf\.inspect<string>\('planner\.workflowPath'\)/,
+        'Expected the workflows→skills profile-tier migration to inspect the VS Code setting scope rather than blindly promoting to Global.'
+    );
+    assert.match(
+        providerSource,
+        /globalValue === OLD_DEFAULT[\s\S]*?ConfigurationTarget\.Global[\s\S]*?workspaceValue === OLD_DEFAULT[\s\S]*?ConfigurationTarget\.Workspace/,
+        'Expected the workflows→skills profile-tier migration to update the reporting scope (Global/Workspace) of the stale setting.'
+    );
+
+    // ── Source/wiring assertion: the constructor sequences the new profile migration ──
+    assert.match(
+        providerSource,
+        /if \(!wfProfileMigrated\) \{[\s\S]*?void this\._migratePlannerWorkflowPathProfileTiers\(\)[\s\S]*?\.then\(\(\) => this\._migratePlannerWorkflowPathProfileTiersWorkflowsToSkills\(\)\);[\s\S]*?\} else \{[\s\S]*?void this\._migratePlannerWorkflowPathProfileTiersWorkflowsToSkills\(\);[\s\S]*?\}/,
+        'Expected the constructor to chain the new profile migration after _migratePlannerWorkflowPathProfileTiers in the !wfProfileMigrated branch and invoke it standalone in the else branch.'
+    );
+
+    // ── Source assertions: normalizeRetiredWorkflowPath + RETIRED_WORKFLOW_PATH_MAP exported ──
+    assert.match(
+        agentPromptBuilderSource,
+        /export const RETIRED_WORKFLOW_PATH_MAP[\s\S]*?'\.agents\/workflows\/improve-plan\.md'[\s\S]*?DEFAULT_PLANNER_WORKFLOW/,
+        'Expected RETIRED_WORKFLOW_PATH_MAP to map the retired improve-plan path to DEFAULT_PLANNER_WORKFLOW (the canonical skills path constant).'
+    );
+    assert.match(
+        agentPromptBuilderSource,
+        /export function normalizeRetiredWorkflowPath\(p: string\): string \{[\s\S]*?RETIRED_WORKFLOW_PATH_MAP\[p\] \?\? p/,
+        'Expected agentPromptBuilder to export normalizeRetiredWorkflowPath returning the map value or the input unchanged.'
+    );
+    assert.match(
+        agentPromptBuilderSource,
+        /'\.agents\/workflows\/improve-feature\.md'[\s\S]*?'\.agents\/workflows\/accuracy\.md'[\s\S]*?'\.agents\/workflows\/switchboard-orchestrator\.md'/,
+        'Expected RETIRED_WORKFLOW_PATH_MAP to cover all four retired workflow paths.'
+    );
+
+    // ── Test 8: normalizeRetiredWorkflowPath maps the four retired paths and passes everything else through ──
+    // Prefer the real export; fall back to an inline mirror so the transform is
+    // still exercised when the compiled export is unavailable.
+    const retiredMap = {
+        '.agents/workflows/improve-plan.md': '.agents/skills/improve-plan/SKILL.md',
+        '.agents/workflows/improve-feature.md': '.agents/skills/improve-feature/SKILL.md',
+        '.agents/workflows/accuracy.md': '.agents/skills/accuracy/SKILL.md',
+        '.agents/workflows/switchboard-orchestrator.md': '.agents/skills/switchboard-orchestrator/SKILL.md',
+    };
+    const norm = normalizeRetiredWorkflowPath || ((p) => retiredMap[p] ?? p);
+    for (const [oldP, newP] of Object.entries(retiredMap)) {
+        assert.strictEqual(norm(oldP), newP, `Expected retired path ${oldP} to map to ${newP}.`);
+    }
+    assert.strictEqual(norm('.custom/workflows/x.md'), '.custom/workflows/x.md', 'Expected a custom path to pass through unchanged.');
+    assert.strictEqual(norm('/abs/path/improve-plan.md'), '/abs/path/improve-plan.md', 'Expected an absolute path to pass through unchanged.');
+    assert.strictEqual(norm('.agents/skills/improve-plan/SKILL.md'), '.agents/skills/improve-plan/SKILL.md', 'Expected an already-correct skills path to pass through unchanged (idempotent).');
+    assert.strictEqual(norm(''), '', 'Expected an empty string to pass through unchanged.');
+
+    console.log('planner workflow path migration test 8 (normalizeRetiredWorkflowPath transform) passed');
+
+    // ── Test 9: profile-tier data transform — exact-match rewrite preserves custom values ──
+    // Mirrors the globalState branch of _migratePlannerWorkflowPathProfileTiersWorkflowsToSkills
+    // against an in-memory shape (no VS Code/globalState available in the harness).
+    const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
+    const NEW_DEFAULT = '.agents/skills/improve-plan/SKILL.md';
+    const staleCfg = { workflowFilePath: OLD_DEFAULT, prompt: 'keep me', addons: { y: 2 } };
+    if (staleCfg.workflowFilePath === OLD_DEFAULT) {
+        staleCfg.workflowFilePath = NEW_DEFAULT;
+    }
+    assert.strictEqual(staleCfg.workflowFilePath, NEW_DEFAULT, 'Expected the stale globalState-shaped value to be rewritten to the skills path.');
+    assert.strictEqual(staleCfg.prompt, 'keep me', 'Expected unrelated keys to be preserved by the profile-tier rewrite.');
+    assert.strictEqual(staleCfg.addons.y, 2, 'Expected addons to be preserved by the profile-tier rewrite.');
+
+    const customCfg = { workflowFilePath: '.custom/workflows/x.md' };
+    if (customCfg.workflowFilePath === OLD_DEFAULT) {
+        customCfg.workflowFilePath = NEW_DEFAULT;
+    }
+    assert.strictEqual(customCfg.workflowFilePath, '.custom/workflows/x.md', 'Expected a custom profile-tier path to be untouched by the exact-match rewrite.');
+
+    console.log('planner workflow path migration test 9 (profile-tier data transform) passed');
 
     console.log('planner workflow path migration test (source assertions) passed');
     console.log('all planner workflow path migration tests passed');

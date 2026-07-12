@@ -21,7 +21,7 @@ import {
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
@@ -520,7 +520,30 @@ export class KanbanProvider implements vscode.Disposable {
 
     // ── Global Override: scope-aware role config (plan 05) ────────────────
     /** Scope-aware role config read. Resolution: project_config → db config → global.
-     *  Public so TaskViewerProvider can delegate through its _kanbanProvider ref. */
+     *  Public so TaskViewerProvider can delegate through its _kanbanProvider ref.
+     *
+     *  2026-07-12 four-front-doors: every value returned here is passed through
+     *  `normalizeRetiredWorkflowPath` (a shallow clone — the underlying persisted
+     *  object is never mutated) so a `workflowFilePath`/`addons.workflowFilePath`
+     *  still pointing at a retired `.agents/workflows/<name>.md` path resolves to
+     *  the new `.agents/skills/<name>/SKILL.md` path. This is the single common
+     *  ancestor of both the Prompts-tab display (getSetting round-trip) and
+     *  prompt generation (_getPromptsConfig → _getRoleConfig → here), so guarding
+     *  here fixes the display, the Save-re-persist loop, and the prompt in one
+     *  place. Only the four retired paths are rewritten — custom and
+     *  already-correct paths pass through untouched. */
+    private _normalizeRoleConfig(cfg: any): any {
+        if (!cfg || typeof cfg !== 'object') return cfg;
+        const out: any = { ...cfg };
+        if (typeof out.workflowFilePath === 'string') {
+            out.workflowFilePath = normalizeRetiredWorkflowPath(out.workflowFilePath);
+        }
+        if (out.addons && typeof out.addons.workflowFilePath === 'string') {
+            out.addons = { ...out.addons, workflowFilePath: normalizeRetiredWorkflowPath(out.addons.workflowFilePath) };
+        }
+        return out;
+    }
+
     public getScopedRoleConfig(role: string): any {
         const key = `switchboard.prompts.roleConfig_${role}`;
         const root = this._taskViewerProvider?._resolveWorkspaceRoot();
@@ -532,19 +555,20 @@ export class KanbanProvider implements vscode.Disposable {
                     if (this._projectOverrideEnabled && this._projectFilter
                         && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
                         const projectVal = db.getProjectConfigJsonSync<any>(this._projectFilter, key, undefined);
-                        if (projectVal !== undefined) return projectVal;
+                        if (projectVal !== undefined) return this._normalizeRoleConfig(projectVal);
                     }
                     // 2. Workspace tier
                     if (this._workspaceOverrideEnabled) {
                         const wsVal = db.getConfigJsonSync<any>(key, undefined);
-                        if (wsVal !== undefined) return wsVal;
+                        if (wsVal !== undefined) return this._normalizeRoleConfig(wsVal);
                     }
                 }
             } catch { /* fall through to global */ }
         }
         // 3. Global (existing behavior)
-        return this._taskViewerProvider?.getRoleConfig(`roleConfig_${role}`)
+        const globalVal = this._taskViewerProvider?.getRoleConfig(`roleConfig_${role}`)
             ?? this._getSetting(key, undefined);
+        return this._normalizeRoleConfig(globalVal);
     }
 
     /** Scope-aware role config write. Project-ON → project_config only.
@@ -4582,7 +4606,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
             },
             workflowFilePathByRole: {
-                planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md'),
+                planner: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md')),
                 lead: leadConfig?.addons?.workflowFilePath || '',
                 coder: coderConfig?.addons?.workflowFilePath || '',
                 reviewer: reviewerConfig?.addons?.workflowFilePath || '',
@@ -4617,7 +4641,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             constitutionEnabled: plannerConfig?.addons?.constitution ?? config.get<boolean>('planner.constitutionEnabled', false),
             designSystemDocEnabled: plannerConfig?.addons?.designSystemDoc ?? config.get<boolean>('planner.designSystemDocEnabled', false),
             designSystemDocLink: config.get<string>('planner.designSystemDocLink', ''),
-            plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md'),
+            plannerWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agents/skills/improve-plan/SKILL.md')),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
                 lead: leadConfig?.addons?.skipCompilation ?? true,
