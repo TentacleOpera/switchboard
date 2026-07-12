@@ -54,9 +54,10 @@ two commands.
 
    **Command B — board counts (local markdown, always current):**
    ```bash
-   awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0}
+   awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0; agent[col]=""}
+        /^\*\*Agent:\*\*/{ agent[col]=$0; sub(/^\*\*Agent:\*\* /,"",agent[col]) }
         /planId:/{ if (/ feature -->/) feats[col]++; else plans[col]++ }
-        END{for (c in plans) printf "%s: %d plans, %d features\n", c, plans[c], feats[c]}' \
+        END{for (c in plans) printf "%s: %d plans, %d features, agent=%s\n", c, plans[c], feats[c], agent[c]}' \
      "$ROOT"/.switchboard/kanban-state-*.md
    ```
    - **Feature rows carry `planId:` too** — only the trailing ` feature -->` marker
@@ -64,6 +65,11 @@ two commands.
      The awk above already splits plans from features per column.
    - **Plans exist?** is answered by this awk output — if any column has `plans > 0`,
      plans exist. No separate `ls` of the plans directory.
+   - **Agent names** come from the `agent=` field per column (the extension writes a
+     `**Agent:** <NAME> CLI` header line into each kanban-state file). Columns with no
+     configured/visible agent produce an empty `agent=` — render those as "no agent
+     configured" rather than blank. These are *configured* names; `/health` `terminals`
+     remains the source for *liveness* (which agents are actually running).
    - **No timestamp read.** The kanban-state files are written on every board move, so
      they are current as of now. Do not read `kanban-board.md` for an "Updated" stamp.
 
@@ -98,6 +104,7 @@ two commands.
    then the in-flight columns (if any). Example shape:
    ```
    Switchboard is live (port 63589).
+   Terminals: Devin CLI (intern), Claude Code (coder)
 
    **switchboard Kanban Board**  
      Backlog 30 · Created 5 · Plan Reviewed 2  
@@ -110,6 +117,14 @@ two commands.
    4. Automate — oversee a column pass, or manage a project end-to-end
    5. More     — design & artifacts · external PM (ClickUp/Linear) · setup & tour
    ```
+   - **Terminals line:** list the live terminal agents from the `/health` `terminals`
+     field. If no terminals are live (terminalCount = 0), show "Terminals: none live" —
+     this is the setup-gap signal. **Save the terminal names in memory** for use in
+     dispatch reports later. The kanban-state file headers now carry the *configured*
+     agent name per role (`**Agent:** <NAME> CLI`, surfaced via Command B's `agent=`
+     field) — use those configured names for the role labels (e.g.
+     "Planner [DEVIN CLI] · Lead Coder [CLAUDE CLI]") and `/health` for the live
+     indicator. If a role's `agent=` is empty, render it as "no agent configured".
    - **Board header** = the workspace directory name (basename of `$ROOT`) + " Kanban
      Board", in **bold**. If a project filter is active, append " (project: <name>)".
    - **Markdown line breaks:** standard Markdown collapses single newlines into spaces.
@@ -226,24 +241,29 @@ What would you like to do?
   dispatchedAt}` — with real 4xx/409 errors when it CAN'T work (plan not found, column has
   no role, no live terminal agent). `success:true` means the card is in the target column
   AND a dispatch was observed — never just "request parsed".
-  - **Result-reporting template (hard).** Consume the fields the response already returns —
-    `topic` (title), `column` (where it landed), `dispatchedAgent` (the terminal name) —
-    and **never** print `moved`/`dispatched` booleans, the planId/sessionId, the `routing`
-    string, or a raw ISO timestamp. The user does not care about routing internals. Report
-    in **one message**:
+  - **Result-reporting template (hard).** The dispatch response is JSON. You MUST parse
+    it to get the agent name — never eyeball raw curl output, never print "unknown". Run
+    the dispatch and pipe the response through `jq` in the SAME command:
+    ```bash
+    curl -s -X POST "$BASE/kanban/dispatch" -H 'Content-Type: application/json' \
+      -d '{"workspaceRoot":"'"$ROOT"'","plan":"<planId>"}' | jq '{topic, column, dispatchedAgent, dispatched}'
+    ```
+    This gives you `topic` (the plan title), `column` (where it landed), and
+    `dispatchedAgent` (the terminal name). If `dispatchedAgent` is null in the jq output,
+    the dispatch did not reach a terminal — say so honestly ("dispatched but no terminal
+    agent picked it up"). But if it has a value, USE IT. **Never** print "unknown", "sent
+    to unknown", or any fallback when the field has a real value. **Never** print the
+    `routing` field, `moved`/`dispatched` booleans, the planId/sessionId, complexity bands,
+    or raw ISO timestamps. The user does not care about routing internals. Report in
+    **one message**:
     ```
     ✓ Dispatched "Fix: Kanban Columns Must Follow Ticked Agents" to Devin CLI (Coder)
 
     Want me to watch until it finishes? I'll tell you the moment it lands.
     ```
-    Format: `Dispatched "<title>" to <dispatchedAgent> (<humanized column>)`. That's it.
+    Format: `Dispatched "<topic>" to <dispatchedAgent> (<humanized column>)`. That's it.
     No routing explanation, no complexity band, no "sent to" prefix — just the plan title,
-    the terminal agent name, and the humanized column name in parentheses.
-    **Extract `dispatchedAgent` from the response JSON** (pipe through `python3 -m json.tool`
-    or `jq` — never eyeball raw curl output). On a successful dispatch (`dispatched: true`)
-    the terminal name IS in the response — use it. Never print "unknown" or "no terminal"
-    on a successful dispatch; if you cannot see the name, you did not extract the field
-    correctly — re-run the extraction.
+    the terminal agent name, and the humanized column.
   - **Synchronous, not background.** `POST /kanban/dispatch` (and every command verb) is a
     synchronous, fast curl — it returns when the work is recorded. Do NOT narrate it as a
     background job, do NOT emit a "waiting for the API" pre-message, do NOT split it across
@@ -516,9 +536,24 @@ On "yes" after a single dispatch:
    (`until [ "$(stat -f %m "$PLAN")" -gt "$BASE_MTIME" ]; do sleep 60; done`), ≤10 min per
    invocation, re-invoked until the mtime advances or the stuck threshold
    (`switchboard.activityLight.timeoutMs`, default 10 min) is hit.
-3. **On completion (first mtime advance):**
-   `✓ Done — "<title>" finished coding in <duration>, now in <column>. Send it to review?`
-   (proactive next step per the "Proactive, not eager" principle in §2).
+3. **On completion (first mtime advance):** read the plan file and report what was
+   actually done — the terminal agent appended its findings/notes to the plan. Summarize
+   them for the user: key changes, findings, risks, and any open questions. Then offer
+   the next step. Shape:
+   ```
+   ✓ Done — "Fix Ghost Plan Duplication" finished coding in 60s, now in Intern.
+
+   **What was done:** Skip-brain-promotion flag added to TaskViewerProvider.ts,
+   disabling the brain backflow across all creation paths. Stale comments cleaned up.
+
+   **Findings:** No major issues. Dead code (_promotePlanToBrain) left deliberately
+   to avoid breaking structural tests.
+
+   Send it to review?
+   ```
+   Read the trailing sections of the plan file (status, review, implementation notes —
+   whatever the terminal agent appended) and summarize. Do NOT just say "finished" —
+   the user wants to know what happened. Keep it concise but substantive.
 4. **On timeout:** report the stuck card; never re-dispatch, never move it backward.
 5. **Boundary (hard):** this watch is session-scoped. It does **not** create/update
    `oversight-state.md`, does **not** append to `oversight-log.md`, and does **not** trip the

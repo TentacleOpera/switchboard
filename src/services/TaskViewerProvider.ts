@@ -18735,6 +18735,11 @@ What would you like to find?`;
             workspaceRoot?: string;
         } = {}
     ): Promise<{ planFileAbsolute: string; }> {
+        // Brain is INPUT-ONLY: default every creation path to skip the
+        // Switchboard->brain backflow. Copying locally-created plans into the
+        // brain spawned ghost/duplicate kanban cards (the brain watcher/rescan
+        // re-mirrored them as brain_<hash> entries). No caller passes false, so
+        // promotion is fully disabled; this is the sole fix for that ghost bug.
         options.skipBrainPromotion ??= true;
         const workspaceRoot = options.workspaceRoot || this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
@@ -18816,8 +18821,11 @@ What would you like to find?`;
                 );
             }
 
-            // Non-blocking auto-promotion: copy plan to Antigravity brain.
-            // Clipboard imports opt out to avoid duplicate mirrored kanban cards.
+            // Dead by default: skipBrainPromotion defaults to true (see top of
+            // method) and no caller passes false, so this Switchboard->brain
+            // backflow never runs. Retained as a documented no-op; _promotePlanToBrain
+            // is kept only because a source-structure regression test asserts its
+            // presence. Do NOT re-enable without reviving the ghost-card bug.
             if (!options.skipBrainPromotion) {
                 void this._promotePlanToBrain(planFileAbsolute, fileName).catch((e) => {
                     console.error('[TaskViewerProvider] Auto-promotion to brain failed (non-fatal):', e);

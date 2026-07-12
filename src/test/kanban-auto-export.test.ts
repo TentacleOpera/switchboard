@@ -14,6 +14,18 @@ function readPerColumnFiles(dir: string): string {
     return files.map(f => fs.readFileSync(path.join(switchboardDir, f), 'utf8')).join('\n');
 }
 
+function readPerColumnFile(dir: string, col: string): string {
+    const slug = col.toLowerCase().replace(/\s+/g, '-');
+    const filePath = path.join(dir, '.switchboard', `kanban-state-${slug}.md`);
+    return fs.readFileSync(filePath, 'utf8');
+}
+
+async function writeStateJson(dir: string, state: Record<string, unknown>): Promise<void> {
+    const statePath = path.join(dir, '.switchboard', 'state.json');
+    await fs.promises.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.promises.writeFile(statePath, JSON.stringify(state), 'utf8');
+}
+
 suite('Kanban Auto-Export (Markdown)', () => {
     let tempDir: string;
     let db: KanbanDatabase;
@@ -224,5 +236,132 @@ suite('Kanban Auto-Export (Markdown)', () => {
         await new Promise(resolve => setTimeout(resolve, 500));
 
         assert.strictEqual(fs.existsSync(exportPath), true, 'Export file should be recreated after dispose flush');
+    });
+
+    test('Agent line appears for configured, visible columns', async function() {
+        this.timeout(5000);
+        const workspaceId = 'test-ws-agent';
+        await db.setWorkspaceId(workspaceId);
+
+        await writeStateJson(tempDir, {
+            startupCommands: { intern: 'agy --mode foo' },
+            visibleAgents: { intern: true }
+        });
+
+        const createDummyPlan = (id: string, column: string) => ({
+            planId: id,
+            sessionId: `sess-${id}`,
+            topic: `Topic ${id}`,
+            planFile: `/tmp/plan-${id}.md`,
+            kanbanColumn: column,
+            status: 'active' as any,
+            complexity: '1',
+            tags: '',
+            dependencies: '',
+            repoScope: '',
+            workspaceId: workspaceId,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastAction: '',
+            sourceType: 'local' as any,
+            brainSourcePath: '',
+            mirrorPath: '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: ''
+        });
+
+        await db.upsertPlans([createDummyPlan('1', 'INTERN CODED')]);
+        await db.flushLocalBoardMirror();
+
+        const content = readPerColumnFile(tempDir, 'INTERN CODED');
+        assert.ok(content.includes('**Agent:** AGY CLI'), 'INTERN CODED header should include **Agent:** AGY CLI');
+        // Header order: ## COL, blank, **Agent:**, blank, then per-plan lines.
+        const agentIdx = content.indexOf('**Agent:** AGY CLI');
+        const planIdx = content.indexOf('plan-1.md');
+        assert.ok(agentIdx > -1 && planIdx > agentIdx, 'Agent line should precede plan lines');
+    });
+
+    test('Agent line omitted for non-visible roles', async function() {
+        this.timeout(5000);
+        const workspaceId = 'test-ws-agent-hidden';
+        await db.setWorkspaceId(workspaceId);
+
+        // tester defaults to non-visible; set explicitly false to be safe.
+        await writeStateJson(tempDir, {
+            startupCommands: { tester: 'qwen --foo' },
+            visibleAgents: { tester: false }
+        });
+
+        await db.flushLocalBoardMirror();
+
+        const content = readPerColumnFile(tempDir, 'ACCEPTANCE TESTED');
+        assert.ok(!content.includes('**Agent:**'), 'ACCEPTANCE TESTED should NOT include **Agent:** when tester is hidden');
+    });
+
+    test('Agent line omitted for columns with no configured role', async function() {
+        this.timeout(5000);
+        const workspaceId = 'test-ws-agent-norole';
+        await db.setWorkspaceId(workspaceId);
+
+        await writeStateJson(tempDir, {
+            startupCommands: { intern: 'agy' },
+            visibleAgents: { intern: true }
+        });
+
+        await db.flushLocalBoardMirror();
+
+        // BACKLOG has no role in DEFAULT_KANBAN_COLUMNS.
+        const content = readPerColumnFile(tempDir, 'BACKLOG');
+        assert.ok(!content.includes('**Agent:**'), 'BACKLOG should NOT include **Agent:** (no role mapping)');
+    });
+
+    test('Agent name updates on config-only change (content-hash fold)', async function() {
+        this.timeout(8000);
+        const workspaceId = 'test-ws-agent-update';
+        await db.setWorkspaceId(workspaceId);
+
+        const createDummyPlan = (id: string, column: string) => ({
+            planId: id,
+            sessionId: `sess-${id}`,
+            topic: `Topic ${id}`,
+            planFile: `/tmp/plan-${id}.md`,
+            kanbanColumn: column,
+            status: 'active' as any,
+            complexity: '1',
+            tags: '',
+            dependencies: '',
+            repoScope: '',
+            workspaceId: workspaceId,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastAction: '',
+            sourceType: 'local' as any,
+            brainSourcePath: '',
+            mirrorPath: '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: ''
+        });
+
+        await db.upsertPlans([createDummyPlan('1', 'INTERN CODED')]);
+
+        await writeStateJson(tempDir, {
+            startupCommands: { intern: 'agy' },
+            visibleAgents: { intern: true }
+        });
+        await db.flushLocalBoardMirror();
+        let content = readPerColumnFile(tempDir, 'INTERN CODED');
+        assert.ok(content.includes('**Agent:** AGY CLI'), 'First write should show AGY CLI');
+
+        // Config-only change: no card move, just rewrite state.json.
+        await writeStateJson(tempDir, {
+            startupCommands: { intern: 'claude' },
+            visibleAgents: { intern: true }
+        });
+        await db.flushLocalBoardMirror();
+        content = readPerColumnFile(tempDir, 'INTERN CODED');
+        assert.ok(content.includes('**Agent:** CLAUDE CLI'), 'Second write should show CLAUDE CLI after config-only change');
+        assert.ok(!content.includes('**Agent:** AGY CLI'), 'Stale AGY CLI line should be gone');
     });
 });

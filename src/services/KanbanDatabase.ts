@@ -5,7 +5,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
-import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
+import {
+    DEFAULT_KANBAN_COLUMNS,
+    parseCustomAgents,
+    parseCustomKanbanColumns,
+    CustomAgentConfig,
+    CustomKanbanColumnConfig
+} from './agentConfig';
 import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE } from './BoardSnapshotPublisher';
 
 export interface WorkspaceDatabaseMapping {
@@ -8070,6 +8076,82 @@ FROM plans
         }, KanbanDatabase.LOCAL_MIRROR_DEBOUNCE_MS);
     }
 
+    /**
+     * Reads agent configuration from `.switchboard/state.json` for the kanban-state
+     * file header writer. Returns empty maps on any failure (no `**Agent:**` lines
+     * written). This is a snapshot read — the staleness window versus
+     * GlobalIntegrationConfigService is bounded by the next board move and acceptable
+     * for a display-only field.
+     */
+    private async _readAgentConfig(): Promise<{
+        startupCommands: Record<string, string>;
+        visibleAgents: Record<string, boolean>;
+        customAgents: CustomAgentConfig[];
+        customKanbanColumns: CustomKanbanColumnConfig[];
+    }> {
+        try {
+            const statePath = path.join(this._workspaceRoot, '.switchboard', 'state.json');
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return {
+                startupCommands: state.startupCommands || {},
+                visibleAgents: state.visibleAgents || {},
+                customAgents: parseCustomAgents(state.customAgents),
+                customKanbanColumns: parseCustomKanbanColumns(state.customKanbanColumns)
+            };
+        } catch {
+            return {
+                startupCommands: {},
+                visibleAgents: {},
+                customAgents: [],
+                customKanbanColumns: []
+            };
+        }
+    }
+
+    /**
+     * Resolves the configured agent display name for a kanban column, or null if no
+     * visible agent is configured. Mirrors KanbanProvider._getAgentNames parsing:
+     * basename of the first command token, strip .exe/.cmd/.bat, uppercase, ` CLI`.
+     * Custom-agent startup commands are merged by role (they live in
+     * `customAgents[].startupCommand`, not `startupCommands`). Custom columns resolve
+     * their role via `customKanbanColumns` (column id → role), NOT via customAgents —
+     * CustomAgentConfig has no column field.
+     */
+    private _resolveAgentForColumn(
+        columnId: string,
+        startupCommands: Record<string, string>,
+        visibleAgents: Record<string, boolean>,
+        customAgents: CustomAgentConfig[],
+        customKanbanColumns: CustomKanbanColumnConfig[]
+    ): string | null {
+        // 1. Find role for this column.
+        const builtIn = DEFAULT_KANBAN_COLUMNS.find(c => c.id === columnId);
+        let role: string | undefined = builtIn?.role;
+        if (!role) {
+            const customCol = customKanbanColumns.find(c => c.id === columnId);
+            if (customCol) role = customCol.role;
+        }
+        if (!role) return null;
+
+        // 2. Check visibility. Defaults: tester/researcher/jules/ticket_updater = false;
+        // custom agents default true. state.visibleAgents overrides.
+        const defaultVisible = !['tester', 'researcher', 'jules', 'ticket_updater'].includes(role);
+        if (visibleAgents[role] === false) return null;
+        if (!(role in visibleAgents) && !defaultVisible) return null;
+
+        // 3. Merge custom-agent startup commands by role, then parse the name.
+        const mergedCommands: Record<string, string> = { ...startupCommands };
+        for (const agent of customAgents) {
+            mergedCommands[agent.role] = agent.startupCommand;
+        }
+        const cmd = (mergedCommands[role] || '').trim();
+        if (!cmd) return null;
+        const binary = cmd.split(/\s+/)[0];
+        const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
+        return `${name} CLI`;
+    }
+
     private async _writeLocalBoardMirror(): Promise<void> {
         if (!this._workspaceRoot || !this._db) return;
         if (this._localMirrorInFlight) {
@@ -8084,13 +8166,26 @@ FROM plans
 
             const allPlans = await this.getBoard(workspaceId);
 
+            // Read agent config so per-column file headers can carry the configured
+            // agent name (`**Agent:** <NAME> CLI`). Folded into the content hash below
+            // so a config-only change (no card move) still triggers a rewrite.
+            const agentConfig = await this._readAgentConfig();
+
             // Content-hash skip: don't rewrite if the serialized representation hasn't changed.
             // The active project filter is folded in so a filter-only change (no card moves)
             // still rewrites the mirror — otherwise the Manager Snapshot's filter scope line
             // goes stale. getConfigSync is a sync DB read (cheap, same _db we hold here).
+            // Agent config is folded in so changing startupCommands (without a card move)
+            // still rewrites the mirror — otherwise the **Agent:** header goes stale.
             const activeFilter = String(this.getConfigSync('kanban.activeProjectFilter') || '');
             const serialized = JSON.stringify({
                 activeFilter,
+                agentConfig: {
+                    startupCommands: agentConfig.startupCommands,
+                    visibleAgents: agentConfig.visibleAgents,
+                    customAgents: agentConfig.customAgents,
+                    customKanbanColumns: agentConfig.customKanbanColumns
+                },
                 allPlans: allPlans.map(p => ({
                     planId: p.planId,
                     kanbanColumn: p.kanbanColumn,
@@ -8142,6 +8237,16 @@ FROM plans
             for (const [col, plans] of allColumns) {
                 const perColPath = path.join(exportRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
                 let colMd = `## ${col}\n\n`;
+                const agentName = this._resolveAgentForColumn(
+                    col,
+                    agentConfig.startupCommands,
+                    agentConfig.visibleAgents,
+                    agentConfig.customAgents,
+                    agentConfig.customKanbanColumns
+                );
+                if (agentName) {
+                    colMd += `**Agent:** ${agentName}\n\n`;
+                }
                 if (plans.length === 0) {
                     colMd += `_No plans_\n\n`;
                 } else {
