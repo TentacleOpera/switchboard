@@ -4878,7 +4878,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 researcher: researcherConfig?.addons?.featureWorkflowFilePath || '',
                 ticket_updater: ticketUpdaterConfig?.addons?.featureWorkflowFilePath || '',
             },
-            plannerFeatureWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.addons?.featureWorkflowFilePath || '.agents/skills/improve-feature/SKILL.md'),
+            plannerFeatureWorkflowPath: normalizeRetiredWorkflowPath(
+                (plannerConfig?.addons?.featureWorkflowFilePathEnabled && plannerConfig?.addons?.featureWorkflowFilePath)
+                    ? plannerConfig.addons.featureWorkflowFilePath
+                    : '.agents/skills/improve-feature/SKILL.md'
+            ),
         };
     }
 

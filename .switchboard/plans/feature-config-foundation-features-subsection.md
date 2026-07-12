@@ -74,3 +74,6 @@ All line references in this plan were verified against live `src/` and are accur
 
 ## Completion Report
 We have successfully implemented the Foundation subtask. The `useWorktreesPerPlan` addon was moved into the `group: 'features'` section inside `sharedDefaults.js` and `kanban.html`. The label and tooltip were revised to focus on feature-subtask orchestration only, establishing the Features section accordion home for subsequent feature levers. No issues were encountered.
+
+## Review Findings
+Reviewer pass (2026-07-13): clean. `useWorktreesPerPlan` correctly relocated to `group: 'features'` with a neutral relabel/tooltip across lead/coder/intern and the custom-agent list; the persisted key and `false` default are unchanged (no migration, existing values preserved). Confirmed the Features accordion renders (renderer emits it whenever ≥1 addon carries a group) and the general single-plan Workflow File stays flat/un-grouped. No code changes needed; no remaining risks.

@@ -60,6 +60,8 @@
         stitchGeneratingLabel: null,
         stitchPendingAutoGenerate: null,
         docsSectionCollapsed: persistedState.docsSectionCollapsed || {},
+        stitchHtmlActiveFilePath: null,
+        stitchSelectedElement: null,
     };
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
@@ -1417,6 +1419,13 @@
             }
         } else if (sourceId === 'stitch-html-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+            state.stitchHtmlActiveFilePath = msg.filePath || null;
+            const inspectBtn = document.getElementById('stitch-html-btn-inspect');
+            if (inspectBtn) inspectBtn.classList.remove('active');
+            const tweakPopup = document.getElementById('stitch-tweak-popup');
+            if (tweakPopup) tweakPopup.style.display = 'none';
+            state.stitchSelectedElement = null;
+
             resetZoom('stitchHtml');
 
             const initialState = document.getElementById('stitch-html-initial-state');
@@ -3487,6 +3496,74 @@
                 }
                 break;
 
+            case 'stitchElementSelected': {
+                const iframe = document.getElementById('stitch-html-preview-frame');
+                if (state.activeSource !== 'stitch-html-folder' || !iframe || event.source !== iframe.contentWindow) {
+                    break;
+                }
+                
+                const selector = String(msg.selector || '');
+                const tag = String(msg.tag || '');
+                const id = String(msg.id || '');
+                const classes = Array.isArray(msg.classes) ? msg.classes.map(String) : [];
+                const text = String(msg.text || '');
+                let outerHTML = String(msg.outerHTML || '');
+                
+                if (outerHTML.length > 2048) {
+                    outerHTML = outerHTML.substring(0, 2048) + '... [truncated]';
+                }
+                const truncatedText = text.length > 200 ? text.substring(0, 200) + '...' : text;
+                
+                state.stitchSelectedElement = {
+                    selector,
+                    tag,
+                    id,
+                    classes,
+                    text: truncatedText,
+                    outerHTML
+                };
+                
+                const breadcrumbEl = document.getElementById('stitch-tweak-header-breadcrumb');
+                if (breadcrumbEl) {
+                    var classStr = classes.length > 0 ? '.' + classes.slice(0, 2).join('.') : '';
+                    breadcrumbEl.textContent = tag + (id ? '#' + id : '') + classStr;
+                    breadcrumbEl.title = selector;
+                }
+                
+                const preEl = document.getElementById('stitch-tweak-snippet-pre');
+                if (preEl) {
+                    preEl.textContent = outerHTML;
+                }
+                
+                const popup = document.getElementById('stitch-tweak-popup');
+                if (popup) {
+                    popup.style.display = 'flex';
+                }
+                
+                const textarea = document.getElementById('stitch-tweak-input');
+                if (textarea) {
+                    textarea.focus();
+                }
+                
+                break;
+            }
+
+            case 'sbInspectState': {
+                const iframe = document.getElementById('stitch-html-preview-frame');
+                if (state.activeSource !== 'stitch-html-folder' || !iframe || event.source !== iframe.contentWindow) {
+                    break;
+                }
+                const btn = document.getElementById('stitch-html-btn-inspect');
+                if (btn) {
+                    if (msg.on) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+                break;
+            }
+
             case 'previewRenderStatus': {
                 // Diagnostic messages from the iframe — shows script load failures,
                 // JS errors, and render status so we can see why previews are blank.
@@ -4488,6 +4565,96 @@
             state.stitchCreativeRange = e.target.value;
         }
     });
+    document.getElementById('stitch-html-btn-inspect')?.addEventListener('click', () => {
+        const frame = document.getElementById('stitch-html-preview-frame');
+        const btn = document.getElementById('stitch-html-btn-inspect');
+        if (frame && btn) {
+            frame.contentWindow?.postMessage({
+                type: 'sbInspectToggle',
+                on: !btn.classList.contains('active')
+            }, '*');
+        }
+    });
+
+    document.getElementById('stitch-tweak-btn-close')?.addEventListener('click', () => {
+        const popup = document.getElementById('stitch-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        const input = document.getElementById('stitch-tweak-input');
+        if (input) input.value = '';
+        state.stitchSelectedElement = null;
+    });
+
+    function composeStitchTweakPrompt() {
+        const el = state.stitchSelectedElement;
+        const filePath = state.stitchHtmlActiveFilePath;
+        const inputEl = document.getElementById('stitch-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!el || !filePath || !instruction) return '';
+        return [
+            'Tweak a generated Stitch screen file in place.',
+            '',
+            'File: ' + filePath,
+            '',
+            'Target element (CSS selector: ' + el.selector + '):',
+            '```html',
+            el.outerHTML,
+            '```',
+            '',
+            'Requested change: ' + instruction,
+            '',
+            'The snippet above is serialized from the live DOM — whitespace, entity encoding, attribute quoting, and boolean-attribute forms may differ from the file bytes, and if the page builds DOM at runtime the element may not appear verbatim in the source. Locate the target by the selector and the element\'s structure/text, not by exact-string search.',
+            '',
+            'Edit the file directly. Keep the change scoped to this element unless it forces adjacent updates (e.g. shared CSS). Do not create a plan file — this is a direct edit.'
+        ].join('\n');
+    }
+
+    document.getElementById('stitch-tweak-btn-send')?.addEventListener('click', () => {
+        const statusEl = document.getElementById('stitch-tweak-status');
+        if (statusEl) statusEl.style.display = 'none';
+
+        const inputEl = document.getElementById('stitch-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!instruction) {
+            if (statusEl) {
+                statusEl.textContent = 'Please describe the change first.';
+                statusEl.style.display = 'block';
+            }
+            return;
+        }
+
+        const prompt = composeStitchTweakPrompt();
+        if (!prompt) return;
+
+        vscode.postMessage({
+            type: 'sendStitchTweakPrompt',
+            prompt,
+            workspaceRoot: state.stitchWorkspaceRoot
+        });
+    });
+
+    document.getElementById('stitch-tweak-btn-copy')?.addEventListener('click', () => {
+        const statusEl = document.getElementById('stitch-tweak-status');
+        if (statusEl) statusEl.style.display = 'none';
+
+        const inputEl = document.getElementById('stitch-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!instruction) {
+            if (statusEl) {
+                statusEl.textContent = 'Please describe the change first.';
+                statusEl.style.display = 'block';
+            }
+            return;
+        }
+
+        const prompt = composeStitchTweakPrompt();
+        if (!prompt) return;
+
+        vscode.postMessage({
+            type: 'copyStitchTweakPrompt',
+            prompt
+        });
+    });
+
     document.getElementById('stitch-html-btn-edit')?.addEventListener('click', () => {
         if (state.stitchBusy) return;
         const screenId = activeStitchHtmlScreenId();

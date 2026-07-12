@@ -3107,6 +3107,14 @@
         .preview-overlay-btn.primary:hover {
             background: var(--accent-teal-bright);
         }
+        .preview-overlay-btn.active {
+            background: var(--accent-teal);
+            color: #000;
+            border-color: var(--accent-teal);
+        }
+        .preview-overlay-btn.active:hover {
+            background: var(--accent-teal-bright);
+        }
 
         /* Preview Footer */
         .preview-footer {
@@ -3816,6 +3824,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     <option value="REFINE">Refine</option>
                                     <option value="REIMAGINE">Reimagine</option>
                                 </select>
+                                <button id="stitch-html-btn-inspect" class="preview-overlay-btn">Inspect</button>
                                 <button id="stitch-html-btn-edit" class="preview-overlay-btn primary">Apply Edit</button>
                                 <div class="split-button-container" style="display: inline-flex; position: relative;">
                                     <button id="stitch-html-btn-variants" class="preview-overlay-btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0;">+3 Variants</button>
@@ -3847,6 +3856,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div id="stitch-html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
                             <div class="zoomable-viewport" style="width: 100%; height: 100%;">
                                 <iframe id="stitch-html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
+                            </div>
+                            <div id="stitch-tweak-popup" style="display: none; position: absolute; top: 12px; right: 12px; z-index: 20; width: 340px; max-height: calc(100% - 24px); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; overflow: hidden; font-size: 12px; font-family: var(--font-family);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-weight: 600;">
+                                    <span id="stitch-tweak-header-breadcrumb" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-family: monospace;"></span>
+                                    <span id="stitch-tweak-btn-close" style="cursor: pointer; padding: 2px 6px; font-size: 14px;">✕</span>
+                                </div>
+                                <div style="padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;">
+                                    <details>
+                                        <summary style="cursor: pointer; outline: none; margin-bottom: 4px; font-size: 11px; color: var(--text-secondary);">Selected HTML snippet</summary>
+                                        <pre id="stitch-tweak-snippet-pre" style="margin: 0; padding: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 3px; font-size: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; overflow-x: auto; max-height: 150px;"></pre>
+                                    </details>
+                                    <textarea id="stitch-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
+                                    <div id="stitch-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
+                                    <div style="display: flex; gap: 8px;">
+                                        <button id="stitch-tweak-btn-send" class="preview-overlay-btn primary" style="flex: 1;">Send to Agent</button>
+                                        <button id="stitch-tweak-btn-copy" class="preview-overlay-btn" style="flex: 1;">Copy Prompt</button>
+                                    </div>
+                                </div>
                             </div>
                             <div class="zoom-event-layer"></div>
                             <div class="zoom-toolbar">

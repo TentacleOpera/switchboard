@@ -982,7 +982,7 @@ export function buildKanbanBatchPrompt(
     if (role === 'planner') {
         const isFeatureTarget = options?.featureMode === true || plans.some(p => p.isFeature);
         const workflowPath = isFeatureTarget
-            ? DEFAULT_FEATURE_PLANNER_WORKFLOW
+            ? (options?.plannerFeatureWorkflowPath || DEFAULT_FEATURE_PLANNER_WORKFLOW)
             : (options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW);
         const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? false;
         // §Git — planner is non-code-touching; strategies resolve to `undefined`/`notSpecified`
@@ -1642,9 +1642,12 @@ export function buildCustomAgentPrompt(
     // NOTE: Built-in roles handle workflow prepend in resolveBaseInstructions.
     // If you change the workflow instruction format here, update resolveBaseInstructions too.
     if (isFeature && addons?.featureWorkflowFilePathEnabled && addons?.featureWorkflowFilePath) {
+        // Feature workflow OVERRIDES the general workflow on a feature dispatch — null both
+        // the feature AND the general workflow fields in the recursion so the general one is
+        // not also prepended (would double-prepend two Read-workflow instructions).
         return `Read ${addons.featureWorkflowFilePath} and follow it step-by-step.\n\n` +
             buildCustomAgentPrompt(plans, promptInstructions,
-                { ...addons, featureWorkflowFilePathEnabled: undefined, featureWorkflowFilePath: undefined }, workspaceRoot);
+                { ...addons, featureWorkflowFilePathEnabled: undefined, featureWorkflowFilePath: undefined, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot);
     }
     if (addons?.workflowFilePathEnabled && addons?.workflowFilePath) {
         return `Read ${addons.workflowFilePath} and follow it step-by-step.\n\n` +

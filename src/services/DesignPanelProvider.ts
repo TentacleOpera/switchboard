@@ -123,6 +123,252 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _activeDesignSystemDocId: string | null = null;
     private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
     private _htmlServerCreationPromises = new Map<string, Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>>();
+    private static readonly _INSPECTOR_SCRIPT = `<script>(function(){
+'use strict';
+if (window.__sbInspectorInstalled) return;
+window.__sbInspectorInstalled = true;
+
+var active = false;
+var hoveredElement = null;
+var overlay = null;
+var overlayLabel = null;
+
+function createOverlay() {
+    overlay = document.createElement('div');
+    overlay.style.position = 'fixed';
+    overlay.style.pointerEvents = 'none';
+    overlay.style.background = 'rgba(0, 120, 215, 0.2)';
+    overlay.style.outline = '1px solid rgb(0, 120, 215)';
+    overlay.style.zIndex = '2147483647';
+    overlay.style.transition = 'all 0.05s ease-out';
+    overlay.style.display = 'none';
+
+    overlayLabel = document.createElement('div');
+    overlayLabel.style.position = 'absolute';
+    overlayLabel.style.background = 'rgb(0, 120, 215)';
+    overlayLabel.style.color = '#fff';
+    overlayLabel.style.fontSize = '10px';
+    overlayLabel.style.fontFamily = 'monospace';
+    overlayLabel.style.padding = '2px 6px';
+    overlayLabel.style.borderRadius = '3px';
+    overlayLabel.style.whiteSpace = 'nowrap';
+    overlayLabel.style.pointerEvents = 'none';
+    overlay.appendChild(overlayLabel);
+
+    document.body.appendChild(overlay);
+}
+
+function updateOverlay(el) {
+    if (!overlay) createOverlay();
+    if (!el || el === document.body || el === document.documentElement) {
+        overlay.style.display = 'none';
+        return;
+    }
+    var rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+        overlay.style.display = 'none';
+        return;
+    }
+
+    overlay.style.left = rect.left + 'px';
+    overlay.style.top = rect.top + 'px';
+    overlay.style.width = rect.width + 'px';
+    overlay.style.height = rect.height + 'px';
+    overlay.style.display = 'block';
+
+    var label = getBreadcrumb(el);
+    overlayLabel.textContent = label;
+
+    if (rect.top > 20) {
+        overlayLabel.style.top = '-18px';
+        overlayLabel.style.bottom = 'auto';
+        overlayLabel.style.left = '0px';
+    } else {
+        overlayLabel.style.top = '0px';
+        overlayLabel.style.bottom = 'auto';
+        overlayLabel.style.left = '0px';
+    }
+}
+
+function getBreadcrumb(el) {
+    var tag = el.tagName.toLowerCase();
+    var id = el.id ? '#' + el.id : '';
+    var classes = el.getAttribute('class');
+    var classStr = '';
+    if (classes && typeof classes === 'string') {
+        var cleanClasses = classes.trim().split(/\\s+/).filter(Boolean);
+        if (cleanClasses.length > 0) {
+            classStr = '.' + cleanClasses.slice(0, 2).join('.');
+        }
+    }
+    return tag + id + classStr;
+}
+
+function buildSelector(el) {
+    if (el.id) {
+        try {
+            if (document.querySelectorAll('#' + el.id).length === 1) {
+                return '#' + el.id;
+            }
+        } catch(e) {}
+    }
+    var path = [];
+    var current = el;
+    var depth = 0;
+    while (current && current.nodeType === Node.ELEMENT_NODE && depth < 10) {
+        var selector = current.tagName.toLowerCase();
+        if (current.id) {
+            selector += '#' + current.id;
+            path.unshift(selector);
+            try {
+                if (document.querySelectorAll(path.join(' > ')).length === 1) {
+                    break;
+                }
+            } catch(e) {}
+        } else {
+            var classes = current.getAttribute('class');
+            if (classes && typeof classes === 'string') {
+                var cleanClasses = classes.trim().split(/\\s+/).filter(Boolean);
+                if (cleanClasses.length > 0) {
+                    selector += '.' + cleanClasses.join('.');
+                }
+            }
+            var siblings = current.parentNode ? current.parentNode.children : [];
+            var sameTagIndex = 0;
+            var isUniqueAmongSiblings = true;
+            for (var i = 0; i < siblings.length; i++) {
+                var sib = siblings[i];
+                if (sib === current) {
+                    sameTagIndex = i + 1;
+                } else if (sib.tagName === current.tagName) {
+                    isUniqueAmongSiblings = false;
+                }
+            }
+            if (!isUniqueAmongSiblings && sameTagIndex > 0) {
+                selector += ':nth-of-type(' + sameTagIndex + ')';
+            }
+            path.unshift(selector);
+        }
+        
+        try {
+            if (document.querySelectorAll(path.join(' > ')).length === 1) {
+                break;
+            }
+        } catch(e) {}
+        
+        current = current.parentNode;
+        depth++;
+    }
+    return path.join(' > ');
+}
+
+function onMouseOver(e) {
+    if (!active) return;
+    var target = e.target;
+    if (target === overlay || overlay && overlay.contains(target)) return;
+    hoveredElement = target;
+    updateOverlay(target);
+}
+
+function onMouseOut(e) {
+    if (!active) return;
+    if (!e.relatedTarget) {
+        if (overlay) overlay.style.display = 'none';
+        hoveredElement = null;
+    }
+}
+
+function onClick(e) {
+    if (!active) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    var el = hoveredElement || e.target;
+    if (!el) return;
+
+    var selector = buildSelector(el);
+    var tag = el.tagName.toLowerCase();
+    var id = el.id || '';
+    
+    var classes = [];
+    var classesAttr = el.getAttribute('class');
+    if (classesAttr && typeof classesAttr === 'string') {
+        classes = classesAttr.trim().split(/\\s+/).filter(Boolean);
+    }
+
+    var text = (el.textContent || '').trim();
+    if (text.length > 200) {
+        text = text.substring(0, 200) + '...';
+    }
+
+    var outerHTML = el.outerHTML || '';
+    if (outerHTML.length > 2048) {
+        outerHTML = outerHTML.substring(0, 2048) + '... [truncated]';
+    }
+
+    window.parent.postMessage({
+        type: 'stitchElementSelected',
+        selector: selector,
+        tag: tag,
+        id: id,
+        classes: classes,
+        text: text,
+        outerHTML: outerHTML
+    }, '*');
+}
+
+function onKeyDown(e) {
+    if (!active) return;
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        toggle(false);
+    }
+}
+
+function onScroll() {
+    if (!active || !hoveredElement) return;
+    updateOverlay(hoveredElement);
+}
+
+function toggle(on) {
+    active = !!on;
+    if (active) {
+        document.addEventListener('mouseover', onMouseOver, true);
+        document.addEventListener('mouseout', onMouseOut, true);
+        document.addEventListener('click', onClick, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+        if (hoveredElement) updateOverlay(hoveredElement);
+    } else {
+        document.removeEventListener('mouseover', onMouseOver, true);
+        document.removeEventListener('mouseout', onMouseOut, true);
+        document.removeEventListener('click', onClick, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+        document.removeEventListener('scroll', onScroll, true);
+        if (overlay) overlay.style.display = 'none';
+        hoveredElement = null;
+    }
+    window.parent.postMessage({ type: 'sbInspectState', on: active }, '*');
+}
+
+window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'sbInspectToggle') {
+        toggle(e.data.on);
+    }
+});
+})();</script>`;
+
+    private _injectIntoHead(html: string, snippet: string): string {
+        if (/<head\b[^>]*>/i.test(html)) {
+            return html.replace(/<head\b[^>]*>/i, m => m + snippet);
+        } else if (/<html\b[^>]*>/i.test(html)) {
+            return html.replace(/<html\b[^>]*>/i, m => m + snippet);
+        } else {
+            return snippet + html;
+        }
+    }
+
     private readonly _SERVER_DENY_LIST: readonly string[] = [
         '.switchboard',
         '.git',
@@ -1611,14 +1857,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 });
 })();</script>`;
 
-                const injected = babelPatch + diag;
-                if (/<head\b[^>]*>/i.test(html)) {
-                    html = html.replace(/<head\b[^>]*>/i, m => m + injected);
-                } else if (/<html\b[^>]*>/i.test(html)) {
-                    html = html.replace(/<html\b[^>]*>/i, m => m + injected);
-                } else {
-                    html = injected + html;
-                }
+                const injected = babelPatch + diag + DesignPanelProvider._INSPECTOR_SCRIPT;
+                html = this._injectIntoHead(html, injected);
                 res.writeHead(200, { 'Content-Type': mimeType, 'Cache-Control': 'no-store' });
                 res.end(Buffer.from(html, 'utf8'));
             } else {
@@ -1963,6 +2203,27 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     requestId: message.requestId,
                     isAutoRefreshed: false
                 });
+                break;
+            }
+
+            case 'copyStitchTweakPrompt': {
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                await vscode.env.clipboard.writeText(prompt);
+                showTemporaryNotification('Copied element tweak prompt to clipboard.');
+                break;
+            }
+
+            case 'sendStitchTweakPrompt': {
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
+                    showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                } else {
+                    await vscode.env.clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
+                }
                 break;
             }
 
@@ -3719,7 +3980,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 isImage,
                 webviewUri,
                 iframeSrc,
-                htmlContent: isHtmlFile ? this._injectLocalCsp(fileContent) : undefined,
+                htmlContent: isHtmlFile ? this._injectLocalCsp(this._injectIntoHead(fileContent, DesignPanelProvider._INSPECTOR_SCRIPT)) : undefined,
                 isAutoRefreshed: isAutoRefreshed || undefined
             });
         } catch (err: any) {

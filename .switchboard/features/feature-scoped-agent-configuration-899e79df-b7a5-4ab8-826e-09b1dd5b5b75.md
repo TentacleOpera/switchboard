@@ -19,10 +19,10 @@ The plan/feature distinction is a value no other agentic project-management tool
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Config — Foundation: First-Class "Features" Subsection Per Role + Relocate Agent-Managed Worktrees](../plans/feature-config-foundation-features-subsection.md) — **LEAD CODED**
-- [ ] [Feature Config — Workflow Lever: Per-Role Feature Workflow Override](../plans/feature-config-workflow-override-per-role.md) — **LEAD CODED**
-- [ ] [Feature Config — Worktree + Subagent Levers: Decouple Feature Orchestration Into Two Independent Controls](../plans/feature-config-worktree-subagent-levers.md) — **LEAD CODED**
-- [ ] [Feature Config — Planner Features UI: Wire the Feature Levers Into the Planner's Hardcoded Config Block](../plans/feature-config-planner-features-ui.md) — **LEAD CODED**
+- [ ] [Feature Config — Foundation: First-Class "Features" Subsection Per Role + Relocate Agent-Managed Worktrees](../plans/feature-config-foundation-features-subsection.md) — **CODE REVIEWED**
+- [ ] [Feature Config — Workflow Lever: Per-Role Feature Workflow Override](../plans/feature-config-workflow-override-per-role.md) — **CODE REVIEWED**
+- [ ] [Feature Config — Worktree + Subagent Levers: Decouple Feature Orchestration Into Two Independent Controls](../plans/feature-config-worktree-subagent-levers.md) — **CODE REVIEWED**
+- [ ] [Feature Config — Planner Features UI: Wire the Feature Levers Into the Planner's Hardcoded Config Block](../plans/feature-config-planner-features-ui.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -44,3 +44,6 @@ All four subtasks were verified against live `src/`; every line reference is acc
 
 ## Completion Report
 We have successfully implemented the "Feature-Scoped Agent Configuration" feature. All four subtasks (Foundation, Workflow Lever, Worktree + Subagent Levers, and Planner Features UI) were completed in sequence. The changes modify `sharedDefaults.js`, `kanban.html`, `KanbanProvider.ts`, and `agentPromptBuilder.ts` to support feature-scoped workflow files, worktrees, and subagent policies. No issues were encountered during the implementation.
+
+## Review Findings
+Reviewer pass (2026-07-13): reviewed all four subtasks against their plans with caller/consumer regression tracing. Two material defects were found and fixed, both in the workflow lever's reach into the planner — the planner feature-workflow override was entirely dead (the builder ignored the threaded `plannerFeatureWorkflowPath` and kept a hardcode), and the planner enable checkbox was ignored (KanbanProvider read the path regardless of the flag); the headline planner lever now demonstrably changes the generated prompt. A third fix removed a custom-agent double-workflow-prepend so a feature workflow truly overrides the general one. Files changed: `src/services/agentPromptBuilder.ts`, `src/services/KanbanProvider.ts`. Deferred NITs (custom-agent legacy worktree wording, dead `FEATURE_ORCHESTRATION_DIRECTIVE` export, and claude_designer/phone_a_friend/project_manager absent from the feature `*ByRole` maps — matching the pre-existing subagent-map pattern); no compile/test run per session directive.

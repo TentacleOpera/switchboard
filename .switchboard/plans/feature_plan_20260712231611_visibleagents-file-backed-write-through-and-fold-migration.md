@@ -89,6 +89,14 @@ clobbering file-only keys (`mcp_monitor` and the other grid-only agents).
    - `handleResetAgents` / built-in-role clear (`:9196` area) and the custom-agent
      delete path that prunes `visibleAgents` (`:9312` area) — deletions must reach
      the file too (subject to the wipe guard).
+   - **Clarification — empty-remainder prune guard:** when the delete path prunes
+     custom-role keys from `visibleAgents` and the remainder is `{}`, the wipe guard
+     (`GICS:200-207`) *refuses* the write and the file keeps the stale custom-role keys
+     → ghost columns persist. The helper must detect an empty remainder and
+     skip-and-warn (do NOT attempt a blanking write — it will be silently dropped).
+     In practice built-in keys (`lead`, `coder`, …) are always present so an empty
+     remainder only arises from a prune-logic bug; the guard makes that bug visible
+     instead of silent.
    - keep `setVisibleAgent('mcp_monitor', …)` as-is — it already merges to the file
      per-key; the new helper is the same operation for built-in/custom role keys.
 
@@ -108,6 +116,14 @@ clobbering file-only keys (`mcp_monitor` and the other grid-only agents).
    already exempts it (`GlobalIntegrationConfigService.ts:198-199` — it may legitimately
    go to `[]`), so a straight write matches its semantics. Save, delete-one, and
    delete-all custom-agent paths all included.
+
+   **Clarification — known trade-off (customAgents fold un-delete):** the fold's
+   "most-populated wins / never shrink a populated file list" heuristic can resurrect
+   custom agents a user *deleted* in a workspace (a shorter, more-correct legacy list
+   loses to a longer stale file list). This is a defensible one-time trade (data-loss >
+   un-delete), but it is a correctness inversion the coder must know: after the fold,
+   the user may need to re-delete resurrected agents. The write-through keeps the file
+   in sync from that point on, so the inversion is one-shot, not ongoing.
 
 3. **One-time fold migration (`switchboard.agents.fileFold.v1`).** A new guarded
    pass, distinct from the existing `globalFileSeed.v2` seed
@@ -130,6 +146,13 @@ clobbering file-only keys (`mcp_monitor` and the other grid-only agents).
    - Guard once per IDE via `globalState('switchboard.agents.fileFold.v1')`;
      idempotent; a crash mid-pass re-runs next launch. Per-workspace DBs are never
      deleted, so a wrong fold is recoverable (mirror the safety note at `:992`).
+   - **Clarification — per-workspace fold scope:** the guard is per-IDE-profile, and the
+     fold only processes workspace roots *open at fold time* (same root-collection as the
+     existing seed). A workspace not open during the fold launch is skipped; its first
+     post-upgrade render still shows the masked bug until the user toggles (write-through
+     then self-heals it). This matches the existing v2 seed's limitation and is acceptable
+     for a one-time migration with a write-through backstop, but the "every install" goal
+     is technically "every workspace open at fold time" — state this in the PR description.
 
 4. **Post-migration read verification.** After the fold, `getVisibleAgents` /
    `getCustomAgents` return the folded file value, so no getter change is needed —
@@ -193,7 +216,37 @@ clobbering file-only keys (`mcp_monitor` and the other grid-only agents).
   (the uniform-rule + `_markConfigDirty` refresh fix). This plan completes the storage
   half. No other plan dependencies.
 
+## Adversarial Synthesis
+
+**Key risks:** (1) the fold's per-IDE-profile guard only processes workspace roots open
+at fold time — workspaces not open at launch are skipped (self-healing on next toggle via
+write-through, but the first post-upgrade render still shows the masked bug for them);
+(2) the customAgents "most-populated wins" fold heuristic can resurrect deleted agents
+(defensible one-time trade: data-loss > un-delete, but a correctness inversion the coder
+must know); (3) pruning custom-role keys from `visibleAgents` via the guarded path must
+specify the empty-remainder case — if the remainder is `{}` the wipe guard refuses the
+write and ghost columns persist. **Mitigations:** state the per-workspace fold scope
+explicitly; name the un-delete trade-off; require the prune helper to guarantee a
+non-empty remainder (built-in keys are always present, so an empty remainder only arises
+from a logic bug — guard with a skip-and-warn, never a blanking write). The approach
+itself (write-through + fold, getters stay file-first) is the strongest of the
+alternatives: merge-read would break cross-IDE consistency, write-through-only would
+half-fix the installed base.
+
 ## Proposed Changes
+
+> **Clarification — line-number drift:** all line numbers below were verified against
+> source on 2026-07-12 and have since drifted ~80 lines downward (the file grew). Every
+> structural and logic claim was re-verified on 2026-07-13 and holds. The coder should
+> grep for function names (`getVisibleAgents`, `setVisibleAgent`,
+> `handleToggleKanbanColumnVisibility`, `handleSaveCustomAgent`,
+> `_migrateStartupCommandsToGlobalFile`, `_agentConfigScore`) rather than trusting the
+> exact offsets. Current verified anchors: `getVisibleAgents` ≈ `:4670`,
+> `getCustomAgents` ≈ `:4721`, `setVisibleAgent` ≈ `:22319`,
+> `handleToggleKanbanColumnVisibility` ≈ `:9332`, `handleSaveCustomAgent` ≈ `:9351`,
+> `_migrateStartupCommandsToGlobalFile` ≈ `:1002`, `updateState` mirror ≈ `:2699-2718`,
+> activation seam (constructor) ≈ `:503`.
+
 ### src/services/TaskViewerProvider.ts
 - Add `mergeVisibleAgentsToGlobalFile(patch: Record<string, boolean>)` — read file,
   `{ ...file, ...patch }`, `setAgentConfig('visibleAgents', …)`. Refactor
