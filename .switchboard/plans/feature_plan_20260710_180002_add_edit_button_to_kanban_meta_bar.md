@@ -119,3 +119,7 @@ Both functions already query `btn-edit-${tab}` (lines 2942/2988) and toggle its 
 ## Completion Report
 
 Added `btn-edit-kanban` to the kanban meta bar in `src/webview/project.js`, placed before Save/Cancel in the right-aligned group. Wired a click listener that calls `enterEditMode('kanban')`. The existing `enterEditMode`/`exitEditMode` show/hide logic automatically toggles the new button. `eslint src/webview/project.js` passed. No compilation or tests were run per the session SKIP directives. No issues encountered.
+
+## Review Findings
+
+Reviewed `src/webview/project.js` lines 1859 (button markup) and 1876-1879 (listener wiring) against plan requirements. Implementation matches spec exactly: `planFile`-gated, `editMode`-hidden, placed before Save/Cancel, null-guarded listener calling `enterEditMode('kanban')`. No CRITICAL or MAJOR findings — no code fixes applied. Regression audit confirmed: no double-trigger (sidebar and meta-bar are separate elements), no race (innerHTML replacement destroys old listeners), no orphaned references (ID was added, not removed), `enterEditMode`/`exitEditMode` unchanged and already handle `btn-edit-${tab}`. `planning.js` has 5 null-guarded `btn-edit-kanban` refs in a separate webview DOM — no collision, pre-existing, out of scope. ESLint passed (exit 0). Remaining risk: none material; the `planning.js`/`project.js` webview divergence is a deferred stylistic cleanup.

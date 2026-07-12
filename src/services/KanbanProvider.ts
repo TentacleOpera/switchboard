@@ -5703,6 +5703,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     /** Send current visible agents to the kanban webview panel. */
     public async sendVisibleAgents() {
+        // A visibleAgents change now drives the built-in role-column SET (not just the
+        // auxiliary agent-name displays), so the follow-on board refresh MUST re-run
+        // _filterDynamicColumns and re-push `updateColumns`. That refresh is gated by
+        // refreshWouldBeNoOp(workspaceId|filters|dataVersion|configEpoch); a toggle
+        // writes state.json/globalState but NOT the kanban DB, so dataVersion is
+        // unchanged. Without bumping the config epoch the refresh is dropped as a
+        // no-op and the column never hides/shows on tick — the plan's headline
+        // behavior. Bump the epoch (the helper's own doc lists "visible agents").
+        this._markConfigDirty();
         if (!this._panel) return;
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
