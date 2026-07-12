@@ -159,3 +159,7 @@ if (!match) {
 ## Recommendation
 
 **Send to Intern** (complexity 3). §1 + §2 are localized and low-risk. Flag §3 to the implementer as optional and only-if-needed, since it adds control-flow surface for the secondary cause.
+
+## Completion Report
+
+Implemented the §1 and §2 layout-timing fixes in `src/webview/project.js`. On `activateKanbanTabAndSelectPlan` the kanban list pane now resets `scrollTop` to 0 immediately, and `scrollPlanItemIntoView` schedules a 50 ms fallback that re-queries the live element, checks its visible bounds, and corrects `scrollTop` using viewport-rect math instead of `offsetTop` so it works regardless of `offsetParent`. The optional §3 retry-hardening change was not applied because the plan identifies it as optional and adds control-flow surface. `node --check` passed for `project.js`.

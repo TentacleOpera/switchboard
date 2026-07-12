@@ -668,6 +668,12 @@
                 _pendingAutoEdit = msg.autoEdit === true;
                 _pendingKanbanSelectionRetries = 0;  // reset retry counter for this selection
 
+                // Reset scroll to the top immediately; the newest plan sorts at the top,
+                // so if the later scrollIntoView no-ops the user is already looking there.
+                if (kanbanListPane) {
+                    kanbanListPane.scrollTop = 0;
+                }
+
                 // Stash the desired narrow filters.
                 _pendingKanbanFilterIntent = {
                     workspaceRoot: msg.workspaceRoot || '',
@@ -1671,6 +1677,28 @@
                 );
                 if (el) {
                     el.scrollIntoView({ behavior: 'instant', block: 'center' });
+                    // Fallback: if scrollIntoView raced the post-innerHTML layout,
+                    // re-check the element's visible bounds after a short delay and
+                    // correct via offsetTop. Re-query the node in case the list
+                    // re-rendered before the timeout fired.
+                    setTimeout(() => {
+                        if (kanbanListPane) {
+                            const liveEl = kanbanListPane.querySelector(
+                                `.kanban-plan-item[data-plan-id="${planId}"]`
+                            );
+                            if (liveEl) {
+                                const elRect = liveEl.getBoundingClientRect();
+                                const paneRect = kanbanListPane.getBoundingClientRect();
+                                if (elRect.top < paneRect.top || elRect.bottom > paneRect.bottom) {
+                                    // Compute the element's content offset from the pane top
+                                    // using viewport rects; this avoids relying on offsetParent
+                                    // being the scroll container.
+                                    const elTop = elRect.top - paneRect.top + kanbanListPane.scrollTop;
+                                    kanbanListPane.scrollTop = elTop - kanbanListPane.clientHeight / 2;
+                                }
+                            }
+                        }
+                    }, 50);
                 }
             });
         });

@@ -227,20 +227,23 @@ What would you like to do?
   no role, no live terminal agent). `success:true` means the card is in the target column
   AND a dispatch was observed — never just "request parsed".
   - **Result-reporting template (hard).** Consume the fields the response already returns —
-    `topic` (title), `column` (where it landed), `dispatchedAgent` (the terminal), `routing`
-    (why it landed there) — and **never** print `moved`/`dispatched` booleans, the
-    planId/sessionId, or a raw ISO timestamp. Report in **one message**:
+    `topic` (title), `column` (where it landed), `dispatchedAgent` (the terminal name) —
+    and **never** print `moved`/`dispatched` booleans, the planId/sessionId, the `routing`
+    string, or a raw ISO timestamp. The user does not care about routing internals. Report
+    in **one message**:
     ```
-    ✓ Dispatched "Fix: Kanban Columns Must Follow Ticked Agents" to CODER CODED —
-      sent to <dispatchedAgent> (routed there by complexity: 5–6 → coder).
+    ✓ Dispatched "Fix: Kanban Columns Must Follow Ticked Agents" to Devin CLI (Coder)
 
     Want me to watch until it finishes? I'll tell you the moment it lands.
     ```
+    Format: `Dispatched "<title>" to <dispatchedAgent> (<humanized column>)`. That's it.
+    No routing explanation, no complexity band, no "sent to" prefix — just the plan title,
+    the terminal agent name, and the humanized column name in parentheses.
     **Extract `dispatchedAgent` from the response JSON** (pipe through `python3 -m json.tool`
     or `jq` — never eyeball raw curl output). On a successful dispatch (`dispatched: true`)
-    the terminal name IS in the response — use it. Never print "no terminal" on a successful
-    dispatch; if you cannot see the name, you did not extract the field correctly — re-run
-    the extraction, do not fall back to a missing-agent phrase.
+    the terminal name IS in the response — use it. Never print "unknown" or "no terminal"
+    on a successful dispatch; if you cannot see the name, you did not extract the field
+    correctly — re-run the extraction.
   - **Synchronous, not background.** `POST /kanban/dispatch` (and every command verb) is a
     synchronous, fast curl — it returns when the work is recorded. Do NOT narrate it as a
     background job, do NOT emit a "waiting for the API" pre-message, do NOT split it across
