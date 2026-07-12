@@ -65,3 +65,7 @@ Give every brief card in the Briefs tab sidebar the same **Link** button (copy v
 ### Automated Tests
 
 - Skipped this pass per session directive (SKIP TESTS). Manual verification above is the acceptance gate.
+
+## Review Findings
+
+Correct and complete: `createBriefDocCard` passes `actions: ['Link Doc']`, reusing the shared `renderDocCard`, the `linkToDocument` message, and the provider handler already live for HTML/Images cards; brief nodes already carry `nodeMetadata.sourceFolder`, so the button copies the correct per-workspace path with click isolation (`stopPropagation`). No provider change was needed — the handler does no allow-list validation, exactly as the plan's superseded note established. **No code changed for this subtask.** Validation: `design.js` syntax OK (compile/tests skipped per directive). No remaining risks.

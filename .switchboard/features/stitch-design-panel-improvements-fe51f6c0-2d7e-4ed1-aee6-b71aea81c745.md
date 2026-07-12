@@ -27,11 +27,11 @@ The improve-feature pass improved all five subtasks against the live code and au
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Organise the Stitch Cache into Per-Project Folders](../plans/stitch-cache-per-project-folders.md) — **CODER CODED**
-- [x] [Add a "Stitch HTML" Browser Tab to the Design Panel](../plans/stitch-html-browser-tab.md) — **CODER CODED**
-- [ ] [Replace the Stitch "New Project" Native Input Box with a Real In-Webview Modal](../plans/stitch-new-project-real-modal.md) — **CODER CODED**
-- [ ] [Briefs "Send to Stitch" — Auto-Name the Project and Actually Generate](../plans/briefs-send-to-stitch-actually-sends.md) — **CODER CODED**
-- [ ] [Add a Per-Brief "Link" Button to the Briefs Sidebar](../plans/briefs-per-item-link-button.md) — **CODER CODED**
+- [ ] [Organise the Stitch Cache into Per-Project Folders](../plans/stitch-cache-per-project-folders.md) — **CODE REVIEWED**
+- [ ] [Add a "Stitch HTML" Browser Tab to the Design Panel](../plans/stitch-html-browser-tab.md) — **CODE REVIEWED**
+- [ ] [Replace the Stitch "New Project" Native Input Box with a Real In-Webview Modal](../plans/stitch-new-project-real-modal.md) — **CODE REVIEWED**
+- [ ] [Briefs "Send to Stitch" — Auto-Name the Project and Actually Generate](../plans/briefs-send-to-stitch-actually-sends.md) — **CODE REVIEWED**
+- [ ] [Add a Per-Brief "Link" Button to the Briefs Sidebar](../plans/briefs-per-item-link-button.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -43,3 +43,7 @@ The improve-feature pass improved all five subtasks against the live code and au
 ## Completion Report
 
 Implemented the three remaining subtasks (New Project modal, Send-to-Stitch auto-generate, per-brief Link button). **Files changed:** `src/webview/design.html` (new `stitch-new-project-modal` markup reusing `stitch-prompt-modal` styles), `src/webview/design.js` (modal open/close/submit wiring with scoped Escape `stopPropagation`; `runStitchGenerate` helper extracted from `btnGenerateStitch` and called from both the button and the `stitchBriefInjected` auto-generate path; `actions: ['Link Doc']` added to `createBriefDocCard`), `src/services/DesignPanelProvider.ts` (`stitchCreateProject` now accepts `message.title` and drops both the `showInputBox` and `showQuickPick` brief-attach blocks plus the dependent `stitchBriefInjected` post; `stitchSendBrief` drops its `showInputBox`, auto-names from `briefTitle` with filename-stem fallback, and posts `stitchBriefInjected` with `autoGenerate: true`). The `stitchBriefInjected` contract is now decoupled: only `stitchSendBrief` produces it, and auto-generate fires only when `autoGenerate` is truthy. No issues encountered; all changes are self-consistent with the existing modal/busy-lock patterns.
+
+## Review Findings
+
+Reviewed all five subtasks against the committed diff (`df9ecb1`). **Files changed during review:** `src/webview/design.js` (deferred Send-to-Stitch auto-generate), `src/services/DesignPanelProvider.ts` (hoisted a per-file DB query out of the `stitchHtmlListDocs` loop), and regenerated `protocol-catalog.json` + `src/generated/verbAllowlist.ts`. **CRITICAL (fixed):** Send-to-Stitch never generated — `stitchProjectsReady` sets `stitchBusy=true` before `stitchBriefInjected` runs, so `runStitchGenerate` bailed; now the generate is stashed and fired from `stitchScreensReady` once busy clears (cleared on `stitchError`). **MAJOR (fixed):** the new `stitchHtmlListDocs`/`stitchPreviewHtml` verbs and the removed `toggleStitchHtmlPreview` had drifted the catalog/allowlist (affects external service-route callers only — the webview path is ungated); `catalog:check` is now green. **Validation:** `catalog:check` green, `design.js` + `DesignPanelProvider.ts` pass syntax checks (compile/tests skipped per directive). **Remaining risks (out of scope):** generate leaves `stitchBusy` set until the next screens/project event (pre-existing, identical for manual Generate); `stitchHtml.projectId` persists but isn't restored on reload (minor).

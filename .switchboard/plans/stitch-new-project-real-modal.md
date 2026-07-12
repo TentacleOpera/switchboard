@@ -72,3 +72,7 @@ Make the Stitch tab's **New Project** button open a proper modal inside the Desi
 ### Automated Tests
 
 - Skipped this pass per session directive (SKIP TESTS). Manual verification above is the acceptance gate.
+
+## Review Findings
+
+Correct and complete: New Project opens the in-webview modal, posts `stitchCreateProject {title, workspaceRoot}`, and the provider drops both the `showInputBox` and the `showQuickPick` brief-attach block plus its dependent `stitchBriefInjected` post, defensively rejecting blank titles. Escape handling is right — the modal input's `stopPropagation` starves the bubble-phase preview-close handler (`design.js:2547`), so cancelling the modal doesn't also close an open Stitch preview. **No code changed for this subtask.** Validation: `design.js` passes a syntax check (compile/tests skipped per directive). No remaining risks.

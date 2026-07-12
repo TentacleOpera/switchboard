@@ -1119,21 +1119,24 @@ export class DesignPanelProvider implements vscode.Disposable {
 
     // Dedupes concurrent downloads of the same target — repeated _formatScreen calls
     // (polls, phase-3 refreshes) fire cache downloads before the first one lands.
-    private _cacheDownloadsInFlight = new Set<string>();
+    // Maps target path → in-flight promise so concurrent requests JOIN the same
+    // download (callers that need the file on disk can await it) instead of
+    // double-downloading or returning before the first write lands.
+    private _cacheDownloadsInFlight = new Map<string, Promise<void>>();
 
-    private async _downloadToCache(url: string, cacheDir: string, fileUri: vscode.Uri): Promise<void> {
+    private _downloadToCache(url: string, cacheDir: string, fileUri: vscode.Uri): Promise<void> {
         const key = fileUri.fsPath;
-        if (this._cacheDownloadsInFlight.has(key)) return;
-        this._cacheDownloadsInFlight.add(key);
-        try {
+        const existing = this._cacheDownloadsInFlight.get(key);
+        if (existing) return existing;
+        const download = (async () => {
             await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
             const res = await this._fetchWithTimeout(url, 60000);
             if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
             const buffer = Buffer.from(await res.arrayBuffer());
             await vscode.workspace.fs.writeFile(fileUri, buffer);
-        } finally {
-            this._cacheDownloadsInFlight.delete(key);
-        }
+        })();
+        this._cacheDownloadsInFlight.set(key, download.finally(() => this._cacheDownloadsInFlight.delete(key)));
+        return this._cacheDownloadsInFlight.get(key)!;
     }
 
     /**
@@ -1437,7 +1440,12 @@ export class DesignPanelProvider implements vscode.Disposable {
             return;
         }
 
-        const pathParts = normalizedResolved.split(path.sep);
+        // Deny-list only the components BELOW the served folder. The traversal check
+        // above already contains the request inside sourceFolder, and sourceFolder is
+        // always extension-chosen — checking the absolute path instead 403'd every
+        // server legitimately rooted under a dot-folder (the Stitch cache lives in
+        // .switchboard/stitch, so all its HTML came back "Forbidden: access denied").
+        const pathParts = path.relative(normalizedSource, normalizedResolved).split(path.sep);
         for (const part of pathParts) {
             if (this._SERVER_DENY_LIST.some(denied => part === denied || part.startsWith(denied))) {
                 res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
@@ -2855,18 +2863,19 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         const entries = await fs.promises.readdir(cacheDir);
                         const db = KanbanDatabase.forWorkspace(workspaceRoot);
                         await db.ensureReady();
+                        // Resolve display names once — one query for the whole project, not
+                        // one per HTML file.
+                        let nameById = new Map<string, string>();
+                        try {
+                            const screens = await db.getStitchScreensForProject(projectId);
+                            nameById = new Map(screens.map(s => [s.id, s.name] as const));
+                        } catch {}
                         for (const entry of entries) {
                             if (path.extname(entry) !== '.html') continue;
                             const screenId = path.basename(entry, '.html');
-                            let name = screenId;
-                            try {
-                                const screens = await db.getStitchScreensForProject(projectId);
-                                const match = screens.find(s => s.id === screenId);
-                                if (match?.name) name = match.name;
-                            } catch {}
                             docs.push({
                                 screenId,
-                                name,
+                                name: nameById.get(screenId) || screenId,
                                 file: entry,
                                 sourceFolder: cacheDir,
                                 absolutePath: path.join(cacheDir, entry)
@@ -3232,7 +3241,14 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     }
                     this._stitchOperationLock = true;
                     try {
-                        const screen = this._activeScreens.get(message.screenId);
+                        // Edits can arrive from the Stitch HTML tab before the Stitch tab
+                        // has loaded the project this session — fetch the screen on demand.
+                        let screen = this._activeScreens.get(message.screenId);
+                        if (!screen && message.projectId) {
+                            const stitch = await loadStitch('');
+                            screen = await stitch.project(message.projectId).getScreen(message.screenId);
+                            if (screen) this._activeScreens.set(screen.id, screen);
+                        }
                         if (!screen) throw new Error('Screen instance not found in memory cache.');
                         const { screens, summary, suggestions } = await this._screenToolCall('edit_screens', {
                             projectId: screen.projectId,
@@ -3243,7 +3259,26 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         const updated = screens[0];
                         if (!updated) throw new Error('Stitch returned no screen for the edit request.');
                         this._activeScreens.set(updated.id, updated);
+                        // Same-id edits leave stale cached assets that would mask the new
+                        // render (disk wins in both cache lookups) — purge before formatting.
+                        try {
+                            const staleDir = this._getImageCacheDir(workspaceRoot, updated.projectId || screen.projectId);
+                            await fs.promises.rm(path.join(staleDir, `${path.basename(updated.id)}.png`), { force: true });
+                            await fs.promises.rm(path.join(staleDir, `${path.basename(updated.id)}.html`), { force: true });
+                        } catch { /* cache purge is best-effort */ }
                         const formatted = await this._formatScreen(updated, workspaceRoot);
+                        // The Stitch HTML tab reloads this screen's file when it hears
+                        // stitchScreenReady — make sure the fresh HTML is on disk first.
+                        if (formatted.htmlUrl) {
+                            try {
+                                const dir = this._getImageCacheDir(workspaceRoot, updated.projectId || screen.projectId);
+                                await this._downloadToCache(formatted.htmlUrl, dir,
+                                    vscode.Uri.file(path.join(dir, `${path.basename(updated.id)}.html`)));
+                                formatted.htmlPath = path.join(dir, `${path.basename(updated.id)}.html`);
+                            } catch (e) {
+                                console.error('Stitch edit HTML re-cache failed:', e);
+                            }
+                        }
                         await this._attachScreenCommentary(formatted, screen.projectId, workspaceRoot, summary, suggestions);
                         this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
                     } finally {
@@ -3263,7 +3298,14 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     }
                     this._stitchOperationLock = true;
                     try {
-                        const screen = this._activeScreens.get(message.screenId);
+                        // Variants can be launched from the Stitch HTML tab — fetch the
+                        // source screen on demand if the Stitch tab hasn't loaded it.
+                        let screen = this._activeScreens.get(message.screenId);
+                        if (!screen && message.projectId) {
+                            const stitch = await loadStitch('');
+                            screen = await stitch.project(message.projectId).getScreen(message.screenId);
+                            if (screen) this._activeScreens.set(screen.id, screen);
+                        }
                         if (!screen) throw new Error('Screen instance not found in memory cache.');
                         const aspects = message.aspects?.length ? message.aspects : undefined;
                         const variantOptions = {
@@ -3283,6 +3325,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             const f = await this._formatScreen(v, workspaceRoot);
                             // The commentary describes the variant batch — attach to each
                             await this._attachScreenCommentary(f, screen.projectId, workspaceRoot, summary, suggestions);
+                            // The Stitch HTML tab refreshes its list on stitchScreensReady —
+                            // land the variants' HTML on disk before announcing them.
+                            if (f.htmlUrl) {
+                                try {
+                                    const dir = this._getImageCacheDir(workspaceRoot, v.projectId || screen.projectId);
+                                    const target = path.join(dir, `${path.basename(v.id)}.html`);
+                                    await this._downloadToCache(f.htmlUrl, dir, vscode.Uri.file(target));
+                                    f.htmlPath = target;
+                                } catch (e) {
+                                    console.error('Stitch variant HTML cache failed:', e);
+                                }
+                            }
                             return f;
                         }));
                         this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });

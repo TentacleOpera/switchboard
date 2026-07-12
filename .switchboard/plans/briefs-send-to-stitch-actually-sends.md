@@ -71,3 +71,7 @@ The flow today (`stitchSendBrief`, `DesignPanelProvider.ts:3035-3096`): read the
 ### Automated Tests
 
 - Skipped this pass per session directive (SKIP TESTS). Manual verification above is the acceptance gate.
+
+## Review Findings
+
+**CRITICAL (fixed):** Send-to-Stitch never actually generated. `stitchSendBrief` correctly auto-names and posts `stitchBriefInjected {autoGenerate:true}`, but the `stitchProjectsReady {selectProjectId}` posted immediately before it calls `setStitchBusy(true)` to load the new project's screens, and `runStitchGenerate` bails on `state.stitchBusy` — so the auto-generate silently no-opped, contradicting the plan's core acceptance ("generation starts unaided"). Fix (`src/webview/design.js`): when busy, stash the request in `state.stitchPendingAutoGenerate` and fire it from the `stitchScreensReady` handler once the (empty) screen-load clears busy; cleared on `stitchError`. `stitchGetProjectScreens` holds no operation lock, so the deferred `stitchGenerate` acquires `_stitchOperationLock` cleanly (no deadlock/double-fire; the Send button is busy-disabled across the gap). Validation: `design.js` syntax OK. Remaining risk (out of scope): generate leaves `stitchBusy` set until the next screens/project event — pre-existing and identical for manual Generate.

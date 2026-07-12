@@ -90,3 +90,7 @@ Store every Stitch screen asset (PNG screenshot + cached HTML) under a per-proje
 ### Automated Tests
 
 - Skipped for this pass per session directive (SKIP TESTS). When re-enabled: a unit test for the folder-name sanitizer (empty name, duplicate name, path-separator injection) and a migration test over a fixture flat dir with a mix of DB-known and unknown basenames asserting move-not-delete.
+
+## Review Findings
+
+Implementation is correct and complete: `_getImageCacheDir(root, projectId?)`, all screen-carrying callers repointed, `stitchDownloadAsset`'s screen-less `projectId` resolution via `_activeScreens`, the move-only idempotent `_migrateStitchCacheToProjectFolders`, and the DB helpers (`getStitchProjectName`/`getStitchScreenProjectId`) all match the plan; the stitch root remains in `localResourceRoots` (`DesignPanelProvider.ts:912`) so subfolder thumbnails still resolve. **No code changed for this subtask.** One accepted deviation (not fixed): an unresolved project name yields `project-<idSuffix>` rather than the plan's bare-root fallback — arguably better (preserves per-project partitioning) and self-consistent since read and write use the same synchronous resolver. Validation: `DesignPanelProvider.ts` passes a TypeScript syntax check (compile/tests skipped per directive). No remaining risks.

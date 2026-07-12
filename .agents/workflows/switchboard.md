@@ -24,39 +24,35 @@ skill adds the **management-console persona** on top of that surface.
 
 ## 1. Entry Protocol (do this FIRST, then stop)
 
-**Local markdown is the primary source for read-only status; the API is for
-verify-before-mutate and for mutations.**
+**Two commands, then report. No more.** The kanban-state files are updated on every
+board move, so they are always current — no staleness check, no timestamp read, no
+separate plans-existence probe. Everything the entry report needs comes from these
+two commands.
 
-1. **Resolve the workspace root once.** Find the directory containing
-   `.switchboard/api-server-port.txt` from the current working directory:
-   ```bash
-   CUR="$PWD"
-   while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do
-     CUR=$(dirname "$CUR")
-   done
-   ROOT="$CUR"
-   ```
-   `ROOT` is the single anchor you reuse everywhere — it fixes workspace scoping.
-   **If your dispatch prompt already names the workspace root** (the Manage button injects
-   the board's selected workspace), use that as `$ROOT` directly and skip the walk — your
-   terminal's working directory may belong to a different root than the board dropdown.
+1. **Resolve ROOT + liveness + board state — two commands total.**
 
-2. **Liveness only — the one network call.** Read the port and confirm Switchboard is up:
+   **Command A — liveness (the only network call):**
    ```bash
    PORT=$(cat "$ROOT/.switchboard/api-server-port.txt")
    BASE="http://127.0.0.1:$PORT"
    curl -s "$BASE/health"   # -> { status:'ok', port, roots:[...], terminals:[...], terminalCount }
    ```
+   - If the dispatch prompt already names the workspace root, use it as `$ROOT` directly
+     and skip the directory walk. Otherwise resolve it once:
+     ```bash
+     CUR="$PWD"; while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done; ROOT="$CUR"
+     ```
    - If the port file is missing, tell the user to open the workspace in VS Code with the
      Switchboard extension active. Do not fall back to direct DB access.
    - Cross-check that `ROOT` appears in `health.roots`; if not, warn the user they are
-     outside a registered Switchboard workspace and stop. **No other API call at entry.**
-   - **Save the `terminals` field** — it is the list of live registered terminal agents
-     and feeds the setup-gap check in step 4 (no extra call, no file read).
+     outside a registered Switchboard workspace and stop.
+   - **Save the `terminals` field** — `terminalCount > 0` means a terminal agent is live.
+     This is the only setup-gap signal at entry: no terminal + zero plans across all
+     columns → nudge "Guided setup recommended"; no terminal but plans exist → nudge
+     "open your agent terminal(s) to re-register them." If `/health` has no `terminals`
+     field (older build), report "terminal-agent status: unknown" — do NOT claim a gap.
 
-3. **Read board state from LOCAL markdown — ONE command, no shell arithmetic.** Count
-   every column in a single awk pass over ALL `kanban-state-*.md` files (never one grep
-   per column, never `grep -c` piped into `$(( ))` math — see Shell discipline below):
+   **Command B — board counts (local markdown, always current):**
    ```bash
    awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0}
         /planId:/{ if (/ feature -->/) feats[col]++; else plans[col]++ }
@@ -66,61 +62,64 @@ verify-before-mutate and for mutations.**
    - **Feature rows carry `planId:` too** — only the trailing ` feature -->` marker
      distinguishes them, so a bare `grep -c 'planId:'` silently inflates plan counts.
      The awk above already splits plans from features per column.
-   - Format the one-line snapshot yourself from the raw counts: **name every non-empty
-     column positioned BEFORE `CODE REVIEWED` individually**, in board order. For the
-     default board that is `BACKLOG`, `CREATED`, `PLAN REVIEWED`, and the coding columns
-     (`CODED`, `LEAD CODED`, `CODER CODED`, `INTERN CODED`). The coding columns appearing
-     here IS the in-flight-work signal — no separate token needed. **Omit `CODE REVIEWED`
-     and every column after it** (`CODE REVIEWED`, `ACCEPTANCE TESTED`, `COMPLETED`, and
-     any custom column positioned at/after CODE REVIEWED) from the headline — no collapsed
-     lifetime number. If a custom column's position relative to CODE REVIEWED is unknown,
-     show it by name (safe default — surface, don't hide).
-   Display as one line, e.g.:
-   `Board (whole workspace): BACKLOG 31 · CREATED 6 · PLAN REVIEWED 3 · CODER CODED 1. Updated 3 min ago.`
-   - **Do NOT list feature names on entry** — the user didn't ask for them.
-   - **Humanize the `Updated:` timestamp** from `$ROOT/.switchboard/kanban-board.md` to a
-     short local time or relative form (`Updated 11:34` or `Updated 3 min ago`). **Never**
-     print the raw `2026-07-11T11:34:49.977Z` ISO/millisecond form. Staleness stays explicit.
+   - **Plans exist?** is answered by this awk output — if any column has `plans > 0`,
+     plans exist. No separate `ls` of the plans directory.
+   - **No timestamp read.** The kanban-state files are written on every board move, so
+     they are current as of now. Do not read `kanban-board.md` for an "Updated" stamp.
+
+   > **Shell discipline:** run each command as ONE foreground/blocking call and read its
+   > full output. Never store counts in variables named after reserved env vars (`TERM`,
+   > `PATH`, `STATUS`). Never feed command substitution into shell arithmetic; let awk do
+   > ALL counting.
+
+2. **Format the snapshot, then present the menu, then stop.**
+
+   - **Name every non-empty column positioned BEFORE `CODE REVIEWED` individually**, in
+     board order. For the default board: `BACKLOG`, `CREATED`, `PLAN REVIEWED`, and the
+     coding columns (`CODED`, `LEAD CODED`, `CODER CODED`, `INTERN CODED`). The coding
+     columns appearing here IS the in-flight-work signal. **Omit `CODE REVIEWED` and
+     every column after it** from the headline. If a custom column's position relative to
+     CODE REVIEWED is unknown, show it by name.
+   - **Humanize column names for display** — never print raw backend column IDs. Mapping:
+     `BACKLOG` → Backlog · `CREATED` → Created · `PLAN REVIEWED` → Plan Reviewed ·
+     `CODED` → Coded · `LEAD CODED` → Lead Coder · `CODER CODED` → Coder ·
+     `INTERN CODED` → Intern · `CODE REVIEWED` → Code Reviewed ·
+     `ACCEPTANCE TESTED` → Acceptance Tested · `COMPLETED` → Completed.
+     Custom columns: title-case the slug. **Display-only** — API calls use uppercase IDs.
+   - **Column IDs vs slugs:** the state FILES are slugs (`kanban-state-lead-coded.md`)
+     but canonical column IDs for API calls are uppercase display names (`LEAD CODED`).
+   - **Do NOT list feature names on entry.**
    - **Scope:** if an active project filter is set, say so; otherwise report the whole
      workspace and say so.
-   - **Column IDs vs slugs:** the state FILES are slugs (`kanban-state-lead-coded.md`)
-     but the canonical column IDs for API calls are uppercase display names
-     (`LEAD CODED`). Never pass a slug as `targetColumn`.
 
-   > **Shell discipline (hard-won, 2026-07-10):** run each entry step as ONE
-   > foreground/blocking command and read its full output — if your harness backgrounds
-   > or truncates it, re-run the same single command in blocking mode; do NOT decompose
-   > into per-column commands and chase fragments. Never store counts in variables named
-   > after reserved env vars (`TERM`, `PATH`, `STATUS` — `TERM=$(...)` silently collides
-   > with the terminal type and prints garbage). Never feed command substitution into
-   > shell arithmetic (`$(( $(grep -c …) ))` breaks on trailing newlines in zsh); let awk
-   > do ALL counting and do any summing yourself when you write the report.
+   **The opening message must be well-formatted.** Each section gets its own line with
+   blank lines between blocks — liveness, board snapshot, and menu are never crammed
+   together. The board snapshot itself is multi-line: a header, then the pre-code columns,
+   then the in-flight columns (if any). Example shape:
+   ```
+   Switchboard is live (port 63589).
 
-4. **Detect setup gaps (no extra API call).** Check three things:
-   - **Terminal agent registered?** Read it from the step-2 `/health` response: `terminals`
-     is the live registered-agent list (`terminalCount > 0` = registered). Registration is
-     in-memory extension state — **no file on disk reflects it. NEVER read
-     `.switchboard/state.json`**: it was migrated into kanban.db and only a dead
-     `state.json.migrated.bak` remains, which always parses to zero terminals (false
-     "no agent" gap). If `/health` has no `terminals` field (older extension build),
-     report "terminal-agent status: unknown" — do NOT claim a gap you cannot see.
-   - **Plans exist?** `ls "$ROOT/.switchboard/plans/"*.md 2>/dev/null | wc -l` (exclude `brain_*`).
-   - **Constitution exists?** Check `$ROOT/.switchboard/constitution.md` or
-     `$ROOT/AGENTS.md` / `$ROOT/CLAUDE.md` (constitution files).
-   If any gap exists, surface it at the **top** of the menu with a one-line nudge —
-   **matched to the likely cause, not always Guided setup**:
-   - No live terminal but plans/constitution exist → the user has set up before and
-     probably just hasn't opened their agent terminals: "⚠ No agent terminal is live —
-     open your agent terminal(s) (AGENT SETUP tab / saved grid) to re-register them."
-   - No terminal AND no plans/constitution → genuinely new: "⚠ Nothing configured yet —
-     Guided setup recommended."
-   If all present, Setup & Tour is a normal menu item.
+   **switchboard Kanban Board**  
+     Backlog 30 · Created 5 · Plan Reviewed 2  
+     In flight: Lead Coder 1 · Coder 2 · Intern 1
 
-5. **Report concisely, then present the two-tier entry menu, then stop.** A few lines:
-   liveness + one-line board snapshot + setup-gap nudge (if any) + the entry menu (see the
-   "What you present on entry" block in §2 — four primary actions plus a one-line "More",
-   NOT the full category reference). **No feature list, no UUIDs, no wall of text.**
-   **No API board query, no `/catalog`, no automation, no eager action.**
+   What would you like to do?
+   1. Plan     — write or improve coding plans
+   2. Code     — dispatch a plan to be coded, check what's in flight
+   3. Board    — browse, move, complete cards; organize features
+   4. Automate — oversee a column pass, or manage a project end-to-end
+   5. More     — design & artifacts · external PM (ClickUp/Linear) · setup & tour
+   ```
+   - **Board header** = the workspace directory name (basename of `$ROOT`) + " Kanban
+     Board", in **bold**. If a project filter is active, append " (project: <name>)".
+   - **Markdown line breaks:** standard Markdown collapses single newlines into spaces.
+     End every line that must break within a block with **two trailing spaces** (the board
+     snapshot header and each column line). Blank lines between blocks work as normal.
+   - "In flight:" line only appears when at least one coding column is non-empty.
+   - Setup-gap nudge (if any) goes on its own line between the snapshot and the menu.
+   - Menu = the two-tier entry menu from §2.
+   **No feature list, no UUIDs, no wall of text. No API board query, no `/catalog`,
+   no automation, no eager action.**
 
 ---
 
@@ -154,7 +153,7 @@ What would you like to do?
 2. Code     — dispatch a plan to be coded, check what's in flight
 3. Board    — browse, move, complete cards; organize features
 4. Automate — oversee a column pass, or manage a project end-to-end
-More: design & artifacts · external PM (ClickUp/Linear) · setup & tour
+5. More     — design & artifacts · external PM (ClickUp/Linear) · setup & tour
 ```
 
 - The numbered tier maps to Plan / Code / Features & Board / Automation below. "More"
@@ -233,11 +232,15 @@ More: design & artifacts · external PM (ClickUp/Linear) · setup & tour
     planId/sessionId, or a raw ISO timestamp. Report in **one message**:
     ```
     ✓ Dispatched "Fix: Kanban Columns Must Follow Ticked Agents" to CODER CODED —
-      picked up by <dispatchedAgent> (routed there by complexity: 5–6 → coder).
+      sent to <dispatchedAgent> (routed there by complexity: 5–6 → coder).
 
     Want me to watch until it finishes? I'll tell you the moment it lands.
     ```
-    If `dispatchedAgent` is null, say "no terminal picked it up yet" rather than inventing one.
+    **Extract `dispatchedAgent` from the response JSON** (pipe through `python3 -m json.tool`
+    or `jq` — never eyeball raw curl output). On a successful dispatch (`dispatched: true`)
+    the terminal name IS in the response — use it. Never print "no terminal" on a successful
+    dispatch; if you cannot see the name, you did not extract the field correctly — re-run
+    the extraction, do not fall back to a missing-agent phrase.
   - **Synchronous, not background.** `POST /kanban/dispatch` (and every command verb) is a
     synchronous, fast curl — it returns when the work is recorded. Do NOT narrate it as a
     background job, do NOT emit a "waiting for the API" pre-message, do NOT split it across

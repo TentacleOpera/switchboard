@@ -3042,19 +3042,11 @@
             border: 0;
             background: #fff;
         }
-        .stitch-live-badge {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            padding: 2px 8px;
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            border-radius: 10px;
-            background: rgba(0, 0, 0, 0.65);
-            color: #6fe3c1;
-            border: 1px solid rgba(111, 227, 193, 0.5);
-            pointer-events: none;
+        /* Stitch HTML tab only — real project names are long; let the picker breathe.
+           (The Stitch tab's own project select is deliberately untouched.) */
+        #stitch-html-project-select {
+            min-width: 260px;
+            max-width: 440px;
         }
 
         /* Preview Header */
@@ -3816,6 +3808,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
                 <div class="preview-panel-wrapper">
                     <div id="preview-pane-stitch-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                        <div id="stitch-html-edit-bar" style="display: none; padding: 8px 12px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg);">
+                            <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                                <input type="text" id="stitch-html-refine-input" class="stitch-input" style="flex: 1;" placeholder="Describe a change to edit this screen, e.g. 'make the header dark blue'..." />
+                                <select id="stitch-html-creative-range-select" class="workspace-filter-select" style="margin-bottom: 0; max-width: 120px;">
+                                    <option value="EXPLORE">Explore</option>
+                                    <option value="REFINE">Refine</option>
+                                    <option value="REIMAGINE">Reimagine</option>
+                                </select>
+                                <button id="stitch-html-btn-edit" class="preview-overlay-btn primary">Apply Edit</button>
+                                <div class="split-button-container" style="display: inline-flex; position: relative;">
+                                    <button id="stitch-html-btn-variants" class="preview-overlay-btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0;">+3 Variants</button>
+                                    <button id="stitch-html-btn-variants-toggle" class="preview-overlay-btn" style="border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid var(--border-color); padding: 0 8px; margin-left: 0;">▾</button>
+                                    <div id="stitch-html-variants-dropdown" class="stitch-variants-dropdown" style="display: none; position: absolute; top: 100%; right: 0; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; padding: 8px 12px; min-width: 140px; margin-top: 4px;">
+                                        <div style="font-weight: 600; font-size: 11px; margin-bottom: 6px; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">Aspects to Vary</div>
+                                        <div id="stitch-html-aspects-checkboxes" style="display: flex; flex-direction: column; gap: 6px;">
+                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="LAYOUT" checked><span>Layout</span></label>
+                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="COLOR_SCHEME" checked><span>Color</span></label>
+                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="IMAGES" checked><span>Images</span></label>
+                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_FONT" checked><span>Font</span></label>
+                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_CONTENT" checked><span>Text</span></label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <div id="stitch-html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
                             <span style="font-size: 48px; opacity: 0.5;">📄</span>
                             <div style="text-align: center;">
@@ -4016,7 +4033,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 </select>
                             </div>
                             <button id="preview-btn-png" class="preview-overlay-btn" title="Copy the image file path to the clipboard">Copy Link</button>
-                            <button id="preview-btn-html" class="preview-overlay-btn" title="Download this screen's HTML into your stitch folder">DL HTML</button>
+                            <button id="preview-btn-html" class="preview-overlay-btn" title="Open this screen's cached HTML in the Stitch HTML tab for further editing">Open in HTML Tab</button>
                             <button id="preview-btn-open-web" class="preview-overlay-btn" style="display: none;" title="Serve the downloaded HTML on localhost and open it in your browser">Open in Browser</button>
                             <button id="btn-close-preview" class="preview-overlay-btn close-btn">✕ Close</button>
                         </div>
@@ -4026,7 +4043,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <img id="preview-image" alt="Screen Preview" title="Click to zoom" />
                         <div id="stitch-html-live-wrapper" style="display: none; position: absolute; inset: 0;">
                             <iframe id="stitch-html-live-frame" title="Live HTML render"></iframe>
-                            <div class="stitch-live-badge" title="This screen has no static screenshot (animated/WebGL components aren't captured by Stitch's screenshot tool) — you're seeing the HTML rendered live">LIVE HTML</div>
                         </div>
                         <div id="preview-image-placeholder" class="stitch-thumb-placeholder" style="display: none; width: 100%; height: 100%;">
                             <span>Preview not ready yet</span>

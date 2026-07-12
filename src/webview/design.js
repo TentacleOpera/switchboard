@@ -58,6 +58,7 @@
         stitchScreenPolls: new Map(),
         stitchPollGaveUp: new Set(),
         stitchGeneratingLabel: null,
+        stitchPendingAutoGenerate: null,
         docsSectionCollapsed: persistedState.docsSectionCollapsed || {},
     };
 
@@ -1455,6 +1456,13 @@
                 statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : '';
                 statusEl.style.color = 'var(--accent-teal)';
             }
+            // A previewed screen is editable — surface the edit toolbar and pin the
+            // project it belongs to (the dropdown may change while previewing).
+            const shEditBar = document.getElementById('stitch-html-edit-bar');
+            if (shEditBar) shEditBar.style.display = 'block';
+            const shRange = document.getElementById('stitch-html-creative-range-select');
+            if (shRange) shRange.value = state.stitchCreativeRange;
+            state.stitchHtmlActiveScreenProjectId = state.selectedStitchHtmlProjectId;
         } else if (sourceId === 'images-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
             resetZoom('images');
@@ -2378,31 +2386,43 @@
             }
         }
 
+        // "Open in HTML Tab" — jump to the Stitch HTML tab with this screen's cached
+        // file open, where the full editing surface (refine/variants) lives.
         if (previewBtnHtml) {
             const newHtmlBtn = previewBtnHtml.cloneNode(true);
             previewBtnHtml.parentNode.replaceChild(newHtmlBtn, previewBtnHtml);
             previewBtnHtml = newHtmlBtn;
+            previewBtnHtml.disabled = !screen.htmlPath;
+            previewBtnHtml.title = screen.htmlPath
+                ? "Open this screen's cached HTML in the Stitch HTML tab for further editing"
+                : 'HTML not cached yet — it downloads automatically as the screen loads';
             previewBtnHtml.addEventListener('click', () => {
-                const destSelect = document.getElementById('preview-destination-select');
-                const destination = destSelect ? destSelect.value : '';
+                if (!screen.htmlPath) return;
+                const projectId = screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : '');
+                state.selectedStitchHtmlProjectId = projectId;
+                if (state.stitchWorkspaceRoot) {
+                    persistTab('stitchHtml.projectId', projectId, state.stitchWorkspaceRoot);
+                }
+                const shSelect = document.getElementById('stitch-html-project-select');
+                if (shSelect) shSelect.value = projectId;
                 vscode.postMessage({
-                    type: 'stitchDownloadAsset',
-                    url: screen.htmlUrl,
-                    filename: `${screen.id}.html`,
-                    screenId: screen.id,
-                    destination,
+                    type: 'stitchHtmlListDocs',
+                    projectId,
                     workspaceRoot: state.stitchWorkspaceRoot
                 });
+                document.querySelector('[data-tab="stitch-html"]')?.click();
+                loadDocumentPreview('stitch-html-folder', `${screen.id}.html`, screen.name || screen.id);
             });
         }
-        // The PNG is already saved on disk (one-and-done). Copy its path to the clipboard,
-        // same as the "Copy Link" buttons in the HTML Previews / Images tabs.
+        // Copy Link prefers the cached HTML (auto-downloaded for every screen); the PNG
+        // is the fallback for screens with no HTML at all.
         if (previewBtnPng) {
             const newPngBtn = previewBtnPng.cloneNode(true);
             previewBtnPng.parentNode.replaceChild(newPngBtn, previewBtnPng);
             previewBtnPng = newPngBtn;
-            previewBtnPng.disabled = !screen.imagePath;
-            previewBtnPng.addEventListener('click', () => copyStitchAssetLink(screen.imagePath));
+            previewBtnPng.disabled = !screen.htmlPath && !screen.imagePath;
+            previewBtnPng.title = "Copy the screen's cached HTML path (or the PNG if no HTML exists)";
+            previewBtnPng.addEventListener('click', () => copyStitchAssetLink(screen.htmlPath || screen.imagePath));
         }
         // "Open on Web" appears once the HTML has been downloaded (this session or a prior one).
         if (previewBtnOpenWeb) {
@@ -2431,6 +2451,7 @@
                 clearAllStitchScreenPolls();
                 setStitchStatus('Editing screen…', 'busy');
                 setStitchBusy(true);
+                state.stitchEditInFlightId = screen.id;
                 vscode.postMessage({
                     type: 'stitchEdit',
                     screenId: screen.id,
@@ -2875,34 +2896,44 @@
             card.className = 'stitch-screen-card';
             card.dataset.screenId = screen.id;
 
-            // Thumbnail — screens still rendering (or with expired temp URLs) have no
-            // usable image; show a reload affordance instead of a broken-file icon.
+            // Placeholder rules: a screen whose screenshot exists but failed to load gets
+            // Reload (a re-fetch fixes it); a live-render screen (HTML, no screenshot ever)
+            // gets Live Preview only — Reload can never produce a screenshot for it; a
+            // still-rendering screen gets Reload.
             const makeThumbPlaceholder = () => {
                 const ph = document.createElement('div');
                 ph.className = 'stitch-thumb-placeholder';
                 const label = document.createElement('span');
-                label.textContent = screen.htmlUrl
-                    ? 'No static screenshot — this screen renders live (WebGL/animated)'
-                    : 'Preview not ready yet';
-                ph.appendChild(label);
-                if (screen.htmlUrl) {
+                const makeReloadBtn = () => {
+                    const btnReload = document.createElement('button');
+                    btnReload.className = 'strip-btn';
+                    btnReload.textContent = '↻ Reload Screen';
+                    btnReload.title = 'Re-fetch this screen from Stitch (picks up the rendered preview and fresh download links)';
+                    btnReload.addEventListener('click', () => {
+                        if (state.stitchBusy) return;
+                        clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
+                        scheduleStitchScreenPoll(screen, { immediate: true, manual: true });
+                    });
+                    return btnReload;
+                };
+                if (screen.imageUrl) {
+                    label.textContent = 'Preview failed to load';
+                    ph.appendChild(label);
+                    ph.appendChild(makeReloadBtn());
+                } else if (screen.htmlUrl) {
+                    label.textContent = 'No static screenshot — this screen renders live (WebGL/animated)';
+                    ph.appendChild(label);
                     const btnLive = document.createElement('button');
                     btnLive.className = 'strip-btn';
                     btnLive.textContent = '▶ Live Preview';
                     btnLive.title = "Render this screen's HTML live in the preview pane (animated/WebGL screens never get a static screenshot)";
                     btnLive.addEventListener('click', () => openStitchPreview(screen));
                     ph.appendChild(btnLive);
+                } else {
+                    label.textContent = 'Preview not ready yet';
+                    ph.appendChild(label);
+                    ph.appendChild(makeReloadBtn());
                 }
-                const btnReload = document.createElement('button');
-                btnReload.className = 'strip-btn';
-                btnReload.textContent = '↻ Reload Screen';
-                btnReload.title = 'Re-fetch this screen from Stitch (picks up the rendered preview and fresh download links)';
-                btnReload.addEventListener('click', () => {
-                    if (state.stitchBusy) return;
-                    clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
-                    scheduleStitchScreenPoll(screen, { immediate: true, manual: true });
-                });
-                ph.appendChild(btnReload);
                 return ph;
             };
 
@@ -2939,30 +2970,16 @@
             const actions = document.createElement('div');
             actions.className = 'stitch-screen-actions';
 
-            // The PNG is already saved on disk — copy its path to the clipboard, same as the
-            // "Copy Link" buttons in the HTML Previews / Images tabs.
-            const btnPng = document.createElement('button');
-            btnPng.className = 'strip-btn';
-            btnPng.textContent = 'Copy Link';
-            btnPng.disabled = !screen.imagePath;
-            btnPng.title = 'Copy the image file path to the clipboard';
-            btnPng.addEventListener('click', () => copyStitchAssetLink(screen.imagePath));
-            actions.appendChild(btnPng);
-
-            const btnHtml = document.createElement('button');
-            btnHtml.className = 'strip-btn';
-            btnHtml.textContent = 'DL HTML';
-            btnHtml.title = "Download this screen's HTML into your stitch folder";
-            btnHtml.addEventListener('click', () => {
-                vscode.postMessage({
-                    type: 'stitchDownloadAsset',
-                    url: screen.htmlUrl,
-                    filename: `${screen.id}.html`,
-                    screenId: screen.id,
-                    workspaceRoot: state.stitchWorkspaceRoot
-                });
-            });
-            actions.appendChild(btnHtml);
+            // Copy Link prefers the cached HTML (the real design artifact, auto-cached for
+            // every screen); the PNG is the fallback for screens with no HTML at all.
+            // No DL HTML button — the HTML downloads automatically.
+            const btnLink = document.createElement('button');
+            btnLink.className = 'strip-btn';
+            btnLink.textContent = 'Copy Link';
+            btnLink.disabled = !screen.htmlPath && !screen.imagePath;
+            btnLink.title = "Copy the screen's cached HTML path (or the PNG if no HTML exists)";
+            btnLink.addEventListener('click', () => copyStitchAssetLink(screen.htmlPath || screen.imagePath));
+            actions.appendChild(btnLink);
 
             card.appendChild(actions);
 
@@ -3278,13 +3295,22 @@
                 }
                 document.querySelector('[data-tab="stitch"]')?.click();
                 if (msg.autoGenerate) {
-                    runStitchGenerate({
+                    const autoGen = {
                         prompt: (msg.content || '').trim(),
                         projectId: msg.projectId,
                         deviceType: stitchDeviceSelect ? stitchDeviceSelect.value : undefined,
                         modelId: state.stitchModelId,
                         statusText: 'Generating from brief\u2026'
-                    });
+                    };
+                    // stitchProjectsReady arrived immediately before this message: it selected
+                    // the new project AND kicked off a screen-load (setStitchBusy(true)).
+                    // runStitchGenerate bails while busy, so defer until that load finishes and
+                    // clears busy \u2014 the stitchScreensReady handler fires the pending generate.
+                    if (state.stitchBusy) {
+                        state.stitchPendingAutoGenerate = autoGen;
+                    } else {
+                        runStitchGenerate(autoGen);
+                    }
                 } else {
                     setStitchStatus('Brief loaded \u2014 review and click Generate', 'success');
                 }
@@ -3691,13 +3717,34 @@
                 const screens = msg.screens || [];
                 renderStitchScreens(screens);
 
+                // New screens (e.g. variants launched from the Stitch HTML tab) may have
+                // landed in the selected project's cache — refresh that tab's list.
+                if (state.selectedStitchHtmlProjectId
+                    && screens.some(s => s.projectId === state.selectedStitchHtmlProjectId)) {
+                    vscode.postMessage({
+                        type: 'stitchHtmlListDocs',
+                        projectId: state.selectedStitchHtmlProjectId,
+                        workspaceRoot: state.stitchWorkspaceRoot
+                    });
+                }
+
                 const missing = screens.filter(isScreenPollable);
                 startMissingStitchScreenPolling(screens, 'project-load');
-                
+
                 if (missing.length > 0) {
                     setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded — waiting for ${missing.length} preview(s)`, 'busy');
                 } else {
                     setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded`, 'success');
+                }
+
+                // A brief "Send to Stitch" is waiting to auto-generate: the new project's
+                // (empty) screen-load just completed and cleared busy. Fire it last so
+                // runStitchGenerate's "Generating from brief…" status/spinner win over the
+                // "0 screens loaded" line above.
+                if (state.stitchPendingAutoGenerate) {
+                    const pending = state.stitchPendingAutoGenerate;
+                    state.stitchPendingAutoGenerate = null;
+                    runStitchGenerate(pending);
                 }
                 break;
             }
@@ -3726,7 +3773,8 @@
                     }
                     if (state.activePreviewScreenId === sid) {
                         if (msg.kind === 'html' && previewBtnOpenWeb) previewBtnOpenWeb.style.display = '';
-                        if (msg.kind === 'png' && previewBtnPng) previewBtnPng.disabled = false;
+                        // Either asset gives Copy Link a target (HTML preferred, PNG fallback).
+                        if (previewBtnPng) previewBtnPng.disabled = false;
                     }
                     // A live preview was waiting on this download — render it now.
                     if (msg.kind === 'html' && state.stitchLivePreviewPendingId === sid
@@ -3780,6 +3828,13 @@
             }
 
             case 'stitchScreenReady': {
+                // An edit's result arrives as a single stitchScreenReady — release the
+                // busy latch (poll refreshes can't reach here mid-edit: both edit
+                // entry points clear all polls before dispatching).
+                if (state.stitchEditInFlightId) {
+                    state.stitchEditInFlightId = null;
+                    setStitchBusy(false);
+                }
                 // Update state without touching existing screens
                 const updatedScreens = [...state.stitchScreens];
                 const existingIdx = updatedScreens.findIndex(s => s.id === msg.screen.id);
@@ -3808,24 +3863,33 @@
                         label.textContent = screen.htmlUrl
                             ? 'No static screenshot — this screen renders live (WebGL/animated)'
                             : 'Preview not ready yet';
-                        ph.appendChild(label);
-                        if (screen.htmlUrl) {
+                        const makeReloadBtn = () => {
+                            const btnReload = document.createElement('button');
+                            btnReload.className = 'strip-btn';
+                            btnReload.textContent = '↻ Reload Screen';
+                            btnReload.addEventListener('click', () => {
+                                if (state.stitchBusy) return;
+                                clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
+                                scheduleStitchScreenPoll(screen, { immediate: true, manual: true });
+                            });
+                            return btnReload;
+                        };
+                        if (screen.imageUrl) {
+                            label.textContent = 'Preview failed to load';
+                            ph.appendChild(label);
+                            ph.appendChild(makeReloadBtn());
+                        } else if (screen.htmlUrl) {
+                            ph.appendChild(label);
                             const btnLive = document.createElement('button');
                             btnLive.className = 'strip-btn';
                             btnLive.textContent = '▶ Live Preview';
                             btnLive.title = "Render this screen's HTML live in the preview pane (animated/WebGL screens never get a static screenshot)";
                             btnLive.addEventListener('click', () => openStitchPreview(screen));
                             ph.appendChild(btnLive);
+                        } else {
+                            ph.appendChild(label);
+                            ph.appendChild(makeReloadBtn());
                         }
-                        const btnReload = document.createElement('button');
-                        btnReload.className = 'strip-btn';
-                        btnReload.textContent = '↻ Reload Screen';
-                        btnReload.addEventListener('click', () => {
-                            if (state.stitchBusy) return;
-                            clearStitchScreenPoll(screen.projectId || (stitchProjectSelect ? stitchProjectSelect.value : ''), screen.id, state.stitchWorkspaceRoot);
-                            scheduleStitchScreenPoll(screen, { immediate: true, manual: true });
-                        });
-                        ph.appendChild(btnReload);
                         return ph;
                     };
                     const oldThumb = existingCard.querySelector('.stitch-screen-thumbnail, .stitch-thumb-placeholder');
@@ -3852,6 +3916,24 @@
                 } else {
                     // New screen not yet in the gallery — full render needed
                     renderStitchScreens(updatedScreens);
+                }
+
+                // Keep the Stitch HTML tab in step: an edited screen has fresh HTML on
+                // disk (the provider re-caches it before announcing) — refresh the list
+                // and, if that screen is the one being previewed there, reload it.
+                if (state.selectedStitchHtmlProjectId
+                    && msg.screen.projectId === state.selectedStitchHtmlProjectId) {
+                    vscode.postMessage({
+                        type: 'stitchHtmlListDocs',
+                        projectId: state.selectedStitchHtmlProjectId,
+                        workspaceRoot: state.stitchWorkspaceRoot
+                    });
+                    if (state.activeSource === 'stitch-html-folder' && state.activeDocId
+                        && String(state.activeDocId).replace(/\.html?$/i, '') === msg.screen.id) {
+                        loadDocumentPreview('stitch-html-folder', state.activeDocId, msg.screen.name || state.activeDocId);
+                        const shStatus = document.getElementById('status-stitch-html');
+                        if (shStatus) { shStatus.textContent = ''; }
+                    }
                 }
 
                 const hasImage = !!msg.screen.imageUrl;
@@ -3896,8 +3978,10 @@
                 // screen refresh hitting NOT_FOUND) used to kill every other screen's
                 // retry loop, leaving "Preview not ready" cards permanently stuck.
                 // Polls are individually bounded (max attempts) so they self-terminate.
+                state.stitchPendingAutoGenerate = null;
                 hideStitchGenerating();
                 setStitchBusy(false);
+                state.stitchEditInFlightId = null;
                 setStitchStatus('Error: ' + msg.error, 'error');
                 break;
 
@@ -4358,6 +4442,10 @@
         if (state.stitchWorkspaceRoot) {
             persistTab('stitchHtml.projectId', state.selectedStitchHtmlProjectId, state.stitchWorkspaceRoot);
         }
+        // Editing context follows the previewed file's project — hide the bar until
+        // a file from the newly selected project is opened.
+        const shEditBar = document.getElementById('stitch-html-edit-bar');
+        if (shEditBar) shEditBar.style.display = 'none';
         if (state.selectedStitchHtmlProjectId) {
             vscode.postMessage({
                 type: 'stitchHtmlListDocs',
@@ -4373,6 +4461,78 @@
     document.getElementById('stitch-html-docs-search')?.addEventListener('input', (e) => {
         state.stitchHtmlDocsSearch = e.target.value;
         if (state.stitchHtmlDocs) renderStitchHtmlDocs(state.stitchHtmlDocs);
+    });
+
+    // Stitch HTML tab: edit toolbar — same actions as the Stitch preview pane, driven
+    // by the previewed file (its filename stem IS the screen id).
+    const stitchHtmlRefineInput = document.getElementById('stitch-html-refine-input');
+    const stitchHtmlCreativeRange = document.getElementById('stitch-html-creative-range-select');
+    function activeStitchHtmlScreenId() {
+        if (state.activeSource !== 'stitch-html-folder' || !state.activeDocId) return '';
+        return String(state.activeDocId).replace(/\.html?$/i, '');
+    }
+    function setStitchHtmlStatus(text, isError) {
+        const statusEl = document.getElementById('status-stitch-html');
+        if (!statusEl) return;
+        statusEl.textContent = text;
+        statusEl.style.color = isError ? 'var(--accent-red, #e66)' : '';
+    }
+    stitchHtmlCreativeRange?.addEventListener('change', (e) => {
+        // Keep the two creative-range pickers in sync; the Stitch tab's own handler
+        // owns persistence, so route the change through it when it exists.
+        const main = document.getElementById('stitch-creative-range-select');
+        if (main && main.value !== e.target.value) {
+            main.value = e.target.value;
+            main.dispatchEvent(new Event('change'));
+        } else {
+            state.stitchCreativeRange = e.target.value;
+        }
+    });
+    document.getElementById('stitch-html-btn-edit')?.addEventListener('click', () => {
+        if (state.stitchBusy) return;
+        const screenId = activeStitchHtmlScreenId();
+        if (!screenId) return;
+        const prompt = stitchHtmlRefineInput ? stitchHtmlRefineInput.value.trim() : '';
+        if (!prompt) { setStitchHtmlStatus('Type a change in the box above, then Apply Edit.', true); return; }
+        setStitchHtmlStatus('Editing screen…');
+        clearAllStitchScreenPolls();
+        setStitchBusy(true);
+        state.stitchEditInFlightId = screenId;
+        vscode.postMessage({
+            type: 'stitchEdit',
+            screenId,
+            projectId: state.stitchHtmlActiveScreenProjectId || state.selectedStitchHtmlProjectId,
+            prompt,
+            modelId: state.stitchModelId,
+            workspaceRoot: state.stitchWorkspaceRoot
+        });
+    });
+    document.getElementById('stitch-html-btn-variants-toggle')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = document.getElementById('stitch-html-variants-dropdown');
+        if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    });
+    document.getElementById('stitch-html-btn-variants')?.addEventListener('click', () => {
+        if (state.stitchBusy) return;
+        const screenId = activeStitchHtmlScreenId();
+        if (!screenId) return;
+        const prompt = stitchHtmlRefineInput ? stitchHtmlRefineInput.value.trim() : '';
+        const container = document.getElementById('stitch-html-aspects-checkboxes');
+        const checkedAspects = [];
+        container?.querySelectorAll('input[type="checkbox"]').forEach(cb => { if (cb.checked) checkedAspects.push(cb.value); });
+        setStitchHtmlStatus('Generating 3 variants of this screen…');
+        setStitchBusy(true);
+        vscode.postMessage({
+            type: 'stitchVariants',
+            screenId,
+            projectId: state.stitchHtmlActiveScreenProjectId || state.selectedStitchHtmlProjectId,
+            prompt: prompt || undefined,
+            count: 3,
+            creativeRange: state.stitchCreativeRange,
+            aspects: checkedAspects.length ? checkedAspects : undefined,
+            modelId: state.stitchModelId,
+            workspaceRoot: state.stitchWorkspaceRoot
+        });
     });
 
     initStitchControls();
