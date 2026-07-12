@@ -19,7 +19,10 @@ Make the Switchboard management console the product's real front door — reacha
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Refactor Switchboard Entry Points to Four `switchboard-`Tagged Front Doors (Skillify Internal Workflows, No Host Drift)](../plans/refactor-switchboard-four-front-doors.md) — **LEAD CODED**
-- [ ] [Make the Switchboard Manage Console Speak Human and Offer the Next Step](../plans/switchboard-manage-console-voice-and-proactivity.md) — **LEAD CODED**
+- [ ] [Refactor Switchboard Entry Points to Four `switchboard-`Tagged Front Doors (Skillify Internal Workflows, No Host Drift)](../plans/refactor-switchboard-four-front-doors.md) — **CODE REVIEWED**
+- [ ] [Make the Switchboard Manage Console Speak Human and Offer the Next Step](../plans/switchboard-manage-console-voice-and-proactivity.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
+## Review Findings
+
+**Reviewed 2026-07-12.** Both subtasks reviewed in-place: the console voice pass is fully landed in `.agents/workflows/switchboard.md`; the four-front-doors refactor was substantially landed but had 2 CRITICAL + 2 MAJOR gaps (undeleted `switchboard-manage` skill, no stale-mirror cleanup in the Claude Code generator, a migration-ordering race, and untouched AGENTS.md/CLAUDE.md registries), all fixed during review — see each subtask's Review Findings for details. Files changed in review: `src/extension.ts`, `src/services/ClaudeCodeMirrorService.ts`, `src/services/TaskViewerProvider.ts`, `src/test/planner-workflow-path-migration.test.js`, `AGENTS.md`, `CLAUDE.md`, plus deletion of `.agents/skills/switchboard-manage/` and six orphaned `.claude/skills/` mirrors. All edited TS files parse clean and every plan grep gate passes; compilation/tests skipped per session directive. Remaining risk: the committed `.claude/` mirror stays one generation stale until the new build regenerates it at activation.

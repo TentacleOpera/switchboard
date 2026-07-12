@@ -357,6 +357,16 @@ const MIGRATION_V54_SQL = [
     `ALTER TABLE projects ADD COLUMN source TEXT NOT NULL DEFAULT 'user'`,
 ];
 
+// V56: persist the Stitch AI's per-screen response alongside the cached screen list.
+// `summary` is the model's text commentary about the generated screen; `suggestions_json`
+// is a JSON-serialized array of {label, prompt} follow-up suggestions. Both come from
+// screen.data.screenMetadata (SDK ≥0.3.x) and previously were dropped on the floor.
+// Additive ALTERs; existing rows backfill to '' and heal on the next screen refresh.
+const MIGRATION_V56_SQL = [
+    `ALTER TABLE stitch_screens ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE stitch_screens ADD COLUMN suggestions_json TEXT NOT NULL DEFAULT ''`,
+];
+
 
 
 const MIGRATION_V13_SQL = [
@@ -7535,6 +7545,18 @@ export class KanbanDatabase {
                 // Do NOT stamp version — retry on next init
             }
         }
+
+        // V56: stitch_screens summary + suggestions_json columns (Stitch AI response text).
+        // Safe/idempotent under the version gate; the try/catch covers a stale restore
+        // where the columns already exist but the version wasn't stamped.
+        const v56 = await this.getMigrationVersion();
+        if (v56 < 56) {
+            for (const sql of MIGRATION_V56_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(56);
+            console.log('[KanbanDatabase] V56 migration completed: stitch_screens summary/suggestions_json columns present');
+        }
     }
 
     /**
@@ -8960,40 +8982,74 @@ FROM plans
         return out;
     }
 
+    public async getStitchProjectName(id: string): Promise<string> {
+        if (!(await this.ensureReady()) || !this._db) return '';
+        const stmt = this._db.prepare('SELECT name FROM stitch_projects WHERE id = ?', [id]);
+        try {
+            if (stmt.step()) {
+                const r = stmt.getAsObject();
+                return String(r.name ?? '');
+            }
+        } finally {
+            stmt.free();
+        }
+        return '';
+    }
+
+    public async getStitchScreenProjectId(screenId: string): Promise<string> {
+        if (!(await this.ensureReady()) || !this._db) return '';
+        const stmt = this._db.prepare('SELECT project_id FROM stitch_screens WHERE id = ?', [screenId]);
+        try {
+            if (stmt.step()) {
+                const r = stmt.getAsObject();
+                return String(r.project_id ?? '');
+            }
+        } finally {
+            stmt.free();
+        }
+        return '';
+    }
+
     // ── Stitch screens ──
     public async upsertStitchScreen(screen: {
         id: string; projectId: string; name: string;
         deviceType: string | null; status: string | null; statusMessage: string | null;
+        summary?: string | null; suggestionsJson?: string | null;
     }): Promise<boolean> {
         return this._persistedUpdate(
-            `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, summary, suggestions_json, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
              ON CONFLICT(id) DO UPDATE SET
                 project_id = excluded.project_id,
                 name = excluded.name,
                 device_type = excluded.device_type,
                 status = excluded.status,
                 status_msg = excluded.status_msg,
+                summary = CASE WHEN excluded.summary != '' THEN excluded.summary ELSE summary END,
+                suggestions_json = CASE WHEN excluded.suggestions_json != '' THEN excluded.suggestions_json ELSE suggestions_json END,
                 updated_at = datetime('now')`,
-            [screen.id, screen.projectId, screen.name ?? '', screen.deviceType ?? '', screen.status ?? '', screen.statusMessage ?? '']
+            [screen.id, screen.projectId, screen.name ?? '', screen.deviceType ?? '', screen.status ?? '', screen.statusMessage ?? '', screen.summary ?? '', screen.suggestionsJson ?? '']
         );
     }
 
     public async bulkUpsertStitchScreens(screens: Array<{
         id: string; projectId: string; name: string;
         deviceType: string | null; status: string | null; statusMessage: string | null;
+        summary?: string | null; suggestionsJson?: string | null;
     }>): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         try {
             this._db.exec('BEGIN');
-            const sql = `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            const sql = `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, summary, suggestions_json, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                          ON CONFLICT(id) DO UPDATE SET
                             project_id = excluded.project_id,
                             name = excluded.name,
                             device_type = excluded.device_type,
                             status = excluded.status,
                             status_msg = excluded.status_msg,
+                            summary = CASE WHEN excluded.summary != '' THEN excluded.summary ELSE summary END,
+                            suggestions_json = CASE WHEN excluded.suggestions_json != '' THEN excluded.suggestions_json ELSE suggestions_json END,
                             updated_at = datetime('now')`;
             for (const s of screens) {
                 this._db.run(sql, [
@@ -9002,7 +9058,9 @@ FROM plans
                     s.name ?? '',
                     s.deviceType ?? '',
                     s.status ?? '',
-                    s.statusMessage ?? ''
+                    s.statusMessage ?? '',
+                    s.summary ?? '',
+                    s.suggestionsJson ?? ''
                 ]);
             }
             this._db.exec('COMMIT');
@@ -9017,10 +9075,11 @@ FROM plans
     public async getStitchScreensForProject(projectId: string): Promise<Array<{
         id: string; projectId: string; name: string;
         deviceType: string; status: string; statusMessage: string;
+        summary: string; suggestionsJson: string;
     }>> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        const out: Array<{ id: string; projectId: string; name: string; deviceType: string; status: string; statusMessage: string }> = [];
-        const stmt = this._db.prepare('SELECT id, project_id, name, device_type, status, status_msg FROM stitch_screens WHERE project_id = ?', [projectId]);
+        const out: Array<{ id: string; projectId: string; name: string; deviceType: string; status: string; statusMessage: string; summary: string; suggestionsJson: string }> = [];
+        const stmt = this._db.prepare('SELECT id, project_id, name, device_type, status, status_msg, summary, suggestions_json FROM stitch_screens WHERE project_id = ?', [projectId]);
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
@@ -9031,12 +9090,28 @@ FROM plans
                     deviceType: String(r.device_type ?? ''),
                     status: String(r.status ?? ''),
                     statusMessage: String(r.status_msg ?? ''),
+                    summary: String(r.summary ?? ''),
+                    suggestionsJson: String(r.suggestions_json ?? ''),
                 });
             }
         } finally {
             stmt.free();
         }
         return out;
+    }
+
+    /**
+     * Delete a cached Stitch project row (screens are removed separately via
+     * deleteStitchScreensForProject). Used to prune projects deleted on the
+     * Stitch side once a fresh API listing confirms they no longer exist.
+     */
+    public async deleteStitchProject(id: string): Promise<boolean> {
+        return this._persistedUpdate('DELETE FROM stitch_projects WHERE id = ?', [id]);
+    }
+
+    /** Delete a single cached Stitch screen row (prune-stale path). */
+    public async deleteStitchScreen(id: string): Promise<boolean> {
+        return this._persistedUpdate('DELETE FROM stitch_screens WHERE id = ?', [id]);
     }
 
     /**

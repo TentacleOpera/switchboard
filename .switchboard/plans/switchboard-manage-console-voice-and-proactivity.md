@@ -304,3 +304,9 @@ All five changes landed in `.agents/skills/switchboard-manage/SKILL.md`:
 5. **§6b single-dispatch completion watch** — lightweight, session-scoped poll that checks plan-file mtime advance and offers to send to review on completion. Hard boundary: no state-file writes, no resume-prompt trips, no multi-plan batching.
 
 **Note:** The SKILL.md file was subsequently absorbed into `.agents/workflows/switchboard.md` and deleted by the sibling refactor plan (`refactor-switchboard-four-front-doors.md`). The voice changes survive verbatim in the new location.
+
+---
+
+## Review Findings
+
+**Reviewed 2026-07-12.** Clean pass — all five changes verified present and correctly bounded in `.agents/workflows/switchboard.md`: humanized pre-CODE-REVIEWED header with relative timestamp (no "terminal N"), broadened Hard Rule 8 plus the numbered list template with dispatch offer, the "Proactive, not eager" principle, the synchronous one-message dispatch template consuming `topic`/`column`/`dispatchedAgent`/`routing`, and the §6b session-scoped watch with its hard no-oversight-state boundary. One inherited defect: the sibling refactor left the stale pre-voice body alive at `.agents/skills/switchboard-manage/SKILL.md` (still prescribing the "terminal N" collapse); that file was deleted during this review, so the humanized door body is now the sole console source. No changes were needed within this plan's own scope; verification was by inspection per the plan's transcript-replay criteria.

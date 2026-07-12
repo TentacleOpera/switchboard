@@ -115,3 +115,7 @@ Both functions already query `btn-edit-${tab}` (lines 2942/2988) and toggle its 
 ## Recommendation
 
 **Send to Intern** (complexity 2). Localized, single-file, pure pattern completion with no behavioral risk.
+
+## Completion Report
+
+Added `btn-edit-kanban` to the kanban meta bar in `src/webview/project.js`, placed before Save/Cancel in the right-aligned group. Wired a click listener that calls `enterEditMode('kanban')`. The existing `enterEditMode`/`exitEditMode` show/hide logic automatically toggles the new button. `eslint src/webview/project.js` passed. No compilation or tests were run per the session SKIP directives. No issues encountered.

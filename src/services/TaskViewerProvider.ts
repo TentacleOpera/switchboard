@@ -516,11 +516,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         // DB tiers are per-workspace and gated by a per-DB marker, so they run
         // regardless of the profile flag — a workspace opened later self-migrates.
-        void this._migratePlannerWorkflowPathDbTiers();
-        // 2026-07-12 four-front-doors refactor: rewrite persisted plannerWorkflowPath
-        // values that still point at the old workflows/ default to the new skills/ path.
-        // Runs after the .agent→.agents normalization so the two rewrites compose.
-        void this._migratePlannerWorkflowPathWorkflowsToSkills();
+        // 2026-07-12 four-front-doors refactor: the workflows→skills rewrite MUST be
+        // chained after the .agent→.agents normalization completes (not fired
+        // concurrently) so the two rewrites compose: a row still holding the
+        // `.agent/workflows/improve-plan.md` variant is first normalized to `.agents/`,
+        // and only then matched against the old default. Running them concurrently
+        // could read the pre-normalization value, skip it, and seal the marker —
+        // stranding the row on a path that no longer exists.
+        void this._migratePlannerWorkflowPathDbTiers()
+            .then(() => this._migratePlannerWorkflowPathWorkflowsToSkills());
         this._pipeline = new PipelineOrchestrator(
             () => this._postPipelineState(),
             async (role, sessionId, instruction) => {

@@ -1,6 +1,7 @@
 ---
 name: accuracy
 description: Implement with high accuracy and self-review (invest effort up front to minimize rework)
+user-invokable: false
 ---
 
 # Accuracy — Solo High-Accuracy Mode

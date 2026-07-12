@@ -27,8 +27,23 @@ function loadStitch(_accessToken: string): Promise<any> {
     return _stitchSdkPromise;
 }
 
+// Long-lived raw MCP client for tool calls the high-level SDK wrappers can't serve —
+// generate/edit/variants responses carry the model's text commentary and follow-up
+// suggestions, which the SDK's projections silently drop. Screen instances built from
+// raw responses hold this client for later calls, so it must not be closed while in use.
+let _stitchRawClientPromise: Promise<any> | undefined;
+function loadStitchRawClient(): Promise<any> {
+    if (!_stitchRawClientPromise) {
+        _stitchRawClientPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then((m: any) => new m.StitchToolClient());
+    }
+    return _stitchRawClientPromise;
+}
+
 export function invalidateStitchSdkCache(): void {
     _stitchSdkPromise = undefined;
+    // The raw client captured the previous API key at connect time — retire it.
+    _stitchRawClientPromise?.then(c => c.close()).catch(() => { /* best effort */ });
+    _stitchRawClientPromise = undefined;
 }
 
 interface TreeNode {
@@ -101,6 +116,8 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _externalFilePollTimer?: NodeJS.Timeout;
     private _lastFolderSignature: Record<string, string> = {}; // keyed by tab name
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
+    private _stitchProjectNames = new Map<string, string>(); // Key: projectId, Value: project name
+    private _stitchCacheMigrated = new Set<string>(); // workspaceRoots that have been migrated
     private _stitchOperationLock = false;
     private _activeDesignSystemDocSourceId: string | null = null;
     private _activeDesignSystemDocId: string | null = null;
@@ -931,16 +948,75 @@ export class DesignPanelProvider implements vscode.Disposable {
         return path.resolve(workspaceRoot, configured);
     }
 
-    private _getImageCacheDir(workspaceRoot: string): string {
-        return path.join(workspaceRoot, '.switchboard', 'stitch');
+    private _getImageCacheDir(workspaceRoot: string, projectId?: string): string {
+        const root = path.join(workspaceRoot, '.switchboard', 'stitch');
+        if (!projectId) return root;
+        const folderName = this._sanitizeProjectFolderName(
+            this._stitchProjectNames.get(projectId) || '',
+            projectId
+        );
+        return path.join(root, folderName);
+    }
+
+    private _sanitizeProjectFolderName(name: string, id: string): string {
+        const sanitized = (name || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        const idSuffix = id.length > 8 ? id.slice(0, 8) : id;
+        return sanitized ? `${sanitized}-${idSuffix}` : `project-${idSuffix}`;
+    }
+
+    private async _resolveStitchProjectName(workspaceRoot: string, projectId: string): Promise<string> {
+        const cached = this._stitchProjectNames.get(projectId);
+        if (cached) return cached;
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            const name = await db.getStitchProjectName(projectId);
+            if (name) {
+                this._stitchProjectNames.set(projectId, name);
+                return name;
+            }
+        } catch {}
+        return '';
+    }
+
+    private async _migrateStitchCacheToProjectFolders(workspaceRoot: string): Promise<void> {
+        if (this._stitchCacheMigrated.has(workspaceRoot)) return;
+        this._stitchCacheMigrated.add(workspaceRoot);
+        const stitchRoot = this._getImageCacheDir(workspaceRoot);
+        let entries: string[];
+        try {
+            entries = await fs.promises.readdir(stitchRoot);
+        } catch { return; }
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        for (const entry of entries) {
+            const ext = path.extname(entry);
+            if (ext !== '.png' && ext !== '.html') continue;
+            const screenBasename = path.basename(entry, ext);
+            const projectId = await db.getStitchScreenProjectId(screenBasename);
+            if (!projectId) continue;
+            const projectName = await this._resolveStitchProjectName(workspaceRoot, projectId);
+            this._stitchProjectNames.set(projectId, projectName);
+            const projectDir = this._getImageCacheDir(workspaceRoot, projectId);
+            const srcPath = path.join(stitchRoot, entry);
+            const dstPath = path.join(projectDir, entry);
+            try {
+                await fs.promises.mkdir(projectDir, { recursive: true });
+                await fs.promises.rename(srcPath, dstPath);
+            } catch (err) {
+                console.error(`[Stitch migration] Failed to move ${entry}:`, err);
+            }
+        }
     }
 
     private async _formatScreenFromCache(cached: {
         id: string; projectId: string; name: string;
         deviceType: string; status: string; statusMessage: string;
+        summary?: string; suggestionsJson?: string;
     }, workspaceRoot: string): Promise<any> {
         const fileUri = vscode.Uri.file(
-            path.join(this._getImageCacheDir(workspaceRoot), `${path.basename(cached.id)}.png`)
+            path.join(this._getImageCacheDir(workspaceRoot, cached.projectId), `${path.basename(cached.id)}.png`)
         );
         let imageUrl = '';
         let imagePath = '';
@@ -949,6 +1025,13 @@ export class DesignPanelProvider implements vscode.Disposable {
             imageUrl = this._panel?.webview.asWebviewUri(fileUri).toString() || '';
             imagePath = fileUri.fsPath;
         } catch {}
+        let suggestions: Array<{ label: string; prompt: string }> = [];
+        if (cached.suggestionsJson) {
+            try {
+                const parsed = JSON.parse(cached.suggestionsJson);
+                if (Array.isArray(parsed)) suggestions = parsed;
+            } catch { /* stale/corrupt JSON — treat as no suggestions */ }
+        }
         return {
             id: cached.id,
             projectId: cached.projectId,
@@ -957,9 +1040,11 @@ export class DesignPanelProvider implements vscode.Disposable {
             imageUrl,
             imagePath,
             htmlUrl: '',
-            htmlPath: await this._getStitchHtmlPath(cached.id, workspaceRoot),
+            htmlPath: await this._getStitchHtmlPath(cached.id, workspaceRoot, cached.projectId),
             status: cached.status,
-            statusMessage: cached.statusMessage
+            statusMessage: cached.statusMessage,
+            summary: cached.summary || '',
+            suggestions
         };
     }
 
@@ -981,9 +1066,9 @@ export class DesignPanelProvider implements vscode.Disposable {
 
     // Returns the on-disk path of a screen's downloaded HTML, or '' if it hasn't been
     // downloaded yet. HTML (unlike the PNG) is fetched on demand, not auto-cached.
-    private async _getStitchHtmlPath(screenId: string, workspaceRoot: string): Promise<string> {
+    private async _getStitchHtmlPath(screenId: string, workspaceRoot: string, projectId?: string): Promise<string> {
         if (!workspaceRoot) return '';
-        const htmlPath = path.join(this._getImageCacheDir(workspaceRoot), `${path.basename(screenId)}.html`);
+        const htmlPath = path.join(this._getImageCacheDir(workspaceRoot, projectId), `${path.basename(screenId)}.html`);
         try {
             await vscode.workspace.fs.stat(vscode.Uri.file(htmlPath));
             return htmlPath;
@@ -993,6 +1078,21 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     private async _getCachedImageUri(screen: any, workspaceRoot: string): Promise<string> {
+        // On-disk PNG wins: it's instant, and — with the API no longer reporting render
+        // status — the last good render beats a blank card whenever the backend
+        // temporarily serves no screenshot URL for a screen.
+        const cacheDir = workspaceRoot ? this._getImageCacheDir(workspaceRoot, screen.projectId) : '';
+        const fileUri = cacheDir
+            ? vscode.Uri.file(path.join(cacheDir, `${path.basename(screen.id)}.png`))
+            : undefined;
+        if (fileUri) {
+            try {
+                await vscode.workspace.fs.stat(fileUri);
+                const uri = this._panel?.webview.asWebviewUri(fileUri).toString() || '';
+                if (uri) return uri;
+            } catch { /* not cached yet */ }
+        }
+
         let cdnUrl: string;
         try {
             cdnUrl = await screen.getImage() || '';
@@ -1006,22 +1106,10 @@ export class DesignPanelProvider implements vscode.Disposable {
             ? cdnUrl.replace(/=[wsh]\d+(?:-[wsh]\d+)?$/, '') + '=w1200'
             : cdnUrl;
 
-        if (!workspaceRoot) return hiResUrl;
+        if (!fileUri || !cacheDir) return hiResUrl;
 
-        const cacheDir = this._getImageCacheDir(workspaceRoot);
-        const safeId = path.basename(screen.id);
-        const cachePath = path.join(cacheDir, `${safeId}.png`);
-        const fileUri = vscode.Uri.file(cachePath);
-
-        // If already cached, return the webview URI
-        try {
-            await vscode.workspace.fs.stat(fileUri);
-            return this._panel?.webview.asWebviewUri(fileUri).toString() || hiResUrl;
-        } catch {
-            // Not cached yet — download in background, return CDN URL immediately so the
-            // gallery renders now without waiting for the download to finish
-        }
-
+        // Not cached yet — download in background, return CDN URL immediately so the
+        // gallery renders now without waiting for the download to finish
         this._downloadToCache(hiResUrl, cacheDir, fileUri).catch(err =>
             console.error('Stitch image cache download failed:', err)
         );
@@ -1029,23 +1117,73 @@ export class DesignPanelProvider implements vscode.Disposable {
         return hiResUrl;
     }
 
+    // Dedupes concurrent downloads of the same target — repeated _formatScreen calls
+    // (polls, phase-3 refreshes) fire cache downloads before the first one lands.
+    private _cacheDownloadsInFlight = new Set<string>();
+
     private async _downloadToCache(url: string, cacheDir: string, fileUri: vscode.Uri): Promise<void> {
-        await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
-        const res = await this._fetchWithTimeout(url, 60000);
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        const buffer = Buffer.from(await res.arrayBuffer());
-        await vscode.workspace.fs.writeFile(fileUri, buffer);
+        const key = fileUri.fsPath;
+        if (this._cacheDownloadsInFlight.has(key)) return;
+        this._cacheDownloadsInFlight.add(key);
+        try {
+            await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
+            const res = await this._fetchWithTimeout(url, 60000);
+            if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+            const buffer = Buffer.from(await res.arrayBuffer());
+            await vscode.workspace.fs.writeFile(fileUri, buffer);
+        } finally {
+            this._cacheDownloadsInFlight.delete(key);
+        }
+    }
+
+    /**
+     * Eagerly cache every screen's HTML next to its PNG (same `.switchboard/stitch/`
+     * dir, `<id>.html`). The HTML is tiny (~15KB) but its download URL is a signed
+     * temp link — without this, the design code is lost once the link expires unless
+     * the user manually clicked DL HTML. Also makes the live-HTML preview and "Open
+     * in Browser" instant. Fire-and-forget; never touches the webview.
+     */
+    private async _backfillStitchHtmlCache(screens: any[], workspaceRoot: string): Promise<void> {
+        if (!workspaceRoot) return;
+        for (const screen of screens) {
+            try {
+                if (!screen?.id) continue;
+                if (await this._getStitchHtmlPath(screen.id, workspaceRoot, screen.projectId)) continue; // already cached
+                let htmlUrl = '';
+                try { htmlUrl = (await screen.getHtml()) || ''; } catch { htmlUrl = ''; }
+                if (!htmlUrl) continue; // image-space screens have no HTML at all
+                const cacheDir = this._getImageCacheDir(workspaceRoot, screen.projectId);
+                // Sequential on purpose — this is a background sweep, not a hot path.
+                await this._downloadToCache(htmlUrl, cacheDir,
+                    vscode.Uri.file(path.join(cacheDir, `${path.basename(screen.id)}.html`)));
+            } catch (err) {
+                console.error(`Stitch HTML cache backfill failed for screen ${screen?.id}:`, err);
+            }
+        }
     }
 
     private async _formatScreen(screen: any, workspaceRoot: string): Promise<any> {
         const imageUrl = await this._getCachedImageUri(screen, workspaceRoot);
         let imagePath = '';
         if (workspaceRoot) {
-            const candidate = path.join(this._getImageCacheDir(workspaceRoot), `${path.basename(screen.id)}.png`);
+            const candidate = path.join(this._getImageCacheDir(workspaceRoot, screen.projectId), `${path.basename(screen.id)}.png`);
             try {
                 await vscode.workspace.fs.stat(vscode.Uri.file(candidate));
                 imagePath = candidate;
             } catch {}
+        }
+        // Image-space screens have no HTML at all (htmlCode: {}), and getHtml() falls
+        // back to a get_screen API call — never let that failure sink the whole batch.
+        let htmlUrl = '';
+        try { htmlUrl = (await screen.getHtml()) || ''; } catch { htmlUrl = ''; }
+        const htmlPath = await this._getStitchHtmlPath(screen.id, workspaceRoot, screen.projectId);
+        if (!htmlPath && htmlUrl && workspaceRoot) {
+            // Eager-cache the HTML like the PNG: download in background, don't block
+            // the format. The signed URL expires, so grab it while we have it.
+            const cacheDir = this._getImageCacheDir(workspaceRoot, screen.projectId);
+            this._downloadToCache(htmlUrl, cacheDir,
+                vscode.Uri.file(path.join(cacheDir, `${path.basename(screen.id)}.html`))
+            ).catch(err => console.error('Stitch HTML cache download failed:', err));
         }
         return {
             id: screen.id,
@@ -1054,11 +1192,110 @@ export class DesignPanelProvider implements vscode.Disposable {
             deviceType: screen.data?.deviceType,
             imageUrl,
             imagePath,
-            htmlUrl: await screen.getHtml(),
-            htmlPath: await this._getStitchHtmlPath(screen.id, workspaceRoot),
+            htmlUrl,
+            htmlPath,
             status: screen.data?.screenMetadata?.status || null,
-            statusMessage: screen.data?.screenMetadata?.statusMessage || null
+            statusMessage: screen.data?.screenMetadata?.statusMessage || null,
+            // The AI's text response about the screen + suggested follow-up prompts —
+            // same metadata object the Stitch website renders alongside each generation.
+            ...this._screenAiMeta(screen.data)
         };
+    }
+
+    // screenMetadata.summary / .suggestions normalization shared by _formatScreen and
+    // the DB upsert sites. Suggestions are {label, prompt} pairs; either field may be
+    // missing on the wire, so each backfills from the other.
+    private _screenAiMeta(data: any): { summary: string; suggestions: Array<{ label: string; prompt: string }> } {
+        const md = data?.screenMetadata;
+        const suggestions = Array.isArray(md?.suggestions)
+            ? md.suggestions
+                .filter((s: any) => s && (s.prompt || s.label))
+                .map((s: any) => ({ label: s.label || s.prompt, prompt: s.prompt || s.label }))
+            : [];
+        return { summary: md?.summary || '', suggestions };
+    }
+
+    private _screenAiMetaForDb(data: any): { summary: string; suggestionsJson: string } {
+        const meta = this._screenAiMeta(data);
+        return {
+            summary: meta.summary,
+            suggestionsJson: meta.suggestions.length ? JSON.stringify(meta.suggestions) : ''
+        };
+    }
+
+    // The SDK's generate()/edit()/variants() wrappers keep only design.screens from the
+    // tool response and silently drop the model's text commentary and follow-up
+    // suggestions (verified live 2026-07-12: outputComponents = [designSystem?, design,
+    // text, suggestion…] — the same content the Stitch website shows beside a
+    // generation). Call the tool raw to recover all three.
+    private async _screenToolCall(toolName: string, args: any, projectId: string): Promise<{
+        screens: any[]; summary: string; suggestions: Array<{ label: string; prompt: string }>;
+    }> {
+        const mod: any = await import(/* webpackMode: "eager" */ '@google/stitch-sdk');
+        const client = await loadStitchRawClient();
+        const raw = await client.callTool(toolName, args);
+        const comps: any[] = raw?.outputComponents ?? [];
+        const screens = comps
+            .flatMap((c: any) => c?.design?.screens || [])
+            .map((d: any) => new mod.Screen(client, { ...d, projectId }));
+        const summary = comps.map((c: any) => c?.text).filter(Boolean).join('\n\n').trim();
+        const suggestions = comps
+            .map((c: any) => (typeof c?.suggestion === 'string' ? c.suggestion.trim() : ''))
+            .filter(Boolean)
+            .map((s: string) => ({ label: s, prompt: s }));
+        return { screens, summary, suggestions };
+    }
+
+    // Persist generate/edit-time commentary so it survives reloads (list responses
+    // never carry it), and stamp it onto the outgoing formatted screen.
+    private async _attachScreenCommentary(
+        formatted: any, projectId: string, workspaceRoot: string,
+        summary: string, suggestions: Array<{ label: string; prompt: string }>
+    ): Promise<void> {
+        if (summary) formatted.summary = summary;
+        if (suggestions.length) formatted.suggestions = suggestions;
+        if (!workspaceRoot || (!summary && !suggestions.length)) return;
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            await db.upsertStitchScreen({
+                id: formatted.id,
+                projectId,
+                name: formatted.name,
+                deviceType: formatted.deviceType ?? null,
+                status: formatted.status ?? null,
+                statusMessage: formatted.statusMessage ?? null,
+                summary,
+                suggestionsJson: suggestions.length ? JSON.stringify(suggestions) : ''
+            });
+        } catch (e) {
+            console.error('Failed to persist Stitch screen commentary:', e);
+        }
+    }
+
+    // Distinguishes generated screens from reference uploads in project.screens() output.
+    // The Stitch backend has shipped two asset shapes:
+    //   • legacy (≤ June 2026): generated screens carry deviceType AND a screenMetadata
+    //     object (status/summary); uploads may have one but never both.
+    //   • current (July 2026+): screenMetadata is GONE. Screens carry screenshot/htmlCode
+    //     {downloadUrl} objects and USUALLY deviceType — but not always (verified live:
+    //     a generated screen arrived with no deviceType and an empty htmlCode). Uploads
+    //     have screenshot/htmlCode too but never deviceType, and keep their original
+    //     filename as the title.
+    // Requiring screenMetadata filtered EVERY screen of a new project into an empty
+    // gallery ("0 screens loaded"); requiring deviceType still dropped real screens.
+    private _isGeneratedScreenAsset(s: any): boolean {
+        const d = s?.data;
+        if (!d) return false;
+        // deviceType marks a generated screen in both shapes — keep it even with no
+        // download URLs yet (still rendering server-side; shows placeholder + polls).
+        if (d.deviceType) return true;
+        if (d.screenMetadata !== undefined && d.screenMetadata !== null) return false; // legacy upload
+        // No deviceType, current shape: keep renderable assets unless the title is a
+        // filename (reference upload).
+        const hasRenderable = !!(d.screenshot?.downloadUrl || d.htmlCode?.downloadUrl);
+        if (!hasRenderable) return false;
+        return !/\.(png|jpe?g|gif|webp|svg|pdf|mdx?|html?|txt)\s*$/i.test(String(d.title || ''));
     }
 
     private async _setupStitchAuth(): Promise<{ valid: boolean; apiKey: string }> {
@@ -1674,6 +1911,21 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'fetchPreview': {
                 const rawDocId = String(message.docId || '');
+                if (message.sourceId === 'stitch-html-folder') {
+                    // Resolve the folder server-side from projectId — never trust webview-supplied paths.
+                    const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                    const resolvedFolder = (root && message.projectId)
+                        ? this._getImageCacheDir(root, message.projectId)
+                        : '';
+                    await this._buildAndSendPreview({
+                        sourceId: message.sourceId,
+                        sourceFolder: resolvedFolder,
+                        docId: rawDocId,
+                        requestId: message.requestId,
+                        isAutoRefreshed: false
+                    });
+                    break;
+                }
                 if ((message.sourceId === 'html-folder' || message.sourceId === 'claude-folder') && message.sourceFolder) {
                     if (message.target === 'claude') {
                         this._activeClaudePreview = {
@@ -2028,7 +2280,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         name: f.name,
                         deviceType: f.deviceType ?? null,
                         status: f.status,
-                        statusMessage: f.statusMessage
+                        statusMessage: f.statusMessage,
+                        summary: f.summary || '',
+                        suggestionsJson: Array.isArray(f.suggestions) && f.suggestions.length ? JSON.stringify(f.suggestions) : ''
                     })));
 
                     this.postMessage({ type: 'stitchDesignSystemApplied', workspaceRoot });
@@ -2055,27 +2309,53 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const db = KanbanDatabase.forWorkspace(workspaceRoot);
                     const dbProjects = await db.getStitchProjects();
 
-                    // If we have cached projects and forceRefresh is NOT set, serve from DB and exit.
-                    if (dbProjects.length > 0 && !message.forceRefresh) {
+                    // Cache-then-network: serve the DB list immediately for a fast dropdown,
+                    // then ALWAYS refresh from the API so projects deleted on the Stitch side
+                    // get pruned without the user having to know about the ↻ button.
+                    const servedFromCache = dbProjects.length > 0 && !message.forceRefresh;
+                    if (servedFromCache) {
+                        for (const p of dbProjects) { this._stitchProjectNames.set(p.id, p.name); }
                         this.postMessage({ type: 'stitchProjectsReady', projects: dbProjects, defaultProjectId, defaultModelId, defaultCreativeRange, workspaceRoot });
-                        return;
                     }
 
-                    // Otherwise fetch from API
-                    const stitch = await loadStitch('');
-                    const list = await stitch.projects();
-                    const projects = list.map((p: any) => ({
-                        id: p.id,
-                        name: p.data?.title || p.data?.name || p.id,
-                        updateTime: p.data?.updateTime || p.data?.createTime || ''
-                    }));
+                    try {
+                        const stitch = await loadStitch('');
+                        const list = await stitch.projects();
+                        const projects = list.map((p: any) => ({
+                            id: p.id,
+                            name: p.data?.title || p.data?.name || p.id,
+                            updateTime: p.data?.updateTime || p.data?.createTime || ''
+                        }));
 
-                    if (workspaceRoot) {
-                        for (const p of projects) {
-                            await db.upsertStitchProject(p.id, p.name, p.updateTime);
+                        if (workspaceRoot) {
+                            for (const p of projects) {
+                                this._stitchProjectNames.set(p.id, p.name);
+                                await db.upsertStitchProject(p.id, p.name, p.updateTime);
+                            }
+                            // Prune projects deleted on the Stitch side. Safe here only: this
+                            // runs after a SUCCESSFUL projects() fetch (a failed fetch throws
+                            // first), and these rows are purely a cache of remote state.
+                            const fetchedIds = new Set(projects.map((p: any) => p.id));
+                            for (const stale of dbProjects.filter(p => !fetchedIds.has(p.id))) {
+                                await db.deleteStitchScreensForProject(stale.id);
+                                await db.deleteStitchProject(stale.id);
+                            }
                         }
+
+                        // Re-post only when the fresh list differs from what the cache showed,
+                        // to avoid dropdown churn on every panel open.
+                        const changed = !servedFromCache ||
+                            projects.length !== dbProjects.length ||
+                            projects.some((p: any) => !dbProjects.find(dp => dp.id === p.id && dp.name === p.name));
+                        if (changed) {
+                            this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId, defaultModelId, defaultCreativeRange, workspaceRoot });
+                        }
+                    } catch (refreshErr: any) {
+                        // Cache was already served — a failed background refresh shouldn't
+                        // paint an error over a working dropdown.
+                        if (!servedFromCache) throw refreshErr;
+                        console.error('Stitch background project refresh failed:', refreshErr);
                     }
-                    this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId, defaultModelId, defaultCreativeRange, workspaceRoot });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -2089,9 +2369,17 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const db = KanbanDatabase.forWorkspace(workspaceRoot);
                     await db.ensureReady();
 
+                    // Migrate flat cache to per-project folders (idempotent, runs once per workspace).
+                    await this._migrateStitchCacheToProjectFolders(workspaceRoot);
+                    // Ensure this project's name is cached for folder resolution.
+                    if (projectId) { await this._resolveStitchProjectName(workspaceRoot, projectId); }
+
                     // --- Phase 1: serve from cache immediately ---
                     const cachedWithImage = new Set<string>(); // screens we already sent WITH an image
                     const cachedIds = new Set<string>();       // all screens we sent from cache
+                    // generate/edit-time commentary lives only in the DB (list responses
+                    // never carry it) — remember it so re-formatted screens keep it.
+                    const cachedCommentary = new Map<string, { summary: string; suggestions: any[] }>();
 
                     if (workspaceRoot) {
                         const cached = await db.getStitchScreensForProject(projectId);
@@ -2101,6 +2389,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             for (const f of formatted) {
                                 cachedIds.add(f.id);
                                 if (f.imageUrl) cachedWithImage.add(f.id);
+                                if (f.summary || (f.suggestions && f.suggestions.length)) {
+                                    cachedCommentary.set(f.id, { summary: f.summary, suggestions: f.suggestions });
+                                }
                             }
                         }
                     }
@@ -2109,9 +2400,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const stitch = await loadStitch('');
                     const allAssets = await stitch.project(projectId).screens();
                     // project.screens() returns ALL assets including reference uploads (images,
-                    // documents, specs). Generated screens always have both a deviceType AND
-                    // a screenMetadata object. Reference uploads may have one but not both.
-                    const list = allAssets.filter((s: any) => !!s.data?.deviceType && s.data?.screenMetadata !== undefined && s.data?.screenMetadata !== null);
+                    // documents, specs) — see _isGeneratedScreenAsset for the shape rules.
+                    const list = allAssets.filter((s: any) => this._isGeneratedScreenAsset(s));
                     for (const screen of list) {
                         this._activeScreens.set(screen.id, screen);
                     }
@@ -2124,24 +2414,41 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             name: s.data?.title || s.data?.displayName || s.id,
                             deviceType: s.data?.deviceType || null,
                             status: s.data?.screenMetadata?.status || null,
-                            statusMessage: s.data?.screenMetadata?.statusMessage || null
+                            statusMessage: s.data?.screenMetadata?.statusMessage || null,
+                            ...this._screenAiMetaForDb(s.data)
                         }));
                         await db.bulkUpsertStitchScreens(screensToUpsert);
                     }
 
                     // --- Phase 3: send what the cache couldn't cover ---
+                    const withCommentary = (f: any) => {
+                        const c = cachedCommentary.get(f.id);
+                        if (c) {
+                            if (!f.summary) f.summary = c.summary;
+                            if (!f.suggestions?.length) f.suggestions = c.suggestions;
+                        }
+                        return f;
+                    };
                     if (cachedIds.size === 0) {
                         // No cache at all — send every screen at once
                         const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
                         this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
                     } else {
-                        // Cache was served — only fetch screens genuinely new (not in DB at all)
-                        const needsUpdate = list.filter((s: any) => !cachedIds.has(s.id));
+                        // Cache was served — re-format screens that are new OR were cached without
+                        // an image on disk. _formatScreen is the only path that triggers the PNG
+                        // download, so filtering on cachedIds here would permanently strand any
+                        // screen that entered the DB before its image finished rendering.
+                        const needsUpdate = list.filter((s: any) => !cachedWithImage.has(s.id));
                         await Promise.all(needsUpdate.map(async (screen: any) => {
-                            const formatted = await this._formatScreen(screen, workspaceRoot);
+                            const formatted = withCommentary(await this._formatScreen(screen, workspaceRoot));
                             this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
                         }));
                     }
+
+                    // Background sweep: archive any screen HTML not yet on disk before its
+                    // signed URL expires. Covers screens served purely from cache above,
+                    // which never pass through _formatScreen.
+                    void this._backfillStitchHtmlCache(list, workspaceRoot);
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -2163,7 +2470,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         await db.ensureReady();
                         const cached = await db.getStitchScreensForProject(projectId);
 
-                        const cacheDir = this._getImageCacheDir(workspaceRoot);
+                        const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
                         for (const s of cached) {
                             const fileUri = vscode.Uri.file(
                                 path.join(cacheDir, `${path.basename(s.id)}.png`)
@@ -2210,20 +2517,20 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         const db = KanbanDatabase.forWorkspace(workspaceRoot);
                         await db.ensureReady();
 
-                        const cached = await db.getStitchScreensForProject(projectId);
-                        const cacheDir = this._getImageCacheDir(workspaceRoot);
-                        for (const s of cached) {
-                            const fileUri = vscode.Uri.file(path.join(cacheDir, `${path.basename(s.id)}.png`));
-                            try { await vscode.workspace.fs.delete(fileUri); } catch { /* ignore if not exist */ }
-                        }
-
-                        await db.deleteStitchScreensForProject(projectId);
+                        // Force reload = re-fetch the authoritative list, upsert, and prune
+                        // rows for screens deleted remotely. Deliberately does NOT delete
+                        // cached PNGs (the API sometimes serves no screenshot URL for a
+                        // screen — deleting the last good render leaves the card permanently
+                        // blank; purging images is the Rebuild Image Cache button's job) and
+                        // does NOT delete-all rows (generate-time commentary lives only in
+                        // the DB and would be lost).
+                        const cachedRows = await db.getStitchScreensForProject(projectId);
 
                         this._activeScreens.clear();
 
                         const stitch = await loadStitch('');
                         const allAssets = await stitch.project(projectId).screens();
-                        const list = allAssets.filter((s: any) => !!s.data?.deviceType && s.data?.screenMetadata !== undefined && s.data?.screenMetadata !== null);
+                        const list = allAssets.filter((s: any) => this._isGeneratedScreenAsset(s));
                         for (const screen of list) {
                             this._activeScreens.set(screen.id, screen);
                         }
@@ -2235,12 +2542,30 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                                 name: s.data?.title || s.data?.displayName || s.id,
                                 deviceType: s.data?.deviceType || null,
                                 status: s.data?.screenMetadata?.status || null,
-                                statusMessage: s.data?.screenMetadata?.statusMessage || null
+                                statusMessage: s.data?.screenMetadata?.statusMessage || null,
+                                ...this._screenAiMetaForDb(s.data)
                             }));
                             await db.bulkUpsertStitchScreens(screensToUpsert);
+                            const freshIds = new Set(list.map((s: any) => s.id));
+                            for (const stale of cachedRows.filter(r => !freshIds.has(r.id))) {
+                                await db.deleteStitchScreen(stale.id);
+                            }
                         }
 
-                        const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
+                        const commentaryById = new Map(cachedRows
+                            .filter(r => r.summary || r.suggestionsJson)
+                            .map(r => [r.id, r] as const));
+                        const formatted = await Promise.all(list.map(async (s: any) => {
+                            const f = await this._formatScreen(s, workspaceRoot);
+                            const c = commentaryById.get(f.id);
+                            if (c) {
+                                if (!f.summary) f.summary = c.summary || '';
+                                if (!f.suggestions?.length && c.suggestionsJson) {
+                                    try { f.suggestions = JSON.parse(c.suggestionsJson); } catch { /* ignore */ }
+                                }
+                            }
+                            return f;
+                        }));
                         this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
                     } finally {
                         this._stitchOperationLock = false;
@@ -2253,49 +2578,17 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             case 'stitchCreateProject':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
+                    const title = (typeof message.title === 'string' ? message.title : '').trim();
+                    if (!title) {
+                        this.postMessage({ type: 'stitchError', error: 'A project title is required.', workspaceRoot });
+                        break;
+                    }
                     if (this._stitchOperationLock) {
                         this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
                         return;
                     }
                     this._stitchOperationLock = true;
                     try {
-                        const title = await vscode.window.showInputBox({
-                            prompt: 'Title for the new Stitch project',
-                            placeHolder: 'e.g. Onboarding Redesign'
-                        });
-                        if (!title) return; // user dismissed the input — nothing to do
-
-                        // Optional brief attachment step
-                        const briefChoice = await vscode.window.showQuickPick(
-                            ['Yes, attach a brief', 'No, skip'],
-                            { placeHolder: 'Attach a design brief to this project?' }
-                        );
-                        let briefContent: string | null = null;
-                        if (briefChoice === 'Yes, attach a brief') {
-                            const briefItems: Array<{ label: string; detail: string; data: any }> = [];
-                            for (const root of (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)) {
-                                const svc = this._getLocalFolderService(root);
-                                const files = await svc.listBriefsFiles();
-                                for (const file of files) {
-                                    if (file.isFolder) continue;
-                                    briefItems.push({
-                                        label: file.title || file.name,
-                                        detail: file.sourceFolder,
-                                        data: file
-                                    });
-                                }
-                            }
-                            if (briefItems.length > 0) {
-                                const selected = await vscode.window.showQuickPick(briefItems, {
-                                    placeHolder: 'Select a design brief'
-                                });
-                                if (selected) {
-                                    const absPath = path.resolve(selected.data.sourceFolder, selected.data.relativePath);
-                                    briefContent = await fs.promises.readFile(absPath, 'utf8');
-                                }
-                            }
-                        }
-
                         const stitch = await loadStitch('');
                         const project = await stitch.createProject(title);
                         const list = await stitch.projects();
@@ -2309,14 +2602,12 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         if (workspaceRoot) {
                             const db = KanbanDatabase.forWorkspace(workspaceRoot);
                             for (const p of projects) {
+                                this._stitchProjectNames.set(p.id, p.name);
                                 await db.upsertStitchProject(p.id, p.name, p.updateTime);
                             }
                         }
                         // Pass the new project as the default so the webview auto-selects it.
                         this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
-                        if (briefContent) {
-                            this.postMessage({ type: 'stitchBriefInjected', content: briefContent, projectId: project.id });
-                        }
                     } finally {
                         this._stitchOperationLock = false;
                     }
@@ -2543,28 +2834,52 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 this.postMessage({ type: 'claudeFoldersListed', paths: service.getClaudeFolderPaths(), workspaceRoot: root });
                 break;
             }
-            // Convenience toggle: register (or unregister) the hidden Stitch assets folder as an
-            // HTML preview source, so downloaded screen HTML shows up in the HTML Previews tab.
-            case 'toggleStitchHtmlPreview': {
-                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const service = this._getLocalFolderService(root);
-                const stitchDir = this._getImageCacheDir(root);
-                if (message.enabled) {
-                    await service.addHtmlFolderPath(stitchDir);
-                } else {
-                    await service.removeHtmlFolderPath(stitchDir);
-                }
-                this._setupHtmlFolderWatchers();
-                await this._sendHtmlDocsReady();
-                this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
-                break;
-            }
 
             // Re-scan the source folders for a tab on demand. The webview posts this when
             // the user activates a tab, mirroring planning.js's fetch-on-tab-activation.
             // VS Code's FileSystemWatcher misses files created outside the editor (e.g. by
             // an external script or agent write), so the watcher-driven list can go stale;
             // a fresh readdir on tab entry guarantees the list is current.
+            case 'stitchHtmlListDocs': {
+                try {
+                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                    const projectId: string = message.projectId;
+                    if (!workspaceRoot || !projectId) {
+                        this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot });
+                        break;
+                    }
+                    await this._resolveStitchProjectName(workspaceRoot, projectId);
+                    const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
+                    const docs: Array<{ screenId: string; name: string; file: string; sourceFolder: string; absolutePath: string }> = [];
+                    try {
+                        const entries = await fs.promises.readdir(cacheDir);
+                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                        await db.ensureReady();
+                        for (const entry of entries) {
+                            if (path.extname(entry) !== '.html') continue;
+                            const screenId = path.basename(entry, '.html');
+                            let name = screenId;
+                            try {
+                                const screens = await db.getStitchScreensForProject(projectId);
+                                const match = screens.find(s => s.id === screenId);
+                                if (match?.name) name = match.name;
+                            } catch {}
+                            docs.push({
+                                screenId,
+                                name,
+                                file: entry,
+                                sourceFolder: cacheDir,
+                                absolutePath: path.join(cacheDir, entry)
+                            });
+                        }
+                    } catch {}
+                    this.postMessage({ type: 'stitchHtmlDocsReady', docs, workspaceRoot });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                }
+                break;
+            }
+
             case 'refreshDocsForTab': {
                 switch (message.tab) {
                     case 'html-preview':
@@ -2814,12 +3129,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
                     const content = await fs.promises.readFile(absPath, 'utf8');
 
-                    const title = await vscode.window.showInputBox({
-                        prompt: 'Title for the new Stitch project',
-                        placeHolder: 'e.g. Onboarding Redesign',
-                        value: message.briefTitle || ''
-                    });
-                    if (!title) break; // user dismissed — nothing to do
+                    // Auto-name the project from the brief title; fall back to the filename stem.
+                    const title = (typeof message.briefTitle === 'string' ? message.briefTitle : '').trim()
+                        || (relativePath ? path.basename(relativePath, path.extname(relativePath)) : '')
+                        || 'Untitled Brief';
 
                     if (this._stitchOperationLock) {
                         this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
@@ -2838,11 +3151,12 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         if (workspaceRoot) {
                             const db = KanbanDatabase.forWorkspace(workspaceRoot);
                             for (const p of projects) {
+                                this._stitchProjectNames.set(p.id, p.name);
                                 await db.upsertStitchProject(p.id, p.name, p.updateTime);
                             }
                         }
                         this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
-                        this.postMessage({ type: 'stitchBriefInjected', content, projectId: project.id });
+                        this.postMessage({ type: 'stitchBriefInjected', content, projectId: project.id, autoGenerate: true });
                     } finally {
                         this._stitchOperationLock = false;
                     }
@@ -2889,9 +3203,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             }
                         }
 
-                        const screen = await projectInstance.generate(augmentedPrompt, message.deviceType, message.modelId);
+                        const { screens, summary, suggestions } = await this._screenToolCall('generate_screen_from_text', {
+                            projectId: message.projectId,
+                            prompt: augmentedPrompt,
+                            deviceType: message.deviceType,
+                            modelId: message.modelId
+                        }, message.projectId);
+                        const screen = screens[0];
+                        if (!screen) throw new Error('Stitch returned no screen for the generate request.');
                         this._activeScreens.set(screen.id, screen);
-                        this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(screen, workspaceRoot), workspaceRoot });
+                        const formatted = await this._formatScreen(screen, workspaceRoot);
+                        await this._attachScreenCommentary(formatted, message.projectId, workspaceRoot, summary, suggestions);
+                        this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
                     } finally {
                         this._stitchOperationLock = false;
                     }
@@ -2911,9 +3234,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     try {
                         const screen = this._activeScreens.get(message.screenId);
                         if (!screen) throw new Error('Screen instance not found in memory cache.');
-                        const updated = await screen.edit(message.prompt, undefined, message.modelId);
+                        const { screens, summary, suggestions } = await this._screenToolCall('edit_screens', {
+                            projectId: screen.projectId,
+                            selectedScreenIds: [message.screenId],
+                            prompt: message.prompt,
+                            modelId: message.modelId
+                        }, screen.projectId);
+                        const updated = screens[0];
+                        if (!updated) throw new Error('Stitch returned no screen for the edit request.');
                         this._activeScreens.set(updated.id, updated);
-                        this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(updated, workspaceRoot), workspaceRoot });
+                        const formatted = await this._formatScreen(updated, workspaceRoot);
+                        await this._attachScreenCommentary(formatted, screen.projectId, workspaceRoot, summary, suggestions);
+                        this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
                     } finally {
                         this._stitchOperationLock = false;
                     }
@@ -2939,10 +3271,19 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             creativeRange: message.creativeRange,
                             aspects
                         };
-                        const list = await screen.variants(message.prompt, variantOptions, undefined, message.modelId);
-                        const formatted = await Promise.all(list.map(async (v: any) => {
+                        const { screens, summary, suggestions } = await this._screenToolCall('generate_variants', {
+                            projectId: screen.projectId,
+                            selectedScreenIds: [message.screenId],
+                            prompt: message.prompt,
+                            variantOptions,
+                            modelId: message.modelId
+                        }, screen.projectId);
+                        const formatted = await Promise.all(screens.map(async (v: any) => {
                             this._activeScreens.set(v.id, v);
-                            return this._formatScreen(v, workspaceRoot);
+                            const f = await this._formatScreen(v, workspaceRoot);
+                            // The commentary describes the variant batch — attach to each
+                            await this._attachScreenCommentary(f, screen.projectId, workspaceRoot, summary, suggestions);
+                            return f;
                         }));
                         this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
                     } finally {
@@ -2967,7 +3308,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
                     // Default to the same folder the screen PNGs already live in, so a screen's
                     // assets stay together in one place. A caller can still override via destination.
-                    let outputDir = this._getImageCacheDir(workspaceRoot);
+                    const activeScreen = message.screenId ? this._activeScreens.get(message.screenId) : undefined;
+                    const projectId = activeScreen?.projectId || '';
+                    let outputDir = projectId
+                        ? this._getImageCacheDir(workspaceRoot, projectId)
+                        : this._getImageCacheDir(workspaceRoot);
                     if (message.destination) {
                         const resolvedDest = path.resolve(message.destination);
                         const allRoots = this._getWorkspaceRoots();
@@ -3008,6 +3353,43 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     });
                 } catch (err: any) {
                     vscode.window.showErrorMessage('Download failed: ' + err.message);
+                    // A live preview may be waiting on this download — let it recover
+                    // (show the placeholder + reload) instead of spinning forever.
+                    this.postMessage({ type: 'stitchHtmlPreviewError', screenId: message.screenId, error: err.message || String(err) });
+                }
+                break;
+            case 'stitchPreviewHtml':
+                // Live-render a screen's downloaded HTML in the preview pane. Used as the
+                // fallback for screens that never get a static screenshot (WebGL/animated
+                // components aren't captured by Stitch's screenshot tool, so their
+                // screenshot.downloadUrl stays empty forever — the HTML is the only render).
+                try {
+                    const htmlPath = path.resolve(String(message.htmlPath || ''));
+                    // Same containment guard as downloads: only files inside a workspace root.
+                    const allRoots = this._getWorkspaceRoots();
+                    const isAllowed = allRoots.some(r => htmlPath.startsWith(path.resolve(r) + path.sep));
+                    if (!isAllowed) throw new Error('Invalid preview file path');
+                    await fs.promises.access(htmlPath, fs.constants.R_OK);
+
+                    // Prefer a localhost URL — the iframe gets its own document origin, so
+                    // inline WebGL scripts and CDN assets run outside the webview CSP.
+                    let iframeSrc: string | undefined;
+                    try {
+                        const serveFolder = path.dirname(htmlPath);
+                        const entry = await this._getOrCreateHtmlServer(serveFolder);
+                        iframeSrc = this._buildLocalhostUrl(entry, serveFolder, htmlPath);
+                    } catch {
+                        iframeSrc = undefined;
+                    }
+                    let htmlContent: string | undefined;
+                    let webviewUri: string | undefined;
+                    if (!iframeSrc) {
+                        htmlContent = await fs.promises.readFile(htmlPath, 'utf8');
+                        webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(htmlPath)).toString();
+                    }
+                    this.postMessage({ type: 'stitchHtmlPreviewReady', screenId: message.screenId, iframeSrc, htmlContent, webviewUri });
+                } catch (err: any) {
+                    this.postMessage({ type: 'stitchHtmlPreviewError', screenId: message.screenId, error: err.message || String(err) });
                 }
                 break;
         }
@@ -3210,6 +3592,15 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     svc.getClaudeFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                    // Admit per-project Stitch cache dirs so the stitch-html-folder sourceId
+                    // can read cached HTML. Resolved server-side from project IDs — never from
+                    // webview-supplied paths.
+                    const db = KanbanDatabase.forWorkspace(root);
+                    await db.ensureReady();
+                    const projects = await db.getStitchProjects();
+                    for (const p of projects) {
+                        allowedFolders.add(path.resolve(this._getImageCacheDir(root, p.id)));
+                    }
                 } catch {}
             }
             const resolvedFolder = path.resolve(sourceFolder);

@@ -1,7 +1,6 @@
 ---
-name: switchboard-chat
-description: Consultative planning mode (Switchboard Operator)
-user-invokable: false
+name: switchboard-cloud
+description: Cloud-VM planning mode — plan first, do not auto-code in a remote VM
 ---
 
 # Consultation & Planning Mode

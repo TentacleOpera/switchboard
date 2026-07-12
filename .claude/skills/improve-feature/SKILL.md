@@ -1,6 +1,7 @@
 ---
 name: improve-feature
 description: "Reconcile and restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent"
+user-invokable: false
 ---
 
 # Improve Feature

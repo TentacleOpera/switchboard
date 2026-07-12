@@ -495,6 +495,30 @@ export function generateClaudeMirror(rootDir: string, extensionVersion: string |
             }
         }
 
+        // Remove stale mirrors: skills this generator previously wrote (tracked in the
+        // ledger) that were NOT regenerated this run — the manifest entry was retired or
+        // its source removed. Without this, retired commands stay user-invokable in
+        // Claude Code on existing installs forever (the workflow-side equivalent is
+        // cleanupLegacyAgentFiles). Only ledger-tracked names under .claude/skills/ are
+        // ever deleted — user-authored skills are never touched.
+        try {
+            const ledgerPath = path.join(claudeDir, GENERATED_MANIFEST_FILE);
+            if (fs.existsSync(ledgerPath)) {
+                const previous = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+                const regenerated = new Set(generatedSkills.map(s => s.name));
+                const prevSkills: Array<{ name?: string }> = Array.isArray(previous?.skills) ? previous.skills : [];
+                for (const prev of prevSkills) {
+                    if (!prev?.name || regenerated.has(prev.name)) continue;
+                    const staleDir = path.join(skillsRoot, prev.name);
+                    if (!staleDir.startsWith(skillsRoot + path.sep)) continue; // path-traversal guard
+                    fs.rmSync(path.join(staleDir, 'SKILL.md'), { force: true });
+                    try { fs.rmdirSync(staleDir); } catch { /* non-empty (user files) — leave the dir */ }
+                }
+            }
+        } catch (e) {
+            console.warn('[ClaudeCodeMirrorService] Failed to clean stale mirrored skills:', e);
+        }
+
         const settingsAllowAdded = mergePermissionsAllowList(claudeDir);
 
         const manifest = {

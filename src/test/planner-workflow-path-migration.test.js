@@ -332,8 +332,8 @@ async function run() {
     );
     assert.match(
         providerSource,
-        /void this\._migratePlannerWorkflowPathWorkflowsToSkills\(\);/,
-        'Expected the constructor to invoke the workflows→skills migration.'
+        /void this\._migratePlannerWorkflowPathDbTiers\(\)\s*\n?\s*\.then\(\(\) => this\._migratePlannerWorkflowPathWorkflowsToSkills\(\)\);/,
+        'Expected the constructor to chain the workflows→skills migration after the .agent→.agents DB-tier normalization (concurrent runs can read pre-normalization values, skip them, and seal the marker).'
     );
 
     // ── Test 7: workflows→skills migration rewrites old default, preserves custom paths ──

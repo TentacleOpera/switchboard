@@ -3531,6 +3531,9 @@ async function cleanupLegacyAgentFiles(workspaceRoot: string): Promise<void> {
         'workflows/improve-feature.md',
         'workflows/accuracy.md',
         'workflows/switchboard-orchestrator.md',
+        // The manage-console skill body was absorbed into workflows/switchboard.md;
+        // the standalone skill dir is retired (its stale copy would drift from the door).
+        'skills/switchboard-manage/SKILL.md',
     ];
     // Only operate on .agents/ (Switchboard's managed directory). A pre-existing
     // .agent/ belongs to the user and must be left byte-for-byte untouched — the
@@ -3720,6 +3723,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         '.agents/workflows/improve-feature.md',
         '.agents/workflows/accuracy.md',
         '.agents/workflows/switchboard-orchestrator.md',
+        '.agents/skills/switchboard-manage/SKILL.md',
     ];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);

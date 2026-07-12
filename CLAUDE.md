@@ -25,7 +25,7 @@ If you find a confirm gate in this codebase, it is a bug — remove it. Multi-ch
 > **Claude Code note.** The Switchboard protocol below was authored for the Antigravity host. In Claude Code:
 > - `view_file <path>` → use the **Read** tool.
 > - `send_message` and role-routing (reviewer, lead, etc.) are **Antigravity-only** — ignore them here.
-> - To run a workflow, invoke its native slash command (e.g. `/switchboard`, `/memo`, `/improve-plan`) or read the skill at `.claude/skills/<name>/SKILL.md`.
+> - To run a workflow, invoke its native slash command (e.g. `/switchboard`, `/switchboard-cloud`, `/switchboard-remote`, `/switchboard-memo`) or read the skill at `.claude/skills/<name>/SKILL.md`.
 > - The ClickUp / Linear / kanban skills shell out via `.agents/skills/_lib/sb_api_call.sh` and work as-is, provided the Switchboard extension (and its API server) is running.
 
 ---
@@ -46,15 +46,12 @@ This project relies on **Switchboard Workflows** defined in `.agents/workflows`.
 
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
-| `/switchboard` | **`switchboard-index.md`** | **The single adaptive front door** (with `/memo`). Detects its environment (local IDE with a live API → management console; cloud remote → plan-mode brake) and routes the request to the right internal skill. Start here when unsure. |
-| `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. Single plans only — for a feature use `/improve-feature`. |
-| `/improve-feature` | **`improve-feature.md`** | Reconcile & restructure a feature's subtasks — improve each, then merge/delete/rewrite/split to make the set coherent. Authorised to cut. Supports a high/low complexity-tier mode. |
-| `/switchboard-split` | **`switchboard-split.md`** | Split one plan into a Complex/Risky file + a Routine companion so the tiers can be coded separately. Remote-safe (file writes). |
-| *(internal, not a front door)* | **`switchboard-chat.md`** | Consultative planning persona. **Not a user front door** — the `/switchboard` router loads it as the cloud plan-mode brake (and as the console's "start a planning session" sub-action). Do not advertise `/switchboard-chat`. |
-| *(internal, not a front door)* | **`switchboard-manage.md`** | Management console persona (entry snapshot → categorized menu → wait for direction). **Not a user front door** — the `/switchboard` router loads it on local board-driving intent. Do not advertise `/switchboard-manage`. |
-| `/memo`, "start memo capture" | **`memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
-| `/switchboard-orchestrator` *(system-launched)* | **`switchboard-orchestrator.md`** | Orchestration-mode batch manager — system-woken persona that groups plans into features (confirm gate off + `Miscellaneous` sweep), fans out to per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Launched by the AUTOMATION tab's Start orchestrator; not for ad-hoc use. |
+| `/switchboard` | **`switchboard.md`** | **The local management console** — drive the board, plans, features, dispatch, and automation while the VS Code extension is running. The primary front door; start here when unsure. |
+| `/switchboard-cloud` | **`switchboard-cloud.md`** | Cloud-VM planning brake — plan first, do not auto-code in a remote VM. |
+| `/switchboard-remote` | **`switchboard-remote.md`** | Remote Switchboard control — drive plans via Linear or Notion when the local machine is off. |
+| `/switchboard-memo`, "start memo capture" | **`switchboard-memo.md`** | Memo capture mode — append-only, no analysis. Enter via `/switchboard-memo` or by saying "start memo capture". Exit with `process memo`. Edit entries with `edit N: <text>`. |
+
+These four are the ONLY user-typeable workflow commands. Internal, extension-dispatched workflows are no longer slash commands: `improve-plan`, `improve-feature`, `accuracy`, and `switchboard-orchestrator` live as stripped skills under `.agents/skills/<name>/SKILL.md`, read by the extension by path (the orchestrator persona is system-launched from the AUTOMATION tab's Start orchestrator; never invoke it ad hoc).
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -90,10 +87,11 @@ Sending to non-existent recipients is always rejected (even when auto-routed).
 ### 🏗️ Switchboard Global Architecture
 
 ```
-User ──► Switchboard Operator (switchboard-chat.md)
+User ──► Switchboard Console (/switchboard) or cloud plan-brake (switchboard-cloud.md)
               │  Plans captured in .switchboard/plans/
               │
-              ├──► /improve-plan   Deep planning with optional dependency checks and adversarial review
+              ├──► improve-plan skill (.agents/skills/improve-plan/SKILL.md, extension-dispatched)
+              │                    Deep planning with optional dependency checks and adversarial review
               └──► Kanban Board    Plans moved through workflow stages (Created → Coded → Reviewed → Done)
 
 All file writes to .switchboard/ MUST use IsArtifact: false.
@@ -132,11 +130,9 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `advise_research` | When planning, flag uncertain assumptions and supply a ready-to-run web-research prompt to confirm them. |
 | `constitution-builder` | Build or refine a project constitution (coding standards and conventions) for the workspace. |
 | `tuning` | Tune Switchboard agent behavior and workflow settings. |
-| `memo` | User invokes `/memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
-| `switchboard` | User types `/switchboard` or doesn't know which skill they need — front door that detects local vs remote and routes the request to the right skill. |
-| `switchboard-chat` | Local consultative planning mode. Reached via `/switchboard` in local mode (the `/sw` alias was retired). Reads kanban state so you can reference columns and chain workflows. |
-| `improve-feature` | User runs `/improve-feature` on a feature. Improves every subtask, then restructures the set — merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
-| `switchboard-split` | User runs `/switchboard-split` on one plan — splits it into a Complex/Risky file + a Routine companion. Remote-safe file writes; the local splitter's remote equivalent. |
+| `switchboard-memo` | User invokes `/switchboard-memo` or says "start memo capture" to enter progressive capture mode — agent appends each user message to `.switchboard/memo.md` without analysis. |
+| `switchboard` | User types `/switchboard` — the local management console (board, plans, features, dispatch, automation). The primary front door. |
+| `improve-feature` | Internal, extension-dispatched (`.agents/skills/improve-feature/SKILL.md`) — improves every subtask of a feature, then restructures the set: merge/delete/rewrite/split. Authorised to cut; git is the undo. Has a high/low complexity-tier mode. |
 | `refine_ticket` | User clicks "Refine" on a ticket card to copy a prompt that produces a complete, agent-actionable specification (backend-consumed skill — not invocable via `skill: "refine_ticket"`) |
 | `refine_feature` | User clicks "Refine" on a selected feature in the Features tab to copy a prompt that fleshes out the feature description and proposes a subtask breakdown (backend-consumed skill — not invocable via `skill: "refine_feature"`) |
 | `group-into-features` | User asks to "group plans into a feature", "organise loose plans into features", or "suggest feature groupings" — scans pre-coding columns, clusters by capability, proposes all groupings for one approval, then creates features via create-feature.js (model-invocable; also sourced by the Suggest Features board button) |
@@ -144,8 +140,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `create-feature-from-plans` | Create a Switchboard feature from a known set of plans when the extension is running — runs create-feature.js |
 | `improve-remote-plan` | Improve a plan stored in Linear via the LocalApiServer GraphQL proxy — reads, deepens, writes back, and advances status without touching git. Use in remote sessions. |
 | `worktree-cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
-| `switchboard-orchestrator` | Launched by the Orchestration automation mode (Start orchestrator button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). Manual `/switchboard-orchestrator` is for deliberate resume/debug only. |
-| `switchboard-manage` | Host-agnostic management console — drive the board, plans, features, and dispatch from any agentic coding host with VS Code minimised. Consultative persona: report state on entry, then wait for user direction. Automation is opt-in only. Replaces the old human `/switchboard-orchestrator` slash command. |
+| `switchboard-orchestrator` | Launched by the Orchestration automation mode (Start orchestrator button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). For deliberate resume/debug, read `.agents/skills/switchboard-orchestrator/SKILL.md` by path. |
 | `switchboard-orchestration` | Fleet coding/review agents working inside orchestration worktrees — discover the API port, read board/features/plans/worktrees, file requests to the orchestrator, and read the session log via HTTP endpoints. |
 | `switchboard-mcp` | Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts with no shell/filesystem) to LocalApiServer. Claude Desktop reaches the management surface via this MCP server, not shell. Use the in-extension **Connect Claude Desktop** button (Setup panel) to write the config entry. |
 | `switchboard-contracts` | Agent-facing *behavior* contracts — consult when unsure how the system behaves (cards move on coding start, completion = plan-file mtime advance, plan files are write-once-at-the-end, subtask column exclusion). Never for invocation — use `switchboard-orchestration` + `GET /catalog` for that. |
@@ -156,12 +151,12 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 ### 📌 Memo Capture Mode — Priority Rule
 
-While `/memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. Capture mode is entered by `/memo` or the natural-language request "start memo capture" (host-independent, for chats without slash commands). The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]` and ends by advising the command `process memo`. The sole exit trigger is the exact command `process memo` (case-insensitive, as the entire message) — it exits capture mode, processes all entries into plan files (one per entry) and clears the memo file on success. An in-place edit command `edit N: <text>` (where N is the 1-based entry number) replaces entry N without appending a new entry; it does not exit capture mode. To leave without processing, clear the conversation. The Memo sub-tab in the sidebar remains as an alternative processing path (backend-driven, immune to host system prompt overrides).
-See `.agents/workflows/memo.md` for the full protocol.
+While `/switchboard-memo` capture mode is active, capture mode takes precedence over the default "analyze and act" behavior. Capture mode is entered by `/switchboard-memo` or the natural-language request "start memo capture" (host-independent, for chats without slash commands). The agent appends each user message to `.switchboard/memo.md` and does NOT analyze, plan, or write code. Every capture-mode reply begins with `[MEMO CAPTURE ACTIVE]` and ends by advising the command `process memo`. The sole exit trigger is the exact command `process memo` (case-insensitive, as the entire message) — it exits capture mode, processes all entries into plan files (one per entry) and clears the memo file on success. An in-place edit command `edit N: <text>` (where N is the 1-based entry number) replaces entry N without appending a new entry; it does not exit capture mode. To leave without processing, clear the conversation. The Memo sub-tab in the sidebar remains as an alternative processing path (backend-driven, immune to host system prompt overrides).
+See `.agents/workflows/switchboard-memo.md` for the full protocol.
 
 ### 📝 Plan Authoring & Problem Analysis Protocol
 
-When creating or improving any implementation plan (including via `/improve-plan`):
+When creating or improving any implementation plan (including via the extension-dispatched `improve-plan` skill):
 - You MUST explicitly document the core problems, background context, and root cause analysis.
 - This details should be placed directly inside or immediately below the `## Goal` section to ensure the plan remains self-contained without violating workflow section requirements.
 - The `improve-plan` required section schema must never be used as a reason to drop the problem analysis.

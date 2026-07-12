@@ -1828,6 +1828,7 @@
                 ${plan.sessionId ? `<button class="strip-btn" id="kanban-meta-copy-prompt-btn" title="Copy dispatch prompt to clipboard">Copy Prompt</button>` : ''}
             </div>
             <div class="kanban-meta-group" style="margin-left: auto;">
+                ${plan.planFile ? `<button class="strip-btn" id="btn-edit-kanban" style="${state.editMode.kanban ? 'display:none;' : ''}">Edit</button>` : ''}
                 <button class="strip-btn" id="btn-save-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Cancel</button>
                 ${plan.clickupTaskId || plan.linearIssueId ? `
@@ -1844,6 +1845,10 @@
         // Dynamic buttons listeners
         const dynamicCancelBtn = document.getElementById('btn-cancel-kanban');
         const dynamicSaveBtn = document.getElementById('btn-save-kanban');
+        const dynamicEditBtn = document.getElementById('btn-edit-kanban');
+        if (dynamicEditBtn) {
+            dynamicEditBtn.addEventListener('click', () => enterEditMode('kanban'));
+        }
 
         // Copy Link / Copy Prompt — promoted into the top bar so the user does not
         // have to locate the plan in the sidebar to access these actions.

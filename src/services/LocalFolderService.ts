@@ -103,9 +103,32 @@ export class LocalFolderService {
                 briefsFolderPaths: [],
                 ticketsAutoSync: false
             };
+            const htmlPaths = parsed.htmlFolderPaths || [];
+            // One-time migration: strip the old `.switchboard/stitch` entry that the
+            // removed toggle used to add. Only exact-suffix matches are removed — user
+            // folders that merely contain the substring are never touched.
+            let migratedHtmlPaths = htmlPaths;
+            if (!parsed._migratedStitchHtmlInclude) {
+                migratedHtmlPaths = htmlPaths.filter((p: string) =>
+                    !String(p).replace(/\\/g, '/').replace(/\/+$/, '').endsWith('/.switchboard/stitch')
+                );
+                if (migratedHtmlPaths.length !== htmlPaths.length) {
+                    parsed._migratedStitchHtmlInclude = true;
+                    // Persist the migration immediately.
+                    db.setConfigJson('folders.paths', {
+                        ...parsed,
+                        htmlFolderPaths: migratedHtmlPaths,
+                        _migratedStitchHtmlInclude: true
+                    }).catch(() => {});
+                } else {
+                    // No entry to strip — mark as done so we never scan again.
+                    parsed._migratedStitchHtmlInclude = true;
+                    db.setConfigJson('folders.paths', { ...parsed, _migratedStitchHtmlInclude: true }).catch(() => {});
+                }
+            }
             return {
                 localFolderPaths: parsed.localFolderPaths || [],
-                htmlFolderPaths: parsed.htmlFolderPaths || [],
+                htmlFolderPaths: migratedHtmlPaths,
                 planningHtmlFolderPaths: parsed.planningHtmlFolderPaths || [],
                 claudeFolderPaths: parsed.claudeFolderPaths || [],
                 designFolderPaths: parsed.designFolderPaths || [],
@@ -134,7 +157,7 @@ export class LocalFolderService {
     async saveFolderPathsConfig(config: LocalFolderPathsConfig): Promise<void> {
         this._assertAllowedWrite();
         const db = KanbanDatabase.forWorkspace(this._effectiveWorkspaceRoot);
-        const { _migratedLocal, _migratedHtml, _migratedDesign, _migratedTickets, _migratedImages, _migratedStitch, _migratedBriefs, ...cleanConfig } = config as any;
+        const { _migratedLocal, _migratedHtml, _migratedDesign, _migratedTickets, _migratedImages, _migratedStitch, _migratedBriefs, _migratedStitchHtmlInclude, ...cleanConfig } = config as any;
         await db.setConfigJson('folders.paths', cleanConfig);
         this._folderPathsCache = cleanConfig;
     }

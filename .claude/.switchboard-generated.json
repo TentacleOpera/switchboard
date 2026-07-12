@@ -1,12 +1,42 @@
 {
   "generator": "ClaudeCodeMirrorService",
-  "version": "1.7.9",
-  "generatedAt": "2026-07-11T21:21:10.924Z",
+  "version": "1.7.13",
+  "generatedAt": "2026-07-11T23:39:20.779Z",
   "skills": [
     {
-      "source": "skills/switchboard-manage",
-      "name": "switchboard-manage",
-      "relPath": ".claude/skills/switchboard-manage/SKILL.md"
+      "source": "workflows/switchboard.md",
+      "name": "switchboard",
+      "relPath": ".claude/skills/switchboard/SKILL.md"
+    },
+    {
+      "source": "workflows/switchboard-cloud.md",
+      "name": "switchboard-cloud",
+      "relPath": ".claude/skills/switchboard-cloud/SKILL.md"
+    },
+    {
+      "source": "workflows/switchboard-remote.md",
+      "name": "switchboard-remote",
+      "relPath": ".claude/skills/switchboard-remote/SKILL.md"
+    },
+    {
+      "source": "workflows/switchboard-memo.md",
+      "name": "switchboard-memo",
+      "relPath": ".claude/skills/switchboard-memo/SKILL.md"
+    },
+    {
+      "source": "skills/improve-plan",
+      "name": "improve-plan",
+      "relPath": ".claude/skills/improve-plan/SKILL.md"
+    },
+    {
+      "source": "skills/improve-feature",
+      "name": "improve-feature",
+      "relPath": ".claude/skills/improve-feature/SKILL.md"
+    },
+    {
+      "source": "skills/accuracy",
+      "name": "accuracy",
+      "relPath": ".claude/skills/accuracy/SKILL.md"
     },
     {
       "source": "skills/improve-remote-plan",

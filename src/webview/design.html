@@ -2981,6 +2981,27 @@
             color: var(--text-secondary);
             font-size: 11px;
         }
+        .stitch-generating-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            min-height: 220px;
+            background: var(--card-bg);
+            border: 1px dashed var(--border-color);
+            border-radius: 4px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .stitch-spinner {
+            width: 28px;
+            height: 28px;
+            border: 3px solid var(--panel-bg2);
+            border-top-color: var(--accent-teal);
+            border-radius: 50%;
+            animation: spin 0.9s linear infinite;
+        }
         #stitch-preview-pane {
             display: flex;
             flex-direction: column;
@@ -3002,6 +3023,38 @@
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
+            cursor: zoom-in;
+        }
+        /* Click-to-zoom: natural size, scrollable inside the overflow:auto container.
+           margin:auto keeps the top-left corner reachable when the image overflows a
+           centered flex container. */
+        #preview-image.zoomed {
+            max-width: none;
+            max-height: none;
+            cursor: zoom-out;
+            margin: auto;
+        }
+        /* Live HTML fallback for screens with no static screenshot (WebGL/animated
+           components aren't captured by Stitch's screenshot tool). */
+        #stitch-html-live-frame {
+            width: 100%;
+            height: 100%;
+            border: 0;
+            background: #fff;
+        }
+        .stitch-live-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            padding: 2px 8px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.65);
+            color: #6fe3c1;
+            border: 1px solid rgba(111, 227, 193, 0.5);
+            pointer-events: none;
         }
 
         /* Preview Header */
@@ -3077,6 +3130,48 @@
         }
         #stitch-preview-pane.loading .preview-footer {
             display: none;
+        }
+        /* AI response (screenMetadata.summary + suggestion chips) shown between
+           the preview image and the refine footer */
+        .preview-ai-response {
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 160px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+        #stitch-preview-pane.loading .preview-ai-response {
+            display: none;
+        }
+        #preview-ai-summary {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+        }
+        #preview-ai-suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .stitch-suggestion-chip {
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border-radius: 12px;
+            padding: 3px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: var(--font-family);
+            transition: all 0.15s;
+        }
+        .stitch-suggestion-chip:hover {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
         }
         .preview-edit-row {
             display: flex;
@@ -3554,6 +3649,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <body class="cyber-theme-enabled">
     <div id="research-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="stitch">STITCH</button>
+        <button class="shared-tab-btn" data-tab="stitch-html">STITCH HTML</button>
         <button class="shared-tab-btn" data-tab="briefs">BRIEFS</button>
         <button class="shared-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
         <button class="shared-tab-btn" data-tab="images">IMAGES</button>
@@ -3698,6 +3794,52 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button id="btn-import-claude-design" class="strip-btn stitch-btn-primary" title="Send the import prompt to Claude">⇨ Import from Claude Design</button>
                     </div>
                     <div id="claude-import-target-hint" style="font-size: 11px; color: var(--text-secondary);"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stitch HTML Tab -->
+        <div id="stitch-html-content" class="shared-tab-content">
+            <div class="controls-strip" id="controls-strip-stitch-html">
+                <select id="stitch-html-project-select" class="workspace-filter-select">
+                    <option value="">Select Project...</option>
+                </select>
+                <input type="text" id="stitch-html-docs-search" class="sidebar-search-input" placeholder="Search screens..." />
+                <span id="status-stitch-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No project selected</span>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-stitch-html">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="empty-state">Select a project to browse cached HTML</div>
+                </div>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-stitch-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                        <div id="stitch-html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                            <span style="font-size: 48px; opacity: 0.5;">📄</span>
+                            <div style="text-align: center;">
+                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Stitch HTML Browser</div>
+                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a project and a screen to preview its cached HTML. HTML caches as screens load in the Stitch tab.</div>
+                            </div>
+                        </div>
+                        <div id="stitch-html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                            <div style="font-size: 12px;">Loading preview...</div>
+                        </div>
+                        <div id="stitch-html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
+                            <div class="zoomable-viewport" style="width: 100%; height: 100%;">
+                                <iframe id="stitch-html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
+                            </div>
+                            <div class="zoom-event-layer"></div>
+                            <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3881,11 +4023,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
 
                     <div class="preview-image-container" style="flex: 1; position: relative; overflow: auto; display: flex; align-items: center; justify-content: center; background: var(--panel-bg2); min-height: 0;">
-                        <img id="preview-image" alt="Screen Preview" style="max-width: 100%; max-height: 100%; object-fit: contain;" />
+                        <img id="preview-image" alt="Screen Preview" title="Click to zoom" />
+                        <div id="stitch-html-live-wrapper" style="display: none; position: absolute; inset: 0;">
+                            <iframe id="stitch-html-live-frame" title="Live HTML render"></iframe>
+                            <div class="stitch-live-badge" title="This screen has no static screenshot (animated/WebGL components aren't captured by Stitch's screenshot tool) — you're seeing the HTML rendered live">LIVE HTML</div>
+                        </div>
                         <div id="preview-image-placeholder" class="stitch-thumb-placeholder" style="display: none; width: 100%; height: 100%;">
                             <span>Preview not ready yet</span>
                             <button id="preview-btn-reload" class="strip-btn">↻ Reload Screen</button>
                         </div>
+                    </div>
+
+                    <div id="preview-ai-response" class="preview-ai-response" style="display: none;">
+                        <div id="preview-ai-summary"></div>
+                        <div id="preview-ai-suggestions"></div>
                     </div>
 
                     <div class="preview-footer">
@@ -3950,10 +4101,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <label for="folder-modal-workspace-select" style="font-size: 11px; color: var(--text-secondary);">Workspace</label>
                         <select id="folder-modal-workspace-select" class="workspace-filter-select" style="width: 100%;"></select>
                     </div>
-                    <label id="stitch-html-preview-toggle-row" for="stitch-html-preview-toggle" style="display: none; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; font-size: 12px;">
-                        <input type="checkbox" id="stitch-html-preview-toggle" />
-                        <span>Include Stitch screen HTML <span style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px;">(.switchboard/stitch)</span></span>
-                    </label>
                     <div class="modal-section">
                         <div class="section-header">
                             <span class="section-title">Configured Folders</span>
@@ -3965,6 +4112,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div id="folder-list-modal" class="folder-list">
                             <!-- Folder items rendered by JS -->
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stitch New Project Modal -->
+        <div id="stitch-new-project-modal" class="stitch-prompt-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="stitch-new-project-modal-title">
+            <div class="modal-content" style="max-width: 500px; width: 90%;">
+                <div class="modal-header">
+                    <h3 id="stitch-new-project-modal-title">New Stitch Project</h3>
+                    <button class="modal-close-btn" id="btn-close-stitch-new-project-modal" aria-label="Close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;">
+                        <label for="stitch-new-project-title" style="font-size: 11px; color: var(--text-secondary);">Project Title</label>
+                        <input type="text" id="stitch-new-project-title" class="stitch-input" style="max-width: 100%;" placeholder="e.g. Onboarding Redesign" />
+                    </div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
+                        <button id="btn-cancel-stitch-new-project" class="strip-btn">Cancel</button>
+                        <button id="btn-create-stitch-new-project" class="strip-btn stitch-btn-primary">Create</button>
                     </div>
                 </div>
             </div>
