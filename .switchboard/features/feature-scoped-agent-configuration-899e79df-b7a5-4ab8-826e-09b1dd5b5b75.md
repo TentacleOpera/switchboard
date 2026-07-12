@@ -19,10 +19,10 @@ The plan/feature distinction is a value no other agentic project-management tool
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature Config — Foundation: First-Class "Features" Subsection Per Role + Relocate Agent-Managed Worktrees](../plans/feature-config-foundation-features-subsection.md) — **PLAN REVIEWED**
-- [ ] [Feature Config — Workflow Lever: Per-Role Feature Workflow Override](../plans/feature-config-workflow-override-per-role.md) — **PLAN REVIEWED**
-- [ ] [Feature Config — Worktree + Subagent Levers: Decouple Feature Orchestration Into Two Independent Controls](../plans/feature-config-worktree-subagent-levers.md) — **PLAN REVIEWED**
-- [ ] [Feature Config — Planner Features UI: Wire the Feature Levers Into the Planner's Hardcoded Config Block](../plans/feature-config-planner-features-ui.md) — **PLAN REVIEWED**
+- [ ] [Feature Config — Foundation: First-Class "Features" Subsection Per Role + Relocate Agent-Managed Worktrees](../plans/feature-config-foundation-features-subsection.md) — **LEAD CODED**
+- [ ] [Feature Config — Workflow Lever: Per-Role Feature Workflow Override](../plans/feature-config-workflow-override-per-role.md) — **LEAD CODED**
+- [ ] [Feature Config — Worktree + Subagent Levers: Decouple Feature Orchestration Into Two Independent Controls](../plans/feature-config-worktree-subagent-levers.md) — **LEAD CODED**
+- [ ] [Feature Config — Planner Features UI: Wire the Feature Levers Into the Planner's Hardcoded Config Block](../plans/feature-config-planner-features-ui.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -41,3 +41,6 @@ All four subtasks were verified against live `src/`; every line reference is acc
 - **Coder feature path — asymmetric coverage (load-bearing for the coder).** The coder feature branch (`agentPromptBuilder.ts:1204-1253`) calls `resolveBaseInstructions` (`:1223`), so the **feature workflow** override reaches it *for free* via the `:314-315` prepend (do NOT add a second coder-branch workflow edit — it would double-prepend). But that branch has **no `featureDirectiveBlock`** and never calls `resolveFeatureOrchestrationDirective`, so the **feature subagent policy** does NOT reach it automatically — the Worktree+Subagent subtask must inject the subagent clause into the coder branch via a shared helper.
 - **Cross-feature stale-path guard is a SOFT dependency.** `normalizeRetiredWorkflowPath` (from `fix-planner-workflowpath-stale-override.md`) is **not yet implemented in `src/`** as of 2026-07-12. The Workflow lever ships and works without it; routing through the guard is additive hardening. Do not block this feature on that fix — coordinate when both are present.
 - **Execution order (all four handled in one dispatch):** Foundation → { Workflow lever, Worktree+Subagent lever } → Planner UI. Since this dispatch implements all four in sequence (no parallel worktrees), the shared-surface merges resolve automatically as each is applied in order.
+
+## Completion Report
+We have successfully implemented the "Feature-Scoped Agent Configuration" feature. All four subtasks (Foundation, Workflow Lever, Worktree + Subagent Levers, and Planner Features UI) were completed in sequence. The changes modify `sharedDefaults.js`, `kanban.html`, `KanbanProvider.ts`, and `agentPromptBuilder.ts` to support feature-scoped workflow files, worktrees, and subagent policies. No issues were encountered during the implementation.

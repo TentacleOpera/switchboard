@@ -2965,7 +2965,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <!-- Planner-specific configuration -->
         <div id="plannerConfig" class="role-config">
           <div class="db-subsection">
-            <div class="subsection-header"><span>Workflow File</span></div>
+            <div class="subsection-header"><span>Workflow File (single plan)</span></div>
             <div class="config-section workflow-section">
               <p class="section-desc">The workflow file defines the planning methodology.</p>
               
@@ -3070,6 +3070,49 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                       <span>Write Feature Description If Empty</span>
                       <span class="tooltip">When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file</span>
                     </label>
+
+                    <!-- Feature Workflow File -->
+                    <div class="addon-file-group" style="margin-top: 8px; border-top: 1px solid var(--vscode-panel-border, #eee); padding-top: 8px;">
+                      <div class="input-group">
+                        <label class="checkbox-item" title="Enable workflow file for planner when targeting a feature">
+                          <input type="checkbox" id="plannerFeatureWorkflowEnabled">
+                          <span>Enable Feature Workflow File</span>
+                        </label>
+                      </div>
+                      <div id="plannerFeatureWorkflowFilePathGroup" style="display:none; margin-top: 4px;">
+                        <div class="input-group" style="display:flex; gap:6px; align-items:center;">
+                          <label for="plannerFeatureWorkflowFilePath" style="font-size:11px;">Path:</label>
+                          <input type="text" id="plannerFeatureWorkflowFilePath" value=".agents/skills/improve-feature/SKILL.md" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
+                          <button id="validateFeatureWorkflowPath" class="secondary-btn" style="padding:2px 6px; font-size:11px;">Validate</button>
+                        </div>
+                        <div id="prompts-tab-feature-workflow-path-status" style="font-size:10px; margin-top:4px; font-family:var(--font-mono); color: var(--vscode-descriptionForeground);"></div>
+                        <div class="example-paths" style="font-size:10px; opacity:0.8; margin-top:4px;">
+                          <strong>Default:</strong> <code>.agents/skills/improve-feature/SKILL.md</code>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Feature Subagent Policy -->
+                    <div style="margin-top: 8px; border-top: 1px solid var(--vscode-panel-border, #eee); padding-top: 8px; display:flex; flex-direction:column; gap:4px;">
+                      <span style="font-weight:600; font-size:11px;">Feature Subagent Policy</span>
+                      <label class="checkbox-item" title="Let the execution platform decide subagent behavior for features">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="default" checked>
+                        <span>Not Specified</span>
+                      </label>
+                      <label class="checkbox-item" title="Explicitly instruct the agent not to spawn or invoke any subagents for features">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="noSubagents">
+                        <span>No Subagents</span>
+                      </label>
+                      <label class="checkbox-item" title="Instruct the agent to use parallel subagents when handling features">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="useSubagents">
+                        <span>Yes (Use Subagents)</span>
+                      </label>
+                      <label class="checkbox-item" title="Instruct the agent to use a specific custom subagent for features" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="customSubagent">
+                        <span>Custom Subagent</span>
+                        <input id="plannerFeatureCustomSubagentName" type="text" placeholder="Custom subagent name..." style="margin-left:8px;padding:2px 6px;border-radius:4px;border:1px solid var(--vscode-input-border, #ccc);background:var(--vscode-input-background, #fff);color:var(--vscode-input-foreground, #000);display:none;font-size:11px;width:150px;">
+                      </label>
+                    </div>
                   </div>
                 </details>
 
@@ -3444,6 +3487,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     plannerCustomNameInput.style.display = plannerSubagentPolicy === 'customSubagent' ? 'inline-block' : 'none';
                     plannerCustomNameInput.value = config.addons?.customSubagentName || '';
                 }
+
+                // Load feature workflow path and feature subagent settings for planner
+                document.getElementById('plannerFeatureWorkflowFilePath').value = config.addons?.featureWorkflowFilePath || '.agents/skills/improve-feature/SKILL.md';
+                const plannerFeatureWorkflowEnabled = config.addons?.featureWorkflowFilePathEnabled === true;
+                document.getElementById('plannerFeatureWorkflowEnabled').checked = plannerFeatureWorkflowEnabled;
+                document.getElementById('plannerFeatureWorkflowFilePathGroup').style.display = plannerFeatureWorkflowEnabled ? 'block' : 'none';
+
+                const plannerFeatureSubagentPolicy = config.addons?.featureSubagentPolicy || 'default';
+                const plannerFeatureSubagentRadios = document.getElementsByName('plannerFeatureSubagentPolicy');
+                plannerFeatureSubagentRadios.forEach(radio => { radio.checked = radio.value === plannerFeatureSubagentPolicy; });
+                const plannerFeatureCustomNameInput = document.getElementById('plannerFeatureCustomSubagentName');
+                if (plannerFeatureCustomNameInput) {
+                    plannerFeatureCustomNameInput.style.display = plannerFeatureSubagentPolicy === 'customSubagent' ? 'inline-block' : 'none';
+                    plannerFeatureCustomNameInput.value = config.addons?.featureCustomSubagentName || '';
+                }
             } else if (currentRole === 'researcher') {
                 const config = roleConfigs[currentRole] || { prompt: '', addons: {} };
                 const complexity = config.researchComplexity || 'deep';
@@ -3496,7 +3554,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no push clause' }
                     ] },
                     { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-                    { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
+                    { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+                    {
+                        id: 'featureSubagentPolicy', label: 'Feature Subagent Policy', tooltip: 'Control how the agent handles subagent spawning for feature dispatches',
+                        type: 'radio', group: 'features', default: 'default', options: [
+                            { value: 'default', label: 'Not Specified', tooltip: 'Let the execution platform decide subagent behavior' },
+                            { value: 'noSubagents', label: 'No Subagents', tooltip: 'Explicitly instruct the agent not to spawn or invoke any subagents' },
+                            { value: 'useSubagents', label: 'Yes (Use Subagents)', tooltip: 'Instruct the agent to use parallel subagents when handling multiple plans' },
+                            { value: 'customSubagent', label: 'Custom Subagent', tooltip: 'Instruct the agent to use a specific custom subagent', textInputOn: 'customSubagent' }
+                        ]
+                    },
+                    { id: 'featureWorkflowFilePath', label: 'Feature Workflow File', tooltip: 'Read a workflow file and follow it step-by-step for feature dispatches', type: 'file', group: 'features', default: false },
                     { id: 'phoneAFriend', label: 'Phone-a-Friend', tooltip: 'When done coding the batch, notify the Phone-a-Friend terminal to do a second pass (requires Phone-a-Friend agent configured)', default: false },
                     { id: 'applyFeatureDirectives', label: 'Apply Feature Ultracode/Goal Directives', group: 'features', tooltip: 'When dispatched on a feature, prepend the board\'s ultracode//goal directives (as for Lead/Coder/Intern)', default: false }
                 ];
@@ -3518,6 +3586,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     wrapper.className = 'addon-radio-group';
                     wrapper.innerHTML = `<span class="addon-label" style="font-weight:600;margin-bottom:4px;display:block;">${addon.label}</span>`;
                     const textInputsToToggle = [];
+                    const targetTextField = addon.id === 'featureSubagentPolicy' ? 'featureCustomSubagentName' : 'customSubagentName';
                     addon.options.forEach(opt => {
                         const label = document.createElement('label');
                         label.className = 'checkbox-item';
@@ -3545,7 +3614,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             textInput.style.background = 'var(--vscode-input-background, #fff)';
                             textInput.style.color = 'var(--vscode-input-foreground, #000)';
                             textInput.style.display = currentValue === opt.textInputOn ? 'inline-block' : 'none';
-                            textInput.value = roleConfigs[role]?.addons?.customSubagentName || '';
+                            textInput.value = roleConfigs[role]?.addons?.[targetTextField] || '';
                             textInput.className = 'addon-text-input';
                             
                             textInput.addEventListener('input', (e) => {
@@ -3553,7 +3622,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 e.target.value = sanitized;
                                 if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
                                 if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
-                                roleConfigs[role].addons.customSubagentName = sanitized;
+                                roleConfigs[role].addons[targetTextField] = sanitized;
                                 saveRoleConfig(role);
                                 refreshPreview();
                             });
@@ -3577,7 +3646,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             });
 
                             if (!isTextInputOptionSelected) {
-                                roleConfigs[role].addons.customSubagentName = '';
+                                roleConfigs[role].addons[targetTextField] = '';
                                 textInputsToToggle.forEach(ti => {
                                     ti.input.value = '';
                                 });
@@ -4414,6 +4483,74 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
                     if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
                     roleConfigs.planner.addons.customSubagentName = sanitized;
+                    saveRoleConfig('planner');
+                    refreshPreview();
+                });
+            }
+
+            // Planner feature workflow file enable checkbox listener
+            const plannerFeatureWorkflowEnabled = document.getElementById('plannerFeatureWorkflowEnabled');
+            if (plannerFeatureWorkflowEnabled) {
+                plannerFeatureWorkflowEnabled.addEventListener('change', (e) => {
+                    const enabled = e.target.checked;
+                    document.getElementById('plannerFeatureWorkflowFilePathGroup').style.display = enabled ? 'block' : 'none';
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                    roleConfigs.planner.addons.featureWorkflowFilePathEnabled = enabled;
+                    saveRoleConfig('planner');
+                    refreshPreview();
+                });
+            }
+
+            // Planner feature workflow file path text input listener
+            const plannerFeatureWorkflowFilePath = document.getElementById('plannerFeatureWorkflowFilePath');
+            if (plannerFeatureWorkflowFilePath) {
+                plannerFeatureWorkflowFilePath.addEventListener('change', (e) => {
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                    roleConfigs.planner.addons.featureWorkflowFilePath = e.target.value;
+                    saveRoleConfig('planner');
+                    refreshPreview();
+                });
+            }
+
+            // Planner feature workflow file validate button listener
+            const validateFeatureWorkflowPath = document.getElementById('validateFeatureWorkflowPath');
+            if (validateFeatureWorkflowPath) {
+                validateFeatureWorkflowPath.addEventListener('click', () => {
+                    const pathEl = document.getElementById('plannerFeatureWorkflowFilePath');
+                    if (pathEl) {
+                        postKanbanMessage({ type: 'fileExists', path: pathEl.value });
+                    }
+                });
+            }
+
+            // Planner feature subagent policy radio listeners
+            const plannerFeatureSubagentRadios = document.getElementsByName('plannerFeatureSubagentPolicy');
+            const plannerFeatureCustomNameInput = document.getElementById('plannerFeatureCustomSubagentName');
+            plannerFeatureSubagentRadios.forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                    roleConfigs.planner.addons.featureSubagentPolicy = e.target.value;
+                    if (plannerFeatureCustomNameInput) {
+                        plannerFeatureCustomNameInput.style.display = e.target.value === 'customSubagent' ? 'inline-block' : 'none';
+                        if (e.target.value !== 'customSubagent') {
+                            roleConfigs.planner.addons.featureCustomSubagentName = '';
+                            plannerFeatureCustomNameInput.value = '';
+                        }
+                    }
+                    saveRoleConfig('planner');
+                    refreshPreview();
+                });
+            });
+            if (plannerFeatureCustomNameInput) {
+                plannerFeatureCustomNameInput.addEventListener('input', (e) => {
+                    const sanitized = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
+                    e.target.value = sanitized;
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                    roleConfigs.planner.addons.featureCustomSubagentName = sanitized;
                     saveRoleConfig('planner');
                     refreshPreview();
                 });
@@ -7070,7 +7207,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'fileExistsResult': {
-                    const statusEl = document.getElementById('prompts-tab-workflow-path-status');
+                    const workflowPath = document.getElementById('workflowFilePath')?.value;
+                    const featureWorkflowPath = document.getElementById('plannerFeatureWorkflowFilePath')?.value;
+                    let targetId = 'prompts-tab-workflow-path-status';
+                    if (msg.path === featureWorkflowPath && msg.path !== workflowPath) {
+                        targetId = 'prompts-tab-feature-workflow-path-status';
+                    }
+                    const statusEl = document.getElementById(targetId);
                     if (statusEl) {
                         statusEl.textContent = msg.exists ? '✓ File exists' : '✗ File not found';
                         statusEl.style.color = msg.exists ? 'var(--accent-teal)' : 'var(--accent-red)';

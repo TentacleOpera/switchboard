@@ -86,3 +86,6 @@ All line references verified against live `src/`: non-planner workflow prepend a
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder.** The material "workflow" lever; carries a real compat constraint (general-fallback). The stale-path guard is an additive coordination, not a blocker (see Reconciliation Notes). Line references verified accurate.
+
+## Completion Report
+We have successfully implemented the Workflow Override subtask. We added `featureWorkflowFilePath` (type: file, group: features) to `sharedDefaults.js` and custom agent configurations in `kanban.html`. The backend in `KanbanProvider.ts` builds feature workflow maps by role and threads them into the prompt builder, falling back to general workflow files when unset. Normalization of retired paths was extended to cover feature workflow paths in `KanbanProvider.ts`. The prompt builder was updated to prepend the feature workflow under feature mode. No issues were encountered.

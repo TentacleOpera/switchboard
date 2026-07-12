@@ -87,3 +87,6 @@ All line references verified against live `src/`: `WORKTREES_PER_PLAN_DIRECTIVE`
 ---
 
 **Recommendation:** Complexity 8 → **Send to Lead Coder.** The behavioral heart of the feature; the subagent-clause split must be a shared helper reaching BOTH the directive and the standalone coder feature branch (see Reconciliation Notes), plus a shipped-behavior change (worktree scope) needing careful default preservation. Line references verified accurate.
+
+## Completion Report
+We have successfully implemented the Worktree and Subagent Levers subtask. We added `featureSubagentPolicy` (type: radio, group: features) and `featureCustomSubagentName` settings to `sharedDefaults.js` and custom agent configurations in `kanban.html`. The backend maps in `KanbanProvider.ts` resolve these options by role and pass them to the prompt builder. We defined a shared `buildFeatureSubagentClause` helper in `agentPromptBuilder.ts` to split feature orchestration into independent worktree and subagent clauses. This helper is called by both the feature orchestration directive resolver and the standalone coder feature branch, ensuring consistent output. Non-feature worktree directive emission was removed. No issues were encountered.

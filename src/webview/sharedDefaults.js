@@ -20,19 +20,19 @@ const DEFAULT_VISIBLE_AGENTS = {
 const DEFAULT_ROLE_CONFIG = {
     planner: {
         workflowFilePath: '.agents/skills/improve-plan/SKILL.md',
-        addons: { switchboardSafeguards: true, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, adviseResearch: true, writeFeatureDescriptionIfEmpty: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true }
+        addons: { switchboardSafeguards: true, constitution: false, aggressivePairProgramming: false, gitProhibition: false, clearAntigravityContext: false, cavemanOutput: true, adviseResearch: true, writeFeatureDescriptionIfEmpty: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: true, featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' }
     },
-    lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
-    coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
-    reviewer: { prompt: '', addons: { switchboardSafeguards: true, advancedRegression: false, reviewerConciseMode: false, reviewerCompactPlanUpdate: false, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    intern: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '' } },
-    analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateMode: 'disabled', clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, researchEnabled: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    claude_designer: { prompt: 'Import a design from claude.ai/design into the target folder, writing the implementation into the designated workspace folder, built with the repo\'s existing components and styles.', addons: { switchboardSafeguards: true, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    phone_a_friend: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } },
-    project_manager: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '' } }
+    lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    reviewer: { prompt: '', addons: { switchboardSafeguards: true, advancedRegression: false, reviewerConciseMode: false, reviewerCompactPlanUpdate: false, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    intern: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', phoneAFriend: false, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', useWorktreesPerPlan: false, workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateMode: 'disabled', clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, researchEnabled: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    claude_designer: { prompt: 'Import a design from claude.ai/design into the target folder, writing the implementation into the designated workspace folder, built with the repo\'s existing components and styles.', addons: { switchboardSafeguards: true, gitProhibition: true, gitBranchStrategy: 'notSpecified', gitCommitStrategy: 'notSpecified', gitPushStrategy: 'notSpecified', clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    phone_a_friend: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: true, skipCompilation: true, skipTests: true, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } },
+    project_manager: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, subagentPolicy: 'default', customSubagentName: '', workflowFilePathEnabled: false, workflowFilePath: '', featureSubagentPolicy: 'default', featureCustomSubagentName: '', featureWorkflowFilePathEnabled: false, featureWorkflowFilePath: '' } }
 };
 
 // Role key/label pairs for UI rendering
@@ -96,6 +96,18 @@ const SUBAGENT_POLICY_RADIO = {
     ]
 };
 
+const FEATURE_SUBAGENT_POLICY_RADIO = {
+    id: 'featureSubagentPolicy', label: 'Feature Subagent Policy', tooltip: 'Control how the agent handles subagent spawning for feature dispatches',
+    type: 'radio', group: 'features', default: 'default', options: [
+        { value: 'default', label: 'Not Specified', tooltip: 'Let the execution platform decide subagent behavior' },
+        { value: 'noSubagents', label: 'No Subagents', tooltip: 'Explicitly instruct the agent not to spawn or invoke any subagents' },
+        { value: 'useSubagents', label: 'Yes (Use Subagents)', tooltip: 'Instruct the agent to use parallel subagents when handling multiple plans' },
+        { value: 'customSubagent', label: 'Custom Subagent', tooltip: 'Instruct the agent to use a specific custom subagent', textInputOn: 'customSubagent' }
+    ]
+};
+
+const FEATURE_WORKFLOW_FILE_PATH_ADDON = { id: 'featureWorkflowFilePath', label: 'Feature Workflow File', tooltip: 'Read a workflow file and follow it step-by-step for feature dispatches', type: 'file', group: 'features', default: false };
+
 // Role addon UI metadata (moved from kanban.html)
 const ROLE_ADDONS = {
     planner: [
@@ -108,7 +120,9 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: true },
         { id: 'writeFeatureDescriptionIfEmpty', label: 'Write Feature Description If Empty', tooltip: 'Backfill Goal, How the Subtasks Achieve This, and Dependencies & sequencing sections in feature files when missing', default: true },
-        SUBAGENT_POLICY_RADIO
+        SUBAGENT_POLICY_RADIO,
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     lead: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -127,8 +141,10 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     coder: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -146,8 +162,10 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     reviewer: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -160,7 +178,9 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     tester: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -168,7 +188,9 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: false },
         SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     intern: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -186,8 +208,10 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees (plans + feature subtasks)', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each plan (and, for a feature dispatch, each subtask) in an isolated git worktree, then reviews and merges. Off = the agent implements plans/subtasks directly — no worktrees, no subagents.', default: false },
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     analyst: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -195,7 +219,9 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: false },
         SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     ticket_updater: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -203,7 +229,9 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce output tokens', default: false },
         SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     researcher: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -211,7 +239,9 @@ const ROLE_ADDONS = {
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'researchEnabled', label: 'Enable Deep Research', tooltip: 'Enable deep research mode (50-100 sources, codebase + web)', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ],
     claude_designer: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -224,7 +254,9 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }
+        { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+        FEATURE_SUBAGENT_POLICY_RADIO,
+        FEATURE_WORKFLOW_FILE_PATH_ADDON
     ]
 };
 

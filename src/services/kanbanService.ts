@@ -156,20 +156,20 @@ export class KanbanService {
         }
         const workspaceRoot = payload.workspaceRoot || this._ctx.workspaceRoot;
         if (!workspaceRoot) {
-            this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false });
+            this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false, path: filePath });
             return { success: false, exists: false };
         }
         const resolvedPath = path.resolve(workspaceRoot, filePath);
         // Containment check — a bare `startsWith(workspaceRoot)` admits sibling dirs
         // that share a prefix (e.g. `/home/u/repo-secrets` when root is `/home/u/repo`).
         if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRoot + path.sep)) {
-            this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false });
+            this._ctx.broadcaster.push({ type: 'fileExistsResult', exists: false, path: filePath });
             return { success: false, exists: false };
         }
         const exists = fs.existsSync(resolvedPath);
         // Push to webview (the webview arm expects a push response).
         // HTTP callers get the return value directly.
-        this._ctx.broadcaster.push({ type: 'fileExistsResult', exists });
+        this._ctx.broadcaster.push({ type: 'fileExistsResult', exists, path: filePath });
         return { success: true, exists };
     }
 

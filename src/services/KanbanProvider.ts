@@ -541,6 +541,9 @@ export class KanbanProvider implements vscode.Disposable {
         if (out.addons && typeof out.addons.workflowFilePath === 'string') {
             out.addons = { ...out.addons, workflowFilePath: normalizeRetiredWorkflowPath(out.addons.workflowFilePath) };
         }
+        if (out.addons && typeof out.addons.featureWorkflowFilePath === 'string') {
+            out.addons = { ...out.addons, featureWorkflowFilePath: normalizeRetiredWorkflowPath(out.addons.featureWorkflowFilePath) };
+        }
         return out;
     }
 
@@ -4435,6 +4438,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             apiPort: this._taskViewerProvider?.getLocalApiServerPort() ?? 0,
             workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
             workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
+            featureUseSubagentsEnabled: promptsConfig.featureUseSubagentsByRole?.[role] ?? false,
+            featureNoSubagentsEnabled: promptsConfig.featureNoSubagentsByRole?.[role] ?? false,
+            featureCustomSubagentName: promptsConfig.featureCustomSubagentNameByRole?.[role] || undefined,
+            featureWorkflowFilePathEnabled: promptsConfig.featureWorkflowFilePathEnabledByRole?.[role] ?? false,
+            featureWorkflowFilePath: promptsConfig.featureWorkflowFilePathByRole?.[role] || '',
+            plannerFeatureWorkflowPath: promptsConfig.plannerFeatureWorkflowPath || '',
             defaultPromptOverrides,
             workspaceRoot,
             routingMapConfig: this._routingMapConfig,
@@ -4814,6 +4823,62 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
                     : ticketUpdaterConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
                     : 'disabled'),
+            featureUseSubagentsByRole: {
+                planner: plannerConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                lead: leadConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                coder: coderConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                reviewer: reviewerConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                tester: testerConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                intern: internConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                analyst: analystConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                researcher: researcherConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+                ticket_updater: ticketUpdaterConfig?.addons?.featureSubagentPolicy === 'useSubagents',
+            },
+            featureNoSubagentsByRole: {
+                planner: plannerConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                lead: leadConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                coder: coderConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                reviewer: reviewerConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                tester: testerConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                intern: internConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                analyst: analystConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                researcher: researcherConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+                ticket_updater: ticketUpdaterConfig?.addons?.featureSubagentPolicy === 'noSubagents',
+            },
+            featureCustomSubagentNameByRole: {
+                planner: plannerConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.featureCustomSubagentName || '') : '',
+                lead: leadConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (leadConfig?.addons?.featureCustomSubagentName || '') : '',
+                coder: coderConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (coderConfig?.addons?.featureCustomSubagentName || '') : '',
+                reviewer: reviewerConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (reviewerConfig?.addons?.featureCustomSubagentName || '') : '',
+                tester: testerConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (testerConfig?.addons?.featureCustomSubagentName || '') : '',
+                intern: internConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (internConfig?.addons?.featureCustomSubagentName || '') : '',
+                analyst: analystConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (analystConfig?.addons?.featureCustomSubagentName || '') : '',
+                researcher: researcherConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (researcherConfig?.addons?.featureCustomSubagentName || '') : '',
+                ticket_updater: ticketUpdaterConfig?.addons?.featureSubagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.featureCustomSubagentName || '') : '',
+            },
+            featureWorkflowFilePathEnabledByRole: {
+                planner: plannerConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                lead: leadConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                coder: coderConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                reviewer: reviewerConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                tester: testerConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                intern: internConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                analyst: analystConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                researcher: researcherConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.featureWorkflowFilePathEnabled ?? false,
+            },
+            featureWorkflowFilePathByRole: {
+                planner: normalizeRetiredWorkflowPath(plannerConfig?.addons?.featureWorkflowFilePath || ''),
+                lead: leadConfig?.addons?.featureWorkflowFilePath || '',
+                coder: coderConfig?.addons?.featureWorkflowFilePath || '',
+                reviewer: reviewerConfig?.addons?.featureWorkflowFilePath || '',
+                tester: testerConfig?.addons?.featureWorkflowFilePath || '',
+                intern: internConfig?.addons?.featureWorkflowFilePath || '',
+                analyst: analystConfig?.addons?.featureWorkflowFilePath || '',
+                researcher: researcherConfig?.addons?.featureWorkflowFilePath || '',
+                ticket_updater: ticketUpdaterConfig?.addons?.featureWorkflowFilePath || '',
+            },
+            plannerFeatureWorkflowPath: normalizeRetiredWorkflowPath(plannerConfig?.addons?.featureWorkflowFilePath || '.agents/skills/improve-feature/SKILL.md'),
         };
     }
 
@@ -9091,16 +9156,16 @@ ${FOCUS_DIRECTIVE}`;
                     if (typeof filePath !== 'string' || !filePath.trim()) break;
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     if (!workspaceRoot) {
-                        this.postMessage({ type: 'fileExistsResult', exists: false });
+                        this.postMessage({ type: 'fileExistsResult', exists: false, path: filePath });
                         break;
                     }
                     const resolvedPath = path.resolve(workspaceRoot, filePath);
                     if (!resolvedPath.startsWith(workspaceRoot)) {
-                        this.postMessage({ type: 'fileExistsResult', exists: false });
+                        this.postMessage({ type: 'fileExistsResult', exists: false, path: filePath });
                         break;
                     }
                     const exists = fs.existsSync(resolvedPath);
-                    this.postMessage({ type: 'fileExistsResult', exists });
+                    this.postMessage({ type: 'fileExistsResult', exists, path: filePath });
                 }
                 break;
             }

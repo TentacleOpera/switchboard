@@ -68,3 +68,6 @@ All line references verified against live `src/webview/kanban.html`: planner blo
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder.** Bespoke but pattern-following UI wiring; the risk is completeness of the three-point wiring, not novelty. Must land after both lever subtasks (see Reconciliation Notes). Line references verified accurate.
+
+## Completion Report
+We have successfully implemented the Planner Features UI subtask. We extended the hardcoded Features details accordion in `kanban.html` to expose Feature Workflow File and Feature Subagent Policy controls, following the planner's bespoke layout. We wired the checkbox/text inputs for load, listener, and save functions, mapping feature workflow settings under `addons.featureWorkflowFilePath`. We updated the webview message handler `fileExistsResult` to dynamically choose status elements using the message path. The general workflow section header was also relabeled to make the single plan scope explicit. No issues were encountered.

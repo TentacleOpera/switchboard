@@ -246,6 +246,18 @@ export interface PromptBuilderOptions {
     workflowFilePathEnabled?: boolean;
     /** Path to the workflow file for non-planner roles. */
     workflowFilePath?: string;
+    /** When true, uses parallel sub-agent instruction for feature dispatches. */
+    featureUseSubagentsEnabled?: boolean;
+    /** When true, injects strict no-subagent prohibition directive for feature dispatches. */
+    featureNoSubagentsEnabled?: boolean;
+    /** Custom subagent name for feature dispatches. */
+    featureCustomSubagentName?: string;
+    /** When true, prepends a workflow file instruction for feature dispatches. */
+    featureWorkflowFilePathEnabled?: boolean;
+    /** Path to the workflow file for feature dispatches. */
+    featureWorkflowFilePath?: string;
+    /** Path to the workflow file for the planner role when targeting a feature. */
+    plannerFeatureWorkflowPath?: string;
     /** Resolved chat-plan write destination(s) for the chat role. One path per entry; the agent picks one. */
     chatPlanDestinations?: string[];
     /** When true, the batch includes a feature and its subtasks. */
@@ -311,8 +323,12 @@ export function resolveBaseInstructions(
     // NOTE: Custom agents handle workflow prepend separately in buildCustomAgentPrompt.
     // If you change the workflow instruction format here, update buildCustomAgentPrompt too.
     // Chat role is excluded because its instructions are already inlined via DEFAULT_CHAT_BASE_INSTRUCTIONS.
-    if (role !== 'planner' && role !== 'chat' && options?.workflowFilePathEnabled && options?.workflowFilePath) {
-        base = `Read ${options.workflowFilePath} and follow it step-by-step.\n\n${base}`;
+    if (role !== 'planner' && role !== 'chat') {
+        if (options?.featureMode && options?.featureWorkflowFilePathEnabled && options?.featureWorkflowFilePath) {
+            base = `Read ${options.featureWorkflowFilePath} and follow it step-by-step.\n\n${base}`;
+        } else if (options?.workflowFilePathEnabled && options?.workflowFilePath) {
+            base = `Read ${options.workflowFilePath} and follow it step-by-step.\n\n${base}`;
+        }
     }
     return base;
 }
@@ -630,17 +646,54 @@ interface FeatureOrchestrationDirectiveContext {
  * implements the subtasks directly, no worktrees/subagents. `feature_worktree_mode` is
  * validated for a warning only. Unknown mode values log a warning and proceed.
  */
+export function buildFeatureSubagentClause(
+    policy: string | undefined,
+    customName: string | undefined,
+    worktreesEnabled: boolean
+): string {
+    const activePolicy = policy || 'default';
+    if (activePolicy === 'default') {
+        return worktreesEnabled
+            ? `Use your native subagent or orchestration capabilities to handle each subtask. If your tool supports worktree-per-plan isolation, activate it now. If you do not support subagents, handle each subtask sequentially in the order listed below. `
+            : `Handle the subtasks yourself in a sensible order — do NOT create git worktrees or spawn subagents for this dispatch. `;
+    }
+
+    const worktreeClause = worktreesEnabled
+        ? `Use a dedicated git worktree for each subtask to prevent file conflicts (worktree-per-plan isolation). `
+        : `Do NOT create git worktrees for this dispatch; implement the subtasks directly. `;
+
+    let subagentClause = '';
+    if (activePolicy === 'noSubagents') {
+        subagentClause = `You are strictly forbidden from spawning or invoking any subagents. Handle all subtasks yourself. `;
+    } else if (activePolicy === 'useSubagents') {
+        subagentClause = `Use your native subagent or orchestration capabilities to handle each subtask. If you do not support subagents, handle each subtask sequentially in the order listed below. `;
+    } else if (activePolicy === 'customSubagent') {
+        const name = customName?.trim();
+        subagentClause = name
+            ? `You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents. `
+            : `Use your native subagent or orchestration capabilities to handle each subtask. `;
+    }
+
+    return `${worktreeClause}${subagentClause}`;
+}
+
 export function resolveFeatureOrchestrationDirective(
     mode: string | undefined,
     featureTopic: string,
     subtaskCount: number,
     worktreesEnabled: boolean = false,
-    _context?: FeatureOrchestrationDirectiveContext
+    _context?: FeatureOrchestrationDirectiveContext,
+    policy?: string,
+    customSubagentName?: string
 ): string {
     if (mode !== undefined && !['none', 'per-feature'].includes(mode)) {
         console.warn(`[agentPromptBuilder] Unknown feature_worktree_mode "${mode}" — falling back to base orchestration directive.`);
     }
-    return FEATURE_ORCHESTRATION_DIRECTIVE(featureTopic, subtaskCount, worktreesEnabled);
+    const subagentAndWorktreePart = buildFeatureSubagentClause(policy, customSubagentName, worktreesEnabled);
+    return `FEATURE MODE: You are implementing the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).\n` +
+        subagentAndWorktreePart +
+        `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
+        `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
 }
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
@@ -842,10 +895,6 @@ export function buildKanbanBatchPrompt(
         subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
     }
 
-    if (useWorktreesPerPlanEnabled) {
-        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + WORKTREES_PER_PLAN_DIRECTIVE : WORKTREES_PER_PLAN_DIRECTIVE;
-    }
-
     const batchExecutionRules = BATCH_EXECUTION_RULES;
     const inlineChallengeDirective = INLINE_CHALLENGE_DIRECTIVE;
     const challengeBlock = includeInlineChallenge ? inlineChallengeDirective : '';
@@ -905,11 +954,15 @@ export function buildKanbanBatchPrompt(
     // before the PLANS TO PROCESS heading rather than under it.
     let featureDirectiveBlock = '';
     if (options?.featureMode && options?.featureTopic) {
+        const featureSubagentPolicy = options?.featureUseSubagentsEnabled ? 'useSubagents' : (options?.featureNoSubagentsEnabled ? 'noSubagents' : (options?.featureCustomSubagentName ? 'customSubagent' : 'default'));
         const directive = resolveFeatureOrchestrationDirective(
             options.featureWorktreeMode,
             options.featureTopic,
             options.subtaskCount || 0,
-            useWorktreesPerPlanEnabled
+            useWorktreesPerPlanEnabled,
+            undefined,
+            featureSubagentPolicy,
+            options.featureCustomSubagentName
         );
         featureDirectiveBlock = directive;
         if (options?.featurePromptTemplate) {
@@ -1256,6 +1309,13 @@ For each plan:
                 dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
             });
 
+            const featureSubagentPolicy = options?.featureUseSubagentsEnabled ? 'useSubagents' : (options?.featureNoSubagentsEnabled ? 'noSubagents' : (options?.featureCustomSubagentName ? 'customSubagent' : 'default'));
+            const featureSubagentBlock = buildFeatureSubagentClause(
+                featureSubagentPolicy,
+                options?.featureCustomSubagentName,
+                useWorktreesPerPlanEnabled
+            ).trim();
+
             const staggeredImplementationBlock = (options?.featureMode && staggeredImplementationEnabled) ? STAGGERED_IMPLEMENTATION_DIRECTIVE : '';
             const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
             const promptParts = [
@@ -1264,6 +1324,7 @@ For each plan:
                 baseInstructions,
                 suffixBlock,
                 featureFileBlock,
+                featureSubagentBlock,
                 phoneAFriendBlock,
                 staggeredImplementationBlock,
                 suppressWalkthroughBlock
@@ -1575,19 +1636,32 @@ export function buildCustomAgentPrompt(
     // options.worktreePath. Mixed-batch suppresses the Branch clause globally.
     const customWorktreeActive = [...new Set(plans.map(p => p.worktreePath).filter((p): p is string => !!p))].length > 0;
 
+    const isFeature = plans.some(p => p.isFeature);
+
     // Custom workflow: prepend read-workflow instruction.
     // NOTE: Built-in roles handle workflow prepend in resolveBaseInstructions.
     // If you change the workflow instruction format here, update resolveBaseInstructions too.
+    if (isFeature && addons?.featureWorkflowFilePathEnabled && addons?.featureWorkflowFilePath) {
+        return `Read ${addons.featureWorkflowFilePath} and follow it step-by-step.\n\n` +
+            buildCustomAgentPrompt(plans, promptInstructions,
+                { ...addons, featureWorkflowFilePathEnabled: undefined, featureWorkflowFilePath: undefined }, workspaceRoot);
+    }
     if (addons?.workflowFilePathEnabled && addons?.workflowFilePath) {
         return `Read ${addons.workflowFilePath} and follow it step-by-step.\n\n` +
             buildCustomAgentPrompt(plans, promptInstructions,
                 { ...addons, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot);
     }
 
-    const noSubagentsEnabled = addons?.subagentPolicy === 'noSubagents';
-    const customSubagentName = addons?.subagentPolicy === 'customSubagent' ? addons?.customSubagentName?.trim() : undefined;
-    const useSubagentsEnabled = addons?.subagentPolicy === 'useSubagents'
-        || (addons?.subagentPolicy === undefined && addons?.useSubagents === true);
+    const featureSubagentPolicy = addons?.featureSubagentPolicy || 'default';
+    const noSubagentsEnabled = isFeature
+        ? featureSubagentPolicy === 'noSubagents'
+        : addons?.subagentPolicy === 'noSubagents';
+    const customSubagentName = isFeature
+        ? (featureSubagentPolicy === 'customSubagent' ? addons?.featureCustomSubagentName?.trim() : undefined)
+        : (addons?.subagentPolicy === 'customSubagent' ? addons?.customSubagentName?.trim() : undefined);
+    const useSubagentsEnabled = isFeature
+        ? (featureSubagentPolicy === 'useSubagents' || (featureSubagentPolicy === 'default' && addons?.useWorktreesPerPlan === true))
+        : (addons?.subagentPolicy === 'useSubagents' || (addons?.subagentPolicy === undefined && addons?.useSubagents === true));
 
     let subagentBlock = '';
     if (noSubagentsEnabled) {
@@ -1601,7 +1675,7 @@ export function buildCustomAgentPrompt(
         subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
     }
 
-    if (addons?.useWorktreesPerPlan) {
+    if (addons?.useWorktreesPerPlan && isFeature) {
         subagentBlock = subagentBlock ? subagentBlock + '\n\n' + WORKTREES_PER_PLAN_DIRECTIVE : WORKTREES_PER_PLAN_DIRECTIVE;
     }
 
