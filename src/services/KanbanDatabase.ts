@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import {
     DEFAULT_KANBAN_COLUMNS,
     parseCustomAgents,
@@ -8077,11 +8078,19 @@ FROM plans
     }
 
     /**
-     * Reads agent configuration from `.switchboard/state.json` for the kanban-state
-     * file header writer. Returns empty maps on any failure (no `**Agent:**` lines
-     * written). This is a snapshot read — the staleness window versus
-     * GlobalIntegrationConfigService is bounded by the next board move and acceptable
-     * for a display-only field.
+     * Reads agent configuration for the kanban-state file header writer. Returns
+     * empty maps on any failure (no `**Agent:**` lines written). This is a snapshot
+     * read — the staleness window versus GlobalIntegrationConfigService is bounded
+     * by the next board move and acceptable for a display-only field.
+     *
+     * Data sources: `state.json` no longer exists on disk (migrated to the kanban.db
+     * config table + `~/.switchboard/integration-config.json` via the stateConfigBridge
+     * facade). KanbanDatabase imports the real `fs` module (not `stateFs`), so a direct
+     * `fs.promises.readFile` on state.json would always fail in production. We try the
+     * legacy file first (tests / older deployments), then fall back to the authoritative
+     * sources: GlobalIntegrationConfigService for machine-global agent keys
+     * (startupCommands, visibleAgents, customAgents) and the kanban.db config table
+     * for per-workspace customKanbanColumns.
      */
     private async _readAgentConfig(): Promise<{
         startupCommands: Record<string, string>;
@@ -8089,6 +8098,8 @@ FROM plans
         customAgents: CustomAgentConfig[];
         customKanbanColumns: CustomKanbanColumnConfig[];
     }> {
+        // Legacy path: try state.json on disk (tests, older deployments that haven't
+        // migrated yet). In production this file is gone — the catch falls through.
         try {
             const statePath = path.join(this._workspaceRoot, '.switchboard', 'state.json');
             const content = await fs.promises.readFile(statePath, 'utf8');
@@ -8099,6 +8110,22 @@ FROM plans
                 customAgents: parseCustomAgents(state.customAgents),
                 customKanbanColumns: parseCustomKanbanColumns(state.customKanbanColumns)
             };
+        } catch {
+            // state.json not on disk — fall through to production sources below.
+        }
+        // Production path: read from the authoritative stores. Agent keys
+        // (startupCommands, visibleAgents, customAgents) are machine-global in
+        // ~/.switchboard via GlobalIntegrationConfigService; customKanbanColumns is
+        // per-workspace in the kanban.db config table. getConfigJsonSync requires
+        // this._db open — _writeLocalBoardMirror guards on that before calling us.
+        try {
+            const startupCommands = GlobalIntegrationConfigService.getAgentConfigSync<Record<string, string>>('startupCommands') || {};
+            const visibleAgents = GlobalIntegrationConfigService.getAgentConfigSync<Record<string, boolean>>('visibleAgents') || {};
+            const customAgentsRaw = GlobalIntegrationConfigService.getAgentConfigSync<unknown[]>('customAgents');
+            const customAgents = parseCustomAgents(customAgentsRaw);
+            const customKanbanColumnsRaw = this.getConfigJsonSync<unknown[]>('kanban.customColumns', []);
+            const customKanbanColumns = parseCustomKanbanColumns(customKanbanColumnsRaw);
+            return { startupCommands, visibleAgents, customAgents, customKanbanColumns };
         } catch {
             return {
                 startupCommands: {},

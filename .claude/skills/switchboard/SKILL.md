@@ -60,14 +60,20 @@ verify-before-mutate and for mutations.**
    every column in a single awk pass over ALL `kanban-state-*.md` files (never one grep
    per column, never `grep -c` piped into `$(( ))` math — see Shell discipline below):
    ```bash
-   awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0}
+   awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0; agent[col]=""}
+        /^\*\*Agent:\*\*/{ agent[col]=$0; sub(/^\*\*Agent:\*\* /,"",agent[col]) }
         /planId:/{ if (/ feature -->/) feats[col]++; else plans[col]++ }
-        END{for (c in plans) printf "%s: %d plans, %d features\n", c, plans[c], feats[c]}' \
+        END{for (c in plans) printf "%s: %d plans, %d features, agent=%s\n", c, plans[c], feats[c], agent[c]}' \
      "$ROOT"/.switchboard/kanban-state-*.md
    ```
    - **Feature rows carry `planId:` too** — only the trailing ` feature -->` marker
      distinguishes them, so a bare `grep -c 'planId:'` silently inflates plan counts.
      The awk above already splits plans from features per column.
+   - **Agent names** come from the `agent=` field per column (the extension writes a
+     `**Agent:** <NAME> CLI` header line into each kanban-state file). Columns with no
+     configured/visible agent produce an empty `agent=` — render those as "no agent
+     configured" rather than blank. These are *configured* names; `/health` `terminals`
+     remains the source for *liveness* (which agents are actually running).
    - Format the one-line snapshot yourself from the raw counts: **name every non-empty
      column positioned BEFORE `CODE REVIEWED` individually**, in board order. For the
      default board that is `BACKLOG`, `CREATED`, `PLAN REVIEWED`, and the coding columns
