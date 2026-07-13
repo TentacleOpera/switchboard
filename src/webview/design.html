@@ -291,7 +291,8 @@
         .content-row.collapsed #tree-pane-briefs,
         .content-row.collapsed #tree-pane-html,
         .content-row.collapsed #tree-pane-images,
-        .content-row.collapsed #tree-pane-tickets {
+        .content-row.collapsed #tree-pane-tickets,
+        .content-row.collapsed #tree-pane-stitch-html {
             padding: 4px;
             overflow: hidden;
         }
@@ -302,7 +303,8 @@
         .content-row.collapsed #tree-pane-briefs > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-html > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-images > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) {
+        .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-stitch-html > *:not(.sidebar-toggle-row) {
             display: none !important;
         }
 
@@ -3804,8 +3806,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <select id="stitch-html-project-select" class="workspace-filter-select">
                     <option value="">Select Project...</option>
                 </select>
-                <input type="text" id="stitch-html-docs-search" class="sidebar-search-input" placeholder="Search screens..." />
                 <button id="stitch-html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
+                <input type="text" id="stitch-html-docs-search" class="sidebar-search-input" placeholder="Search screens..." />
                 <span id="status-stitch-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No project selected</span>
             </div>
             <div class="content-row">
@@ -3894,8 +3896,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <select id="html-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
-                <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
                 <button id="html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
+                <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
                 <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
                 <button id="btn-copy-design-html-artifact-prompt" class="strip-btn" title="Copy a prompt to publish the selected HTML file to claude.ai as an Artifact">Copy upload prompt</button>
                 <button id="btn-send-design-html-artifact-prompt" class="strip-btn stitch-btn-primary" title="Send the artifact upload prompt to Claude">⇨ Upload to Claude Artifacts</button>

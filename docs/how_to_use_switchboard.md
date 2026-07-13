@@ -18,7 +18,16 @@ To get the most out of Switchboard, follow the standard full-lifecycle pipeline:
 
 ## 1.5. Capturing Issues with Memo Mode
 
-During testing or exploration, use `/memo` to enter capture mode. Each message is appended verbatim to `.switchboard/memo.md` — no analysis, no code changes, just capture. When you're done, either open the Memo sub-tab in the sidebar (Agents & Terminals tab → Memo sub-tab) to dispatch entries to the planner or copy the planner prompt to clipboard, or send `process memo` in chat to exit capture mode and create one plan per entry. You can also open the Memo tab directly via the `switchboard.memo.hotkey` keybinding (default `cmd+shift+alt+m`).
+During testing or exploration, use `/switchboard-memo` to enter capture mode. Each message is appended verbatim to `.switchboard/memo.md` — no analysis, no code changes, just capture. When you're done, either open the Memo sub-tab in the sidebar (Agents & Terminals tab → Memo sub-tab) to dispatch entries to the planner or copy the planner prompt to clipboard, or send `process memo` in chat to exit capture mode and create one plan per entry. You can also open the Memo tab directly via the `switchboard.memo.hotkey` keybinding (default `cmd+shift+alt+m`).
+
+### Four front-door commands
+Switchboard's chat entry points are consolidated into four slash commands:
+- **`/switchboard`** — The local management console: drive the board, plans, features, dispatch, and automation while the VS Code extension is running. This is the primary front door — start here when unsure.
+- **`/switchboard-cloud`** — Cloud-VM planning brake: plan first, do not auto-code in a remote VM.
+- **`/switchboard-remote`** — Remote Switchboard control: drive plans via Linear or Notion when the local machine is off.
+- **`/switchboard-memo`** — Memo capture mode (see above).
+
+The old commands (`/sw`, `/switchboard-chat`, bare `/memo`) have been retired in favor of these four.
 
 ---
 
@@ -85,6 +94,9 @@ Separately, **Board State Export** (Setup panel) mirrors board state to git — 
 ### MCP Monitor — watch your comms without leaving the board
 Turn on the **MCP Monitor** in the Kanban Automation panel to have Switchboard ping a dedicated Claude terminal on an interval (1–30 min) that checks your connected MCP sources — Slack, Gmail, Google Calendar, or a custom instruction — and reports anything needing attention in that terminal pane. Pick the sources to watch and the cadence; the status line shows whether the monitor terminal is running (launch it if not). Off by default, and read-only — it never dispatches work.
 
+### Orchestration Automation Mode — unattended batch management
+Also in the Kanban Automation panel: switch the automation mode to **Orchestration** and click **Start orchestrator** to launch an orchestrator agent that batch-manages the board unattended. On each interval tick it groups loose plans into features, fans work out across per-feature worktrees and terminals, verifies progress against git/board state, triages agent requests, and merges completed features back to main. This is the unattended equivalent of clicking **Orchestrate** on each feature manually — ideal for letting a fleet of agents work through a backlog overnight.
+
 ### Auto-Archive — keep the board (and free-tier limits) tidy
 On the Kanban **Setup** tab, enable the **Auto-Archive Rule** to automatically complete + archive any plan that sits in a chosen column past a dwell threshold (default 2 hours). The archive rides your unified push out to Linear/Notion, which helps stay under Linear's free-tier active-issue cap. Off by default. Heads-up: the dwell clock uses the plan's last-updated time, so editing or commenting on a plan resets it — a busy plan may never auto-archive.
 
@@ -108,23 +120,80 @@ Click the **?** button in the Features tab for this same cheat-sheet:
 ### Worktree isolation
 Bind a feature to its own git worktree/branch so its agents never collide with your main checkout. Manage worktrees from the Kanban **WORKTREES** panel — dispatched agents automatically `cd` into the worktree and switch to its branch, and you can merge or abandon the worktree when the feature is done. This is ideal for running several features in parallel without branch churn.
 
+### Feature-scoped agent configuration
+Each role can have independent agent settings when working on features versus single plans. In the Prompts tab, a **Features** subsection per role lets you override three things for feature dispatches only:
+- **Workflow file** — use a different planning workflow for features than for standalone plans.
+- **Subagent policy** — no subagents, use subagents, or a custom subagent, independent of your general setting.
+- **Worktree mode** — decouple the worktree decision from the subagent decision.
+
+This means a feature can use a different planning workflow or subagent strategy without changing your defaults for single-plan work.
+
 > Deleting a feature only detaches its subtasks (they return to the board) — it never destroys the underlying plans.
 
 ---
 
 ## 6. Design in the Loop (Stitch & Claude)
 
-The Design panel keeps UI work inside the IDE so it can feed straight into plans and code. Two generation paths:
+The Design panel keeps UI work inside the IDE so it can feed straight into plans and code. It has six tabs: **STITCH**, **STITCH HTML**, **BRIEFS**, **HTML PREVIEWS**, **IMAGES**, and **DESIGN SYSTEM**.
 
 ### Google Stitch
-Generate and refine UI screens on the **STITCH** tab. Authenticate once with your Stitch API key or OAuth token (stored in VS Code `SecretStorage`), pick a sync destination folder, and download HTML/PNG output plus design tokens to hand off to coders.
+Generate and refine UI screens on the **STITCH** tab. Authenticate once with your Stitch API key or OAuth token (stored in VS Code `SecretStorage`), pick a sync destination folder, and download HTML/PNG output plus design tokens to hand off to coders. The **STITCH HTML** tab browses your cached Stitch HTML output organized per project, so you can preview, inspect, and tweak generated screens without hunting through folders.
 
 ### Claude (claude.ai/design)
-The **CLAUDE** tab turns a claude.ai/design mockup into repo code:
-1. (Optional) Paste a `claude.ai/design` URL or project ID into the project field.
-2. Pick the target workspace/folder.
-3. Click **Copy import prompt** and paste it to a Claude agent (CLI or chat).
+Import designs from Claude's design tool via the **DESIGN SYSTEM** tab's "Claude Design Systems" source:
+1. (Optional) Paste a `claude.ai/design` URL or project ID into the project field (or leave blank to list your projects).
+2. Click **Copy import prompt** (or **Import from Claude Design** to send directly).
 
-The prompt instructs the agent to import the design into your repo **using the repo's existing components and styles**, listing your design projects if you didn't specify one, and running `/design-login` first if you're not authenticated. Nothing is stored in Switchboard — your Claude agent does the import. To automate it from the board, enable the **Claude Designer** agent role.
+The prompt instructs the agent to import the design into your repo **using the repo's existing components and styles**, and running `/design-login` first if you're not authenticated. Nothing is stored in Switchboard — your Claude agent does the import. To automate it from the board, enable the **Claude Designer** agent role.
 
-Both tabs share the panel's folder browsing, **Link to Folder** buttons (copy a configured folder's path to the clipboard), HTML/image previews with zoom, and the **BRIEFS** / **DESIGN SYSTEM** tabs for reference docs.
+### Claude Artifacts round-trip
+The **HTML PREVIEWS** tab and the Planning panel's HTML tab include **Copy upload prompt** / **Upload to Claude Artifacts** buttons that push a local HTML file to claude.ai as an Artifact, plus a download prompt to pull an Artifact back into your repo. This gives you a repeatable loop: pull an artifact down, edit it with any agent, push it back — useful for stakeholder-facing documents and prototypes hosted on claude.ai.
+
+All tabs share the panel's folder browsing, **Link to Folder** buttons (copy a configured folder's path to the clipboard), HTML/image previews with zoom, and the **BRIEFS** / **DESIGN SYSTEM** infrastructure.
+
+### Inspect Mode — tweak a previewed element and hand it to the coder
+Every sandboxed HTML preview in Switchboard has an **Inspect Mode** button in its controls strip — the Stitch HTML tab, the Design panel's **HTML PREVIEWS** tab, and the Planning panel's HTML tab. Once a screen or prototype is close enough, you don't need to regenerate it or leave the preview to make small surgical edits. Inspect Mode is the handoff from preview to in-file tweak:
+
+1. Click **Inspect Mode** to toggle hover-to-select on.
+2. Hover the rendered page — elements highlight as you move the cursor.
+3. Click the element you want to change. A tweak popup (docked top-right of the preview) opens showing the element's **CSS selector** and a truncated **HTML snippet** — the payload that lets the agent grep straight to the right node instead of reading the whole file.
+4. Type your change (e.g. "make this button dark blue", "tighten this card's padding").
+5. **Send to Agent** delivers a composed prompt — file path, selector, snippet, and your instruction — to the **coder** agent terminal (it falls back to the clipboard if no terminal is registered). **Copy Prompt** puts the same prompt on the clipboard for an IDE chat agent instead.
+6. The agent edits the file in place and the preview **auto-refreshes** to show the result. Switchboard never rewrites the file itself, so your tweaks are never clobbered by a regeneration.
+
+While inspect is on, links and buttons inside the preview are inert so you can select without navigating away. Press **Escape** (with focus in the preview) or click **Inspect Mode** again to turn it off. If the file is saved or auto-refreshed mid-composition, the popup closes and the selection resets — but your typed instruction is preserved so you don't lose your draft.
+
+This works identically across all three HTML preview surfaces, so the same tweak-and-handoff loop applies whether you're refining a Stitch-generated screen, a Design-panel HTML prototype, or an HTML file browsed from the Planning panel.
+
+---
+
+## 7. Tickets Tab — PM Tool Management Inside VS Code
+
+The Planning panel's **TICKETS** tab lets you browse, search, filter, import, and create tickets directly from ClickUp or Linear without leaving VS Code. Features include:
+- **Workspace / provider / project pickers** and **state / status filters** to narrow the view.
+- **+ New Ticket** to create a ticket inline; **Refetch** to re-pull from the source; **Sync changes** to push local edits back.
+- **Hierarchy navigation** via breadcrumbs for parent/child ticket navigation.
+- **Ticket preview meta bar** with Edit, Save, Cancel, Push (push to PM tool), Delete, Status dropdown, Tags, Comment, Attachments, Open (open in browser), Diagram Prompt, + Subtask, and Convert to Subtask.
+- **Sidebar actions**: **Link all** (copy all ticket paths), **Import all to kanban**.
+
+This is the day-to-day PM surface for triage and ticket management — complementing the Kanban board's plan-centric workflow.
+
+---
+
+## 8. Project Manager Role & the Manage Button
+
+The **Project Manager** is a core agent role (on by default) that provides a host-agnostic management console — you can drive the board over the LocalApiServer HTTP API from any chat host (Claude Desktop, claude.ai, Antigravity, etc.) while VS Code runs in the background.
+
+Activate it via the **Manage** button in the Implementation panel, or the board's **Run Selected Plans** targeted-pass button. The manager console:
+- Presents plan lists with numbered titles (no raw UUIDs or filenames).
+- Offers proactive follow-up suggestions after every list ("Dispatch any of these, or group some into a feature?").
+- Delivers natural-language dispatch reports naming the receiving agent.
+- Can self-service open agent terminals via the API instead of directing you to the IDE.
+
+---
+
+## 9. Claude Desktop MCP Server
+
+Switchboard ships a local stdio MCP server that bridges **Claude Desktop** (and other MCP-only hosts without shell/filesystem access) to Switchboard's LocalApiServer HTTP surface. This lets you read the board, create/move/delete plans, reconcile features, and dispatch coding from Claude Desktop while VS Code runs in the background.
+
+Set it up via the in-extension **Connect Claude Desktop** button in the Setup panel — it writes the MCP config entry for you. The server is a thin bridge; all state lives in the Switchboard extension's local API.

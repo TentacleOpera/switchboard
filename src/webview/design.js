@@ -28,6 +28,7 @@
         designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
         imagesPreviewCollapsed: persistedState.imagesPreviewCollapsed || false,
         briefsPreviewCollapsed: persistedState.briefsPreviewCollapsed || false,
+        stitchHtmlSidebarCollapsed: persistedState.stitchHtmlSidebarCollapsed || false,
         htmlWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
         imagesWorkspaceRootFilter: '',
@@ -421,7 +422,7 @@
     // Sidebar Collapsing
     function toggleSidebarCollapsed(e) {
         const btn = e.target;
-        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images') || btn.closest('#tree-pane-briefs');
+        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images') || btn.closest('#tree-pane-briefs') || btn.closest('#tree-pane-stitch-html');
         if (!pane) return;
         const row = pane.closest('.content-row');
         if (!row) return;
@@ -437,6 +438,8 @@
             state.imagesPreviewCollapsed = isCollapsed;
         } else if (pane.id === 'tree-pane-briefs') {
             state.briefsPreviewCollapsed = isCollapsed;
+        } else if (pane.id === 'tree-pane-stitch-html') {
+            state.stitchHtmlSidebarCollapsed = isCollapsed;
         }
         saveState();
     }
@@ -1954,6 +1957,7 @@
             htmlPreviewCollapsed: state.htmlPreviewCollapsed,
             imagesPreviewCollapsed: state.imagesPreviewCollapsed,
             briefsPreviewCollapsed: state.briefsPreviewCollapsed,
+            stitchHtmlSidebarCollapsed: state.stitchHtmlSidebarCollapsed,
             stitchThumbnailStripCollapsed: state.stitchThumbnailStripCollapsed
         });
     }
@@ -4672,6 +4676,10 @@
             prompt,
             workspaceRoot: state.stitchWorkspaceRoot
         });
+        inputEl.value = '';
+        const popup = document.getElementById('stitch-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        state.stitchSelectedElement = null;
     });
 
     document.getElementById('stitch-tweak-btn-copy')?.addEventListener('click', () => {
@@ -4695,6 +4703,10 @@
             type: 'copyStitchTweakPrompt',
             prompt
         });
+        inputEl.value = '';
+        const popup = document.getElementById('stitch-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        state.stitchSelectedElement = null;
     });
 
     // ── HTML Previews tab Inspect Mode (mirrors the Stitch HTML tab wiring above) ──
@@ -4763,6 +4775,10 @@
             prompt,
             workspaceRoot: state.designWorkspaceRootFilter
         });
+        inputEl.value = '';
+        const popup = document.getElementById('html-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        state.htmlSelectedElement = null;
     });
 
     document.getElementById('html-tweak-btn-copy')?.addEventListener('click', () => {
@@ -4786,6 +4802,10 @@
             type: 'copyHtmlTweakPrompt',
             prompt
         });
+        inputEl.value = '';
+        const popup = document.getElementById('html-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        state.htmlSelectedElement = null;
     });
 
     document.getElementById('stitch-html-btn-edit')?.addEventListener('click', () => {
@@ -5319,6 +5339,8 @@
         if (briefsRow) briefsRow.classList.toggle('collapsed', !!state.briefsPreviewCollapsed);
         const imagesRow = document.getElementById('tree-pane-images')?.closest('.content-row');
         if (imagesRow) imagesRow.classList.toggle('collapsed', !!state.imagesPreviewCollapsed);
+        const stitchHtmlRow = document.getElementById('tree-pane-stitch-html')?.closest('.content-row');
+        if (stitchHtmlRow) stitchHtmlRow.classList.toggle('collapsed', !!state.stitchHtmlSidebarCollapsed);
     }
 
     // ── DESIGN SYSTEM tab → Claude Design Systems source: import via DesignSync ──
@@ -5429,6 +5451,8 @@
         if (briefsRow) briefsRow.classList.toggle('collapsed', !!state.briefsPreviewCollapsed);
         const imagesRow = document.getElementById('tree-pane-images')?.closest('.content-row');
         if (imagesRow) imagesRow.classList.toggle('collapsed', !!state.imagesPreviewCollapsed);
+        const stitchHtmlRow = document.getElementById('tree-pane-stitch-html')?.closest('.content-row');
+        if (stitchHtmlRow) stitchHtmlRow.classList.toggle('collapsed', !!state.stitchHtmlSidebarCollapsed);
     }
 
     // Notify backend ready

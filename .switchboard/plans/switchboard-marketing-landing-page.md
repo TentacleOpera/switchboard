@@ -28,6 +28,11 @@ The hard part of building shipped software has moved. Writing code is increasing
 - **Domain:** deferred. Build for the default `*.github.io` URL; buying + DNS + `CNAME` + HTTPS is a self-contained later phase.
 - **Demo assets:** ~1 week out. Ship the page now with sized placeholder poster frames; slot clips in as recorded, no layout change.
 - **Repo:** new dedicated **public** repo (keeps marketing assets/history/analytics out of the extension codebase; deploys independently).
+- **Repo identity (RESOLVED 2026-07-13):** **project-site** — `https://<user>.github.io/switchboard-site/`. Served from a subpath, so the build MUST use **relative asset paths** (or a `<base>` tag), never absolute `/assets/...` (those 404 under a project-site subpath). Verify on the live `github.io` URL, not just the in-editor previewer.
+- **Stitch handoff (RECEIVED 2026-07-13):** build from the two prototype files at `.switchboard/stitch/switchboard-landing-page-62484982/`:
+  - `c4d62bf3c43b4a2e93ca295b2f6be805.html` (545 lines) — the main landing page.
+  - `d9bf1d93c0bd43beba5eaab77ba0db94.html` (431 lines) — a secondary/doc variant.
+  Both use Tailwind via CDN (`cdn.tailwindcss.com` with `forms` + `container-queries` plugins) and Google Fonts (Hanken Grotesk, JetBrains Mono, Material Symbols Outlined), with an "Afterburner" dev-dark theme: near-black `#101414` canvas, cyan `#00e5ff` accent, CRT scanlines (`.scanline`), tactical grid (`.bg-grid`), and glow text-shadow (`.glow-text`). The Complex task is extracting these CDN styles into **vendored plain CSS** (no build step, no external CDN) — self-host the fonts, inline or vendor the Tailwind-generated CSS.
 
 ### The five headliner pillars (owner's priority order — this is the section order)
 
@@ -46,10 +51,10 @@ The hard part of building shipped software has moved. Writing code is increasing
 
 ## User Review Required
 
-Two genuine calls the owner owns (everything else is decided in this plan):
+Both calls are now **RESOLVED (2026-07-13)** — recorded here for provenance; no further owner action is needed before build.
 
-1. **Capability-claim accuracy gate (blocking before the copy goes public).** The copy asserts specific integrations — Cowork/Antigravity embed, Notion remote control, ClickUp/Linear sync, multi-account CLI dispatch. Marketing that names a capability commits to it being real and demoable, since each pillar's clip must *show* it. Before publish, confirm every named integration is currently shippable and can be recorded. Cut or soften any claim whose clip can't be produced.
-2. **Repo identity:** project-site (`https://<user>.github.io/switchboard-site/`) vs user/org-site served from root (`https://<user>.github.io/`). This decides the asset-path strategy (see Proposed Changes → Edge Cases) and must be chosen when the repo is created.
+1. **Capability-claim accuracy gate — RESOLVED.** Owner confirmed every integration named in the copy (Cowork/Antigravity embed, Notion remote control, ClickUp/Linear sync, multi-account CLI dispatch) is shipped and demoable. The copy stays as-written; no claims need cutting or softening. Each pillar's clip can be produced against the real feature.
+2. **Repo identity — RESOLVED.** **Project-site** (`https://<user>.github.io/switchboard-site/`). Asset-path strategy locked: relative paths / `<base>` tag, never absolute `/assets/...`. See Confirmed decisions above.
 
 ## Complexity Audit
 
@@ -60,7 +65,7 @@ Two genuine calls the owner owns (everything else is decided in this plan):
 - Placeholder poster → real-clip swap is a mechanical `src`/`poster` change per pillar.
 
 ### Complex / Risky
-- **Stitch prototype → self-contained production adaptation.** Extracting the prototype's realized Tailwind/CDN styles into plain vendored CSS is the one genuinely fiddly task, and its size is unbounded until the export is seen (single self-contained file vs folder is unknown until handoff). This is where the real work hides behind a low overall score.
+- **Stitch prototype → self-contained production adaptation.** Extracting the prototype's realized Tailwind/CDN styles into plain vendored CSS is the one genuinely fiddly task. The handoff is now in (two self-contained HTML files — see Confirmed decisions), so the scope is known: each file inlines its own Tailwind config + custom CSS; the coder must reconcile the two, vendor the generated CSS, and self-host the three font families. This is where the real work hides behind a low overall score.
 - **Zero-layout-shift video slots** + IntersectionObserver lazy-load + `prefers-reduced-motion` fallback, done correctly — autoplay must only fire *after* the source is attached while in view; `autoplay` on a source-less `<video>` does nothing.
 - **GitHub Pages project-site subpath** asset resolution — absolute (`/assets/...`) paths 404 when the site is served from `/switchboard-site/`.
 
@@ -70,10 +75,10 @@ Two genuine calls the owner owns (everything else is decided in this plan):
 - **Security:** No user input, no forms, no cookies, no auth. Privacy posture = zero external CDN (self-hosted fonts, vendored CSS/JS), no third-party trackers beyond the optional privacy-first analytics snippet (deferred). Because everything is same-origin, a restrictive CSP `<meta>` is cheap and worth adding. Note: a **public** repo means all copy and positioning are public the instant they're pushed — deploy is owner-triggered so the timing stays controlled.
 - **Side Effects:** Creating a new public repo exposes positioning and (eventually) the install funnel publicly. OG/social tags mean link-unfurl caches (Slack, Twitter/X, iMessage, etc.) snapshot whatever state is live when a link is first shared — re-scrape/refresh after clips and the domain land, or early shares immortalize the placeholder state.
 - **Dependencies & Conflicts:**
-  - **Stitch prototype handoff** (owner, manual) — the build starts from it; absent it, the Visual Design spec below is the fallback.
-  - **Five demo clips (~1 week)** — the page's actual conversion mechanism. Placeholders ship, but the page is not doing its job until real clips land (see Adversarial Synthesis).
+  - **Stitch prototype handoff — RECEIVED (2026-07-13).** Two files delivered; see Confirmed decisions above for paths and theme details. No longer a blocker; the Visual Design spec below is no longer the fallback.
+  - **Five demo clips (~1 week)** — the page's actual conversion mechanism. Placeholders ship, but the page is not doing its job until real clips land (see Adversarial Synthesis). Not blocking for build.
   - **Domain purchase** (deferred) — not blocking; the page is reviewable on `github.io`.
-  - **Capability-claim accuracy** — copy must not assert integrations that can't be demoed (see User Review Required #1).
+  - **Capability-claim accuracy — CONFIRMED (2026-07-13).** Owner verified all named integrations are shipped and demoable; copy stands as-written. No longer a blocker (see User Review Required #1, resolved).
 
 ## Dependencies
 

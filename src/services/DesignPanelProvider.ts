@@ -106,6 +106,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _designFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _imagesFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _briefsFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _stitchHtmlFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _saveTextDocListener?: vscode.Disposable;
     private _htmlDocsDebounce?: NodeJS.Timeout;
     private _claudeDocsDebounce?: NodeJS.Timeout;
@@ -385,6 +386,9 @@ window.addEventListener('message', function(e) {
     private _themeListenersRegistered = false;
     private _activeHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
     private _activeClaudePreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
+    private _activeStitchHtmlPreview: { sourceFolder: string; docId: string; sourceId: string; projectId: string; workspaceRoot: string } | null = null;
+    private _activeStitchHtmlProjectId: string = '';
+    private _activeStitchHtmlWorkspaceRoot: string = '';
     private _autoRefreshDebounce?: NodeJS.Timeout;
 
     constructor(
@@ -458,6 +462,7 @@ window.addEventListener('message', function(e) {
                 this._setupDesignFolderWatchers();
                 this._setupImagesFolderWatchers();
                 this._setupBriefsFolderWatchers();
+                void this._setupStitchHtmlFolderWatchers().catch(() => {});
                 await this._sendHtmlDocsReady();
                 await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
@@ -564,6 +569,7 @@ window.addEventListener('message', function(e) {
                 this._setupDesignFolderWatchers();
                 this._setupImagesFolderWatchers();
                 this._setupBriefsFolderWatchers();
+                void this._setupStitchHtmlFolderWatchers().catch(() => {});
                 await this._sendHtmlDocsReady();
                 await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
@@ -653,6 +659,8 @@ window.addEventListener('message', function(e) {
         this._imagesFolderWatchers = [];
         this._briefsFolderWatchers.forEach(w => w.dispose());
         this._briefsFolderWatchers = [];
+        this._stitchHtmlFolderWatchers.forEach(w => w.dispose());
+        this._stitchHtmlFolderWatchers = [];
     }
 
     private _getHtml(webview: vscode.Webview): string {
@@ -773,6 +781,41 @@ window.addEventListener('message', function(e) {
         }
     }
 
+    private async _setupStitchHtmlFolderWatchers(): Promise<void> {
+        this._stitchHtmlFolderWatchers.forEach(w => w.dispose());
+        this._stitchHtmlFolderWatchers = [];
+        const projectId = this._activeStitchHtmlProjectId;
+        const workspaceRoot = this._activeStitchHtmlWorkspaceRoot;
+        if (!projectId || !workspaceRoot) return;
+        try {
+            // Resolve the project name first so _getImageCacheDir computes the correct
+            // <sanitizedName>-<idSuffix> cache dir. Without this, a name-cache miss would
+            // target a phantom "project-<idSuffix>" dir that never receives events.
+            await this._resolveStitchProjectName(workspaceRoot, projectId);
+            const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
+            if (!fs.existsSync(cacheDir)) return;
+            const pattern = new vscode.RelativePattern(cacheDir, '**/*');
+            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+            watcher.onDidChange((uri) => {
+                // Bail if the active project changed between watcher creation and fire —
+                // a callback from a just-discarded project must not refresh the new view.
+                if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
+                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                this._autoRefreshHtmlPreview(uri);
+            });
+            watcher.onDidCreate((uri) => {
+                if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
+                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                this._autoRefreshHtmlPreview(uri);
+            });
+            watcher.onDidDelete(() => {
+                if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
+                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+            });
+            this._stitchHtmlFolderWatchers.push(watcher);
+        } catch {}
+    }
+
     private _setupClaudeFolderWatchers(): void {
         this._claudeFolderWatchers.forEach(w => w.dispose());
         this._claudeFolderWatchers = [];
@@ -875,6 +918,44 @@ window.addEventListener('message', function(e) {
                 });
             }
         }, 300);
+    }
+
+    private async _sendStitchHtmlDocsReady(workspaceRoot: string, projectId: string): Promise<void> {
+        if (!workspaceRoot || !projectId) {
+            this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot });
+            return;
+        }
+        try {
+            await this._resolveStitchProjectName(workspaceRoot, projectId);
+            const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
+            const docs: Array<{ screenId: string; name: string; file: string; sourceFolder: string; absolutePath: string }> = [];
+            try {
+                const entries = await fs.promises.readdir(cacheDir);
+                const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                await db.ensureReady();
+                // Resolve display names once — one query for the whole project, not
+                // one per HTML file.
+                let nameById = new Map<string, string>();
+                try {
+                    const screens = await db.getStitchScreensForProject(projectId);
+                    nameById = new Map(screens.map(s => [s.id, s.name] as const));
+                } catch {}
+                for (const entry of entries) {
+                    if (path.extname(entry) !== '.html') continue;
+                    const screenId = path.basename(entry, '.html');
+                    docs.push({
+                        screenId,
+                        name: nameById.get(screenId) || screenId,
+                        file: entry,
+                        sourceFolder: cacheDir,
+                        absolutePath: path.join(cacheDir, entry)
+                    });
+                }
+            } catch {}
+            this.postMessage({ type: 'stitchHtmlDocsReady', docs, workspaceRoot });
+        } catch {
+            this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot });
+        }
     }
 
     private async _sendClaudeDocsReady(): Promise<void> {
@@ -2026,6 +2107,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (message.tab !== 'claude') {
                     this._activeClaudePreview = null;
                 }
+                if (message.tab !== 'stitch-html') {
+                    this._activeStitchHtmlPreview = null;
+                }
                 if (this._isPolledTab(message.tab) && this._panel?.visible) {
                     this._startExternalFilePoll();
                 } else {
@@ -2163,9 +2247,25 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (message.sourceId === 'stitch-html-folder') {
                     // Resolve the folder server-side from projectId — never trust webview-supplied paths.
                     const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                    const resolvedFolder = (root && message.projectId)
-                        ? this._getImageCacheDir(root, message.projectId)
+                    const projectId = String(message.projectId || '');
+                    // Resolve the project name before computing the cache dir so the folder
+                    // is correct even if fetchPreview fires before stitchHtmlListDocs has
+                    // populated the name cache (mirrors the watcher's async resolution).
+                    if (root && projectId) {
+                        await this._resolveStitchProjectName(root, projectId);
+                    }
+                    const resolvedFolder = (root && projectId)
+                        ? this._getImageCacheDir(root, projectId)
                         : '';
+                    this._activeStitchHtmlPreview = resolvedFolder
+                        ? { sourceFolder: resolvedFolder, docId: rawDocId, sourceId: message.sourceId, projectId, workspaceRoot: root }
+                        : null;
+                    // Re-target the per-project watcher if the active project changed.
+                    if (projectId !== this._activeStitchHtmlProjectId || root !== this._activeStitchHtmlWorkspaceRoot) {
+                        this._activeStitchHtmlProjectId = projectId;
+                        this._activeStitchHtmlWorkspaceRoot = root;
+                        void this._setupStitchHtmlFolderWatchers().catch(() => {});
+                    }
                     await this._buildAndSendPreview({
                         sourceId: message.sourceId,
                         sourceFolder: resolvedFolder,
@@ -3132,43 +3232,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             // an external script or agent write), so the watcher-driven list can go stale;
             // a fresh readdir on tab entry guarantees the list is current.
             case 'stitchHtmlListDocs': {
-                try {
-                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                    const projectId: string = message.projectId;
-                    if (!workspaceRoot || !projectId) {
-                        this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot });
-                        break;
-                    }
-                    await this._resolveStitchProjectName(workspaceRoot, projectId);
-                    const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
-                    const docs: Array<{ screenId: string; name: string; file: string; sourceFolder: string; absolutePath: string }> = [];
-                    try {
-                        const entries = await fs.promises.readdir(cacheDir);
-                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                        await db.ensureReady();
-                        // Resolve display names once — one query for the whole project, not
-                        // one per HTML file.
-                        let nameById = new Map<string, string>();
-                        try {
-                            const screens = await db.getStitchScreensForProject(projectId);
-                            nameById = new Map(screens.map(s => [s.id, s.name] as const));
-                        } catch {}
-                        for (const entry of entries) {
-                            if (path.extname(entry) !== '.html') continue;
-                            const screenId = path.basename(entry, '.html');
-                            docs.push({
-                                screenId,
-                                name: nameById.get(screenId) || screenId,
-                                file: entry,
-                                sourceFolder: cacheDir,
-                                absolutePath: path.join(cacheDir, entry)
-                            });
-                        }
-                    } catch {}
-                    this.postMessage({ type: 'stitchHtmlDocsReady', docs, workspaceRoot });
-                } catch (err: any) {
-                    this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot() || '';
+                const projectId: string = message.projectId;
+                // Track the active stitch-html project server-side so the per-project
+                // watcher can re-target on project switch. A preview opened under project A
+                // is not valid under project B, so clear the active preview on change.
+                if (projectId !== this._activeStitchHtmlProjectId || workspaceRoot !== this._activeStitchHtmlWorkspaceRoot) {
+                    this._activeStitchHtmlProjectId = projectId;
+                    this._activeStitchHtmlWorkspaceRoot = workspaceRoot;
+                    this._activeStitchHtmlPreview = null;
+                    void this._setupStitchHtmlFolderWatchers().catch(() => {});
                 }
+                await this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
                 break;
             }
 
@@ -4021,7 +4096,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         if (this._saveTextDocListener) return;
         this._saveTextDocListener = vscode.workspace.onDidSaveTextDocument((document) => {
             if (!this._panel?.visible) return;
-            if (!this._activeHtmlPreview && !this._activeClaudePreview) return;
+            if (!this._activeHtmlPreview && !this._activeClaudePreview && !this._activeStitchHtmlPreview) return;
             this._autoRefreshHtmlPreview(document.uri);
         });
         this._disposables.push(this._saveTextDocListener);
@@ -4043,7 +4118,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             this._autoRefreshDebounce = setTimeout(() => {
                 this._autoRefreshDebounce = undefined;
                 
-                const current = target === 'claude' ? this._activeClaudePreview : this._activeHtmlPreview;
+                const current = target === 'claude' ? this._activeClaudePreview
+                    : target === 'stitch-html' ? this._activeStitchHtmlPreview
+                    : this._activeHtmlPreview;
                 if (!current || !this._panel) return;
 
                 const currentRel = current.docId.includes(':')
@@ -4065,6 +4142,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
         checkAndRefresh(this._activeHtmlPreview);
         checkAndRefresh(this._activeClaudePreview, 'claude');
+        checkAndRefresh(this._activeStitchHtmlPreview, 'stitch-html');
     }
 
     /**

@@ -8340,6 +8340,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
             prompt,
             workspaceRoot: state.planningHtmlWorkspaceRootFilter
         });
+        inputEl.value = '';
+        const popup = document.getElementById('planning-html-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        state.htmlSelectedElement = null;
     });
 
     document.getElementById('planning-html-tweak-btn-copy')?.addEventListener('click', () => {
@@ -8363,6 +8367,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
             type: 'copyHtmlTweakPrompt',
             prompt
         });
+        inputEl.value = '';
+        const popup = document.getElementById('planning-html-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        state.htmlSelectedElement = null;
     });
 
     function openFoldersModal(scope = 'local') {

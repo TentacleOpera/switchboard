@@ -56,9 +56,9 @@ Commands:
 Setting: `switchboard.kanban.controlPlaneRoot`
 
 ### 3. Design in the Loop (Google Stitch + Claude)
-The Design panel keeps UI generation inside the IDE so design output flows straight into your plans and code. It has six tabs: **STITCH**, **CLAUDE**, **BRIEFS**, **HTML PREVIEWS**, **IMAGES**, and **DESIGN SYSTEM**.
+The Design panel keeps UI generation inside the IDE so design output flows straight into your plans and code. It has six tabs: **STITCH**, **STITCH HTML**, **BRIEFS**, **HTML PREVIEWS**, **IMAGES**, and **DESIGN SYSTEM**.
 
-**Google Stitch** — Generate and refine UI screens with Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — those credentials are held in VS Code's `SecretStorage`, never in `settings.json`.
+**Google Stitch** — Generate and refine UI screens with Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — those credentials are held in VS Code's `SecretStorage`, never in `settings.json`. The **STITCH HTML** tab browses cached Stitch HTML output organized per project, so you can preview, inspect, and tweak generated screens without leaving the IDE.
 Settings (`settings.json`):
 - `switchboard.stitch.authMode` (`apiKey` | `oauth`)
 - `switchboard.stitch.defaultProjectId`
@@ -66,9 +66,23 @@ Settings (`settings.json`):
 - `switchboard.stitch.defaultModelId` (`GEMINI_3_FLASH` | `GEMINI_3_1_PRO`)
 - `switchboard.stitch.defaultCreativeRange` (`EXPLORE` | `REFINE` | `REIMAGINE`)
 
-**Claude (claude.ai/design)** — The CLAUDE tab bridges your workspace to Claude's design tool. Optionally enter a `claude.ai/design` URL or project ID, pick the target folder, then click **Copy import prompt** to get a ready-to-paste prompt that tells a Claude agent to import the design into your repo *using the repo's existing components and styles* (it runs `/design-login` first if needed). The tab also previews local HTML and image files with zoom/pan. No Anthropic API key is stored in Switchboard — the import is run by your Claude agent. The optional **Claude Designer** agent role automates this from the board.
+**Claude (claude.ai/design)** — Import designs from Claude's design tool via the **DESIGN SYSTEM** tab's "Claude Design Systems" source. Enter a `claude.ai/design` URL or project ID (or leave blank to list your projects), then click **Copy import prompt** or **Import from Claude Design** to send a ready-to-paste prompt that tells a Claude agent to import the design into your repo *using the repo's existing components and styles* (it runs `/design-login` first if needed). No Anthropic API key is stored in Switchboard — the import is run by your Claude agent. The optional **Claude Designer** agent role automates this from the board.
 
-Both Stitch and Claude tabs share the Design panel's folder browsing, **Link to Folder** buttons (copy a configured folder's path to the clipboard), and **BRIEFS** / **DESIGN SYSTEM** infrastructure.
+**Claude Artifacts round-trip** — The **HTML PREVIEWS** tab and the Planning panel's HTML tab include **Copy upload prompt** / **Upload to Claude Artifacts** buttons that push a local HTML file to claude.ai as an Artifact, and a corresponding download prompt to pull an Artifact back into your repo. This gives you a repeatable loop: pull an artifact down, edit it with any agent, push it back.
+
+All tabs share the Design panel's folder browsing, **Link to Folder** buttons (copy a configured folder's path to the clipboard), and **BRIEFS** / **DESIGN SYSTEM** infrastructure.
+
+### Inspect Mode — tweak any HTML preview element and hand it to an agent
+Every sandboxed HTML preview in Switchboard has an **Inspect Mode** button in its controls strip — the **STITCH** HTML tab, the Design panel's **HTML PREVIEWS** tab, and the Planning panel's HTML tab. It is the handoff point from a generated or prototyped screen to surgical, in-file tweaks: no need to leave the preview, hunt through large anonymous markup, or hand-write element descriptions.
+
+1. Click **Inspect Mode** to toggle hover-to-select on.
+2. Hover the rendered page — elements highlight as you move the cursor.
+3. Click the element you want to change. A tweak popup (docked top-right of the preview) opens, showing the element's **CSS selector** and a truncated **HTML snippet**.
+4. Type your change in the popup (e.g. "make this button dark blue", "tighten this card's padding").
+5. **Send to Agent** delivers a composed prompt — the file path, the selector, the snippet, and your instruction — to the **coder** agent terminal (falls back to clipboard if no terminal is registered). **Copy Prompt** puts the same prompt on the clipboard.
+6. The agent edits the file in place; the preview **auto-refreshes** to show the result. Switchboard never regenerates the file, so your tweaks are never clobbered.
+
+While inspect is on, links and buttons inside the preview are inert so you can select without navigating away. Press **Escape** (with focus in the preview) or click **Inspect Mode** again to exit. If the file is saved or auto-refreshed mid-composition, the popup closes and the selection resets but your typed instruction is preserved.
 
 ---
 
@@ -90,6 +104,7 @@ Configure roles:
 - **Analyst** — General research.
 - **Ticket Updater** — Reads imported tickets and posts short triage verdicts (severity, area, recommended action) back to ClickUp/Linear as comments.
 - **Orchestrator** — Runs an entire Feature end-to-end with native subagents (off by default; enable in the Kanban Agents tab).
+- **Project Manager** — Host-agnostic management console; drive the board over the LocalApiServer HTTP API from any chat host. Core role, on by default; activated via the **Manage** button in the Implementation panel (or the board's **Run Selected Plans** targeted-pass button).
 - **Claude Designer** — Imports a design from claude.ai/design into the target folder using the repo's existing components and styles (off by default).
 - **MCP Monitor** — Read-only monitor role; on an interval it pings a dedicated Claude terminal to check connected MCP sources (Slack, Gmail, Google Calendar, custom) and report what needs attention (off by default).
 
@@ -112,19 +127,26 @@ All Switchboard planning workflows are available directly in [claude.ai](https:/
 
 ### Quick start
 
-Type `/sw` in any claude.ai chat to enter Switchboard's consultative planning mode. The skill reads your committed `kanban-board.md` snapshot so you can reference your board by column name:
+Type `/switchboard` in any claude.ai chat to enter Switchboard's management console. The skill reads your committed `kanban-board.md` snapshot so you can reference your board by column name:
 
 > "What's in the Created column?"
 > "Review all plans in Backlog and tell me which ones have missing dependencies."
 
+### Four front-door commands
+
+- **`/switchboard`** — The local management console: drive the board, plans, features, dispatch, and automation while the VS Code extension is running.
+- **`/switchboard-cloud`** — Cloud-VM planning brake: plan first, do not auto-code in a remote VM.
+- **`/switchboard-remote`** — Remote Switchboard control: drive plans via Linear or Notion when the local machine is off.
+- **`/switchboard-memo`** — Memo capture mode: append-only, no analysis. Exit with `process memo`.
+
 ### Chaining workflows
 
-Once you've identified plans with `/sw`, you can run other Switchboard workflows across them in the same session:
+Once you've identified plans with `/switchboard`, you can run other Switchboard workflows across them in the same session:
 
 - **`/improve-plan`** — deep-plan with adversarial review. Ask Claude to run it on every plan in a given column at once, rather than one at a time.
-- **`/memo`** — capture a burst of new ideas as plan stubs without interrupting your flow.
+- **`/switchboard-memo`** — capture a burst of new ideas as plan stubs without interrupting your flow.
 
-**Example:** Open claude.ai, type `/sw`, ask "show me everything in Created", then say "run `/improve-plan` on each of those" — Claude will work through all of them in one session.
+**Example:** Open claude.ai, type `/switchboard`, ask "show me everything in Created", then say "run `/improve-plan` on each of those" — Claude will work through all of them in one session.
 
 ---
 
@@ -157,6 +179,9 @@ Configure per column:
 ### MCP Monitor
 Also in the Automation panel: turn on the **MCP Monitor** to have Switchboard periodically ping a dedicated Claude terminal that checks your connected MCP sources (Slack, Gmail, Google Calendar, or a custom instruction) and reports anything needing attention. Pick a single global interval (1–30 min) and the sources to watch; a status line shows whether the monitor terminal is running. Off by default.
 
+### Orchestration Automation Mode
+Also in the Automation panel: switch the automation mode to **Orchestration** and click **Start orchestrator** to launch an orchestrator agent that batch-manages the board unattended. On each interval tick it groups loose plans into features, fans work out across per-feature worktrees and terminals, verifies progress against git/board state, triages agent requests, and merges completed features back to main. This is the unattended equivalent of clicking **Orchestrate** on each feature manually.
+
 ---
 
 ## Project Management & Sync
@@ -179,6 +204,8 @@ On the Kanban board, feature cards show a purple left border and a `FEATURE · N
 - **Split (recommended)** — Drag the feature to the **Planner** column to improve every subtask plan, *then* **Orchestrate** to hand the improved feature to the Orchestrator to implement.
 
 **Worktree isolation** — A feature can be bound to a dedicated git worktree/branch so its agents work in isolation. Manage worktrees from the Kanban WORKTREES panel; dispatched agents `cd` into the worktree and switch to its branch automatically, and the worktree can later be merged or abandoned.
+
+**Feature-scoped agent configuration** — Each role can have independent agent settings when working on features versus single plans. In the Prompts tab, a **Features** subsection per role lets you override the workflow file, subagent policy, and worktree mode for feature dispatches only — so a feature can use a different planning workflow or subagent strategy than a standalone plan without changing your defaults.
 
 ### ClickUp & Linear Sync
 Configure tokens in Setup.
@@ -262,18 +289,20 @@ Testing failed? Press **Report** to return cards with logs to the Coder column.
 Copy links and prompts to share state between Antigravity, Windsurf, and Cursor.
 
 ### Memo Capture Mode
-Use `/memo` to enter append-only capture mode. Every message you send is appended verbatim to `.switchboard/memo.md` — no analysis, no action. This is ideal for logging issues, bugs, and ideas during testing without breaking your flow. Process captured entries into plan files using the Memo sub-tab in the sidebar (Copy Prompt or Send to Planner buttons), or send `process memo` in chat to exit capture mode and create one plan per entry. You can also open the Memo tab directly with the `switchboard.memo.hotkey` keybinding (default `cmd+shift+alt+m`).
+Use `/switchboard-memo` to enter append-only capture mode. Every message you send is appended verbatim to `.switchboard/memo.md` — no analysis, no action. This is ideal for logging issues, bugs, and ideas during testing without breaking your flow. Process captured entries into plan files using the Memo sub-tab in the sidebar (Copy Prompt or Send to Planner buttons), or send `process memo` in chat to exit capture mode and create one plan per entry. You can also open the Memo tab directly with the `switchboard.memo.hotkey` keybinding (default `cmd+shift+alt+m`).
 
 ---
 
 ## Planning Tools
 
 ### IDE Chat Commands
-- `/switchboard-chat` — PM consultation workflow.
+- `/switchboard` — Local management console (board, plans, features, dispatch, automation).
+- `/switchboard-cloud` — Cloud-VM planning brake (plan first, do not auto-code).
+- `/switchboard-remote` — Remote control via Linear or Notion when the local machine is off.
+- `/switchboard-memo` — Memo capture mode (append-only issue/idea logging).
 - `/improve-plan` — Deep planning and adversarial review.
 - `/archive` — Search DuckDB plan archives.
 - `/export` — Save current conversation to archives.
-- `/memo` — Enter memo capture mode (append-only issue/idea logging).
 
 ### Plan Scanner
 Periodically scans AI IDE/agent folders for newly generated plan files and imports them.
@@ -294,12 +323,12 @@ Settings:
 
 - **Kanban** (`switchboard.openKanban`) — Visual board plus tabs for Agents, Prompts, Automation, Remote, Worktrees, UAT, and Setup. Projects are created here (board toolbar) and the PROJECT CONTEXT toggle lives here.
 - **Setup** (`switchboard.openSetupPanel`) — Central configuration.
-- **Planning** (`switchboard.openPlanningPanel`) — Authoring interface.
+- **Planning** (`switchboard.openPlanningPanel`) — Authoring interface with four tabs: **DOCS** (unified local + online document browser), **TICKETS** (ClickUp/Linear ticket management), **RESEARCH** (AI-assisted research workflow), and **NotebookLM** (zero-cost planning).
 - **Project Panel** (`switchboard.openProjectPanel`) — Projects (per-project PRDs), Features, Constitution, System docs, Tuning insights, the **Architect** tab (guided governance setup), and the **Remote** tab (Remote Control config).
   ![Project panel — Constitution](docs/TODO_project_panel.png)
-- **Design Panel** (`switchboard.openDesignPanel`) — Six tabs: STITCH (Google Stitch), CLAUDE (claude.ai/design import), BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM.
+- **Design Panel** (`switchboard.openDesignPanel`) — Six tabs: STITCH (Google Stitch), STITCH HTML (browse cached Stitch HTML by project), BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM (includes Claude Design Systems import).
   ![Design panel — Stitch](docs/TODO_design_panel.png)
-- **Research / LOCAL DOCS Panel** — Manage local research, design system files, and Antigravity Brain artifacts.
+- **Planning / Research Panel** — Manage local research, design system files, and Antigravity Brain artifacts.
   ![Research panel — Local Docs](docs/TODO_research_panel.png)
   Settings: `switchboard.research.localFolderPaths`, `switchboard.research.htmlFolderPaths`, `switchboard.research.designFolderPaths`
 - **Status Bar Hub** (`switchboard.openHub`) — Grouped actions dropdown.
@@ -338,6 +367,14 @@ The built-in Reviewer agent features a Grumpy Principal Engineer persona. It tur
 - **100% Local-First** — No external proxy servers, no telemetry, no tracking.
 - **Secure SecretStorage** — API tokens for ClickUp, Linear, and Notion are saved locally in VS Code's `SecretStorage`. Keys are never sent to third-party endpoints.
 - **MIT License** — Fully open source.
+
+---
+
+## Claude Desktop MCP Server
+
+Switchboard ships a local stdio MCP server that bridges **Claude Desktop** (and other MCP-only hosts without shell/filesystem access) to Switchboard's LocalApiServer HTTP surface. This lets you read the board, create/move/delete plans, reconcile features, and dispatch coding from Claude Desktop while VS Code runs in the background.
+
+Set it up via the in-extension **Connect Claude Desktop** button in the Setup panel — it writes the MCP config entry for you. The server is a thin bridge; all state lives in the Switchboard extension's local API.
 
 ---
 

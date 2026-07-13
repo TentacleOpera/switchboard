@@ -97,7 +97,7 @@ Switchboard ships with the following built-in agent roles (defined in `agentConf
 | `splitter` | Splitter Agent | Splits large plans into sub-plans. |
 | `gatherer` | Context Gatherer | Gathers code context before planning. |
 | `orchestrator` | Orchestrator | Runs an entire Feature end-to-end with native subagents. Off by default — enable in the Kanban Agents tab to dispatch features directly (otherwise **Orchestrate** copies the prompt). Defaults to a subagent-per-subtask policy and can optionally use a git worktree per plan. See §8 (Features). |
-| `claude_designer` | Claude Designer | Imports a design from claude.ai/design into a target folder using the repo's existing components and styles. Off by default. See §9 (Design Panel → CLAUDE tab). |
+| `claude_designer` | Claude Designer | Imports a design from claude.ai/design into a target folder using the repo's existing components and styles. Off by default. See §9 (Design Panel → DESIGN SYSTEM tab, Claude Design Systems source). |
 | `mcp_monitor` | MCP Monitor | Monitor-only role. On an interval it pings a dedicated Claude terminal to check your connected MCP sources (Slack, Gmail, Google Calendar, custom) and report anything needing attention. Off by default; it is read-only and cannot receive execute dispatches. See §4 (MCP Monitor). |
 
 ### Custom Roles
@@ -345,10 +345,10 @@ Settings: `switchboard.planner.designDocEnabled`, `switchboard.planner.designDoc
 
 Open with `switchboard.openDesignPanel`.
 
-The Design panel keeps UI generation inside the IDE so output feeds straight into plans and code. It has six tabs: **STITCH**, **CLAUDE**, **BRIEFS**, **HTML PREVIEWS**, **IMAGES**, and **DESIGN SYSTEM**. (For a control-by-control breakdown of every tab, see §27.)
+The Design panel keeps UI generation inside the IDE so output feeds straight into plans and code. It has six tabs: **STITCH**, **STITCH HTML**, **BRIEFS**, **HTML PREVIEWS**, **IMAGES**, and **DESIGN SYSTEM**. (For a control-by-control breakdown of every tab, see §27.)
 
 ### STITCH tab — Google Stitch
-Generate and refine UI screens with Google Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — credentials are held in VS Code's `SecretStorage`, never in `settings.json`. Output (HTML/PNG) and design tokens download to a chosen sync-destination folder.
+Generate and refine UI screens with Google Stitch. Authenticate by entering your Stitch API key or OAuth access token directly in the Design panel — credentials are held in VS Code's `SecretStorage`, never in `settings.json`. Output (HTML/PNG) and design tokens download to a chosen sync-destination folder, organized into per-project subfolders.
 
 Settings:
 - `switchboard.stitch.authMode` — `apiKey` | `oauth`
@@ -357,22 +357,30 @@ Settings:
 - `switchboard.stitch.defaultModelId` — `GEMINI_3_FLASH` | `GEMINI_3_1_PRO` (default: `GEMINI_3_FLASH`)
 - `switchboard.stitch.defaultCreativeRange` — `EXPLORE` | `REFINE` | `REIMAGINE` (default: `EXPLORE`)
 
-### CLAUDE tab — Import from claude.ai/design
-The CLAUDE tab bridges your workspace to Claude's web design tool. It does not call an API or store a key — instead it generates a prompt that a Claude agent (CLI or chat) runs to import a design into your repo.
+### STITCH HTML tab — browse cached Stitch screens
+The **STITCH HTML** tab browses your cached Stitch HTML output organized per project. A project dropdown selector lets you switch between Stitch projects, and each screen can be previewed, inspected (see Inspect Mode below), and tweaked in place. This replaces the old method of hunting through flat output folders.
+
+### Claude (claude.ai/design) — import via DESIGN SYSTEM tab
+Claude design import lives in the **DESIGN SYSTEM** tab under the "Claude Design Systems" source. It does not call an API or store a key — instead it generates a prompt that a Claude agent (CLI or chat) runs to import a design into your repo.
 
 Workflow:
-1. *(Optional)* Paste a `claude.ai/design` URL or project ID into the **claude.ai/design URL or ID (optional)** field.
-2. Select the target workspace from the workspace filter (falls back to the current workspace root).
-3. Click **Copy import prompt**. The copied prompt reads, roughly:
+1. *(Optional)* Paste a `claude.ai/design` URL or project ID into the **claude.ai/design URL or ID (optional)** field (or leave blank to list your projects).
+2. Click **Copy import prompt** (or **Import from Claude Design** to send directly to a Claude agent). The copied prompt reads, roughly:
    > Import a design from claude.ai/design into this repository, writing the implementation into `<folder>`, built with the repo's existing components and styles. *[If you gave a project: "Use the Claude Design project: `<ref>`." Otherwise: "First list my available claude.ai/design projects and ask me which one (and which screen) to import."]* If you're not logged in to Claude Design, run `/design-login` first.
-4. Paste the prompt to your Claude agent, which imports the design.
+3. Paste the prompt to your Claude agent, which imports the design.
 
-The tab's sidebar browses configured folders of local HTML and image files; selecting one previews it (sandboxed iframe for HTML, image viewer for images) with a zoom toolbar (zoom in/out, reset, fit; hold **Space** + scroll/drag to pan & zoom). To automate the import from the Kanban board, enable the **Claude Designer** agent role (off by default; see §3).
+To automate the import from the Kanban board, enable the **Claude Designer** agent role (off by default; see §3).
 
 > **No Anthropic API key is stored in Switchboard.** Authentication happens inside your Claude agent via `/design-login`.
 
+### Claude Artifacts round-trip
+The **HTML PREVIEWS** tab and the Planning panel's HTML tab include **Copy upload prompt** and **Upload to Claude Artifacts** buttons that push a local HTML file to claude.ai as an Artifact. A corresponding download prompt pulls an Artifact back into your repo. This gives you a repeatable loop: pull an artifact down, edit it with any agent, push it back — useful for stakeholder-facing documents and prototypes hosted on claude.ai.
+
+### Inspect Mode — tweak any HTML preview element
+Every sandboxed HTML preview in Switchboard has an **Inspect Mode** button in its controls strip — the STITCH HTML tab, the HTML PREVIEWS tab, and the Planning panel's HTML tab. Click to toggle hover-to-select on, hover to highlight an element, click to select it, then type a tweak instruction in the popup. **Send to Agent** delivers a composed prompt (file path + CSS selector + HTML snippet + your instruction) to the coder agent terminal; **Copy Prompt** puts it on the clipboard. The agent edits the file in place and the preview auto-refreshes. Press **Escape** or click the button again to exit. Your typed instruction is preserved across auto-refreshes.
+
 ### Folder management & Link to Folder
-Every folder-browsing tab (CLAUDE, BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM) uses a **Manage Folders** button to configure which folders are browsed, and a **Link** button on each folder header that copies that folder's path to the clipboard (handy for pasting into agent prompts). Folder paths are sourced from the `switchboard.research.*` settings (see §10).
+Every folder-browsing tab (STITCH HTML, BRIEFS, HTML PREVIEWS, IMAGES, DESIGN SYSTEM) uses a **Manage Folders** button to configure which folders are browsed, and a **Link** button on each folder header that copies that folder's path to the clipboard (handy for pasting into agent prompts). Folder paths are sourced from the `switchboard.research.*` settings (see §10).
 
 ---
 
@@ -821,7 +829,7 @@ All commands registered in `extension.ts` and declared in `package.json`:
 
 Switchboard exposes **four front doors** in IDE chat agents (Windsurf, Cursor, Antigravity, Claude Code) — identical on every host:
 
-- **`/switchboard`** — Local management console. Drive the board, plans, features, and dispatch when the VS Code extension is running. The primary front door.
+- **`/switchboard`** — Local management console. Drive the board, plans, features, and dispatch when the VS Code extension is running. The primary front door. The console presents plan lists with numbered titles (no raw UUIDs or filenames), offers proactive follow-up suggestions after every list ("Dispatch any of these, or group some into a feature?"), delivers natural-language dispatch reports naming the receiving agent, and can self-service open agent terminals via the API instead of directing you to the IDE.
 - **`/switchboard-cloud`** — Cloud-VM planning mode. Plan first, do not auto-code in a remote VM. Consultative planning persona.
 - **`/switchboard-remote`** — Remote control. Drive plans via Linear or Notion MCP when the local machine / VS Code extension is off.
 - **`/switchboard-memo`** — Enter memo capture mode. Appends each message verbatim to `.switchboard/memo.md` without analysis or action. Process entries via the Memo sub-tab in the sidebar, or send `process memo` to exit and create one plan per entry. Clear the conversation to leave without processing.
@@ -834,6 +842,8 @@ Switchboard exposes **four front doors** in IDE chat agents (Windsurf, Cursor, A
 - **switchboard-orchestrator** — Orchestration batch manager. System-launched by the AUTOMATION tab.
 
 **Claude Cowork** is served by a dedicated `switchboard-cowork` skill, exported as a `.zip` from the Setup panel's **"Set up Cowork"** button. Upload it in Cowork's Settings > Capabilities. It bundles the local MCP transport so Cowork can drive the board.
+
+**Claude Desktop MCP Server** — Switchboard ships a local stdio MCP server (`switchboard-mcp`) that bridges Claude Desktop (and other MCP-only hosts without shell/filesystem access) to Switchboard's LocalApiServer HTTP surface. This lets you read the board, create/move/delete plans, reconcile features, and dispatch coding from Claude Desktop while VS Code runs in the background. Set it up via the in-extension **Connect Claude Desktop** button in the Setup panel — it writes the MCP config entry for you. The server is a thin bridge; all state lives in the Switchboard extension's local API.
 
 ---
 
@@ -1259,23 +1269,26 @@ Configure agent visibility and CLI startup commands:
 
 **PROMPTS Tab**
 Per-role prompt customization:
-- **Role Selector** — Dropdown to select agent role (includes custom agents).
+- **Role Selector** — Dropdown to select agent role (includes custom agents, each with a short description).
 - **Planner Config** (shown for Planner role):
   - **Workflow File** — Enable/disable, set workflow file path (e.g., `.agents/skills/improve-plan/SKILL.md`), validate path.
-  - **Add-ons** — Switchboard Safeguards, Planning Feature Reference, Project Constitution Reference, Project PRD Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests.
+  - **Add-ons** — Switchboard Safeguards, Planning Feature Reference, Project Constitution Reference, Project PRD Reference, Aggressive Pair Programming, Git Prohibition, Clear Antigravity Context, Caveman Output, Skip Compilation, Skip Tests. Git strategy controls are grouped into labeled accordions with visible descriptions.
   - **Subagent Policy** — Not Specified / No Subagents / Use Subagents / Custom Subagent (with name input).
+  - **Features subsection** — Per-role feature-scoped overrides that apply only when dispatching a feature (not a standalone plan): **Feature Workflow File** (override the general workflow), **Feature Subagent Policy** (independent of the general setting), and **Worktree Mode** (decouple the worktree decision from the subagent decision). A **Features accordion** groups feature-only add-ons separately from general add-ons.
 - **Research Complexity** (shown for Researcher/Code Researcher): Quick / Standard / Deep / Academic. Save to Local Docs toggle.
-- **Non-Planner Add-ons** — Role-specific add-ons (inline challenge, accurate coding, pair programming, etc.).
+- **Non-Planner Add-ons** — Role-specific add-ons (inline challenge, accurate coding, pair programming, etc.). Also includes a **Features accordion** for feature-only add-ons and a **Walkthrough Suppression** checkbox.
 - **Edit Prompt Template** — Live preview of the composed prompt, editable before dispatch.
 
 **AUTOMATION Tab**
 Automation panel for configuring AUTOBAN rules and timing per column. Includes batch size, complexity filter, routing mode, max sends per terminal, global session cap, and terminal pool management. Also hosts the **MCP Monitor** controls (on/off, interval, watched sources, launch status — see §4).
 
+**Orchestration mode** — Switch the automation mode to **Orchestration** and click **Start orchestrator** to launch an orchestrator agent that batch-manages the board unattended. On each interval tick it groups loose plans into features, fans work out across per-feature worktrees and terminals, verifies progress against git/board state, triages agent requests, and merges completed features back to main. This is the unattended equivalent of clicking **Orchestrate** on each feature manually. The orchestrator persona is system-launched (never invoked ad hoc); see `.agents/skills/switchboard-orchestrator/SKILL.md` for details.
+
 **REMOTE Tab** (Project panel)
 Configure Remote Control — provider (Linear / Notion / ClickUp), boards to sync, remote mode (Ingest / Full), comment-polling and push toggles, silent syncing, and ping frequency. Includes a Sync Health panel. See §30. (This config tab lives in the Project panel; the start/stop toggle is on the Kanban toolbar.)
 
 **WORKTREES Tab**
-Manage git worktrees for feature-based dispatch routing. Create, list, and delete worktrees associated with features.
+Manage git worktrees for feature-based dispatch routing. Organized into **Epics**, **Projects**, and **Unbound** sections. Create, list, and delete worktrees associated with features. Includes a **Suppress main repo agent terminals** checkbox (with descriptive text explaining the routing order) so dispatched agents only run in their worktree terminals, not the main repo. Kanban plan cards display a **worktree icon** indicating active vs. merged/deleted worktree status.
 
 **UAT Tab**
 User Acceptance Testing checklist. **REFRESH** button reloads the UAT checklist from the database. Shows test items with pass/fail status tracking.
@@ -1352,27 +1365,28 @@ Hosted by `DesignPanelProvider`. Six tabs:
 
 **STITCH Tab**
 Google Stitch integration for AI-powered UI generation:
-- **Project Selector** — Choose Stitch project. **+ New Project** to create. **Refresh Projects** to re-fetch. **Rebuild Cache** to re-download preview images. **Force Reload Screens** to re-fetch screen list. **Download Design Tokens** for color palette. **Open DESIGN.md** for handoff file. **⚙️ Auth** to configure authentication.
+- **Project Selector** — Choose Stitch project. **+ New Project** to create (opens an in-webview modal). **Refresh Projects** to re-fetch. **Rebuild Cache** to re-download preview images. **Force Reload Screens** to re-fetch screen list. **Download Design Tokens** for color palette. **Open DESIGN.md** for handoff file. **⚙️ Auth** to configure authentication.
 - **Sync Destination** — Select workspace for downloaded assets.
 - **Generation Strip** — Prompt input, device type (Agnostic/Desktop/Mobile/Tablet), model (Flash/Pro), **+ Attach** reference files, **Generate Screen**.
 - **Preview Pane** — Screen preview with **DL HTML** / **DL PNG** download buttons, destination folder selector, **Close**.
 - **Refine Row** — Refine prompt input, creative range (Explore/Refine/Reimagine), **Apply Edit**, **+3 Variants** with aspect selection (Layout, Color, Images, Font, Text).
 - **Thumbnail Strip** — Scrollable screen thumbnails with collapse toggle.
 
-**CLAUDE Tab**
-Import a design from claude.ai/design into the repo (no API key stored — see §9):
-- **Controls strip** — Workspace filter, file search, **claude.ai/design URL or ID (optional)** input, **Copy import prompt** button (copies a ready-to-paste import prompt for a Claude agent).
-- **Sidebar** — Browse configured folders of HTML and image files. **Manage Folders** to configure; **Link** on each folder header to copy its path.
-- **Preview pane** ("Claude Previewer") — Renders the selected HTML file (sandboxed iframe) or image, with a zoom toolbar (zoom in/out, reset, fit; hold **Space** + scroll/drag to pan & zoom).
+**STITCH HTML Tab**
+Browse cached Stitch HTML screens organized per project:
+- **Project dropdown** — Select which Stitch project's cached HTML to browse.
+- **Controls strip** — Workspace filter, file search, **Inspect Mode** button (toggle hover-to-select element mode for in-place tweaks — see §9).
+- **Preview pane** — Renders the selected HTML file (sandboxed iframe) with a zoom toolbar (zoom in/out, reset, fit; hold **Space** + scroll/drag to pan & zoom). Tweak popup docked top-right when Inspect Mode is active.
 
 **BRIEFS Tab**
 Design brief management:
-- **Workspace filter**, **Manage Folders**, **New Brief**, **Delete**, **Edit**, **Send to Stitch** (send brief as Stitch prompt), **Save** / **Cancel** (edit mode).
+- **Workspace filter**, **Manage Folders**, **New Brief**, **Delete**, **Edit**, **Send to Stitch** (auto-names the project from the brief title and immediately generates), **Link** (per-brief — copies the brief's file path to clipboard), **Save** / **Cancel** (edit mode).
 - **Search** — Filter briefs by text.
 
 **HTML PREVIEWS Tab**
 Browse HTML prototype files:
 - **Workspace filter**, **Manage Folders**, **Open in Browser**, **Copy Link**.
+- **Controls strip** — **Inspect Mode** button (toggle hover-to-select element mode — see §9), **Copy upload prompt** / **Upload to Claude Artifacts** (push the selected HTML file to claude.ai as an Artifact — see §9).
 - **Search** — Filter previews by text.
 
 **IMAGES Tab**
@@ -1381,20 +1395,22 @@ Browse image assets:
 - **Search** — Filter images by text.
 
 **DESIGN SYSTEM Tab**
-Design system documentation and Stitch design systems:
+Design system documentation, Stitch design systems, and Claude design systems:
 - **Local Docs sub-tab** — **Workspace filter**, **Manage Folders**, **Set as Active Design Doc**, **Link**, **Edit**, **Save** / **Cancel**. Search filter.
 - **Stitch Design Systems sub-tab** — View Stitch project design systems, **Create Design System**, **Refresh List**. Requires a Stitch project to be selected.
+- **Claude Design Systems sub-tab** — Import designs from claude.ai/design. **claude.ai/design URL or ID (optional)** input, **Copy import prompt**, **Import from Claude Design** (sends the import prompt to a Claude agent). No API key stored — see §9.
 
 ### Planning / Artifacts Panel (`planning.html`)
 
-Hosted by `PlanningPanelProvider`. Four tabs:
+Hosted by `PlanningPanelProvider`. Five tabs:
 
 **DOCS Tab**
-Unified document browser for local plans and docs:
+Unified document browser for local plans and docs (merges the former Local Docs and Online Docs tabs into one):
 - **Workspace filter**, **Sync Mode** dropdown (Auto Sync All / Sync Selected Containers).
+- **Source filter chips** (Local · ClickUp · Linear · Notion) to narrow the tree by source.
 - **Import**, **Edit**, **Save**, **Cancel**, **Sync to Online** — Document management actions.
 - **Search** — Filter docs by text.
-- Sidebar with document tree, preview pane with markdown rendering.
+- Sidebar with document tree (collapsible source sections with doc counts, sync indicators per doc), preview pane with markdown rendering.
 - Breadcrumb navigation for nested documents.
 
 **TICKETS Tab**
@@ -1414,6 +1430,12 @@ AI-assisted research workflow:
 - **Step 1: Draft Prompt** — Research topic input, **Copy Prompt Template**, **Draft with Analyst Agent**.
 - **Step 2: Run in Google AI Studio** — Link to aistudio.google.com, instructions for Search Grounding.
 - **Step 3: Save Results** — **Destination folder** selector, **Manage Folders**, **Import from Clipboard**.
+
+**HTML Tab**
+Browse and preview HTML files from configured folders, with Inspect Mode and Claude Artifacts round-trip:
+- **Workspace filter**, **Manage Folders**, file search.
+- **Controls strip** — **Inspect Mode** button (toggle hover-to-select element mode for in-place tweaks — see §9), **Copy upload prompt** / **Upload to Claude Artifacts** (push the selected HTML file to claude.ai as an Artifact — see §9).
+- **Preview pane** — Renders the selected HTML file (sandboxed iframe) with a zoom toolbar. Tweak popup docked top-right when Inspect Mode is active.
 
 **NotebookLM Tab**
 Zero-cost planning via Google NotebookLM:
