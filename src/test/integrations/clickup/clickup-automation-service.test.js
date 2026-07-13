@@ -209,8 +209,10 @@ async function run() {
             assert.ok(!planContent.includes('**Internal Plan:** true'));
             assert.ok(!planContent.includes('**Pipeline ID:**'));
 
-            http.queueJson(200, { id: 'task-bug' }, (req) => req.method === 'PUT' && req.path === '/api/v2/task/task-bug');
-            http.queueJson(200, { id: 'task-bug' }, (req) => req.method === 'POST' && req.path === '/api/v2/list/list-backlog/task/task-bug');
+            http.queueJson(200, { id: 'task-bug', list: { id: 'list-created' } }, (req) => req.method === 'PUT' && req.path === '/api/v2/task/task-bug');
+            http.queueJson(200, { id: 'task-bug', status: { status: 'open', id: 'status-open' }, locations: [{ id: 'list-created' }] }, (req) => req.method === 'GET' && req.path === '/api/v2/task/task-bug');
+            http.queueJson(200, { id: 'list-backlog', statuses: [{ id: 'status-open', status: 'open' }] }, (req) => req.method === 'GET' && req.path === '/api/v2/list/list-backlog');
+            http.queueJson(200, { success: true }, (req) => req.method === 'PUT' && req.path === '/api/v3/workspaces/team-1/tasks/task-bug/home_list/list-backlog');
 
             const syncResult = await service.syncPlan(Object.assign({}, createdPlan, {
                 kanbanColumn: 'BACKLOG',

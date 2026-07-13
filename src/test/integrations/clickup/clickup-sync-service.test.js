@@ -329,8 +329,10 @@ async function testSyncPlanCreateAndUpdateFlows() {
             assert.strictEqual(createRequest.jsonBody.custom_fields.length, 3);
 
             http.queueJson(200, { tasks: [{ id: 'task-existing' }] }, (req) => req.method === 'GET' && req.path.includes('/task?custom_fields='));
-            http.queueJson(200, { id: 'task-existing' }, (req) => req.method === 'PUT' && req.path === '/api/v2/task/task-existing');
-            http.queueJson(200, { id: 'task-existing' }, (req) => req.method === 'POST' && req.path === '/api/v2/list/list-backlog/task/task-existing');
+            http.queueJson(200, { id: 'task-existing', list: { id: 'list-created' } }, (req) => req.method === 'PUT' && req.path === '/api/v2/task/task-existing');
+            http.queueJson(200, { id: 'task-existing', status: { status: 'open', id: 'status-open' }, locations: [{ id: 'list-created' }] }, (req) => req.method === 'GET' && req.path === '/api/v2/task/task-existing');
+            http.queueJson(200, { id: 'list-backlog', statuses: [{ id: 'status-open', status: 'open' }] }, (req) => req.method === 'GET' && req.path === '/api/v2/list/list-backlog');
+            http.queueJson(200, { success: true }, (req) => req.method === 'PUT' && req.path === '/api/v3/workspaces/team-1/tasks/task-existing/home_list/list-backlog');
 
             const updated = await service.syncPlan(createPlanRecord({
                 planId: 'plan-updated',
@@ -347,8 +349,7 @@ async function testSyncPlanCreateAndUpdateFlows() {
 
             const lookupCountBeforeLinked = http.requests.filter((req) => req.method === 'GET' && req.path.includes('/task?custom_fields=')).length;
             const createdTaskCountBeforeLinked = http.requests.filter((req) => req.method === 'POST' && req.path === '/api/v2/list/list-created/task').length;
-            http.queueJson(200, { id: 'task-linked' }, (req) => req.method === 'PUT' && req.path === '/api/v2/task/task-linked');
-            http.queueJson(200, { id: 'task-linked' }, (req) => req.method === 'POST' && req.path === '/api/v2/list/list-created/task/task-linked');
+            http.queueJson(200, { id: 'task-linked', list: { id: 'list-created' } }, (req) => req.method === 'PUT' && req.path === '/api/v2/task/task-linked');
 
             const linked = await service.syncPlan(createPlanRecord({
                 planId: 'plan-linked',
