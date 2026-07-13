@@ -16,9 +16,9 @@ This is subtask 1 of 4 in the **Switchboard Docs Section** feature. This plan co
 
 ## User Review Required
 
-- **CSP policy decision:** if Astro inlines scripts, the user must approve either externalizing (preferred) or adding `'unsafe-inline'` to `script-src` (degrades CSP posture). Flag in chat before committing to either.
+- **CSP policy:** research confirmed Astro externalizes scripts by default — no CSP relaxation needed. The user should still verify no `is:inline` or `define:vars` directives are introduced during migration. No decision required unless those directives are used.
 - **GitHub Pages source setting:** the repo's Settings → Pages → Source must be set to "GitHub Actions" (not "Deploy from branch"). User must verify/flip this in the GitHub UI — it cannot be done from code.
-- **withastro/action version:** the plan pins `withastro/action@v1`. The user should confirm this is the current stable major before the deploy workflow runs (see Uncertain Assumptions).
+- **BASE_URL path audit:** every hardcoded absolute path (`/assets/...`, `/...`) in the migrated HTML must be converted to use `import.meta.env.BASE_URL`. The user should review the path audit before merge.
 
 ## Complexity Audit
 
@@ -101,12 +101,10 @@ export default defineConfig({
 - Verify: sticky nav, smooth-scroll, IntersectionObserver reveals, lazy video load, `prefers-reduced-motion` fallback all still work.
 
 ### CSP consideration
-Astro may inline small scripts. The current CSP (`script-src 'self'`) blocks inline scripts. Check the build output:
-- If Astro externalizes all scripts → CSP stays as-is.
-- If Astro inlines scripts → either configure Astro to externalize, or add `'unsafe-inline'` to `script-src` (less ideal, note it in the plan completion).
+**Research confirmed: Astro externalizes `<script>` blocks by default** — it bundles and hashes them as external `.js` assets, natively satisfying a strict `script-src 'self'` CSP. Inline scripts only occur in three cases: (1) `is:inline` directive, (2) `define:vars` directive, (3) Astro Island hydration scripts. The docs site is static with no islands, so CSP stays clean. The current CSP (`script-src 'self'`) should be preserved as-is in `BaseLayout.astro`. Verify no `is:inline` or `define:vars` usage in the migrated components.
 
 ### tsconfig.json — path aliases
-Astro's extended config should include path aliases so Markdown content pages (plans 3 & 4) can reference layouts without fragile relative paths:
+Astro's extended config should include path aliases for use in `.astro` component imports (NOT in Markdown frontmatter — see note below):
 ```json
 {
   "extends": "astro/tsconfigs/strict",
@@ -121,17 +119,23 @@ Astro's extended config should include path aliases so Markdown content pages (p
   }
 }
 ```
-Content pages then use `layout: @layouts/DocsLayout.astro` in frontmatter instead of `../../../layouts/DocsLayout.astro` (depth-dependent, error-prone). **Verify that Astro resolves `@`-aliases in Markdown `layout` frontmatter** — if it does not, fall back to the correct relative path (`../../../layouts/DocsLayout.astro` from `src/pages/docs/<tier>/page.md`). See Uncertain Assumptions.
+> **Path aliases do NOT work in Markdown `layout` frontmatter.** Research confirmed: Astro's frontmatter `layout` resolution occurs early in the Markdown parsing pipeline, outside Vite's module-resolution loop where path aliases are resolved. Aliases work in `.astro` imports, script files, and JSX — but NOT in `.md` frontmatter. Content pages (plans 3 & 4) MUST use explicit relative paths: `layout: ../../../layouts/DocsLayout.astro` (from `src/pages/docs/<tier>/page.md`, three directories deep). The aliases above are still useful for `.astro` component imports (e.g. `DocsLayout.astro` importing `DocsSidebar` via `@components/DocsSidebar.astro`).
 
 ### Deploy workflow
-Use Astro's official action:
+Use Astro's official action. **Research confirmed: `withastro/action@v6` is the current stable major** (v1–v3 are deprecated; v6 defaults to Node 24, supports modern lockfile formats, and handles dot-prefixed routing). The workflow MUST explicitly request `pages: write` and `id-token: write` permissions:
 ```yaml
-on: push
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: withastro/action@v1
+      - uses: withastro/action@v6
         with:
           path: .
 ```
@@ -157,7 +161,7 @@ This installs deps, builds, and deploys to Pages in one step. Ensure repo Settin
 
 ## Adversarial Synthesis
 
-Key risks: landing page visual regression through framework migration (structure/path/script drift), CSP conflict with Astro's script bundling, and base-path asset/font resolution failures. Mitigations: diff rendered HTML against the current static site, audit all paths post-build, and make the CSP-vs-inline-scripts decision consciously before merge.
+Key risks: landing page visual regression through framework migration (structure/path drift), and base-path asset resolution failures — Astro does NOT auto-prefix absolute root-relative paths in HTML (`<a href="/...">`, `<img src="/...">`), so every hardcoded absolute path in the migrated HTML must be converted to use `import.meta.env.BASE_URL`. CSP risk is resolved — research confirmed Astro externalizes scripts by default, natively satisfying `script-src 'self'`. Mitigations: diff rendered HTML against the current static site, audit all `href`/`src` attributes for BASE_URL prefixing, and verify no `is:inline`/`define:vars` usage in components.
 
 ## Verification Plan
 
@@ -168,16 +172,18 @@ Key risks: landing page visual regression through framework migration (structure
 - **Visual regression:** `astro dev` → landing page renders identically to the current static site. Check every section, every class, every interaction.
 - **Build output:** `astro build` → `dist/` contains `index.html`, CSS, JS, fonts, assets. `.nojekyll` present in `dist/`.
 - **Self-contained check:** serve `dist/` locally → DevTools Network → zero external requests.
-- **CSP:** no console violations.
-- **Subpath:** all URLs include `/switchboard-site/` prefix. No 404s.
+- **CSP:** no console violations. Verify no `is:inline` or `define:vars` directives in components.
+- **Subpath:** all URLs include `/switchboard-site/` prefix. No 404s. **Audit every `href` and `src` in `index.astro` and `BaseLayout.astro` for `BASE_URL` prefixing.**
 - **Mobile:** responsive layout holds. iOS Safari video autoplay (muted + playsinline).
 - **Lighthouse:** ≥95 on the built output (should be unchanged — Astro ships zero JS by default).
-- **Path alias verification:** confirm `@layouts/*` aliases resolve in both `.astro` imports and (if supported) Markdown `layout` frontmatter.
+- **Path alias verification:** confirm `@layouts/*` aliases resolve in `.astro` imports. (Aliases do NOT work in `.md` frontmatter — confirmed by research; content plans use relative paths.)
 
-## Uncertain Assumptions
+## Research Findings (Confirmed)
 
-- **Astro Markdown `layout` frontmatter path resolution:** it is uncertain whether Astro resolves the `layout` property in `.md` frontmatter relative to the page file, relative to `src/`, or via tsconfig path aliases (`@layouts/`). The plan sets up aliases and provides a relative-path fallback, but the user was advised to run web research to confirm the exact resolution mechanism before implementation.
-- **`withastro/action` version:** the plan pins `withastro/action@v1`. It is uncertain whether `v1` is the current stable major or if a newer major (v2+) has been released with breaking changes. The user was advised to run web research to confirm the latest stable version before the deploy workflow is committed.
+- **Path aliases in `.md` frontmatter:** NOT supported. Astro's frontmatter `layout` resolution occurs outside Vite's module-resolution loop. Content pages MUST use relative paths (`../../../layouts/DocsLayout.astro`). Aliases work only in `.astro` imports.
+- **`withastro/action` version:** `@v6` is current stable major (v1–v3 deprecated). Workflow requires `permissions: pages: write, id-token: write`.
+- **CSP / script bundling:** Astro externalizes `<script>` blocks by default. `script-src 'self'` is satisfied natively. Inline scripts only with `is:inline`, `define:vars`, or island hydration. No islands on this static site → CSP stays clean.
+- **Base-path HTML paths:** Astro does NOT auto-prefix absolute root-relative paths in HTML. Must use `import.meta.env.BASE_URL`. CSS `url()` in `src/` is auto-prefixed by Vite; CSS in `public/` is NOT processed.
 
 ## Dependencies
 

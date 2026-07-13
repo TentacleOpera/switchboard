@@ -154,7 +154,11 @@ Full page list is in the nav config below.
 - Renders `<div class="code-block"><pre><code>...</code></pre></div>` with a copy button
 - Copy button: a `<button>` with a tiny `<script>` that calls `navigator.clipboard.writeText()`. Astro processes and bundles the script.
 - If Shiki is configured (polish phase), syntax highlighting goes here. For now, plain monospace with the `.code-block` styling.
-- **Critical for Markdown content pages:** plans 3 & 4 author `.md` pages that use fenced code blocks (```lang), NOT the `CodeBlock.astro` component (Astro components can't be used inline in `.md` files). The `.code-block` visual styling MUST also be applied via CSS selectors to `pre > code` elements within `.docs-article` in `docs.css`. Without this, all code blocks in content pages render unstyled. The `CodeBlock.astro` component is for `.astro` pages only (e.g. the docs index); the CSS-based styling covers all Markdown content.
+- **Critical for Markdown content pages:** plans 3 & 4 author `.md` pages that use fenced code blocks (```lang), NOT the `CodeBlock.astro` component (Astro components can't be used inline in `.md` files). **Research confirmed: Astro renders fenced code blocks via Shiki by default, wrapping them in `<pre class="astro-code">` with inline styles.** Standard CSS `pre > code` overrides will FAIL due to Shiki's inline style specificity. To style fenced blocks:
+  - Target the `.astro-code` wrapper class for container styling (padding, borders, margins, background override).
+  - Use `!important` on token color overrides to beat Shiki's inline styles, OR disable Shiki (`markdownSyntaxHighlighting: false` in `astro.config.mjs`) and style plain `<pre><code>` with the `.code-block` CSS.
+  - **Recommended:** consider `astro-expressive-code` integration (replaces Shiki, provides built-in copy buttons, code frames, and CSS-variable theming — no inline styles to fight). This would also give fenced blocks the copy-button feature without custom JS.
+  - The `CodeBlock.astro` component is for `.astro` pages only (e.g. the docs index); the CSS/integration approach covers all Markdown content.
 
 ### Docs index page (`/docs/`)
 - Three cards/sections: Getting Started, Guides, Reference
@@ -181,6 +185,7 @@ Full page list is in the nav config below.
 - **Shared surface — `Header.astro`:** plan 1 creates it, plan 2 modifies it (adds `Docs` link). No conflict — plan 2's modification is additive.
 - **Shared surface — `Footer.astro`:** plan 1 creates it, plan 2 modifies it (replaces placeholder). No conflict — plan 2's modification is the intended replacement.
 - **Shared surface — `nav.ts`:** plan 2 creates and owns it. Plans 3 & 4 consume it read-only. The page list in `nav.ts` must exactly match the pages created by plans 3 & 4.
+- **Markdown links and base path — CRITICAL:** **Research confirmed: Astro does NOT auto-prefix root-relative links in Markdown** (`[Docs](/docs)` → will 404 under `/switchboard-site/`). Content pages (plans 3 & 4) that use root-relative Markdown links like `[Agent Roles](/docs/reference/agent-roles)` will break. Options: (a) use relative links between pages (`../reference/agent-roles`), (b) add a remark plugin to prefix links with `BASE_URL`, or (c) hardcode the full `/switchboard-site/docs/...` prefix. **Recommendation:** use relative links between docs pages (option a) — they're the least fragile and don't require build-time processing. The `nav.ts` sidebar links are rendered in `.astro` components where `BASE_URL` can be applied programmatically, so those are fine.
 
 ## Adversarial Synthesis
 
@@ -202,9 +207,11 @@ Key risks: fenced code blocks in Markdown content pages rendering unstyled (beca
 - **Accessibility:** keyboard-tab through sidebar links with visible focus rings. Heading order logical. Drawer button has `aria-expanded`.
 - **CSS isolation:** landing page does NOT load `docs.css`. Check DevTools Network tab on the landing page.
 
-## Uncertain Assumptions
+## Research Findings (Confirmed)
 
-- **Astro Markdown `layout` frontmatter path resolution:** same as plan 1 — it is uncertain whether Astro resolves the `layout` property in `.md` frontmatter via tsconfig path aliases (`@layouts/`). Plan 1 sets up the aliases; this plan depends on that working. The user was advised to run web research to confirm before implementation.
+- **Shiki fenced code block styling:** Astro renders fenced blocks via Shiki with `<pre class="astro-code">` and inline styles. CSS `pre > code` overrides fail due to inline specificity. Target `.astro-code` wrapper or use `!important`, or disable Shiki, or use `astro-expressive-code` integration (recommended — provides copy buttons and CSS-variable theming).
+- **Markdown links and base path:** Astro does NOT auto-prefix root-relative links in Markdown. Use relative links between docs pages (`../reference/agent-roles`) to avoid 404s under the `/switchboard-site/` subpath.
+- **Path aliases in `.md` frontmatter:** NOT supported (confirmed in plan 1's research). Content pages use relative paths for `layout` frontmatter.
 
 ## Dependencies
 

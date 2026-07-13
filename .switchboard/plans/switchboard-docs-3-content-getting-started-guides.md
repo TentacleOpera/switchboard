@@ -82,12 +82,12 @@ This is subtask 3 of 4 in the **Switchboard Docs Section** feature. This plan co
    - Internal anchors → links to the relevant docs page
    - External URLs (GitHub, Marketplace) → keep as-is
 4. **Remove stale refs:** delete `docs/TODO_*.png` image references. Delete the "pre-release, currently hidden" triage section's UI instructions but keep a note that it's pre-release.
-5. **Cross-link between tiers:** Getting Started pages link to Guides for deeper coverage. Guides link to Reference pages for exhaustive detail. Use relative links (`../guides/quota-optimization` or `/docs/guides/quota-optimization`).
+5. **Cross-link between tiers:** Getting Started pages link to Guides for deeper coverage. Guides link to Reference pages for exhaustive detail. **Research confirmed: Astro does NOT auto-prefix root-relative links in Markdown.** Use relative links between docs pages (`../guides/quota-optimization` from a Getting Started page, `../getting-started/installation` from a Guides page) — NOT root-relative (`/docs/guides/...`) which will 404 under the `/switchboard-site/` subpath. External URLs (GitHub, Marketplace) stay as-is (full URLs).
 6. **Version references:** replace hardcoded `v1.7.6` / `switchboard-1.7.6.vsix` with a link to the Releases page (`https://github.com/TentacleOpera/switchboard/releases/latest`).
 7. **Frontmatter:** each page has:
    ```yaml
    ---
-   layout: @layouts/DocsLayout.astro
+   layout: ../../../layouts/DocsLayout.astro
    title: "Installation"
    description: "How to install Switchboard and set up your first workspace."
    prev:
@@ -98,7 +98,7 @@ This is subtask 3 of 4 in the **Switchboard Docs Section** feature. This plan co
      href: "/docs/getting-started/quick-start"
    ---
    ```
-   > **Layout path:** use the `@layouts/` tsconfig alias (set up in plan 1). If Astro does not resolve aliases in Markdown `layout` frontmatter, fall back to the correct relative path: `../../../layouts/DocsLayout.astro` (pages are at `src/pages/docs/<tier>/page.md`, three directories deep from `src/`). Do NOT use `../layouts/` or `../../layouts/` — those resolve to wrong directories. See Uncertain Assumptions.
+   > **Layout path:** **Research confirmed: tsconfig path aliases (`@layouts/`) do NOT work in Markdown `layout` frontmatter.** Use the explicit relative path `../../../layouts/DocsLayout.astro` (pages are at `src/pages/docs/<tier>/page.md`, three directories deep from `src/`). Do NOT use `../layouts/` or `../../layouts/` — those resolve to wrong directories. The `prev`/`next` `href` values are consumed by the `PrevNext.astro` component (rendered in `.astro` context where `BASE_URL` can be applied), so root-relative paths like `/docs/` are fine there.
 
 ## Prev/Next Flow
 
@@ -145,10 +145,11 @@ Key risks: silent content drops during adaptation (~200 links to rewrite, no aut
 - **Tables:** render with dark-theme styling, no overflow on mobile.
 - **Frontmatter layout path:** verify all 10 pages build successfully with the `@layouts/` alias (or the correct relative fallback path).
 
-## Uncertain Assumptions
+## Research Findings (Confirmed)
 
-- **Astro Markdown `layout` frontmatter path resolution:** it is uncertain whether Astro resolves the `@layouts/` tsconfig alias in `.md` frontmatter `layout` property. The plan provides a verified relative-path fallback (`../../../layouts/DocsLayout.astro`). The user was advised to run web research to confirm before implementation.
-- **Source file section coverage:** the plan maps source sections to output pages, but it is uncertain whether every section of the README and how-to-use guide is accounted for. A manual coverage check during implementation is required.
+- **Path aliases in `.md` frontmatter:** NOT supported. Use explicit relative path `../../../layouts/DocsLayout.astro` for the `layout` property.
+- **Markdown cross-page links:** Astro does NOT auto-prefix root-relative links in Markdown. Use relative links (`../guides/quota-optimization`) between docs pages, NOT root-relative (`/docs/guides/...`). External URLs stay as full URLs.
+- **Source file section coverage:** the plan maps source sections to output pages, but a manual coverage check during implementation is still required to ensure no section is dropped.
 
 ## Dependencies
 

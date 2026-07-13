@@ -75,11 +75,11 @@ This is subtask 4 of 4 in the **Switchboard Docs Section** feature. This plan co
 2. **Split by area, not by source section:** some source sections are short (§6 Pair Programming is 10 lines). Merge short sections into related pages rather than creating stubs. The mapping table above shows the groupings.
 3. **Tables:** the user manual has many tables (roles, columns, AUTOBAN config, settings). These are critical reference content. Render as Markdown tables. Verify they look right in the dark theme and don't overflow on mobile (may need `overflow-x: auto` on table containers).
 4. **Settings reference:** §20 is a long flat list of settings keys. Keep it as a table with columns: Setting Key | Type | Default | Description. If it's extremely long, consider splitting into two pages (Settings + Commands). Use your judgement based on the actual content length.
-5. **Rewrite links:** same rules as plan 3. Internal anchors (`#4-the-autoban-kanban-board`) → docs-site URLs (`/docs/reference/autoban`). Cross-references between reference pages. Links to README/how-to-use → Guides pages.
+5. **Rewrite links:** same rules as plan 3. Internal anchors (`#4-the-autoban-kanban-board`) → relative links to the relevant reference page (`../reference/autoban` from another reference page, or `autoban` from within the same `reference/` directory). **Research confirmed: Astro does NOT auto-prefix root-relative links in Markdown** — use relative links between docs pages, NOT root-relative (`/docs/reference/...`). Cross-references to Guides pages use relative paths (`../guides/constitution`). External URLs (GitHub, Marketplace) stay as full URLs.
 6. **Remove stale refs:** delete all `docs/TODO_*.png` image references. Delete `![...](docs/TODO_*.png)` lines entirely.
 7. **Pre-release content:** the triage pipeline (§29) is marked "pre-release, currently hidden." Keep the content but add a callout/note at the top: "This feature is pre-release and not currently exposed in the UI."
 8. **Version references:** the manual is dated "June 2026." Add a note at the top of the reference section: "Last updated: June 2026. Sourced from the live codebase." Don't hardcode extension version numbers.
-9. **Frontmatter:** same pattern as plan 3. Use `layout: @layouts/DocsLayout.astro` (tsconfig alias from plan 1). If Astro does not resolve aliases in Markdown `layout` frontmatter, fall back to the correct relative path: `../../../layouts/DocsLayout.astro` (Reference pages are at `src/pages/docs/reference/page.md` — same depth as Getting Started/Guides pages, three directories deep from `src/`). Do NOT use `../../layouts/` — that resolves to `src/pages/layouts/` which doesn't exist. See Uncertain Assumptions.
+9. **Frontmatter:** same pattern as plan 3. Use `layout: ../../../layouts/DocsLayout.astro` (explicit relative path). **Research confirmed: tsconfig path aliases (`@layouts/`) do NOT work in Markdown `layout` frontmatter.** Reference pages are at `src/pages/docs/reference/page.md` — same depth as Getting Started/Guides pages, three directories deep from `src/`. Do NOT use `../../layouts/` — that resolves to `src/pages/layouts/` which doesn't exist.
 
 ## Prev/Next Flow
 
@@ -131,10 +131,12 @@ Key risks: silent content drops across 1711 lines of source material (32 section
 - **Pre-release callout:** triage pipeline page has the pre-release note visible.
 - **Frontmatter layout path:** verify all 11 pages build successfully with the `@layouts/` alias (or the correct relative fallback path).
 
-## Uncertain Assumptions
+## Research Findings (Confirmed)
 
-- **Astro Markdown `layout` frontmatter path resolution:** same as plans 1 and 3 — uncertain whether `@layouts/` alias resolves in `.md` frontmatter. Verified relative fallback provided (`../../../layouts/DocsLayout.astro`). The user was advised to run web research to confirm before implementation.
-- **User manual section coverage:** the plan maps 32 source sections to 11 output pages, but it is uncertain whether every detail within each section is accounted for. A manual coverage check during implementation is required.
+- **Path aliases in `.md` frontmatter:** NOT supported. Use explicit relative path `../../../layouts/DocsLayout.astro` for the `layout` property.
+- **Markdown cross-page links:** Astro does NOT auto-prefix root-relative links in Markdown. Use relative links between reference pages (`autoban` or `../reference/autoban`) and to Guides pages (`../guides/constitution`), NOT root-relative (`/docs/reference/...`).
+- **Shiki code block styling:** fenced code blocks render via Shiki with `<pre class="astro-code">` and inline styles. Plan 2 handles the CSS targeting strategy (`.astro-code` wrapper or `astro-expressive-code`).
+- **User manual section coverage:** the plan maps 32 source sections to 11 output pages, but a manual coverage check during implementation is still required to ensure no section is dropped.
 - **User manual line count:** the plan says "1712-line" but the actual file is 1711 lines. Minor discrepancy — does not affect the plan.
 
 ## Dependencies
