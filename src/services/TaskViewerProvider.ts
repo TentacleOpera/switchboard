@@ -1699,6 +1699,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // "no terminal" (a throw becomes a 500 and breaks the best-effort signal).
                 await this._dispatchPhoneAFriend(planFile, originRole || 'coder');
             },
+            onDispatchResearch: async (workspaceRoot: string, prompt: string) => {
+                // Route the planner's "advise research if unsure" hand-off to an active
+                // researcher agent. Returns { dispatched:false } (never throws) when no
+                // researcher is live so the planner falls back to emitting the prompt.
+                return await this._dispatchResearchToResearcher(workspaceRoot, prompt);
+            },
             onOrchestratorRequest: async (request, workspaceRoot) => {
                 return await this._handleOrchestratorInboxRequest(request, workspaceRoot);
             },
@@ -3616,6 +3622,61 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public sendLoadingState(loading: boolean) {
         this.postMessage({ type: 'loading', value: loading });
+    }
+
+    /**
+     * Research hand-off dispatch — invoked by the LocalApiServer's `onDispatchResearch`
+     * callback (POST /research/dispatch) when the planner's "advise research if unsure"
+     * add-on wants to delegate its research prompt to an active Researcher agent.
+     *
+     * Only dispatches when a `researcher`-role terminal is registered AND live: if none
+     * is configured or the terminal has exited, it returns `{ dispatched:false }` WITHOUT
+     * spawning one (unlike sendPromptToAgentTerminal, which would create a terminal) so
+     * the planner can cleanly fall back to emitting the prompt in its chat summary. When
+     * a researcher is live it resolves the configured research-docs folder (mirrors the
+     * KanbanProvider localDocsPath resolution and the researcher prompt's save default),
+     * appends a save-to-docs instruction, and sends the prompt to that terminal.
+     */
+    private async _dispatchResearchToResearcher(
+        workspaceRoot: string,
+        prompt: string
+    ): Promise<{ dispatched: boolean; researcher?: string; savePath?: string; reason?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot || '');
+        if (!resolvedRoot) {
+            return { dispatched: false, reason: 'workspace root could not be resolved' };
+        }
+
+        // A researcher must be configured for this workspace...
+        const researcherName = await this._getAgentNameForRole('researcher', resolvedRoot);
+        if (!researcherName) {
+            return { dispatched: false, reason: 'no researcher agent configured' };
+        }
+
+        // ...AND its terminal must be registered and still live (not exited). Resolve
+        // the same way sendPromptToAgentTerminal does, but never fall through to a spawn.
+        const suffixedKey = this._suffixedName(researcherName);
+        let terminal: vscode.Terminal | undefined;
+        if (this._registeredTerminals) {
+            terminal = this._registeredTerminals.get(researcherName) || this._registeredTerminals.get(suffixedKey);
+        }
+        if (!terminal) {
+            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(researcherName));
+            terminal = (vscode.window.terminals || []).find(t => this._normalizeAgentKey(t.name) === strippedTarget);
+        }
+        if (!terminal || terminal.exitStatus !== undefined) {
+            return { dispatched: false, reason: 'researcher agent is not live' };
+        }
+
+        // Resolve the configured/default research-docs folder — the same source the
+        // researcher prompt's save-to-docs instruction uses (KanbanProvider:localDocsPath).
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(resolvedRoot));
+        const savePath = config.get<string[]>('research.localFolderPaths', [])[0] || '.switchboard/docs/';
+
+        const fullPrompt = `${prompt}\n\nIMPORTANT: After completing the research, save the results to ${savePath} using the write_to_file tool so the plan author can review them later.`;
+
+        await this.sendPromptToAgentTerminal('researcher', fullPrompt, resolvedRoot);
+
+        return { dispatched: true, researcher: researcherName, savePath };
     }
 
     public async sendPromptToAgentTerminal(role: string, text: string, workspaceRoot?: string): Promise<void> {

@@ -195,6 +195,24 @@ interface LocalApiServerOptions {
      */
     onPhoneAFriend?: (planFile: string, originRole?: string) => Promise<void>;
     /**
+     * Research hand-off — reached by the planner agent's `curl` when its "advise
+     * research if unsure" add-on has a research prompt to delegate. The host checks
+     * whether a `researcher`-role terminal is registered AND live; if so it resolves
+     * the configured research-docs folder (`switchboard.research.localFolderPaths[0]`,
+     * default `.switchboard/docs/`), appends a save-to-docs instruction, and sends the
+     * prompt to that terminal — returning `{ dispatched:true, researcher, savePath }`.
+     * When no researcher is active it returns `{ dispatched:false, reason }` (it MUST
+     * NOT throw, and MUST NOT spawn a terminal) so the planner cleanly falls back to
+     * emitting the prompt in its chat summary. Optional — absent in headless/test
+     * harnesses (endpoint returns 503).
+     */
+    onDispatchResearch?: (workspaceRoot: string, prompt: string) => Promise<{
+        dispatched: boolean;
+        researcher?: string;
+        savePath?: string;
+        reason?: string;
+    }>;
+    /**
      * Orchestrator request channel — reached by a fleet coding/review agent's
      * `curl` when it needs to raise a question, warning, research request, or
      * blocker to the orchestrator. The host resolves the workspace root and
@@ -1294,6 +1312,48 @@ export class LocalApiServer {
             console.error('[LocalApiServer] phoneAFriend error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'phoneAFriend failed' }));
+        }
+    }
+
+    /**
+     * POST /research/dispatch — hand a ready-to-run research prompt to an active
+     * Researcher agent. Reached by the planner agent's `curl` when its "advise
+     * research if unsure" add-on has an active researcher to delegate to. The host
+     * callback (`onDispatchResearch`) decides: it dispatches only when a researcher
+     * terminal is registered AND live, and returns `{ dispatched:false, reason }`
+     * otherwise (never throws on "no researcher") so the planner falls back to
+     * emitting the prompt in its chat summary. Body: `{ prompt, workspaceRoot? }`.
+     */
+    private async _handleResearchDispatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const onDispatchResearch = this._options.onDispatchResearch;
+        if (!onDispatchResearch) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Research dispatch not available' }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            const prompt = String(body?.prompt || '').trim();
+            const workspaceRoot = body?.workspaceRoot
+                ? String(body.workspaceRoot).trim()
+                : (this._options.workspaceRoot || '');
+            if (!prompt) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing required field: prompt' }));
+                return;
+            }
+
+            // The callback reports "no researcher active" as a normal result
+            // (dispatched:false), never a throw — mirror the phone-a-friend
+            // best-effort contract so the caller can branch on the outcome.
+            const result = await onDispatchResearch(workspaceRoot, prompt);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, ...result }));
+        } catch (err) {
+            console.error('[LocalApiServer] researchDispatch error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'researchDispatch failed' }));
         }
     }
 
@@ -2588,6 +2648,8 @@ export class LocalApiServer {
                 await this._handlePostComment(req, res);
             } else if (pathname === '/phone-a-friend' && req.method === 'POST') {
                 await this._handlePhoneAFriend(req, res);
+            } else if (pathname === '/research/dispatch' && req.method === 'POST') {
+                await this._handleResearchDispatch(req, res);
             } else if (pathname === '/orchestrator/request' && req.method === 'POST') {
                 await this._handleOrchestratorRequest(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {
