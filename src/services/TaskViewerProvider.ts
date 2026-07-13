@@ -1762,12 +1762,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         try {
             const port = await this._localApiServer.start();
-            // Write port file to ALL workspace roots (excluding mapped children) so agents in any folder can discover it
-            for (const root of allRoots) {
+            // Write port file to workspace roots that already carry a .switchboard/ dir
+            // (excluding mapped children) so agents in those folders can discover it.
+            // NEVER mkdir the .switchboard/ marker here: a root without it was never
+            // set up as a Switchboard workspace and must not be converted into one
+            // (same never-create rule as the board mirror and identity writers).
+            for (const root of this._filterPortFileEligibleRoots(allRoots)) {
                 const portFilePath = path.join(root, '.switchboard', 'api-server-port.txt');
                 const tempFilePath = portFilePath + '.tmp';
                 try {
-                    await fs.promises.mkdir(path.dirname(portFilePath), { recursive: true });
                     await fs.promises.writeFile(tempFilePath, port.toString(), 'utf8');
                     await fs.promises.rename(tempFilePath, portFilePath);
                 } catch (writeErr) {
@@ -1812,9 +1815,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (allRoots.length === 0) return;
 
             const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
-            // Port-file existence check (any root). Missing port file ⇒ agents can't discover.
-            let portFileExists = false;
-            for (const root of allRoots) {
+            // Port-file existence check, only across roots eligible for the port file
+            // (those that already have .switchboard/). A window with no eligible root
+            // legitimately has no port file — treat that as satisfied, otherwise the
+            // watchdog would restart a healthy server every interval forever.
+            const eligibleRoots = this._filterPortFileEligibleRoots(allRoots);
+            let portFileExists = eligibleRoots.length === 0;
+            for (const root of eligibleRoots) {
                 const portFilePath = path.join(root, '.switchboard', 'api-server-port.txt');
                 if (fs.existsSync(portFilePath)) { portFileExists = true; break; }
             }
@@ -1907,6 +1914,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         } catch {
             return allRoots;
         }
+    }
+
+    /**
+     * Roots eligible to receive the api-server-port.txt discovery file: only those
+     * where .switchboard/ already exists as a directory. The port writer must never
+     * create the .switchboard/ marker — doing so converts unrelated open repos into
+     * "managed" folders and re-arms the scaffold litter this guards against.
+     */
+    private _filterPortFileEligibleRoots(roots: string[]): string[] {
+        return roots.filter(root => {
+            try {
+                return fs.statSync(path.join(root, '.switchboard')).isDirectory();
+            } catch {
+                return false;
+            }
+        });
     }
 
     /**

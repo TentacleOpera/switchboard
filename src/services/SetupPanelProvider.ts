@@ -1663,7 +1663,9 @@ export class SetupPanelProvider implements vscode.Disposable {
     /**
      * Tiered predicate mirroring extension.ts isSwitchboardManagedFolder:
      * mapped children are not managed, configured parents are, and unclaimed roots
-     * must carry a deliberate-setup marker (kanban.db, db-pointer, or workspace-id).
+     * must carry a deliberate-setup marker (kanban.db or db-pointer). workspace-id
+     * is deliberately excluded — it was self-planted into unrelated repos by the
+     * identity writers pre-guard, so it proves nothing (keep in sync with extension.ts).
      */
     private _isSwitchboardManagedFolder(root: string): boolean {
         const resolvedRoot = path.resolve(root);
@@ -1692,7 +1694,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 return false;
             }
 
-            const markers = ['kanban.db', 'db-pointer', 'workspace-id'];
+            const markers = ['kanban.db', 'db-pointer'];
             return markers.some(name => fs.existsSync(path.join(switchboardDir, name)));
         } catch {
             return false;

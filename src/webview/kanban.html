@@ -4765,10 +4765,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         // Obnoxious-by-request: giant animated ULTRACODE slam. Afterburner only — it speaks
-        // that theme's CRT/neon language — and skipped when cyber animations are disabled.
+        // that theme's CRT/neon language. Gated by its own ultracode-animation-enabled toggle
+        // (independent of the CRT artifact animation toggle in setup).
         function fireUltracodeBlast() {
             if (!document.body.classList.contains('cyber-theme-enabled')) { return; }
-            if (document.body.classList.contains('cyber-animation-disabled')) { return; }
             if (!document.body.classList.contains('ultracode-animation-enabled')) { return; }
             document.getElementById('ultracode-blast')?.remove();
             const blast = document.createElement('div');

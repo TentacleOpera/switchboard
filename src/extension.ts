@@ -272,10 +272,16 @@ function isSwitchboardManagedFolder(root: string): boolean {
         if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
             return false;
         }
+        // NOTE: workspace-id is deliberately NOT a marker. It was mass-planted into
+        // unrelated repos by the identity writers before they got their existence
+        // bail (WorkspaceIdentityService), so it proves nothing about deliberate
+        // setup and kept re-arming littered roots for full scaffold refreshes
+        // (UAT 2026-07-13: analytics-dashboard). A genuine workspace always has
+        // kanban.db (standalone) or db-pointer (redirected parent); a root with
+        // only workspace-id self-heals into managed the moment its board is used.
         const markers = [
             path.join(dir, 'kanban.db'),
             path.join(dir, 'db-pointer'),
-            path.join(dir, 'workspace-id'),
         ];
         return markers.some(p => fs.existsSync(p));
     } catch {
