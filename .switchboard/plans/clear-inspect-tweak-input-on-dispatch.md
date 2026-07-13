@@ -120,3 +120,15 @@ Send to Intern (complexity 2 — mechanical, mirrors shipped pattern, single-pas
 ## Completion Summary
 
 Implemented the post-dispatch cleanup in all six tweak send/copy handlers. After each `vscode.postMessage(...)` call, appended a 4-line block that clears the textarea (`inputEl.value = ''`), hides the popup (`getElementById(...).style.display = 'none'` with null guard), and nulls the corresponding `state.*SelectedElement`. Files changed: `src/webview/design.js` (stitch-tweak-btn-send L4674-4682, stitch-tweak-btn-copy L4702-4709, html-tweak-btn-send L4773-4781, html-tweak-btn-copy L4801-4808) and `src/webview/planning.js` (planning-html-tweak-btn-send L8338-8346, planning-html-tweak-btn-copy L8366-8373). The cleanup mirrors the existing ✕ close-handler pattern exactly; Inspect Mode toggle and empty-instruction early-return guards are untouched. No issues encountered.
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome, mortal. I came looking for a disaster and found... competence. Annoying.
+
+- **NIT** — Cleanup operation order differs cosmetically from the close handlers (send/copy does input-clear → popup-hide → state-null; close does popup-hide → input-clear → state-null). Functionally identical — all synchronous, no observable difference. Not worth fixing.
+- **NIT** — `inputEl` reuse after the empty-guard is safe (guard returns early when null), but a paranoid reviewer would note the trust chain rests on that guard. It holds. Move on.
+- No CRITICAL or MAJOR findings. All six handlers verified present and correct. Regression audit clean: `state.*SelectedElement` nulling is an established pattern (close handlers L4630/4729/8294, fresh-render handlers L1434/1442/3580). No double-trigger, no race, no orphaned refs. Inspect Mode toggle (`sbInspectToggle` to iframe) is untouched.
+
+**Stage 2 (Balanced):** Keep all six cleanup blocks as-is. No fixes required. The NITs are cosmetic and carry zero behavioral risk. Verification: no compilation/tests run per instructions; manual code-path audit confirms the cleanup runs strictly post-dispatch on the success path only, matching the shipped close-handler pattern.
+
+**Files changed:** `src/webview/design.js` (4 handlers), `src/webview/planning.js` (2 handlers). **Validation:** code-path audit only (compilation/tests skipped per instructions). **Remaining risks:** none material.

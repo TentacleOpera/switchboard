@@ -365,3 +365,9 @@ The coder does **not** start from a blank file. The owner produces a visual prot
 ---
 
 **Recommendation: Send to Coder.** (Complexity 4 — routine static build with one genuinely fiddly spot: the Stitch → vendored-CSS extraction.)
+
+---
+
+## Completion Summary
+
+Built the Switchboard marketing landing page as a self-contained static site in a new dedicated repo at `/Users/patrickvuleta/Documents/GitHub/switchboard-site/` (local only — Phase 0; no remote, no push, owner triggers Phase 1 publish). Adapted the Stitch prototype (`c4d62bf3…html`) into hand-vendored plain CSS with the Afterburner dev-dark theme realized as CSS custom properties; extracted the CDN Tailwind/Google-Fonts dependencies into self-hosted woff2 fonts (Hanken Grotesk + JetBrains Mono, latin subsets) and inline SVG icons replacing Material Symbols, so the page makes zero external requests (enforced by a restrictive CSP `<meta>`). Files: `index.html` (semantic landmarks, one `<h1>`, production copy, five pillars in owner order, OG/Twitter/canonical/JSON-LD), `styles.css` (design tokens, `@font-face`, layout, reveal, reduced-motion, focus rings), `main.js` (sticky nav, smooth-scroll, IntersectionObserver reveals + lazy clip load with `prefers-reduced-motion` native-controls fallback), plus `assets/` (fonts, favicon.svg, og-image.png, ld.json), `.nojekyll`, `LICENSE`, `README.md`. All asset paths are relative for the project-site subpath; verified all assets serve 200 from both root and `/switchboard-site/` subpath, exactly one `<h1>`, no inline styles. Demo clips are wired via `data-webm`/`data-mp4` attributes with fixed `aspect-ratio` placeholders (zero layout shift) — drop files into `assets/clips/` with no code change. No issues encountered; build-ready for owner-triggered Phase 1.

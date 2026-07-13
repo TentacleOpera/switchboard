@@ -167,3 +167,14 @@ Inspect Mode is pinned to the left next to the dropdown. The search input retain
 ## Completion Summary
 
 Verified against live source (2026-07-13): all three controls strips already place the Inspect Mode `<button>` immediately after the `<select>` dropdown and before the `<input class="sidebar-search-input">` — i.e. the target order described in the Goal. No code change was made. Files inspected: `src/webview/planning.html` (L3690-3699, `#controls-strip-planning-html`), `src/webview/design.html` (L3805-3812, `#controls-strip-stitch-html`; L3895-3904, `#controls-strip-html`). The plan's "currently renders on the right-hand side" premise does not match the current code; the proposed DOM reorder is a no-op. If the visual symptom persists, the cause lies elsewhere (CSS, runtime DOM mutation, or a different strip than the three listed) and the plan should be reworked before any code change.
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** A plan that does nothing. My favorite kind — nothing to break.
+
+- **NIT** — The plan's original premise (button on the right) was wrong, but the plan self-corrected via Superseded callouts and flagged for user review. Good process, stale diagnosis. No code touched, no harm done.
+- No CRITICAL/MAJOR findings. Re-verified all three strips against live source: `planning.html` L3690-3699, `design.html` L3805-3812 and L3895-3904. DOM order is `<select> → <button Inspect Mode> → <input.sidebar-search-input> → <span> → <button>*` in all three. Target layout already satisfied. No-op is the correct outcome.
+
+**Stage 2 (Balanced):** No code change needed or applied — confirmed correct. If the user still sees the button on the right visually, the cause is not DOM order (investigate CSS overrides, runtime DOM mutation, or a different strip). No fixes applied. Verification: visual DOM-order inspection only (compilation/tests skipped per instructions).
+
+**Files changed:** none. **Validation:** DOM-order audit against live source. **Remaining risks:** if the visual symptom persists, the real cause is undiagnosed — do not apply the proposed reorder (it would change nothing); rework the plan to find the actual culprit.
