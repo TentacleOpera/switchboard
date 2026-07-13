@@ -123,7 +123,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _activeDesignSystemDocId: string | null = null;
     private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
     private _htmlServerCreationPromises = new Map<string, Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>>();
-    private static readonly _INSPECTOR_SCRIPT = `<script>(function(){
+    public static readonly _INSPECTOR_SCRIPT = `<script>(function(){
 'use strict';
 if (window.__sbInspectorInstalled) return;
 window.__sbInspectorInstalled = true;
@@ -2216,6 +2216,27 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
 
             case 'sendStitchTweakPrompt': {
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
+                    showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                } else {
+                    await vscode.env.clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
+                }
+                break;
+            }
+
+            case 'copyHtmlTweakPrompt': {
+                const prompt = String(message.prompt || '');
+                if (!prompt) break;
+                await vscode.env.clipboard.writeText(prompt);
+                showTemporaryNotification('Copied element tweak prompt to clipboard.');
+                break;
+            }
+
+            case 'sendHtmlTweakPrompt': {
                 const prompt = String(message.prompt || '');
                 if (!prompt) break;
                 if (this._taskViewerProvider) {

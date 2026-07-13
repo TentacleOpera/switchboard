@@ -62,6 +62,8 @@
         docsSectionCollapsed: persistedState.docsSectionCollapsed || {},
         stitchHtmlActiveFilePath: null,
         stitchSelectedElement: null,
+        htmlActiveFilePath: null,
+        htmlSelectedElement: null,
     };
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
@@ -1417,6 +1419,16 @@
                 statusHtml.textContent = isAutoRefreshed ? 'Auto-refreshed' : '';
                 statusHtml.style.color = 'var(--accent-teal)';
             }
+            // Inspect Mode reset on (auto-)refresh: clear the selection state and
+            // hide the popup, but preserve the textarea draft (same rule as the
+            // Stitch HTML tab). The toggle's .active class is cleared too — a
+            // fresh render means the iframe's inspector state is gone.
+            state.htmlActiveFilePath = msg.filePath || null;
+            const htmlInspectBtn = document.getElementById('html-btn-inspect');
+            if (htmlInspectBtn) htmlInspectBtn.classList.remove('active');
+            const htmlTweakPopup = document.getElementById('html-tweak-popup');
+            if (htmlTweakPopup) htmlTweakPopup.style.display = 'none';
+            state.htmlSelectedElement = null;
         } else if (sourceId === 'stitch-html-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
             state.stitchHtmlActiveFilePath = msg.filePath || null;
@@ -3497,24 +3509,37 @@
                 break;
 
             case 'stitchElementSelected': {
-                const iframe = document.getElementById('stitch-html-preview-frame');
-                if (state.activeSource !== 'stitch-html-folder' || !iframe || event.source !== iframe.contentWindow) {
-                    break;
-                }
-                
                 const selector = String(msg.selector || '');
                 const tag = String(msg.tag || '');
                 const id = String(msg.id || '');
                 const classes = Array.isArray(msg.classes) ? msg.classes.map(String) : [];
                 const text = String(msg.text || '');
                 let outerHTML = String(msg.outerHTML || '');
-                
+
                 if (outerHTML.length > 2048) {
                     outerHTML = outerHTML.substring(0, 2048) + '... [truncated]';
                 }
                 const truncatedText = text.length > 200 ? text.substring(0, 200) + '...' : text;
-                
-                state.stitchSelectedElement = {
+
+                // Route to the correct tab based on activeSource + the iframe that
+                // emitted the message. The shared _INSPECTOR_SCRIPT posts the same
+                // `stitchElementSelected` type from every preview iframe, so the
+                // activeSource + event.source gate prevents cross-tab popup bleed.
+                let targetTab = null;
+                if (state.activeSource === 'stitch-html-folder') {
+                    const stitchFrame = document.getElementById('stitch-html-preview-frame');
+                    if (stitchFrame && event.source === stitchFrame.contentWindow) {
+                        targetTab = 'stitch';
+                    }
+                } else if (state.activeSource === 'html-folder') {
+                    const htmlFrame = document.getElementById('html-preview-frame');
+                    if (htmlFrame && event.source === htmlFrame.contentWindow) {
+                        targetTab = 'html';
+                    }
+                }
+                if (!targetTab) break;
+
+                const selected = {
                     selector,
                     tag,
                     id,
@@ -3522,38 +3547,55 @@
                     text: truncatedText,
                     outerHTML
                 };
-                
-                const breadcrumbEl = document.getElementById('stitch-tweak-header-breadcrumb');
+                const idPrefix = targetTab === 'stitch' ? 'stitch' : 'html';
+                if (targetTab === 'stitch') {
+                    state.stitchSelectedElement = selected;
+                } else {
+                    state.htmlSelectedElement = selected;
+                }
+
+                const breadcrumbEl = document.getElementById(idPrefix + '-tweak-header-breadcrumb');
                 if (breadcrumbEl) {
                     var classStr = classes.length > 0 ? '.' + classes.slice(0, 2).join('.') : '';
                     breadcrumbEl.textContent = tag + (id ? '#' + id : '') + classStr;
                     breadcrumbEl.title = selector;
                 }
-                
-                const preEl = document.getElementById('stitch-tweak-snippet-pre');
+
+                const preEl = document.getElementById(idPrefix + '-tweak-snippet-pre');
                 if (preEl) {
                     preEl.textContent = outerHTML;
                 }
-                
-                const popup = document.getElementById('stitch-tweak-popup');
+
+                const popup = document.getElementById(idPrefix + '-tweak-popup');
                 if (popup) {
                     popup.style.display = 'flex';
                 }
-                
-                const textarea = document.getElementById('stitch-tweak-input');
+
+                const textarea = document.getElementById(idPrefix + '-tweak-input');
                 if (textarea) {
                     textarea.focus();
                 }
-                
+
                 break;
             }
 
             case 'sbInspectState': {
-                const iframe = document.getElementById('stitch-html-preview-frame');
-                if (state.activeSource !== 'stitch-html-folder' || !iframe || event.source !== iframe.contentWindow) {
-                    break;
+                // Mirror the stitchElementSelected routing: gate on activeSource +
+                // the originating iframe so each tab toggles only its own button.
+                let targetBtnId = null;
+                if (state.activeSource === 'stitch-html-folder') {
+                    const stitchFrame = document.getElementById('stitch-html-preview-frame');
+                    if (stitchFrame && event.source === stitchFrame.contentWindow) {
+                        targetBtnId = 'stitch-html-btn-inspect';
+                    }
+                } else if (state.activeSource === 'html-folder') {
+                    const htmlFrame = document.getElementById('html-preview-frame');
+                    if (htmlFrame && event.source === htmlFrame.contentWindow) {
+                        targetBtnId = 'html-btn-inspect';
+                    }
                 }
-                const btn = document.getElementById('stitch-html-btn-inspect');
+                if (!targetBtnId) break;
+                const btn = document.getElementById(targetBtnId);
                 if (btn) {
                     if (msg.on) {
                         btn.classList.add('active');
@@ -4651,6 +4693,97 @@
 
         vscode.postMessage({
             type: 'copyStitchTweakPrompt',
+            prompt
+        });
+    });
+
+    // ── HTML Previews tab Inspect Mode (mirrors the Stitch HTML tab wiring above) ──
+    document.getElementById('html-btn-inspect')?.addEventListener('click', () => {
+        const frame = document.getElementById('html-preview-frame');
+        const btn = document.getElementById('html-btn-inspect');
+        if (frame && btn) {
+            frame.contentWindow?.postMessage({
+                type: 'sbInspectToggle',
+                on: !btn.classList.contains('active')
+            }, '*');
+        }
+    });
+
+    document.getElementById('html-tweak-btn-close')?.addEventListener('click', () => {
+        const popup = document.getElementById('html-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        const input = document.getElementById('html-tweak-input');
+        if (input) input.value = '';
+        state.htmlSelectedElement = null;
+    });
+
+    function composeHtmlTweakPrompt() {
+        const el = state.htmlSelectedElement;
+        const filePath = state.htmlActiveFilePath;
+        const inputEl = document.getElementById('html-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!el || !filePath || !instruction) return '';
+        return [
+            'Tweak an HTML file in place.',
+            '',
+            'File: ' + filePath,
+            '',
+            'Target element (CSS selector: ' + el.selector + '):',
+            '```html',
+            el.outerHTML,
+            '```',
+            '',
+            'Requested change: ' + instruction,
+            '',
+            'The snippet above is serialized from the live DOM — whitespace, entity encoding, attribute quoting, and boolean-attribute forms may differ from the file bytes, and if the page builds DOM at runtime the element may not appear verbatim in the source. Locate the target by the selector and the element\'s structure/text, not by exact-string search.',
+            '',
+            'Edit the file directly. Keep the change scoped to this element unless it forces adjacent updates (e.g. shared CSS). Do not create a plan file — this is a direct edit.'
+        ].join('\n');
+    }
+
+    document.getElementById('html-tweak-btn-send')?.addEventListener('click', () => {
+        const statusEl = document.getElementById('html-tweak-status');
+        if (statusEl) statusEl.style.display = 'none';
+
+        const inputEl = document.getElementById('html-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!instruction) {
+            if (statusEl) {
+                statusEl.textContent = 'Please describe the change first.';
+                statusEl.style.display = 'block';
+            }
+            return;
+        }
+
+        const prompt = composeHtmlTweakPrompt();
+        if (!prompt) return;
+
+        vscode.postMessage({
+            type: 'sendHtmlTweakPrompt',
+            prompt,
+            workspaceRoot: state.designWorkspaceRootFilter
+        });
+    });
+
+    document.getElementById('html-tweak-btn-copy')?.addEventListener('click', () => {
+        const statusEl = document.getElementById('html-tweak-status');
+        if (statusEl) statusEl.style.display = 'none';
+
+        const inputEl = document.getElementById('html-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!instruction) {
+            if (statusEl) {
+                statusEl.textContent = 'Please describe the change first.';
+                statusEl.style.display = 'block';
+            }
+            return;
+        }
+
+        const prompt = composeHtmlTweakPrompt();
+        if (!prompt) return;
+
+        vscode.postMessage({
+            type: 'copyHtmlTweakPrompt',
             prompt
         });
     });

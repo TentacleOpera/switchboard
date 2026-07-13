@@ -49,7 +49,9 @@
         planningHtmlWorkspaceRootFilter: '',
         planningHtmlDocsSearch: '',
         _lastPlanningHtmlDocsMsg: null,
-        htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false
+        htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
+        htmlActiveFilePath: null,
+        htmlSelectedElement: null
     };
 
     let _restoredPanelState = { panel: {}, byRoot: {} };
@@ -3565,6 +3567,17 @@
                 if (previewWrapper) previewWrapper.style.display = 'none';
                 if (initialState) initialState.style.display = 'flex';
             }
+            // Inspect Mode reset on (auto-)refresh: clear selection state and hide
+            // the popup, but preserve the textarea draft (same rule as the Design
+            // panel's Stitch HTML / HTML Previews tabs). The toggle's .active class
+            // is cleared too — a fresh render means the iframe's inspector state is
+            // gone.
+            state.htmlActiveFilePath = msg.filePath || null;
+            const planningInspectBtn = document.getElementById('planning-html-btn-inspect');
+            if (planningInspectBtn) planningInspectBtn.classList.remove('active');
+            const planningTweakPopup = document.getElementById('planning-html-tweak-popup');
+            if (planningTweakPopup) planningTweakPopup.style.display = 'none';
+            state.htmlSelectedElement = null;
             return; // do not fall through to markdown rendering
         }
 
@@ -4744,6 +4757,75 @@
             case 'previewError':
                 handlePreviewError(msg);
                 break;
+            case 'stitchElementSelected': {
+                // Shared _INSPECTOR_SCRIPT posts this from the Planning HTML iframe.
+                // Gate on activeSource + the originating iframe so only the
+                // Planning HTML tab's popup is populated.
+                const planningHtmlFrame = document.getElementById('planning-html-frame');
+                if (state.activeSource !== 'planning-html-folder' || !planningHtmlFrame || event.source !== planningHtmlFrame.contentWindow) {
+                    break;
+                }
+
+                const phSelector = String(msg.selector || '');
+                const phTag = String(msg.tag || '');
+                const phId = String(msg.id || '');
+                const phClasses = Array.isArray(msg.classes) ? msg.classes.map(String) : [];
+                const phText = String(msg.text || '');
+                let phOuterHTML = String(msg.outerHTML || '');
+
+                if (phOuterHTML.length > 2048) {
+                    phOuterHTML = phOuterHTML.substring(0, 2048) + '... [truncated]';
+                }
+                const phTruncatedText = phText.length > 200 ? phText.substring(0, 200) + '...' : phText;
+
+                state.htmlSelectedElement = {
+                    selector: phSelector,
+                    tag: phTag,
+                    id: phId,
+                    classes: phClasses,
+                    text: phTruncatedText,
+                    outerHTML: phOuterHTML
+                };
+
+                const phBreadcrumb = document.getElementById('planning-html-tweak-header-breadcrumb');
+                if (phBreadcrumb) {
+                    var phClassStr = phClasses.length > 0 ? '.' + phClasses.slice(0, 2).join('.') : '';
+                    phBreadcrumb.textContent = phTag + (phId ? '#' + phId : '') + phClassStr;
+                    phBreadcrumb.title = phSelector;
+                }
+
+                const phPre = document.getElementById('planning-html-tweak-snippet-pre');
+                if (phPre) {
+                    phPre.textContent = phOuterHTML;
+                }
+
+                const phPopup = document.getElementById('planning-html-tweak-popup');
+                if (phPopup) {
+                    phPopup.style.display = 'flex';
+                }
+
+                const phTextarea = document.getElementById('planning-html-tweak-input');
+                if (phTextarea) {
+                    phTextarea.focus();
+                }
+
+                break;
+            }
+            case 'sbInspectState': {
+                const planningHtmlFrame2 = document.getElementById('planning-html-frame');
+                if (state.activeSource !== 'planning-html-folder' || !planningHtmlFrame2 || event.source !== planningHtmlFrame2.contentWindow) {
+                    break;
+                }
+                const phBtn = document.getElementById('planning-html-btn-inspect');
+                if (phBtn) {
+                    if (msg.on) {
+                        phBtn.classList.add('active');
+                    } else {
+                        phBtn.classList.remove('active');
+                    }
+                }
+                break;
+            }
             case 'saveOnlineDocFileResult': {
                 const { success, error } = msg;
                 const textarea = document.getElementById('markdown-editor');
@@ -8191,6 +8273,97 @@ Return ONLY the drafted prompt with no additional commentary.`;
             });
         });
     }
+
+    // ── Planning HTML tab Inspect Mode (mirrors Design panel's Stitch HTML tab) ──
+    document.getElementById('planning-html-btn-inspect')?.addEventListener('click', () => {
+        const frame = document.getElementById('planning-html-frame');
+        const btn = document.getElementById('planning-html-btn-inspect');
+        if (frame && btn) {
+            frame.contentWindow?.postMessage({
+                type: 'sbInspectToggle',
+                on: !btn.classList.contains('active')
+            }, '*');
+        }
+    });
+
+    document.getElementById('planning-html-tweak-btn-close')?.addEventListener('click', () => {
+        const popup = document.getElementById('planning-html-tweak-popup');
+        if (popup) popup.style.display = 'none';
+        const input = document.getElementById('planning-html-tweak-input');
+        if (input) input.value = '';
+        state.htmlSelectedElement = null;
+    });
+
+    function composePlanningHtmlTweakPrompt() {
+        const el = state.htmlSelectedElement;
+        const filePath = state.htmlActiveFilePath;
+        const inputEl = document.getElementById('planning-html-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!el || !filePath || !instruction) return '';
+        return [
+            'Tweak an HTML file in place.',
+            '',
+            'File: ' + filePath,
+            '',
+            'Target element (CSS selector: ' + el.selector + '):',
+            '```html',
+            el.outerHTML,
+            '```',
+            '',
+            'Requested change: ' + instruction,
+            '',
+            'The snippet above is serialized from the live DOM — whitespace, entity encoding, attribute quoting, and boolean-attribute forms may differ from the file bytes, and if the page builds DOM at runtime the element may not appear verbatim in the source. Locate the target by the selector and the element\'s structure/text, not by exact-string search.',
+            '',
+            'Edit the file directly. Keep the change scoped to this element unless it forces adjacent updates (e.g. shared CSS). Do not create a plan file — this is a direct edit.'
+        ].join('\n');
+    }
+
+    document.getElementById('planning-html-tweak-btn-send')?.addEventListener('click', () => {
+        const statusEl = document.getElementById('planning-html-tweak-status');
+        if (statusEl) statusEl.style.display = 'none';
+
+        const inputEl = document.getElementById('planning-html-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!instruction) {
+            if (statusEl) {
+                statusEl.textContent = 'Please describe the change first.';
+                statusEl.style.display = 'block';
+            }
+            return;
+        }
+
+        const prompt = composePlanningHtmlTweakPrompt();
+        if (!prompt) return;
+
+        vscode.postMessage({
+            type: 'sendHtmlTweakPrompt',
+            prompt,
+            workspaceRoot: state.planningHtmlWorkspaceRootFilter
+        });
+    });
+
+    document.getElementById('planning-html-tweak-btn-copy')?.addEventListener('click', () => {
+        const statusEl = document.getElementById('planning-html-tweak-status');
+        if (statusEl) statusEl.style.display = 'none';
+
+        const inputEl = document.getElementById('planning-html-tweak-input');
+        const instruction = inputEl ? inputEl.value.trim() : '';
+        if (!instruction) {
+            if (statusEl) {
+                statusEl.textContent = 'Please describe the change first.';
+                statusEl.style.display = 'block';
+            }
+            return;
+        }
+
+        const prompt = composePlanningHtmlTweakPrompt();
+        if (!prompt) return;
+
+        vscode.postMessage({
+            type: 'copyHtmlTweakPrompt',
+            prompt
+        });
+    });
 
     function openFoldersModal(scope = 'local') {
         folderModalScope = scope;

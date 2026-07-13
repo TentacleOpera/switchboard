@@ -284,14 +284,21 @@ function isSwitchboardManagedFolder(root: string): boolean {
 }
 
 /**
- * Per-folder control-plane refresh: content-hash skill seed + version-gated
- * protocol scaffold + per-folder version stamp. Extracted from the old
- * single-root activation block; behavior is byte-equivalent for one folder.
+ * Per-folder control-plane refresh: content-hash skill **and workflow** seed +
+ * conditional protocol scaffold + per-folder version stamp. Extracted from the
+ * old single-root activation block. Workflow files use the same content-hash
+ * self-heal as skills (not a version gate) so a rename/door-change lands on
+ * same-version installs — fixes the delete-without-replace asymmetry where
+ * `cleanupLegacyAgentFiles` (unconditional) removed retired workflow files
+ * while delivery was gated on a version bump.
  *
  * Ordering contract (preserved from the original :477-479 block):
  *   1. Capture `needsAgentRefresh` BEFORE seeding (seeding must not pre-stamp).
  *   2. Content-hash skill seed loop.
- *   3. Scaffold + stamp iff `needsAgentRefresh || agentsChanged`.
+ *   3. Content-hash workflow seed loop (same semantics, must set agentsChanged
+ *      so the same-pass scaffold regenerates the .claude mirror against freshly
+ *      delivered doors).
+ *   4. Scaffold + stamp iff `needsAgentRefresh || agentsChanged`.
  */
 async function refreshWorkspaceControlPlane(
     root: string,
@@ -337,6 +344,52 @@ async function refreshWorkspaceControlPlane(
         }
     } catch (err) {
         console.error(`[Switchboard] Skill-file seed failed for ${root}, continuing:`, err);
+    }
+
+    // 2b. Content-hash workflow seed loop (same per-file semantics as skills).
+    // Workflow files are Switchboard-managed canonical definitions — user edits
+    // are not preserved across activations when the bundle differs (same contract
+    // as cleanupLegacyAgentFiles). Hash-seeding (not a version gate) ensures a
+    // door rename or new door lands on same-version installs; without this the
+    // unconditional cleanupLegacyAgentFiles delete becomes delete-without-replace.
+    // Must set agentsChanged so the same-pass scaffold regenerates the .claude
+    // mirror against freshly delivered door sources.
+    try {
+        const bundledWorkflowsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'workflows');
+        const workflowFiles = await crawlDirectory(bundledWorkflowsUri);
+        for (const relativePath of workflowFiles) {
+            const srcUri = vscode.Uri.joinPath(bundledWorkflowsUri, relativePath);
+            const destUri = vscode.Uri.joinPath(vscode.Uri.file(root), '.agents', 'workflows', relativePath);
+            try {
+                await vscode.workspace.fs.stat(destUri);
+                // dest exists → overwrite iff bundle content differs (content-hash refresh)
+                try {
+                    const [srcHash, destHash] = await Promise.all([
+                        ControlPlaneMigrationService.hashFile(srcUri.fsPath),
+                        ControlPlaneMigrationService.hashFile(destUri.fsPath),
+                    ]);
+                    if (srcHash !== destHash) {
+                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
+                        await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
+                        agentsChanged = true;
+                    }
+                } catch (hashErr) {
+                    console.warn(`[Switchboard] Workflow content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
+                }
+            } catch {
+                // dest absent → copy new file.
+                try {
+                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
+                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
+                    agentsChanged = true;
+                } catch (copyErr) {
+                    console.warn(`[Switchboard] Workflow seed copy failed for ${relativePath}, skipping:`, copyErr);
+                }
+            }
+        }
+    } catch (err) {
+        // Missing bundle workflows dir (or unreadable) → no-op; never fail activation.
+        console.error(`[Switchboard] Workflow-file seed failed for ${root}, continuing:`, err);
     }
 
     // 3. Scaffold protocol layers + stamp version iff refresh needed.
@@ -3674,7 +3727,10 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     const agentSourceUri = vscode.Uri.joinPath(extensionUri, '.agents');
     const agentFiles = await crawlDirectory(agentSourceUri);
 
-    // 2a. Version-gated workflow migration
+    // 2a. Version-gated workflow migration (retained as a redundant fast path for
+    // any migration side effects, but no longer the sole delivery trigger —
+    // workflow .md files now also flow through the content-hash path below so a
+    // door rename lands on same-version installs).
     const needsWorkflowMigration = shouldRefreshAgentWorkspaceFiles(extensionUri.fsPath, workspaceUri.fsPath);
 
     for (const relativePath of agentFiles) {
@@ -3689,6 +3745,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         if (isWorkflowFile && needsWorkflowMigration) {
             // Workflow files are canonical extension definitions — always overwrite on version change.
             // Per-file failure tolerance: one unwritable file must not abort setup for the rest.
+            // (Content-hash path below also runs for workflows, so same-version installs self-heal too.)
             try {
                 await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
             } catch (copyErr) {
@@ -3697,10 +3754,12 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
             continue;
         }
 
-        // Content-hash self-healing for non-workflow files (skills, etc.): copy if absent,
-        // overwrite iff bundle content differs from workspace content. Fail-safe: skip on
-        // hash error, never clobber blindly. User-authored (non-bundled) files are never
-        // touched — the loop only iterates files present in the bundle.
+        // Content-hash self-healing for all agent files (skills AND workflows when
+        // the version gate did not fire): copy if absent, overwrite iff bundle
+        // content differs from workspace content. Fail-safe: skip on hash error,
+        // never clobber blindly. User-authored (non-bundled) files are never
+        // touched — the loop only iterates files present in the bundle. This is
+        // the delivery guarantee for workflow door renames on same-version installs.
         try {
             await vscode.workspace.fs.stat(destUri);
             // dest exists → overwrite iff content differs

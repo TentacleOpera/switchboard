@@ -20,6 +20,7 @@ import { PlannerPromptWriter } from './PlannerPromptWriter';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBrowseService } from './NotionBrowseService';
 import { LocalFolderService } from './LocalFolderService';
+import { DesignPanelProvider } from './DesignPanelProvider';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
@@ -1851,6 +1852,20 @@ Start by checking which documents exist, then present the menu.`;
         return processedHtml;
     }
 
+    // Mirrors DesignPanelProvider._injectIntoHead — inserts a snippet at the start
+    // of <head> (or <html>, or document top) so the inspector script runs before
+    // the page's own DOM is built. Used by the Planning HTML preview's srcdoc and
+    // server paths to install Inspect Mode.
+    private _injectIntoHead(html: string, snippet: string): string {
+        if (/<head\b[^>]*>/i.test(html)) {
+            return html.replace(/<head\b[^>]*>/i, m => m + snippet);
+        } else if (/<html\b[^>]*>/i.test(html)) {
+            return html.replace(/<html\b[^>]*>/i, m => m + snippet);
+        } else {
+            return snippet + html;
+        }
+    }
+
     // ── Planning HTML preview server infrastructure ──
     // Serves planning-HTML-tab files over localhost so iframes have a real origin.
     // Mirrors DesignPanelProvider's HTML server infra, scoped to _planningHtmlServers.
@@ -1945,7 +1960,12 @@ Start by checking which documents exist, then present the menu.`;
             return;
         }
 
-        const pathParts = normalizedResolved.split(path.sep);
+        // Deny-list only the components BELOW the served folder. The traversal check
+        // above already contains the request inside sourceFolder; checking the
+        // absolute path instead (the previous behaviour) 403'd any folder whose
+        // absolute path happens to contain a denied component (e.g. a workspace
+        // rooted under a dot-folder). Mirrors DesignPanelProvider's fixed version.
+        const pathParts = path.relative(normalizedSource, normalizedResolved).split(path.sep);
         for (const part of pathParts) {
             if (this._SERVER_DENY_LIST.some(denied => part === denied || part.startsWith(denied))) {
                 res.writeHead(403, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
@@ -1962,8 +1982,18 @@ Start by checking which documents exist, then present the menu.`;
                 return;
             }
             const mimeType = this._getMimeType(resolvedPath);
-            res.writeHead(200, { 'Content-Type': mimeType, 'Cache-Control': 'no-store' });
-            res.end(data);
+            // For HTML files, inject the Inspect Mode inspector script so the
+            // Planning HTML tab gains hover-to-select element inspection parity
+            // with the Design panel's HTML/Stitch HTML tabs. Non-HTML assets
+            // (CSS/JS/images/fonts) pass through byte-identical.
+            if (mimeType.startsWith('text/html')) {
+                const html = this._injectIntoHead(data.toString('utf8'), DesignPanelProvider._INSPECTOR_SCRIPT);
+                res.writeHead(200, { 'Content-Type': mimeType, 'Cache-Control': 'no-store' });
+                res.end(Buffer.from(html, 'utf8'));
+            } else {
+                res.writeHead(200, { 'Content-Type': mimeType, 'Cache-Control': 'no-store' });
+                res.end(data);
+            }
         });
 
         const entry = this._planningHtmlServers.get(sourceFolder);
@@ -2056,7 +2086,7 @@ Start by checking which documents exist, then present the menu.`;
                 isImage,
                 webviewUri,
                 iframeSrc,
-                htmlContent: isHtmlFile ? this._injectLocalCsp(fileContent) : undefined,
+                htmlContent: isHtmlFile ? this._injectLocalCsp(this._injectIntoHead(fileContent, DesignPanelProvider._INSPECTOR_SCRIPT)) : undefined,
                 isAutoRefreshed: isAutoRefreshed || undefined
             });
         } catch (err: any) {
@@ -3507,6 +3537,25 @@ Start by checking which documents exist, then present the menu.`;
                     await this._taskViewerProvider.sendPromptToAgentTerminal('claude_artifacts', msg.prompt || '', msg.workspaceRoot);
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     this._pushTo(targetPanel, 'planning', { type: 'artifactPromptSent', kind: msg.kind });
+                }
+                break;
+            }
+            case 'copyHtmlTweakPrompt': {
+                const prompt = String(msg.prompt || '');
+                if (!prompt) break;
+                await vscode.env.clipboard.writeText(prompt);
+                showTemporaryNotification('Copied element tweak prompt to clipboard.');
+                break;
+            }
+            case 'sendHtmlTweakPrompt': {
+                const prompt = String(msg.prompt || '');
+                if (!prompt) break;
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, msg.workspaceRoot || undefined);
+                    showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                } else {
+                    await vscode.env.clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
                 }
                 break;
             }
