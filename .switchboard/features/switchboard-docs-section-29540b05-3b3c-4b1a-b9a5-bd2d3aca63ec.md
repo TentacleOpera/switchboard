@@ -21,9 +21,12 @@ Add a comprehensive multi-page documentation section to the Switchboard marketin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Switchboard Docs — Astro Migration & Landing Page Port](../plans/switchboard-docs-1-astro-migration.md) — **PLAN REVIEWED**
-- [ ] [Switchboard Docs — Layout, Sidebar & Components](../plans/switchboard-docs-2-layout-components.md) — **PLAN REVIEWED**
-- [ ] [Switchboard Docs — Content: Getting Started & Guides](../plans/switchboard-docs-3-content-getting-started-guides.md) — **PLAN REVIEWED**
-- [ ] [Switchboard Docs — Content: Reference (Full User Manual)](../plans/switchboard-docs-4-content-reference.md) — **PLAN REVIEWED**
+- [x] [Switchboard Docs — Astro Migration & Landing Page Port](../plans/switchboard-docs-1-astro-migration.md) — **INTERN CODED**
+- [x] [Switchboard Docs — Layout, Sidebar & Components](../plans/switchboard-docs-2-layout-components.md) — **INTERN CODED**
+- [x] [Switchboard Docs — Content: Getting Started & Guides](../plans/switchboard-docs-3-content-getting-started-guides.md) — **INTERN CODED**
+- [x] [Switchboard Docs — Content: Reference (Full User Manual)](../plans/switchboard-docs-4-content-reference.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
+
+### Completion Summary
+Implemented complete Astro migration for marketing site. Replaced static index.html with index.astro, constructed shared BaseLayout, DocsLayout, and navigation/sidebar components. Authored 21 content and reference pages matching spec definitions. No regressions or build issues encountered during local assembly.
 

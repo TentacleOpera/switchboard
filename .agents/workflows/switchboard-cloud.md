@@ -24,21 +24,15 @@ When the user references plans, columns, or board state (e.g. "plans in the Crea
 ## Process
 1. **Onboard:** Greet the user. Identify the core problem or opportunity. Focus on ideation.
 2. **Iterate:** Ask "Why" before "How." Challenge assumptions. Document requirements, edge cases, and risks the user may have missed.
-3. **Plan:** When the "What" and "Why" are clear, draft the implementation plan.
-4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
+3. **Assess scope — split before drafting.** Before writing any plan file, assess whether the work is one plan or multiple. Auto-split into separate plan files when EITHER signal is present:
+   - **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
+   - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
+   When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one.
+4. **Plan:** Draft the implementation plan(s). If you split, write each plan file now, in this step.
+5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, notify the user and offer to group them: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the `create-feature-from-plans` skill — it handles the mechanics (plan ID resolution, `create-feature.js` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the `create-feature` remote path automatically.
 
 ## Feature Relationships (frontmatter carrier)
 
 1. **Feature Relationships**: Feature relationships are carried by `**Feature:** <feature-plan-id>` and `**Project:** <name>` lines written directly in each plan `.md` — the plan watcher applies these on import with apply-if-empty semantics. No manifest file or batch payload is used.
 2. **Plan Metadata**: Do NOT write a `**Plan ID:**` line in plan bodies — it is never parsed; the importer assigns the ID and keys identity by the file **path**. A **feature** takes its UUID from its `feature-<uuid>.md` **filename** (that is what `**Feature:** <uuid>` links point to) — not from a body line.
-3. **Feature Grouping**: If you want to group plans into a feature, refer to the **Feature Grouping** section below and invoke the `create-feature-from-plans` skill.
-
-
-## Feature Grouping
-
-When the work described will span 3 or more plan files on a related topic (sharing a common feature area or root cause):
-
-- **Early (during Iterate):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under a feature?"* Do not create anything yet.
-- **Closing (at Gate):** When the user signals scoping is complete OR once 3+ related plans have been drafted, offer again: *"You now have [N] plans covering [topic] — want me to create a feature to group them?"*
-
-Only create the feature if the user confirms. When the user says yes, invoke the `create-feature-from-plans` skill — it handles the mechanics (plan ID resolution, `create-feature.js` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the `create-feature` remote path automatically.
+3. **Feature Grouping**: If you want to group plans into a feature, see step 5 (Gate) of the Process above and invoke the `create-feature-from-plans` skill.

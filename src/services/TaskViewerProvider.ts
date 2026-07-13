@@ -3917,6 +3917,7 @@ For EACH issue above:
 2. Follow the standard Switchboard plan format (Goal, Metadata, Complexity Audit, Edge-Case & Dependency Audit, Proposed Changes, Verification Plan)
 3. Investigate the codebase to understand the root cause and write an actionable plan
 4. Each plan must be self-contained — do not reference other memo issues
+5. If a single issue covers 3+ distinct deliverables or 2+ independently-shippable phases, split it into multiple plan files — each independently codeable with its own Goal, Metadata, and Verification Plan. Otherwise, one issue = one plan.
 
 ## Plan File Format
 
@@ -3930,7 +3931,7 @@ Each plan file must include:
 - ## Verification Plan
 
 ## Important
-- Create ${issues.length} plan file(s) total — one per issue
+- Create ${issues.length} plan file(s) total — one per issue (more if any issue is split per the splitting rule above)
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
 - Do NOT skip the investigation step — read the relevant code before writing each plan
 - If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create a feature grouping them: "These [N] plans cover related work — want me to create a feature to group them together?" Only create the feature if the user confirms. Do NOT hand-write the feature file. If the VS Code extension is running (check ${workspaceRoot}/.switchboard/api-server-port.txt), run: node "${workspaceRoot}/.agents/skills/kanban_operations/create-feature.js" "<featureName>" '<planIdsJson>' "${workspaceRoot}" "<description>" — this does DB upsert + subtask linking atomically. If the extension is not reachable, invoke the create-feature skill (direct file write to .switchboard/features/). Use planId UUIDs from the kanban DB or kanban-board.md, NOT filenames.`;

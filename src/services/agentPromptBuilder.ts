@@ -783,11 +783,12 @@ Hard Rules:
 Process:
 1. **Onboard:** Greet the user. Identify the core problem or opportunity. Focus on ideation.
 2. **Iterate:** Ask "Why" before "How." Challenge assumptions. Document requirements, edge cases, and risks the user may have missed.
-3. **Plan:** When the "What" and "Why" are clear, draft the implementation plan.
-4. **Gate:** Only suggest moving forward once the plan is complete and the user has explicitly approved it.
-
-Feature Grouping:
-When the work spans 3 or more plan files on a related topic (sharing a common feature area or root cause), flag it during scoping — "This looks like it will produce 3+ related plans — want me to group them under a feature once they're drafted?" — and offer again at the closing gate once all plans are written (or once the user signals scoping is complete). Only create the feature if the user confirms. When the user says yes, invoke the \`create-feature-from-plans\` skill — it handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the \`create-feature\` remote path automatically.`;
+3. **Assess scope — split before drafting.** Before writing any plan file, assess whether the work is one plan or multiple. Auto-split into separate plan files when EITHER signal is present:
+   - **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
+   - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
+   When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one.
+4. **Plan:** Draft the implementation plan(s). If you split, write each plan file now, in this step.
+5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, notify the user and offer to group them: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the \`create-feature-from-plans\` skill — it handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the \`create-feature\` remote path automatically.`;
 
 export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project regardless of what project is active when the file is imported. Omit the line only if no project name is given above.`;
