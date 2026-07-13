@@ -792,6 +792,11 @@ window.addEventListener('message', function(e) {
             // <sanitizedName>-<idSuffix> cache dir. Without this, a name-cache miss would
             // target a phantom "project-<idSuffix>" dir that never receives events.
             await this._resolveStitchProjectName(workspaceRoot, projectId);
+            // A concurrent _setupStitchHtmlFolderWatchers call (rapid project switch) may
+            // have updated the active project while we were awaiting. Bail before creating
+            // a watcher — the newer call owns the array now, and pushing here would orphan
+            // this watcher (its callbacks would staleness-bail, but the OS handle leaks).
+            if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
             const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
             if (!fs.existsSync(cacheDir)) return;
             const pattern = new vscode.RelativePattern(cacheDir, '**/*');
