@@ -3674,7 +3674,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const fullPrompt = `${prompt}\n\nIMPORTANT: After completing the research, save the results to ${savePath} using the write_to_file tool so the plan author can review them later.`;
 
-        await this.sendPromptToAgentTerminal('researcher', fullPrompt, resolvedRoot);
+        // Send to the already-resolved live terminal directly — do NOT re-route
+        // through sendPromptToAgentTerminal. That method re-resolves the
+        // terminal and spawns a fresh one if the live terminal has exited in
+        // the window since the liveness check above, violating the "never
+        // spawn a researcher" guarantee (Design Decision #3). Bypassing the
+        // spawn fallback closes that TOCTOU gap: a send to an exited terminal
+        // fails closed (dispatched:false) instead of spawning a new one.
+        const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || researcherName)) || researcherName;
+        try {
+            await withTerminalSendLock(sendLockKey, async () => {
+                await sendRobustText(terminal!, fullPrompt, true);
+            });
+        } catch (err) {
+            console.error('[TaskViewerProvider] researchDispatch send failed:', err);
+            return { dispatched: false, reason: 'researcher terminal send failed' };
+        }
 
         return { dispatched: true, researcher: researcherName, savePath };
     }

@@ -1347,9 +1347,24 @@ export class LocalApiServer {
             // The callback reports "no researcher active" as a normal result
             // (dispatched:false), never a throw — mirror the phone-a-friend
             // best-effort contract so the caller can branch on the outcome.
+            //
+            // Response shape: `dispatched` is the single top-level outcome
+            // signal. Do NOT wrap in `{ success:true, ...result }` — that
+            // wrapper contradicts `dispatched:false` with a `success:true`
+            // sibling and HTTP 200, which agents key on to announce a phantom
+            // hand-off and suppress the chat-paste fallback (the observed P0
+            // "ram it through without a target agent" bug). Use the HTTP status
+            // as the unambiguous gate instead:
+            //   200 + { dispatched:true, ... }              → dispatched
+            //   200 + { dispatched:false, reason:"..." }    → configured but offline (soft)
+            //   404 + { dispatched:false, reason:"no researcher agent configured" }
+            //                                               → no target configured (hard)
+            // The 404-vs-200 distinction lets the directive branch cleanly:
+            // any non-200 OR `dispatched` not `true` → fall back.
             const result = await onDispatchResearch(workspaceRoot, prompt);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, ...result }));
+            const status = (!result.dispatched && result.reason === 'no researcher agent configured') ? 404 : 200;
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
         } catch (err) {
             console.error('[LocalApiServer] researchDispatch error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });

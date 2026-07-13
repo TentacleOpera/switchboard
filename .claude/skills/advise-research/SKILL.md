@@ -19,11 +19,14 @@ If you are confident about everything, state that no research is needed and omit
 
 Before showing the research prompt to the user, try to hand it directly to an active Researcher agent via the Switchboard HTTP server. This delegates the actual research instead of making the user run it manually.
 
-1. Read the port from `.switchboard/api-server-port.txt` (relative to the workspace root). If the file is missing, skip the hand-off and fall back to the chat-summary prompt.
-2. POST the prompt to `http://127.0.0.1:<port>/research/dispatch` with a JSON body `{"workspaceRoot":"<absolute workspace root>","prompt":"<the full research prompt>"}`. Build the JSON safely — write the prompt to a temp file and pipe it through `jq -Rs` or `python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'`. Never hand-escape newlines.
-3. The server decides whether a Researcher agent is registered and live:
-   - `{"dispatched":true,"researcher":"...","savePath":"..."}` → the prompt was forwarded to the Researcher agent, which was told to save its findings to `savePath` (the configured or default research-docs folder). Tell the user you handed the research to the Researcher agent and where it will save its findings. Do NOT paste the full prompt into your summary.
-   - `{"dispatched":false,...}` (or the request fails / the port file is missing) → fall back: supply the ready-to-run research prompt at the very end of your chat summary so the user can trigger web research themselves.
+1. Read the port from `.switchboard/api-server-port.txt` (relative to the workspace root). If the file is missing, skip the hand-off and fall back to the chat-summary prompt. If you have no reason to believe a Researcher agent is configured for this workspace, you may skip the POST and go straight to the chat-paste fallback — the endpoint returns a non-200 status when no researcher is configured, but avoiding the round-trip is cheaper.
+2. POST the prompt to `http://127.0.0.1:<port>/research/dispatch` with a JSON body `{"workspaceRoot":"<absolute workspace root>","prompt":"<the full research prompt>"}`. Build the JSON safely — write the prompt to a temp file and pipe it through `jq -Rs` or `python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'`. Never hand-escape newlines. If neither tool is available the POST will fail and you fall back to chat-paste.
+3. The server signals the outcome with the HTTP status code AND the `dispatched` field — there is NO `success` field, so do NOT key on one:
+   - HTTP 200 + `{"dispatched":true,"researcher":"...","savePath":"..."}` → the prompt was forwarded to the Researcher agent, which was told to save its findings to `savePath` (the configured or default research-docs folder). Tell the user you handed the research to the Researcher agent and that it will attempt to save its findings to `savePath`. Do NOT paste the full prompt into your summary.
+   - HTTP 200 + `{"dispatched":false,"reason":"..."}` → a researcher is configured but not live (soft failure). Fall back: supply the ready-to-run research prompt at the very end of your chat summary.
+   - HTTP 404 + `{"dispatched":false,"reason":"no researcher agent configured"}` → no researcher is configured at all (hard failure). Fall back to the chat-summary prompt.
+   - Any other non-200 status, a request failure, or a missing port file → fall back to the chat-summary prompt.
+   - Only announce a hand-off if the HTTP status is 200 AND the body contains `"dispatched": true`. Do NOT key on a `success` field.
 
 ## Research Prompt Structure
 
