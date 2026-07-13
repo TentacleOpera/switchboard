@@ -1,12 +1,12 @@
 ---
-description: Remote Switchboard control — drive plans via Linear or Notion when the local machine is off
+description: Remote Switchboard control — drive plans via Linear, Notion, or ClickUp when the local machine is off
 ---
 
 
 # Remote Switchboard Session Entry Point
 
 You are entering a **remote Switchboard planning session**. The local machine and
-VS Code extension are not running. Plans live in Linear or Notion — not in local
+VS Code extension are not running. Plans live in Linear, Notion, or ClickUp — not in local
 `.md` files. MCP (or the LocalApiServer proxy) is the control surface. Git is not
 used for planning.
 
@@ -110,7 +110,15 @@ execution agent in the wrong direction.
   ("Switchboard Project Context"). Only navigation efficiency changes — the flow above stays
   the same.
 
-## 8. Notion Steps (if Notion is the provider)
+## 8. ClickUp Steps (if ClickUp is the provider)
+
+1. **Find the mapped lists.** ClickUp maps columns to separate lists. Query/fetch your workspace folder to find the lists mapped to your columns.
+2. **Create or find the task.** Create a task in the list mapped to the "CREATED" column (or another list) to start a new plan. The next poll imports it as a new local markdown plan.
+3. **Write the plan into the task DESCRIPTION.** Write the implementation plan into the task description. The local agent will fetch and write it to the local plan file before executing.
+4. **Trigger the local agent: move the task.** To trigger the local agent, move the task to the list mapped to that column (e.g. from the CREATED list to the CODING list). Changing the home list of the task triggers the corresponding local column agent.
+5. **Comments limitation.** Note that the comment-bus is not supported for ClickUp. Two-way comment communication is unavailable; use task description and status/list moves to control execution.
+
+## Notion Steps (if Notion is the provider)
 
 1. **Find the plans database.** Use Notion MCP search/query to locate the Switchboard
    plans database (titled "Switchboard Kanban Backup") and the "Switchboard Comments"

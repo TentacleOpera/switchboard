@@ -215,6 +215,9 @@ export interface PromptBuilderOptions {
     skipTests?: boolean;
     /** When true, instructs the planner to emit a research prompt for any assumption it is not 100% sure about. */
     adviseResearchIfUnsure?: boolean;
+    /** When true, a researcher-role agent is configured — the directive includes the POST hand-off.
+     *  When false/undefined, the directive skips the hand-off and goes straight to chat-paste fallback. */
+    researcherConfigured?: boolean;
     /** When true, instructs the planner to backfill Goal, How the Subtasks Achieve This, and Dependencies & sequencing sections in feature files if missing. */
     writeFeatureDescriptionIfEmpty?: boolean;
     /** When true, instructs the agent to skip walkthrough.md artifact generation at task completion. */
@@ -575,9 +578,19 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as p
 // UI-driven code path (Research tab) and remains independent — it embeds the same structure for the
 // webview and cannot read the extension-side skill file at runtime. Both share the template structure
 // via the skill file as canonical source.
-export const ADVISE_RESEARCH_DIRECTIVE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then build the ready-to-run research prompt.
+//
+// The directive is split into two variants based on whether a researcher agent is configured at
+// prompt-build time. When no researcher is configured, the planner never sees the POST hand-off
+// instructions — it goes straight to the chat-paste fallback. This eliminates the P0 "phantom
+// hand-off" bug by construction (the planner can't attempt a POST it was never told about) and
+// saves ~400 tokens on every planner run in workspaces without a researcher.
+const ADVISE_RESEARCH_DIRECTIVE_BASE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/skills/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then build the ready-to-run research prompt.`;
+const ADVISE_RESEARCH_DIRECTIVE_HANDOFF = `
 
-RESEARCHER HAND-OFF (try this before showing the prompt to the user): attempt to hand the research prompt directly to an active Researcher agent via the Switchboard HTTP server. Read the port from .switchboard/api-server-port.txt (relative to the workspace root); if the file is missing, skip the POST and fall back to the chat-summary prompt. If you have no reason to believe a Researcher agent is configured for this workspace, you may skip the POST and go straight to the chat-paste fallback — the endpoint returns a non-200 status when no researcher is configured, but avoiding the round-trip is cheaper. Otherwise POST to http://127.0.0.1:<port>/research/dispatch with JSON body {"workspaceRoot":"<absolute workspace root>","prompt":"<the full research prompt>"}. Build the JSON safely (write the prompt to a temp file and pipe it through \`jq -Rs\` or \`python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'\` — never hand-escape newlines); if neither tool is available the POST will fail and you fall back to chat-paste. The server signals the outcome with the HTTP status code AND the \`dispatched\` field — there is NO \`success\` field, so do NOT key on one. If a Researcher agent is registered AND live it forwards the prompt to that agent, tells it to save its findings to the configured research-docs folder, and responds with HTTP 200 and body {"dispatched":true,"researcher":"...","savePath":"..."}. If a researcher is configured but not live it responds with HTTP 200 and {"dispatched":false,"reason":"..."}. If no researcher is configured at all it responds with HTTP 404 and {"dispatched":false,"reason":"no researcher agent configured"}. Only announce a hand-off if the HTTP status is 200 AND the JSON body contains "dispatched": true — tell the user you handed the research to the Researcher agent and that it will attempt to save its findings to savePath, and do NOT paste the full research prompt into your summary. If the HTTP status is not 200, OR the body does not contain "dispatched": true, OR the port file is missing, OR the request fails — fall back: supply the ready-to-run research prompt at the very end of your chat summary so the user can trigger web research themselves. If you are confident about everything, state that no research is needed and omit the section, the hand-off, and the prompt.`;
+RESEARCHER HAND-OFF (try this before showing the prompt to the user): A Researcher agent is configured for this workspace — attempt to hand the research prompt directly to it via the Switchboard HTTP server. Read the port from .switchboard/api-server-port.txt (relative to the workspace root); if the file is missing, skip the POST and fall back to the chat-summary prompt. Otherwise POST to http://127.0.0.1:<port>/research/dispatch with JSON body {"workspaceRoot":"<absolute workspace root>","prompt":"<the full research prompt>"}. Build the JSON safely (write the prompt to a temp file and pipe it through \`jq -Rs\` or \`python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'\` — never hand-escape newlines); if neither tool is available the POST will fail and you fall back to chat-paste. The server signals the outcome with the HTTP status code AND the \`dispatched\` field — there is NO \`success\` field, so do NOT key on one. If a Researcher agent is registered AND live it forwards the prompt to that agent, tells it to save its findings to the configured research-docs folder, and responds with HTTP 200 and body {"dispatched":true,"researcher":"...","savePath":"..."}. If a researcher is configured but not live it responds with HTTP 200 and {"dispatched":false,"reason":"..."}. Only announce a hand-off if the HTTP status is 200 AND the JSON body contains "dispatched": true — tell the user you handed the research to the Researcher agent and that it will attempt to save its findings to savePath, and do NOT paste the full research prompt into your summary. If the HTTP status is not 200, OR the body does not contain "dispatched": true, OR the port file is missing, OR the request fails — fall back: supply the ready-to-run research prompt at the very end of your chat summary so the user can trigger web research themselves. If you are confident about everything, state that no research is needed and omit the section, the hand-off, and the prompt.`;
+const ADVISE_RESEARCH_DIRECTIVE_NO_RESEARCHER = ` No Researcher agent is configured for this workspace — skip the "Researcher Hand-Off" section in the skill file entirely and go directly to the chat-summary fallback: supply the ready-to-run research prompt at the very end of your chat summary so the user can trigger web research themselves. If you are confident about everything, state that no research is needed and omit the section, the hand-off, and the prompt.`;
+export const ADVISE_RESEARCH_DIRECTIVE = ADVISE_RESEARCH_DIRECTIVE_BASE + ADVISE_RESEARCH_DIRECTIVE_HANDOFF;
+export const ADVISE_RESEARCH_DIRECTIVE_NO_RESEARCHER = ADVISE_RESEARCH_DIRECTIVE_BASE + ADVISE_RESEARCH_DIRECTIVE_NO_RESEARCHER;
 
 export const WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE = `FEATURE DESCRIPTION BACKFILL: The feature file path is included in the plan list above (the entry tagged [FEATURE: ...]). Read that file. If it is missing any of these three sections, write them now following this format:
 - ## Goal: 2-4 sentences describing what the feature achieves, what problem it solves, and why these plans are grouped together.
@@ -876,6 +889,7 @@ export function buildKanbanBatchPrompt(
     const skipCompilation = options?.skipCompilation ?? false;
     const skipTests = options?.skipTests ?? false;
     const adviseResearchIfUnsure = options?.adviseResearchIfUnsure ?? true;
+    const researcherConfigured = options?.researcherConfigured ?? false;
     const writeFeatureDescriptionIfEmpty = options?.writeFeatureDescriptionIfEmpty ?? true;
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
     const staggeredImplementationEnabled = options?.staggeredImplementationEnabled ?? false;
@@ -1031,7 +1045,7 @@ export function buildKanbanBatchPrompt(
             plannerBase += '\n\n' + SKIP_TESTS_DIRECTIVE;
         }
         if (adviseResearchIfUnsure) {
-            plannerBase += '\n\n' + ADVISE_RESEARCH_DIRECTIVE;
+            plannerBase += '\n\n' + (researcherConfigured ? ADVISE_RESEARCH_DIRECTIVE : ADVISE_RESEARCH_DIRECTIVE_NO_RESEARCHER);
         }
         if (writeFeatureDescriptionIfEmpty && options?.featureMode) {
             plannerBase += '\n\n' + WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE;

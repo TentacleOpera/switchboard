@@ -4757,6 +4757,19 @@ Each plan file must include:
         }
     }
 
+    /**
+     * Check whether a researcher-role agent is configured for this workspace (or globally).
+     * Used at prompt-build time to decide whether to include the Researcher Hand-Off
+     * directive in the planner prompt. Mirrors the resolution logic in
+     * _dispatchResearchToResearcher (same _getAgentNameForRole call) so the prompt-time
+     * gate and the runtime dispatch see the same "configured" answer.
+     */
+    public async isResearcherConfigured(workspaceRoot?: string): Promise<boolean> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot || '');
+        const name = await this._getAgentNameForRole('researcher', resolvedRoot);
+        return !!name;
+    }
+
     public async getStartupCommands(workspaceRoot?: string): Promise<Record<string, string>> {
         // Custom agents are also machine-global (read from the same ~/.switchboard file).
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);

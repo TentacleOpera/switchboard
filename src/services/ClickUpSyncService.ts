@@ -2923,19 +2923,20 @@ export class ClickUpSyncService {
       body.markdown_content = `${planContent}\n\n---\n[Switchboard] PlanFile: ${plan.planFile} | Plan: ${plan.planId}`;
     }
 
-    await this.retry(() =>
+    const updateResult = await this.retry(() =>
       this.httpRequest('PUT', `/task/${taskId}`, body)
     );
 
     // Move task to correct list if column changed
     const targetListId = config.columnMappings[plan.kanbanColumn];
     if (targetListId) {
-      try {
-        await this.retry(() =>
-          this.httpRequest('POST', `/list/${targetListId}/task/${taskId}`)
-        );
-      } catch (err) {
-        console.warn(`[ClickUpSync] Failed to move task ${taskId} to list ${targetListId}:`, err);
+      const currentListId = String(updateResult?.data?.list?.id || '').trim();
+      if (currentListId && currentListId !== targetListId) {
+        try {
+          await this.moveTask(taskId, targetListId);
+        } catch (err) {
+          console.warn(`[ClickUpSync] Failed to move task ${taskId} to list ${targetListId}:`, err);
+        }
       }
     }
   }

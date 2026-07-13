@@ -4474,6 +4474,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
             resolvedOptions.workflowFilePathEnabled = promptsConfig.workflowFilePathEnabledByRole?.planner !== false;
 
+            // Resolve whether a researcher-role agent is configured at prompt-build time.
+            // When true, the directive includes the POST hand-off instructions; when false,
+            // the planner goes straight to the chat-paste fallback — no wasted POST, no
+            // false-success path. Mirrors the runtime _dispatchResearchToResearcher check.
+            resolvedOptions.researcherConfigured = this._taskViewerProvider
+                ? await this._taskViewerProvider.isResearcherConfigured(workspaceRoot)
+                : false;
+
 
             resolvedOptions.constitutionEnabled = promptsConfig.constitutionEnabled;
             const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);

@@ -1423,7 +1423,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <select id="remote-provider" class="workspace-project-select" style="width:100%; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
                             <option value="linear">Linear</option>
                             <option value="notion">Notion</option>
-                            <option value="clickup">ClickUp (push-only)</option>
+                            <option value="clickup">ClickUp</option>
                         </select>
                     </label>
 
@@ -5395,7 +5395,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const title = document.getElementById('remote-subsection-title');
             if (title) {
                 title.textContent = provider === 'notion' ? 'Remote Control (Notion)'
-                    : provider === 'clickup' ? 'Remote Control (ClickUp — push only)'
+                    : provider === 'clickup' ? 'Remote Control (ClickUp)'
                     : 'Remote Control (Linear)';
             }
             const skillBlock = document.getElementById('remote-linear-agent-skill');

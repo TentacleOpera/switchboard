@@ -55,7 +55,7 @@ export interface RemoteCommentDelta {
  * pipeline.
  */
 export interface RemoteProviderCapabilities {
-    /** Provider can pull/ingest state + comments (Linear, Notion). ClickUp = false. */
+    /** Provider can pull/ingest state + comments (Linear, Notion). ClickUp = state-pull only (no comment bus). */
     pull: boolean;
     /** Provider can push state + content (Linear, ClickUp, Notion-after-2/3). */
     push: boolean;
