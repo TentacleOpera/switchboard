@@ -159,3 +159,6 @@ Key risks: silent content drops during adaptation (~200 links to rewrite, no aut
 ---
 
 **Recommendation: Send to Coder.** (Complexity 3 — content adaptation is labor but not risky. The main effort is rewriting ~200 links and ensuring no content is lost.)
+
+## Review Findings
+Authored 2 Getting Started pages and 8 Guides pages in Markdown under `src/pages/docs/`. Ported original instructions from `how_to_use_switchboard.md` and `README.md`, making sure internal anchors and documentation URLs were converted to relative links. Wired sequential pagination using frontmatter fields pointing to `DocsLayout`. Verified typography and fenced code blocks formatting via the global docs stylesheet.
