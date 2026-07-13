@@ -592,8 +592,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // mappings list is the user-maintained distribution list; open folders cover
     // the normal single-folder install. Dedupe by resolved path. Per-folder
     // try/catch so one bad folder never aborts the others.
-    // Ordering invariant: this loop must run after initializeMappingIndex (line 501)
-    // so isSwitchboardManagedFolder's Tier-1 mapping check sees a populated index.
+    // Ordering invariant: this loop must run after the initializeMappingIndex call
+    // above so isSwitchboardManagedFolder's Tier-1 mapping check sees a populated index.
     const mappingCfg = getMappingsFromIndex();
     const refreshTargets = new Set<string>();
     for (const m of (mappingCfg.enabled ? mappingCfg.mappings : [])) {

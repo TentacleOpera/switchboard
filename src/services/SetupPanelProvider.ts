@@ -19,6 +19,18 @@ import { getMappingsFromIndex, resolveEffectiveWorkspaceRootFromMappings } from 
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { exportCoworkSkill } from './CoworkSkillExporter';
 
+// Switchboard writes only a marker-delimited MANAGED BLOCK into CLAUDE.md / AGENTS.md
+// (see extension.ts ensureProtocolFile) and only ledger-tracked skills into `.claude/`
+// (see ClaudeCodeMirrorService — `.claude/` is the user's Claude Code config dir, never
+// owned wholesale). Litter cleanup must mirror that discipline: strip the block, remove
+// ledger-tracked skills — never `rm -rf` a shared file/dir. Marker literals are a stable
+// cross-host contract; kept in sync with their source-of-truth definitions.
+const AGENTS_MANAGED_BLOCK_START = '<!-- switchboard:agents-protocol:start -->';
+const AGENTS_MANAGED_BLOCK_END = '<!-- switchboard:agents-protocol:end -->';
+const CLAUDE_MANAGED_BLOCK_START = '<!-- switchboard:claude-protocol:start -->';
+const CLAUDE_MANAGED_BLOCK_END = '<!-- switchboard:claude-protocol:end -->';
+const CLAUDE_GENERATED_MANIFEST_FILE = '.switchboard-generated.json';
+
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
     handleGetControlPlaneStatus?: (workspaceRoot?: string) => Promise<any>;
     handleSetExplicitControlPlaneRoot?: (controlPlaneRoot: string, workspaceRoot?: string) => Promise<any>;
@@ -1712,34 +1724,38 @@ export class SetupPanelProvider implements vscode.Disposable {
         const removed: string[] = [];
         const skipped: string[] = [];
 
-        const topLevel: Array<{ rel: string; isDir: boolean }> = [
-            { rel: '.agents', isDir: true },
-            { rel: '.claude', isDir: true },
-            { rel: 'AGENTS.md', isDir: false },
-            { rel: 'CLAUDE.md', isDir: false },
-        ];
-
-        for (const item of topLevel) {
-            const fullPath = path.join(root, item.rel);
-            try {
-                const stat = fs.lstatSync(fullPath);
-                if (stat.isSymbolicLink()) {
-                    skipped.push(`${item.rel} is a symlink`);
-                    continue;
-                }
-                if (item.isDir && stat.isDirectory()) {
-                    await fs.promises.rm(fullPath, { recursive: true, force: true });
-                    removed.push(`${item.rel}/`);
-                } else if (!item.isDir && stat.isFile()) {
-                    await fs.promises.unlink(fullPath);
-                    removed.push(item.rel);
-                }
-            } catch (err: any) {
-                if (err?.code !== 'ENOENT') {
-                    skipped.push(`${item.rel} removal failed: ${err.message || err}`);
-                }
+        // `.agents/` is Switchboard's managed source-of-truth dir (the user's dir is the
+        // SINGULAR `.agent/`, handled by the separate legacy-cleanup path and never touched
+        // here). In a littered non-managed folder it is entirely a Switchboard dump, so it
+        // is removed wholesale — with a symlink guard.
+        const dotAgents = path.join(root, '.agents');
+        try {
+            const stat = fs.lstatSync(dotAgents);
+            if (stat.isSymbolicLink()) {
+                skipped.push('.agents/ is a symlink');
+            } else if (stat.isDirectory()) {
+                await fs.promises.rm(dotAgents, { recursive: true, force: true });
+                removed.push('.agents/');
+            }
+        } catch (err: any) {
+            if (err?.code !== 'ENOENT') {
+                skipped.push(`.agents/ removal failed: ${err.message || err}`);
             }
         }
+
+        // `.claude/` is the user's Claude Code config directory. Switchboard only ever
+        // writes ledger-tracked skills + a non-destructive settings.json merge into it, so
+        // we remove ONLY what the ledger records — never the directory wholesale. Deleting
+        // `.claude/` would destroy the user's own settings.json, settings.local.json,
+        // commands/, plans/, and hand-authored skills.
+        await this._removeMirroredClaudeSkills(root, removed, skipped);
+
+        // CLAUDE.md / AGENTS.md carry a marker-delimited Switchboard managed block that
+        // coexists with user-authored content (this repo's own CLAUDE.md is a live example:
+        // user rules above the block, generated protocol inside it). Strip ONLY the block;
+        // delete the file only if nothing else survives.
+        await this._stripManagedBlock(root, 'CLAUDE.md', CLAUDE_MANAGED_BLOCK_START, CLAUDE_MANAGED_BLOCK_END, removed, skipped);
+        await this._stripManagedBlock(root, 'AGENTS.md', AGENTS_MANAGED_BLOCK_START, AGENTS_MANAGED_BLOCK_END, removed, skipped);
 
         const switchboardDir = path.join(root, '.switchboard');
         try {
@@ -1790,6 +1806,110 @@ export class SetupPanelProvider implements vscode.Disposable {
         }
 
         return { removed, skipped };
+    }
+
+    /**
+     * Surgically remove only the Claude Code skills THIS extension generated into
+     * `<root>/.claude/`, tracked in the `.switchboard-generated.json` ledger. Mirrors
+     * ClaudeCodeMirrorService's own stale-mirror cleanup: only ledger-named skill dirs
+     * are touched; user-authored skills, settings.json, commands/, plans/, etc. are left
+     * intact. If there is no ledger, `.claude/` was not created by Switchboard (or by a
+     * pre-ledger version) and is not touched at all. Empty dirs are pruned afterwards.
+     */
+    private async _removeMirroredClaudeSkills(root: string, removed: string[], skipped: string[]): Promise<void> {
+        const claudeDir = path.join(root, '.claude');
+        try {
+            const stat = fs.lstatSync(claudeDir);
+            if (stat.isSymbolicLink()) {
+                skipped.push('.claude/ is a symlink');
+                return;
+            }
+            if (!stat.isDirectory()) return;
+        } catch (err: any) {
+            if (err?.code !== 'ENOENT') skipped.push(`.claude/ inspect failed: ${err.message || err}`);
+            return;
+        }
+
+        const ledgerPath = path.join(claudeDir, CLAUDE_GENERATED_MANIFEST_FILE);
+        let ledger: any;
+        try {
+            ledger = JSON.parse(await fs.promises.readFile(ledgerPath, 'utf8'));
+        } catch {
+            // No ledger → not Switchboard-generated (or pre-ledger). Leave `.claude/` alone.
+            return;
+        }
+
+        const skillsRoot = path.join(claudeDir, 'skills');
+        const skills: Array<{ name?: string }> = Array.isArray(ledger?.skills) ? ledger.skills : [];
+        for (const s of skills) {
+            if (!s?.name) continue;
+            const staleDir = path.join(skillsRoot, s.name);
+            // Path-traversal guard: never step outside `.claude/skills/`.
+            if (staleDir !== skillsRoot && !staleDir.startsWith(skillsRoot + path.sep)) continue;
+            try {
+                await fs.promises.rm(path.join(staleDir, 'SKILL.md'), { force: true });
+                await fs.promises.rmdir(staleDir);
+                removed.push(`.claude/skills/${s.name}/`);
+            } catch {
+                // Dir non-empty (user files) or already gone — leave it.
+            }
+        }
+
+        // Remove the ledger, then prune now-empty Switchboard dirs. Non-empty (user
+        // content) dirs are left, so a shared `.claude/` survives with the user's files.
+        try { await fs.promises.rm(ledgerPath, { force: true }); removed.push(`.claude/${CLAUDE_GENERATED_MANIFEST_FILE}`); } catch {}
+        try { await fs.promises.rmdir(skillsRoot); } catch { /* non-empty — leave */ }
+        try { await fs.promises.rmdir(claudeDir); removed.push('.claude/ (was empty)'); } catch { /* non-empty — leave */ }
+    }
+
+    /**
+     * Strip only the marker-delimited Switchboard managed block from a shared protocol
+     * file (CLAUDE.md / AGENTS.md), preserving all user-authored content outside it.
+     * Spans first-start → last-end to collapse any duplicate markers. If the file has no
+     * markers it is left untouched. If nothing but whitespace remains after stripping,
+     * the file was Switchboard-only and is deleted.
+     */
+    private async _stripManagedBlock(root: string, fileName: string, blockStart: string, blockEnd: string, removed: string[], skipped: string[]): Promise<void> {
+        const filePath = path.join(root, fileName);
+        try {
+            const stat = fs.lstatSync(filePath);
+            if (stat.isSymbolicLink()) {
+                skipped.push(`${fileName} is a symlink`);
+                return;
+            }
+            if (!stat.isFile()) return;
+        } catch (err: any) {
+            if (err?.code !== 'ENOENT') skipped.push(`${fileName} inspect failed: ${err.message || err}`);
+            return;
+        }
+
+        let content: string;
+        try {
+            content = await fs.promises.readFile(filePath, 'utf8');
+        } catch (err: any) {
+            skipped.push(`${fileName} read failed: ${err.message || err}`);
+            return;
+        }
+
+        const startIdx = content.indexOf(blockStart);
+        const endIdx = content.lastIndexOf(blockEnd);
+        if (startIdx === -1 || endIdx === -1 || startIdx > endIdx) {
+            // No well-formed managed block → purely user content (or malformed). Leave it.
+            return;
+        }
+
+        const stripped = (content.slice(0, startIdx) + content.slice(endIdx + blockEnd.length)).trim();
+        try {
+            if (stripped.length === 0) {
+                await fs.promises.unlink(filePath);
+                removed.push(fileName);
+            } else {
+                await fs.promises.writeFile(filePath, stripped + '\n', 'utf8');
+                removed.push(`${fileName} (Switchboard block stripped, user content kept)`);
+            }
+        } catch (err: any) {
+            skipped.push(`${fileName} update failed: ${err.message || err}`);
+        }
     }
 
     /**

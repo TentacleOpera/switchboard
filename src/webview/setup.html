@@ -1652,22 +1652,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
-    <!-- Scaffold cleanup confirmation modal -->
-    <div id="agent-dir-cleanup-modal" class="modal-overlay hidden">
-        <div class="modal-card" style="max-width: 520px;">
-            <div class="modal-title">Confirm: Delete old scaffolding</div>
-            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
-                This will permanently delete the selected directories and files. This action cannot be undone.
-            </div>
-            <div id="agent-dir-cleanup-modal-paths" style="font-size:10px; color:var(--text-primary); margin-bottom:10px; font-family:var(--font-mono); line-height:1.6; padding:8px; background:var(--panel-bg2); border-radius:4px; border:1px solid var(--border-dim);"></div>
-            <div id="agent-dir-cleanup-modal-skipped" style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;"></div>
-            <div style="display:flex; gap:8px; justify-content:flex-end;">
-                <button id="btn-agent-dir-cleanup-cancel" class="secondary-btn">CANCEL</button>
-                <button id="btn-agent-dir-cleanup-confirm" class="action-btn" style="background:var(--accent-red, #d33);">DELETE</button>
-            </div>
-        </div>
-    </div>
-
     <div id="custom-prompts-modal" class="modal-overlay hidden">
         <div class="modal-card" style="max-width: 560px;">
             <div class="modal-title">Customize Default Prompts</div>
@@ -1862,7 +1846,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastClickupSetupState = null;
         let lastLinearSetupState = null;
         let lastNotionSetupState = null;
-        let lastAgentDirCleanupState = null;
 
         let lastControlPlaneCandidate = null;
         let lastControlPlaneStatus = null;
@@ -3599,49 +3582,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'initControlPlaneGit', remoteUrl });
         });
 
-        // Scaffold cleanup button handlers
+        // Scaffold cleanup button — deletes on click (no confirm gate, per project rule).
+        // The card enumerates the exact paths per deletable root before the click, so
+        // the destructive scope is visible without a two-click confirmation modal.
         document.getElementById('btn-agent-dir-cleanup')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'getAgentDirCleanupState' });
-            const modalPaths = document.getElementById('agent-dir-cleanup-modal-paths');
-            const modalSkipped = document.getElementById('agent-dir-cleanup-modal-skipped');
-            if (modalPaths && lastAgentDirCleanupState?.roots) {
-                const deletablePaths = [];
-                const skippedInfo = [];
-                for (const r of lastAgentDirCleanupState.roots) {
-                    if (r.deletable) {
-                        const parts = [];
-                        if (r.agentDir) parts.push(`${r.root}/.agent/`);
-                        if (r.litter) {
-                            if (r.preservedPlans) {
-                                parts.push(`${r.root}/.switchboard/ (plan files preserved)`);
-                            } else {
-                                parts.push(`${r.root}/.switchboard/`);
-                            }
-                            parts.push(`${r.root}/.agents/`, `${r.root}/.claude/`, `${r.root}/AGENTS.md`, `${r.root}/CLAUDE.md`);
-                        }
-                        deletablePaths.push(...parts);
-                    } else {
-                        skippedInfo.push(`${r.root} — ${r.reason || 'skipped'}`);
-                    }
-                }
-                modalPaths.innerHTML = deletablePaths.map(p => escapeHtml(p)).join('<br>');
-                modalSkipped.innerHTML = skippedInfo.length > 0
-                    ? '<strong>Skipped (not deletable):</strong><br>' + skippedInfo.map(s => escapeHtml(s)).join('<br>')
-                    : '';
-            }
-            const modal = document.getElementById('agent-dir-cleanup-modal');
-            if (modal) modal.classList.remove('hidden');
-        });
-        document.getElementById('btn-agent-dir-cleanup-cancel')?.addEventListener('click', () => {
-            const modal = document.getElementById('agent-dir-cleanup-modal');
-            if (modal) modal.classList.add('hidden');
-        });
-        document.getElementById('agent-dir-cleanup-modal')?.addEventListener('click', (e) => {
-            if (e.target.id === 'agent-dir-cleanup-modal') {
-                e.currentTarget.classList.add('hidden');
-            }
-        });
-        document.getElementById('btn-agent-dir-cleanup-confirm')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'performAgentDirCleanup' });
         });
         document.getElementById('btn-clear-prompt-override')?.addEventListener('click', () => {
@@ -5245,7 +5189,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 case 'agentDirCleanupState': {
-                    lastAgentDirCleanupState = message;
                     const card = document.getElementById('agent-dir-cleanup-card');
                     const rootsDiv = document.getElementById('agent-dir-cleanup-roots');
                     if (!card || !rootsDiv) break;
@@ -5255,7 +5198,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             if (r.agentDir) types.push('old .agent/');
                             if (r.litter) types.push(r.preservedPlans ? 'scaffold litter (plan files preserved)' : 'scaffold litter');
                             const status = r.deletable ? `✓ deletable (${types.join(' + ')})` : `⚠ ${r.reason || 'skipped'}`;
-                            return `<div>${escapeHtml(r.root)} — <span style="color:${r.deletable ? 'var(--accent-teal)' : 'var(--accent-red, #d33)'};">${escapeHtml(status)}</span></div>`;
+                            let html = `<div>${escapeHtml(r.root)} — <span style="color:${r.deletable ? 'var(--accent-teal)' : 'var(--accent-red, #d33)'};">${escapeHtml(status)}</span></div>`;
+                            // Enumerate the exact paths the CLEAN UP button will delete, so the
+                            // destructive scope is visible without a confirmation modal.
+                            if (r.deletable) {
+                                const paths = [];
+                                if (r.agentDir) paths.push('.agent/');
+                                if (r.litter) {
+                                    paths.push(r.preservedPlans ? '.switchboard/ (plans/ preserved)' : '.switchboard/');
+                                    paths.push('.agents/');
+                                    // Surgical: only Switchboard's own content is removed from these
+                                    // shared files/dirs — user config and content is preserved.
+                                    paths.push('.claude/ (Switchboard skills only)');
+                                    paths.push('CLAUDE.md / AGENTS.md (Switchboard block only)');
+                                }
+                                if (paths.length > 0) {
+                                    html += `<div style="margin:2px 0 6px 12px; color:var(--text-secondary); opacity:0.85;">↳ removes: ${escapeHtml(paths.join(', '))}</div>`;
+                                }
+                            }
+                            return html;
                         }).join('');
                         card.classList.remove('hidden');
                     } else {
@@ -5265,8 +5226,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'agentDirCleanupResult': {
                     const card = document.getElementById('agent-dir-cleanup-card');
-                    const modal = document.getElementById('agent-dir-cleanup-modal');
-                    if (modal) modal.classList.add('hidden');
                     const removed = (message.removedRoots || []).length;
                     const skipped = (message.skippedRoots || []).length;
                     let statusMsg = `Cleaned scaffolding from ${removed} workspace${removed === 1 ? '' : 's'}.`;
