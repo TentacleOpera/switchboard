@@ -570,15 +570,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
 
         <div class="shared-tab-content active" id="startup-fields" data-tab-content="setup">
-                <!-- Stale .agent/ cleanup card (conditional — shown only when a stale .agent/ exists) -->
+                <!-- Stale .agent/ and scaffold litter cleanup card -->
                 <div id="agent-dir-cleanup-card" class="hidden" style="margin-bottom: 16px; padding: 12px; border: 1px solid var(--border-color); border-left: 3px solid var(--accent-teal); border-radius: 4px; background: var(--panel-bg);">
-                    <div class="section-label" style="margin-bottom: 6px;">Old .agent/ directory found</div>
+                    <div class="section-label" style="margin-bottom: 6px;">Switchboard cleanup available</div>
                     <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.5;">
-                        Switchboard now stores agent assets in <code style="font-size:10px;">.agents/</code> (Antigravity only autoloads <code style="font-size:10px;">.agents/</code>).
-                        A leftover <code style="font-size:10px;">.agent/</code> folder from a previous version was found and is no longer used.
+                        Switchboard found old scaffolding that can be safely removed: a leftover <code style="font-size:10px;">.agent/</code> directory or unwanted scaffold files in a non-Switchboard workspace.
                     </div>
                     <div id="agent-dir-cleanup-roots" style="font-size: 10px; color: var(--text-secondary); margin-bottom: 10px; font-family: var(--font-mono); line-height: 1.6;"></div>
-                    <button id="btn-agent-dir-cleanup" class="action-btn" style="width: 100%;">CLEAN UP OLD .agent/ DIRECTORY</button>
+                    <button id="btn-agent-dir-cleanup" class="action-btn" style="width: 100%;">CLEAN UP SELECTED SCAFFOLDING</button>
                     <div id="agent-dir-cleanup-status" style="display:none; margin-top:8px; font-size:11px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
                 </div>
 
@@ -1653,12 +1652,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
-    <!-- Agent dir cleanup confirmation modal -->
+    <!-- Scaffold cleanup confirmation modal -->
     <div id="agent-dir-cleanup-modal" class="modal-overlay hidden">
         <div class="modal-card" style="max-width: 520px;">
-            <div class="modal-title">Confirm: Delete old .agent/ directory</div>
+            <div class="modal-title">Confirm: Delete old scaffolding</div>
             <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
-                This will permanently delete the following directory(s). This action cannot be undone.
+                This will permanently delete the selected directories and files. This action cannot be undone.
             </div>
             <div id="agent-dir-cleanup-modal-paths" style="font-size:10px; color:var(--text-primary); margin-bottom:10px; font-family:var(--font-mono); line-height:1.6; padding:8px; background:var(--panel-bg2); border-radius:4px; border:1px solid var(--border-dim);"></div>
             <div id="agent-dir-cleanup-modal-skipped" style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;"></div>
@@ -1863,6 +1862,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastClickupSetupState = null;
         let lastLinearSetupState = null;
         let lastNotionSetupState = null;
+        let lastAgentDirCleanupState = null;
 
         let lastControlPlaneCandidate = null;
         let lastControlPlaneStatus = null;
@@ -3599,27 +3599,32 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'initControlPlaneGit', remoteUrl });
         });
 
-        // Agent dir cleanup button handlers
+        // Scaffold cleanup button handlers
         document.getElementById('btn-agent-dir-cleanup')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'getAgentDirCleanupState' });
-            // Show the confirmation modal with paths populated from the last state
-            const rootsDiv = document.getElementById('agent-dir-cleanup-roots');
             const modalPaths = document.getElementById('agent-dir-cleanup-modal-paths');
             const modalSkipped = document.getElementById('agent-dir-cleanup-modal-skipped');
-            if (rootsDiv && modalPaths) {
-                // Extract deletable roots from the card display
+            if (modalPaths && lastAgentDirCleanupState?.roots) {
                 const deletablePaths = [];
                 const skippedInfo = [];
-                rootsDiv.querySelectorAll('div').forEach(div => {
-                    const text = div.textContent || '';
-                    if (text.includes('deletable')) {
-                        const pathMatch = text.match(/^(.+?)\s+—/);
-                        if (pathMatch) deletablePaths.push(pathMatch[1].trim());
-                    } else if (text.includes('⚠')) {
-                        skippedInfo.push(text);
+                for (const r of lastAgentDirCleanupState.roots) {
+                    if (r.deletable) {
+                        const parts = [];
+                        if (r.agentDir) parts.push(`${r.root}/.agent/`);
+                        if (r.litter) {
+                            if (r.preservedPlans) {
+                                parts.push(`${r.root}/.switchboard/ (plan files preserved)`);
+                            } else {
+                                parts.push(`${r.root}/.switchboard/`);
+                            }
+                            parts.push(`${r.root}/.agents/`, `${r.root}/.claude/`, `${r.root}/AGENTS.md`, `${r.root}/CLAUDE.md`);
+                        }
+                        deletablePaths.push(...parts);
+                    } else {
+                        skippedInfo.push(`${r.root} — ${r.reason || 'skipped'}`);
                     }
-                });
-                modalPaths.innerHTML = deletablePaths.map(p => escapeHtml(p) + '/.agent/').join('<br>');
+                }
+                modalPaths.innerHTML = deletablePaths.map(p => escapeHtml(p)).join('<br>');
                 modalSkipped.innerHTML = skippedInfo.length > 0
                     ? '<strong>Skipped (not deletable):</strong><br>' + skippedInfo.map(s => escapeHtml(s)).join('<br>')
                     : '';
@@ -5240,12 +5245,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 case 'agentDirCleanupState': {
+                    lastAgentDirCleanupState = message;
                     const card = document.getElementById('agent-dir-cleanup-card');
                     const rootsDiv = document.getElementById('agent-dir-cleanup-roots');
                     if (!card || !rootsDiv) break;
                     if (message.hasStaleAgentDir && message.roots && message.roots.length > 0) {
                         rootsDiv.innerHTML = message.roots.map(r => {
-                            const status = r.deletable ? '✓ deletable' : `⚠ ${r.reason || 'skipped'}`;
+                            const types = [];
+                            if (r.agentDir) types.push('old .agent/');
+                            if (r.litter) types.push(r.preservedPlans ? 'scaffold litter (plan files preserved)' : 'scaffold litter');
+                            const status = r.deletable ? `✓ deletable (${types.join(' + ')})` : `⚠ ${r.reason || 'skipped'}`;
                             return `<div>${escapeHtml(r.root)} — <span style="color:${r.deletable ? 'var(--accent-teal)' : 'var(--accent-red, #d33)'};">${escapeHtml(status)}</span></div>`;
                         }).join('');
                         card.classList.remove('hidden');
@@ -5260,7 +5269,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (modal) modal.classList.add('hidden');
                     const removed = (message.removedRoots || []).length;
                     const skipped = (message.skippedRoots || []).length;
-                    let statusMsg = `Removed .agent/ from ${removed} workspace${removed === 1 ? '' : 's'}.`;
+                    let statusMsg = `Cleaned scaffolding from ${removed} workspace${removed === 1 ? '' : 's'}.`;
                     if (skipped > 0) {
                         statusMsg += ` Skipped ${skipped} (see below).`;
                         if (card) {

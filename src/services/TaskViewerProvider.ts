@@ -4756,16 +4756,19 @@ Each plan file must include:
         }
     }
 
-    public async getVisibleAgents(workspaceRoot?: string): Promise<Record<string, boolean>> {
-        const defaults: Record<string, boolean> = { 
-            lead: true, 
-            coder: true, 
-            intern: true, 
-            reviewer: true, 
-            tester: false, 
-            planner: true, 
-            analyst: true, 
-            jules: false, 
+    /** Default visibility for every known agent role. Fresh object per call so
+     *  callers (e.g. getVisibleAgents) may mutate it. Single source of truth so
+     *  the Restore-Defaults reset and the getter can't drift. */
+    private _defaultVisibleAgents(): Record<string, boolean> {
+        return {
+            lead: true,
+            coder: true,
+            intern: true,
+            reviewer: true,
+            tester: false,
+            planner: true,
+            analyst: true,
+            jules: false,
             ticket_updater: false,
             researcher: false,
             mcp_monitor: false,
@@ -4773,6 +4776,10 @@ Each plan file must include:
             phone_a_friend: false,
             project_manager: true
         };
+    }
+
+    public async getVisibleAgents(workspaceRoot?: string): Promise<Record<string, boolean>> {
+        const defaults: Record<string, boolean> = this._defaultVisibleAgents();
 
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
 
@@ -9373,18 +9380,32 @@ Each plan file must include:
                 .filter((role): role is string => Boolean(role))
         );
 
+        // Reset built-in column visibility to defaults by OVERWRITING each built-in
+        // role with its default value — not by deleting the keys. Deleting every
+        // built-in key leaves an empty remainder, which the visibleAgents wipe guard
+        // (GlobalIntegrationConfigService) refuses to write, silently keeping stale
+        // hidden-column overrides so Restore Defaults appears to do nothing. A
+        // defaults patch is always non-empty, passes the guard, and preserves
+        // file-only keys (mcp_monitor, custom agents).
+        const defaultVisibility = this._defaultVisibleAgents();
+        const resetPatch: Record<string, boolean> = {};
+        for (const role of builtInColumnRoles) {
+            resetPatch[role] = role in defaultVisibility ? defaultVisibility[role] : true;
+        }
+
         await this.updateState(async (state: any) => {
             state.customAgents = parseCustomAgents(state.customAgents);
             state.customKanbanColumns = [];
 
-            if (state.visibleAgents && typeof state.visibleAgents === 'object') {
-                for (const role of builtInColumnRoles) {
-                    delete state.visibleAgents[role];
-                }
+            if (!state.visibleAgents || typeof state.visibleAgents !== 'object') {
+                state.visibleAgents = {};
+            }
+            for (const [role, visible] of Object.entries(resetPatch)) {
+                state.visibleAgents[role] = visible;
             }
         });
 
-        await this.mergeVisibleAgentsToGlobalFile({}, [...builtInColumnRoles]);
+        await this.mergeVisibleAgentsToGlobalFile(resetPatch);
 
         await this._kanbanProvider?.cleanupKanbanColumnState(resolvedRoot, { clearAll: true });
         this._kanbanProvider?.sendVisibleAgents();

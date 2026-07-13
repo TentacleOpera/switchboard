@@ -10,6 +10,7 @@ import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
+import { resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex } from './services/WorkspaceIdentityService';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
 import { sendRobustText } from './services/terminalUtils';
@@ -236,16 +237,47 @@ function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: 
 }
 
 /**
- * Predicate: a folder is Switchboard-managed iff `<root>/.switchboard/` exists
- * as a directory. This is the definitive opt-in marker — it is what makes a
- * folder eligible for control-plane refresh, and it aligns with the version
- * stamp's write path (`<root>/.switchboard/.agent_version.json`). Folders
- * without it are never scaffolded (prevents littering unrelated open repos).
+ * Predicate: a folder is Switchboard-managed for the control-plane refresh loop.
+ * Consults workspace mappings first, then falls back to on-disk markers of a
+ * deliberate setup (`kanban.db`, `db-pointer`, or `workspace-id`). The previous
+ * "`.switchboard/` exists" test was self-defeating because board-mirror and
+ * identity writers auto-created that directory; this tiered gate prevents that.
  */
 function isSwitchboardManagedFolder(root: string): boolean {
+    const resolvedRoot = path.resolve(root);
     try {
-        const dir = path.join(root, '.switchboard');
-        return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+        // Tier 1: mapped child workspaceFolders belong to the parent and are never scaffolded here.
+        const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
+        if (effectiveRoot !== resolvedRoot) {
+            return false;
+        }
+
+        // Tier 2: configured mapping parents are explicit user opt-in.
+        const cfg = getMappingsFromIndex();
+        if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+            for (const mapping of cfg.mappings) {
+                if (mapping.parentFolder) {
+                    const expanded = mapping.parentFolder.startsWith('~')
+                        ? path.join(os.homedir(), mapping.parentFolder.slice(1))
+                        : mapping.parentFolder;
+                    if (path.resolve(expanded) === resolvedRoot) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Tier 3: unclaimed by config — fall back to evidence of deliberate setup.
+        const dir = path.join(resolvedRoot, '.switchboard');
+        if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+            return false;
+        }
+        const markers = [
+            path.join(dir, 'kanban.db'),
+            path.join(dir, 'db-pointer'),
+            path.join(dir, 'workspace-id'),
+        ];
+        return markers.some(p => fs.existsSync(p));
     } catch {
         return false;
     }
@@ -560,7 +592,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // mappings list is the user-maintained distribution list; open folders cover
     // the normal single-folder install. Dedupe by resolved path. Per-folder
     // try/catch so one bad folder never aborts the others.
-    const { getMappingsFromIndex } = require('./services/WorkspaceIdentityService');
+    // Ordering invariant: this loop must run after initializeMappingIndex (line 501)
+    // so isSwitchboardManagedFolder's Tier-1 mapping check sees a populated index.
     const mappingCfg = getMappingsFromIndex();
     const refreshTargets = new Set<string>();
     for (const m of (mappingCfg.enabled ? mappingCfg.mappings : [])) {

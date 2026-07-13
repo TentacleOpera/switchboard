@@ -8,12 +8,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import * as cp from 'child_process';
 import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { applyThemeBodyClass } from './themeBodyClass';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
+import { getMappingsFromIndex, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { exportCoworkSkill } from './CoworkSkillExporter';
 
@@ -1608,57 +1610,279 @@ export class SetupPanelProvider implements vscode.Disposable {
     }
 
     /**
-     * Scan workspace root(s) for a stale `.agent/` directory that can be safely cleaned up.
-     * Returns the list of deletable roots and the list of skipped roots (with reasons).
+     * Resolve all workspace roots to scan, including mapped children that may not be
+     * open in the current window but are the primary victims of scaffold litter.
+     */
+    private _getCleanupScanRoots(): string[] {
+        const roots = new Set<string>();
+        if (vscode.workspace.workspaceFolders) {
+            for (const folder of vscode.workspace.workspaceFolders) {
+                roots.add(path.resolve(folder.uri.fsPath));
+            }
+        }
+
+        const cfg = getMappingsFromIndex();
+        if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+            for (const m of cfg.mappings) {
+                if (m.parentFolder) {
+                    const expanded = m.parentFolder.startsWith('~')
+                        ? path.join(os.homedir(), m.parentFolder.slice(1))
+                        : m.parentFolder;
+                    if (expanded.trim()) {
+                        try { roots.add(path.resolve(expanded)); } catch {}
+                    }
+                }
+                if (Array.isArray(m.workspaceFolders)) {
+                    for (const wf of m.workspaceFolders) {
+                        const expanded = wf.startsWith('~')
+                            ? path.join(os.homedir(), wf.slice(1))
+                            : wf;
+                        if (expanded.trim()) {
+                            try { roots.add(path.resolve(expanded)); } catch {}
+                        }
+                    }
+                }
+            }
+        }
+
+        return Array.from(roots);
+    }
+
+    /**
+     * Tiered predicate mirroring extension.ts isSwitchboardManagedFolder:
+     * mapped children are not managed, configured parents are, and unclaimed roots
+     * must carry a deliberate-setup marker (kanban.db, db-pointer, or workspace-id).
+     */
+    private _isSwitchboardManagedFolder(root: string): boolean {
+        const resolvedRoot = path.resolve(root);
+        try {
+            const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
+            if (effectiveRoot !== resolvedRoot) {
+                return false;
+            }
+
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const mapping of cfg.mappings) {
+                    if (mapping.parentFolder) {
+                        const expanded = mapping.parentFolder.startsWith('~')
+                            ? path.join(os.homedir(), mapping.parentFolder.slice(1))
+                            : mapping.parentFolder;
+                        if (path.resolve(expanded) === resolvedRoot) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            const switchboardDir = path.join(resolvedRoot, '.switchboard');
+            if (!fs.existsSync(switchboardDir) || !fs.statSync(switchboardDir).isDirectory()) {
+                return false;
+            }
+
+            const markers = ['kanban.db', 'db-pointer', 'workspace-id'];
+            return markers.some(name => fs.existsSync(path.join(switchboardDir, name)));
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Check whether any of the given relative paths are tracked by git.
+     */
+    private async _gitHasTrackedPaths(root: string, paths: string[]): Promise<boolean> {
+        return new Promise((resolve) => {
+            cp.execFile('git', ['ls-files', '--error-unmatch', '--', ...paths], { cwd: root, timeout: 10000 }, (_, stdout) => {
+                // stdout contains the tracked paths; exit code 1 is produced whenever
+                // any path is untracked, so we only care whether stdout has entries.
+                resolve(stdout.trim().length > 0);
+            });
+        });
+    }
+
+    /**
+     * Remove the scaffold litter set from a root. If preservePlans is true, the
+     * `.switchboard/plans/` directory is kept and only the rest of `.switchboard/`
+     * is removed.
+     */
+    private async _performScaffoldLitterCleanup(root: string, preservePlans: boolean): Promise<{
+        removed: string[];
+        skipped: string[];
+    }> {
+        const removed: string[] = [];
+        const skipped: string[] = [];
+
+        const topLevel: Array<{ rel: string; isDir: boolean }> = [
+            { rel: '.agents', isDir: true },
+            { rel: '.claude', isDir: true },
+            { rel: 'AGENTS.md', isDir: false },
+            { rel: 'CLAUDE.md', isDir: false },
+        ];
+
+        for (const item of topLevel) {
+            const fullPath = path.join(root, item.rel);
+            try {
+                const stat = fs.lstatSync(fullPath);
+                if (stat.isSymbolicLink()) {
+                    skipped.push(`${item.rel} is a symlink`);
+                    continue;
+                }
+                if (item.isDir && stat.isDirectory()) {
+                    await fs.promises.rm(fullPath, { recursive: true, force: true });
+                    removed.push(`${item.rel}/`);
+                } else if (!item.isDir && stat.isFile()) {
+                    await fs.promises.unlink(fullPath);
+                    removed.push(item.rel);
+                }
+            } catch (err: any) {
+                if (err?.code !== 'ENOENT') {
+                    skipped.push(`${item.rel} removal failed: ${err.message || err}`);
+                }
+            }
+        }
+
+        const switchboardDir = path.join(root, '.switchboard');
+        try {
+            const stat = fs.lstatSync(switchboardDir);
+            if (stat.isSymbolicLink()) {
+                skipped.push('.switchboard/ is a symlink');
+                return { removed, skipped };
+            }
+            if (!stat.isDirectory()) {
+                skipped.push('.switchboard/ is not a directory');
+                return { removed, skipped };
+            }
+
+            const entries = await fs.promises.readdir(switchboardDir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (preservePlans && entry.name === 'plans') {
+                    continue;
+                }
+
+                const childPath = path.join(switchboardDir, entry.name);
+                try {
+                    if (entry.isSymbolicLink()) {
+                        skipped.push(`.switchboard/${entry.name} is a symlink`);
+                        continue;
+                    }
+                    if (entry.isDirectory()) {
+                        await fs.promises.rm(childPath, { recursive: true, force: true });
+                        removed.push(`.switchboard/${entry.name}/`);
+                    } else if (entry.isFile()) {
+                        await fs.promises.unlink(childPath);
+                        removed.push(`.switchboard/${entry.name}`);
+                    }
+                } catch (err: any) {
+                    skipped.push(`.switchboard/${entry.name} removal failed: ${err.message || err}`);
+                }
+            }
+
+            if (preservePlans) {
+                removed.push('.switchboard/plans/ preserved');
+            } else {
+                await fs.promises.rmdir(switchboardDir);
+                removed.push('.switchboard/');
+            }
+        } catch (err: any) {
+            if (err?.code !== 'ENOENT') {
+                skipped.push(`.switchboard/ cleanup failed: ${err.message || err}`);
+            }
+        }
+
+        return { removed, skipped };
+    }
+
+    /**
+     * Scan workspace root(s) for a stale `.agent/` directory or scaffold litter that
+     * can be safely cleaned up. Returns the list of deletable roots and skipped roots.
      */
     private async _getAgentDirCleanupState(): Promise<{
         hasStaleAgentDir: boolean;
-        roots: Array<{ root: string; deletable: boolean; reason?: string }>;
+        roots: Array<{ root: string; deletable: boolean; reason?: string; agentDir?: boolean; agentDirDeletable?: boolean; litter?: boolean; litterDeletable?: boolean; preservedPlans?: boolean }>;
     }> {
-        const workspaceRoots = this._resolveWorkspaceRoots();
-        const roots: Array<{ root: string; deletable: boolean; reason?: string }> = [];
+        const roots: Array<{ root: string; deletable: boolean; reason?: string; agentDir?: boolean; agentDirDeletable?: boolean; litter?: boolean; litterDeletable?: boolean; preservedPlans?: boolean }> = [];
 
-        for (const root of workspaceRoots) {
+        for (const root of this._getCleanupScanRoots()) {
             const legacyDir = path.join(root, '.agent');
-            const agentsDir = path.join(root, '.agents');
+            const switchboardDir = path.join(root, '.switchboard');
+            const hasAgentDir = fs.existsSync(legacyDir);
+            const hasSwitchboardDir = fs.existsSync(switchboardDir) && fs.statSync(switchboardDir).isDirectory();
+            const hasLitter = hasSwitchboardDir && !this._isSwitchboardManagedFolder(root);
 
-            if (!fs.existsSync(legacyDir)) {
-                continue; // no stale dir — don't include in results
-            }
-
-            // Guard: sibling .agents/ must exist (never strand the user)
-            if (!fs.existsSync(agentsDir)) {
-                roots.push({ root, deletable: false, reason: 'No .agents/ directory found — removing .agent/ would leave you without agent assets.' });
+            if (!hasAgentDir && !hasLitter) {
                 continue;
             }
 
-            // Guard: don't follow a symlinked .agent
-            try {
-                const stat = fs.lstatSync(legacyDir);
-                if (stat.isSymbolicLink()) {
-                    roots.push({ root, deletable: false, reason: '.agent/ is a symlink — refusing to delete for safety.' });
-                    continue;
+            const entry: any = { root, agentDir: hasAgentDir, litter: hasLitter, deletable: false };
+            const reasons: string[] = [];
+
+            if (hasAgentDir) {
+                const agentsDir = path.join(root, '.agents');
+                if (!fs.existsSync(agentsDir)) {
+                    reasons.push('No .agents/ directory found — removing .agent/ would leave you without agent assets.');
+                } else {
+                    try {
+                        const stat = fs.lstatSync(legacyDir);
+                        if (stat.isSymbolicLink()) {
+                            reasons.push('.agent/ is a symlink — refusing to delete for safety.');
+                        } else {
+                            const configRefsLegacy = await this._configReferencesLegacyAgent(root);
+                            if (configRefsLegacy) {
+                                reasons.push('Your Switchboard configuration references .agent/ — remove those references before cleaning up.');
+                            } else {
+                                entry.agentDirDeletable = true;
+                            }
+                        }
+                    } catch {
+                        reasons.push('Unable to inspect .agent/ directory.');
+                    }
                 }
-            } catch {
-                roots.push({ root, deletable: false, reason: 'Unable to inspect .agent/ directory.' });
-                continue;
             }
 
-            // Guard: check if any agent-asset config points into .agent/
-            const configRefsLegacy = await this._configReferencesLegacyAgent(root);
-            if (configRefsLegacy) {
-                roots.push({ root, deletable: false, reason: 'Your Switchboard configuration references .agent/ — remove those references before cleaning up.' });
-                continue;
+            if (hasLitter) {
+                try {
+                    const stat = fs.lstatSync(switchboardDir);
+                    if (stat.isSymbolicLink()) {
+                        reasons.push('.switchboard/ is a symlink — refusing to delete for safety.');
+                    } else {
+                        const tracked = await this._gitHasTrackedPaths(root, ['.switchboard', '.agents', '.claude', 'AGENTS.md', 'CLAUDE.md']);
+                        if (tracked) {
+                            reasons.push('Scaffold files are tracked by git — refusing to delete.');
+                        } else {
+                            const plansDir = path.join(switchboardDir, 'plans');
+                            let planFiles: string[] = [];
+                            try {
+                                const entries = await fs.promises.readdir(plansDir, { withFileTypes: true });
+                                planFiles = entries.filter(e => e.isFile() && e.name.endsWith('.md')).map(e => e.name);
+                            } catch {
+                                // plans directory absent or unreadable
+                            }
+
+                            if (planFiles.length > 0) {
+                                entry.preservedPlans = true;
+                            }
+                            entry.litterDeletable = true;
+                        }
+                    }
+                } catch {
+                    reasons.push('Unable to inspect .switchboard/ directory.');
+                }
             }
 
-            roots.push({ root, deletable: true });
+            if (entry.agentDirDeletable || entry.litterDeletable) {
+                entry.deletable = true;
+            } else if (reasons.length > 0) {
+                entry.reason = reasons.join(' ');
+            }
+
+            roots.push(entry);
         }
 
         return { hasStaleAgentDir: roots.length > 0, roots };
     }
 
     /**
-     * Perform the guarded recursive delete of stale `.agent/` directories.
+     * Perform the guarded cleanup of stale `.agent/` directories and scaffold litter.
      */
     private async _performAgentDirCleanup(): Promise<{
         success: boolean;
@@ -1677,24 +1901,42 @@ export class SetupPanelProvider implements vscode.Disposable {
                 continue;
             }
 
-            const legacyDir = path.join(entry.root, '.agent');
-            try {
-                // Re-check guards right before deletion (race safety)
-                const stat = fs.lstatSync(legacyDir);
-                if (stat.isSymbolicLink()) {
-                    skippedRoots.push({ root: entry.root, reason: '.agent/ is a symlink — refusing to delete for safety.' });
-                    continue;
-                }
-                if (!fs.existsSync(path.join(entry.root, '.agents'))) {
-                    skippedRoots.push({ root: entry.root, reason: 'No .agents/ directory found — removing .agent/ would leave you without agent assets.' });
-                    continue;
-                }
+            const removedParts: string[] = [];
+            const skippedParts: string[] = [];
 
-                await fs.promises.rm(legacyDir, { recursive: true, force: true });
+            if (entry.agentDir && entry.agentDirDeletable) {
+                const legacyDir = path.join(entry.root, '.agent');
+                try {
+                    const stat = fs.lstatSync(legacyDir);
+                    if (stat.isSymbolicLink()) {
+                        skippedParts.push('.agent/ is a symlink — refusing to delete for safety.');
+                    } else if (!fs.existsSync(path.join(entry.root, '.agents'))) {
+                        skippedParts.push('No .agents/ directory found — removing .agent/ would leave you without agent assets.');
+                    } else {
+                        await fs.promises.rm(legacyDir, { recursive: true, force: true });
+                        removedParts.push('.agent/');
+                    }
+                } catch (error) {
+                    const reason = error instanceof Error ? error.message : String(error);
+                    skippedParts.push(`.agent/ removal failed: ${reason}`);
+                }
+            } else if (entry.agentDir && !entry.agentDirDeletable) {
+                skippedParts.push('old .agent/ directory not deletable');
+            }
+
+            if (entry.litter && entry.litterDeletable) {
+                const result = await this._performScaffoldLitterCleanup(entry.root, !!entry.preservedPlans);
+                removedParts.push(...result.removed);
+                skippedParts.push(...result.skipped);
+            } else if (entry.litter && !entry.litterDeletable) {
+                skippedParts.push('scaffold litter not deletable');
+            }
+
+            if (removedParts.length > 0) {
                 removedRoots.push(entry.root);
-            } catch (error) {
-                const reason = error instanceof Error ? error.message : String(error);
-                skippedRoots.push({ root: entry.root, reason: `Failed to delete: ${reason}` });
+            }
+            if (skippedParts.length > 0) {
+                skippedRoots.push({ root: entry.root, reason: skippedParts.join('; ') });
             }
         }
 

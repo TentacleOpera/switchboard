@@ -7886,6 +7886,13 @@ FROM plans
     private async _writeKanbanStateBackup(): Promise<void> {
         if (!this._workspaceRoot || !this._db) return;
         try {
+            const switchboardDir = path.join(this._workspaceRoot, '.switchboard');
+            const stat = await fs.promises.stat(switchboardDir);
+            if (!stat.isDirectory()) return;
+        } catch {
+            return;
+        }
+        try {
             const workspaceId = await this.getWorkspaceId();
             if (!workspaceId) return;
 
@@ -8190,6 +8197,14 @@ FROM plans
             const workspaceId = await this.getWorkspaceId();
             if (!workspaceId) return;
             const exportRoot = this._resolveExportRoot();
+
+            try {
+                const switchboardDir = path.join(exportRoot, '.switchboard');
+                const stat = await fs.promises.stat(switchboardDir);
+                if (!stat.isDirectory()) return;
+            } catch {
+                return;
+            }
 
             const allPlans = await this.getBoard(workspaceId);
 

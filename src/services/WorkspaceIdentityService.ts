@@ -185,9 +185,17 @@ function isValidWorkspaceId(value: string): boolean {
 }
 
 export async function tryWriteCommittedWorkspaceId(workspaceRoot: string, workspaceId: string): Promise<void> {
-    const committedPath = path.join(path.resolve(workspaceRoot), '.switchboard', 'workspace-id');
+    const resolvedRoot = path.resolve(workspaceRoot);
+    const switchboardDir = path.join(resolvedRoot, '.switchboard');
     try {
-        await fs.promises.mkdir(path.dirname(committedPath), { recursive: true });
+        const stat = await fs.promises.stat(switchboardDir);
+        if (!stat.isDirectory()) return;
+    } catch {
+        return;
+    }
+
+    const committedPath = path.join(switchboardDir, 'workspace-id');
+    try {
         await fs.promises.writeFile(committedPath, `${workspaceId}\n`, { flag: 'wx' });
     } catch (error: any) {
         if (error?.code !== 'EEXIST') {
@@ -204,7 +212,16 @@ async function tryWriteCommittedWorkspaceIdIfDifferent(
     workspaceRoot: string,
     workspaceId: string
 ): Promise<void> {
-    const committedPath = path.join(path.resolve(workspaceRoot), '.switchboard', 'workspace-id');
+    const resolvedRoot = path.resolve(workspaceRoot);
+    const switchboardDir = path.join(resolvedRoot, '.switchboard');
+    try {
+        const stat = await fs.promises.stat(switchboardDir);
+        if (!stat.isDirectory()) return;
+    } catch {
+        return;
+    }
+
+    const committedPath = path.join(switchboardDir, 'workspace-id');
     try {
         // Check if file already has the correct value
         let currentValue = '';
@@ -216,8 +233,7 @@ async function tryWriteCommittedWorkspaceIdIfDifferent(
 
         // Only write if different (prevents unnecessary writes and fs churn)
         if (currentValue !== workspaceId) {
-            await fs.promises.mkdir(path.dirname(committedPath), { recursive: true });
-            const dbPath = KanbanDatabase.forWorkspace(path.resolve(workspaceRoot)).dbPath;
+            const dbPath = KanbanDatabase.forWorkspace(resolvedRoot).dbPath;
             await fs.promises.writeFile(committedPath, `${workspaceId}\n${dbPath}\n`);
         }
     } catch (error: any) {
