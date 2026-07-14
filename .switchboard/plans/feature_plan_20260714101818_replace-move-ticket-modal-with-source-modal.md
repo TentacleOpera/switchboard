@@ -248,3 +248,7 @@ case 'moveTicketResult': {
 7. **No regression on Source browse mode:** Open the Source modal via the
    Source button (not Move). Confirm Apply button is hidden and the hierarchy
    nav still switches the active source as before.
+
+## Review Findings
+
+Reviewed the committed implementation (commit a1928ce) against the plan. Files changed: `src/webview/planning.js`, `src/webview/planning.html`. Two CRITICAL findings fixed: (1) space and folder `<select>` change handlers were not guarded with `_moveMode` — browsing the ClickUp hierarchy in move mode silently persisted the browsing state via `saveTicketsState()` and `clickupSaveSpaceSelection`/`clickupSaveFolderSelection`, overwriting the user's active source in both tab state and ClickUp config; fixed by adding `_moveMode` guards that skip persistence calls but still load folders/lists for browsing. (2) `clickupFoldersLoaded`/`clickupListsLoaded` result handlers were not stale-result-guarded — late-arriving fetch results from move-mode browsing could corrupt the restored hierarchy state after `exitMoveMode()`; fixed by adding `msg.spaceId`/`msg.folderId` mismatch guards. Two NITs deferred: Source modal `display: block` doesn't flex-center (pre-existing, shared with browse mode), and `moveTargetsResult` handler is dead code for ClickUp move mode (harmless). `node --check` passes after fixes. Remaining risk: the stale-result guard relies on `msg.spaceId`/`msg.folderId` being present in the result messages (confirmed in PlanningPanelProvider.ts:5189, 5222).

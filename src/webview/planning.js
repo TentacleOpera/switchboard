@@ -6280,6 +6280,12 @@
                 }
                 break;
             case 'clickupFoldersLoaded':
+                // Stale-result guard: skip if the result is for a different space than
+                // the currently selected one (e.g. a late-arriving fetch from
+                // move-mode browsing after exitMoveMode restored the snapshot).
+                if (msg.spaceId && msg.spaceId !== clickUpSelectedSpaceId) {
+                    break;
+                }
                 clickUpAvailableFolders = msg.folders || [];
                 clickUpAvailableListsInFolder = [];
                 clickUpAvailableDirectLists = msg.directLists || [];
@@ -6315,6 +6321,14 @@
                 renderTicketsTab();
                 break;
             case 'clickupListsLoaded':
+                // Stale-result guard: skip if the result is for a different
+                // space/folder than the currently selected one (e.g. a late-arriving
+                // fetch from move-mode browsing after exitMoveMode restored the
+                // snapshot).
+                if ((msg.spaceId && msg.spaceId !== clickUpSelectedSpaceId) ||
+                    (msg.folderId !== undefined && msg.folderId !== clickUpSelectedFolderId)) {
+                    break;
+                }
                 if (clickUpSelectedFolderId) {
                     clickUpAvailableListsInFolder = msg.lists || [];
                 } else {
@@ -10832,6 +10846,25 @@ Instructions:
             clickUpProjectStatusFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
+            // Move mode: browse the hierarchy for move-target selection without
+            // persisting the browsing state. skip saveTicketsState() and
+            // clickupSaveSpaceSelection so the user's active source is not
+            // overwritten; still load folders so the user can navigate.
+            if (_moveMode) {
+                if (spaceId) {
+                    clickUpHierarchyLoading = true;
+                    renderTicketsClickUpPanel();
+                    vscode.postMessage({
+                        type: 'clickupLoadFolders',
+                        spaceId,
+                        workspaceRoot: ticketsWorkspaceRoot || undefined
+                    });
+                } else {
+                    clickUpHierarchyLoading = false;
+                    renderTicketsClickUpPanel();
+                }
+                return;
+            }
             if (spaceId) {
                 clickUpHierarchyLoading = true;
                 renderTicketsClickUpPanel();
@@ -10878,6 +10911,36 @@ Instructions:
             clickUpProjectStatusFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
+            // Move mode: browse folders for move-target selection without persisting.
+            // Skip saveTicketsState() and clickupSaveFolderSelection; still load lists
+            // so the user can navigate to a target list.
+            if (_moveMode) {
+                if (folderId) {
+                    clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
+                    clickUpHierarchyLoading = true;
+                    renderTicketsClickUpPanel();
+                    if (folderId === '_root_') {
+                        vscode.postMessage({
+                            type: 'clickupLoadLists',
+                            spaceId: clickUpSelectedSpaceId,
+                            folderId: '',
+                            workspaceRoot: ticketsWorkspaceRoot || undefined
+                        });
+                    } else {
+                        vscode.postMessage({
+                            type: 'clickupLoadLists',
+                            spaceId: clickUpSelectedSpaceId,
+                            folderId: clickUpSelectedFolderId,
+                            workspaceRoot: ticketsWorkspaceRoot || undefined
+                        });
+                    }
+                } else {
+                    clickUpSelectedFolderId = '';
+                    clickUpHierarchyLoading = false;
+                    renderTicketsClickUpPanel();
+                }
+                return;
+            }
             if (folderId) {
                 clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
                 clickUpHierarchyLoading = true;
