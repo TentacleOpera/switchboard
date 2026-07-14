@@ -2852,6 +2852,16 @@
             flex-shrink: 0;
             align-self: center; /* overrides base .ticket-sync-badge align-self: flex-start */
         }
+        /* Editable status & assignee rows on sidebar cards afford clicking. */
+        .ticket-node .tickets-issue-meta[data-edit-status],
+        .ticket-node .tickets-issue-meta[data-edit-assignees] {
+            cursor: pointer;
+        }
+        .ticket-node .tickets-issue-meta[data-edit-status]:hover,
+        .ticket-node .tickets-issue-meta[data-edit-assignees]:hover {
+            text-decoration: underline;
+            color: var(--accent-teal, #00ffcc);
+        }
 
         .ticket-node .card-actions {
             display: flex;
@@ -4196,6 +4206,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
     </div>
+    <div class="folder-modal" id="ticket-status-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="ticket-status-modal-title">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="modal-header">
+                <h3 id="ticket-status-modal-title">Change Status</h3>
+                <button class="modal-close-btn" id="btn-close-ticket-status-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <select id="ticket-status-select" class="kanban-meta-dropdown" style="width: 100%; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; padding: 4px 8px; box-sizing: border-box; border-radius: 3px;"></select>
+                    <div id="ticket-status-modal-loading" style="display:none; font-size:12px; color: var(--text-secondary);">Loading statuses…</div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                        <button id="btn-cancel-ticket-status" class="strip-btn">Cancel</button>
+                        <button id="btn-save-ticket-status" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
     <div id="ticket-priority-popover" style="display: none; position: absolute; z-index: 1000; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); padding: 4px 0; min-width: 120px;"></div>
     <div class="folder-modal" id="tickets-source-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-source-modal-title">
         <div class="modal-content">
@@ -4217,8 +4245,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Hierarchy</label>
                     <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
                 </div>
+                <!-- Move-mode controls — shown only when the Source modal opens in move mode.
+                     The hierarchy nav is ClickUp-only and mutates the active source, so in
+                     move mode we hide it and present a themed target <select> populated via
+                     fetchMoveTargets (which works for both ClickUp and Linear). -->
+                <div id="tickets-source-move-controls" style="display:none; flex-direction: column; gap: 8px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <input type="text" id="tickets-source-move-search" placeholder="Search target..." style="flex: 1; padding: 4px 8px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; box-sizing: border-box; border-radius: 3px;">
+                        <button type="button" id="tickets-source-move-refresh" class="strip-btn" title="Refresh list" style="padding: 4px 8px;">↻</button>
+                    </div>
+                    <select id="tickets-source-move-target-select" size="10" style="width: 100%; padding: 4px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 3px; font-size: 12px; height: 180px; box-sizing: border-box;">
+                        <option value="" disabled selected>Loading targets...</option>
+                    </select>
+                    <div id="tickets-source-move-linear-unassign-wrap" style="display:none; font-size: 12px; color: var(--text-secondary);">
+                        <label style="display:flex; align-items:center; gap:4px;">
+                            <input type="checkbox" id="tickets-source-move-unassign"> Unassign from project
+                        </label>
+                    </div>
+                </div>
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
                     <button id="btn-close-tickets-source-modal-action" class="strip-btn">Close</button>
+                    <button id="btn-apply-move-ticket" class="planning-button" style="display:none; margin: 0; padding: 4px 12px;" disabled>Move</button>
                 </div>
             </div>
         </div>

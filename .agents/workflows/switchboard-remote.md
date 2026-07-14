@@ -1,12 +1,12 @@
 ---
-description: Remote Switchboard control — drive plans via Linear, Notion, or ClickUp when the local machine is off
+description: Remote Switchboard control — drive plans via Linear or Notion when the local machine is off
 ---
 
 
 # Remote Switchboard Session Entry Point
 
 You are entering a **remote Switchboard planning session**. The local machine and
-VS Code extension are not running. Plans live in Linear, Notion, or ClickUp — not in local
+VS Code extension are not running. Plans live in Linear or Notion — not in local
 `.md` files. MCP (or the LocalApiServer proxy) is the control surface. Git is not
 used for planning.
 
@@ -110,15 +110,7 @@ execution agent in the wrong direction.
   ("Switchboard Project Context"). Only navigation efficiency changes — the flow above stays
   the same.
 
-## 8. ClickUp Steps (if ClickUp is the provider)
-
-1. **Find the mapped lists.** ClickUp maps columns to separate lists. Query/fetch your workspace folder to find the lists mapped to your columns.
-2. **Create or find the task.** Create a task in the list mapped to the "CREATED" column (or another list) to start a new plan. The next poll imports it as a new local markdown plan.
-3. **Write the plan into the task DESCRIPTION.** Write the implementation plan into the task description. The local agent will fetch and write it to the local plan file before executing.
-4. **Trigger the local agent: move the task.** To trigger the local agent, move the task to the list mapped to that column (e.g. from the CREATED list to the CODING list). Changing the home list of the task triggers the corresponding local column agent.
-5. **Comments limitation.** Note that the comment-bus is not supported for ClickUp. Two-way comment communication is unavailable; use task description and status/list moves to control execution.
-
-## Notion Steps (if Notion is the provider)
+## 8. Notion Steps (if Notion is the provider)
 
 1. **Find the plans database.** Use Notion MCP search/query to locate the Switchboard
    plans database (titled "Switchboard Kanban Backup") and the "Switchboard Comments"
@@ -209,15 +201,17 @@ property updates — which is all this flow needs. If your specific connector la
 create-row, fall back to creating a child page under the Comments DB with the same
 properties, or report the gap to the user.
 
-## Plan Sizing & Feature Grouping
+## Feature Grouping
 
-**Plan Sizing — split before drafting.** Before writing any plan file, assess whether the work is one plan or multiple. Auto-split into separate plan files when EITHER signal is present:
-- **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
-- **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own.
-When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. If the user explicitly asks for a single plan, respect that and write one.
+When the work described will span 3 or more plan files on a related topic (sharing a
+common feature area or root cause):
 
-**Feature Grouping.** When the work described will span 3 or more plan files on a related topic (sharing a common feature area or root cause):
-- **Early (during scoping):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under a feature?"* Do not create anything yet.
-- **Closing (when all plans are drafted):** Offer again: *"You now have [N] plans covering [topic] — want me to create a feature to group them?"*
+- **Early (during scoping):** Flag it once: *"This looks like it will produce 3+
+  related plans — once they're all drafted, want me to group them under a feature?"*
+  Do not create anything yet.
+- **Closing (when all plans are drafted):** Offer again: *"You now have [N] plans
+  covering [topic] — want me to create a feature to group them?"*
 
-Only create the feature if the user confirms. In a remote session, feature creation follows the `/create-feature` skill (direct file write to `.switchboard/features/`) or the `create-feature.js` script if the extension is reachable.
+Only create the feature if the user confirms. In a remote session, feature creation follows
+the `/create-feature` skill (direct file write to `.switchboard/features/`) or the
+`create-feature.js` script if the extension is reachable.

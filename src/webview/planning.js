@@ -308,6 +308,9 @@
     let availableLinearStates = [];
     let availableClickUpTags = [];
     let availableClickUpStatuses = [];
+    // Status-edit modal target (set by showTicketStatusModal, read by Save).
+    let _statusModalProvider = null;
+    let _statusModalTicketId = null;
     let _tagsModalOpen = false;
     let _tagsCatalogLoading = false;
     let _assignModalOpen = false;
@@ -995,120 +998,332 @@
         _tagsModalOpen = false;
     }
 
+    // Move-mode state for the Source modal. When _moveMode is true the Source modal
+    // is repurposed as a move-target picker. For ClickUp the existing hierarchy nav
+    // (space→folder→list) is used for browsing — the whole point of this feature is
+    // to replace the flat unsorted mega-list with the hierarchy browser. The active
+    // ClickUp hierarchy state is snapshotted on enter and restored on exit so move-
+    // mode browsing does not mutate or persist the user's active source. For Linear
+    // no hierarchy nav exists, so a themed target <select> populated via
+    // fetchMoveTargets is shown instead.
+    let _moveMode = false;
+    let _moveTicketId = null;
+    let _moveProvider = null;
+    let _moveSelectedTargetId = null;
+    let _moveHierarchySnapshot = null;
+
     function showMoveTicketModal(provider, ticketId) {
-        // Remove any existing one first
-        document.getElementById('move-ticket-modal')?.remove();
+        _moveMode = true;
+        _moveTicketId = ticketId;
+        _moveProvider = provider;
+        _moveSelectedTargetId = null;
+        _moveHierarchySnapshot = null;
 
-        const modalHtml = `
-        <div class="folder-modal" id="move-ticket-modal" style="display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000;">
-            <div class="modal-content" style="width: 320px; background: var(--panel-bg, #1e1e1e); border: 1px solid var(--border-color, #333); border-radius: 6px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 12px;">
-                <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
-                    <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">Move Ticket</h3>
-                    <button class="modal-close-btn" id="move-modal-close" style="background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 18px;">&times;</button>
-                </div>
-                <div class="modal-body" style="display: flex; flex-direction: column; gap: 8px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                        <input type="text" id="move-search-input" placeholder="Search target..." style="flex: 1; padding: 6px 8px; background: var(--input-bg, #2d2d2d); border: 1px solid var(--border-color, #444); color: var(--text-primary); border-radius: 4px;">
-                        <button type="button" id="move-modal-refresh-targets" style="padding: 6px 8px; background: var(--button-secondary-bg, #3a3a3a); color: var(--text-primary); border: 1px solid var(--border-color, #444); border-radius: 4px; cursor: pointer;" title="Refresh list">↻</button>
-                    </div>
-                    <select id="move-target-select" size="10" style="width: 100%; padding: 4px; background: var(--input-bg, #2d2d2d); border: 1px solid var(--border-color, #444); color: var(--text-primary); border-radius: 4px; font-size: 12px; height: 180px;">
-                        <option value="" disabled selected>Loading targets...</option>
-                    </select>
-                    ${provider === 'linear' ? `<div style="font-size: 10px; color: var(--text-secondary);"><label style="display: flex; align-items: center; gap: 4px;"><input type="checkbox" id="move-linear-unassign"> Unassign from project</label></div>` : ''}
-                </div>
-                <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
-                    <button type="button" id="move-modal-cancel" style="padding: 6px 12px; background: var(--button-secondary-bg, #3a3a3a); color: var(--text-primary); border: 1px solid var(--border-color, #444); border-radius: 4px; cursor: pointer;">Cancel</button>
-                    <button type="button" id="move-modal-submit" style="padding: 6px 12px; background: var(--accent-color, #007acc); color: #fff; border: none; border-radius: 4px; cursor: pointer;" disabled>Move</button>
-                </div>
-            </div>
-        </div>
-        `;
+        const modal = document.getElementById('tickets-source-modal');
+        if (!modal) return;
+        modal.style.display = 'block';
 
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = modalHtml;
-        const modalEl = wrapper.firstElementChild;
-        document.body.appendChild(modalEl);
+        // Show move-mode controls container + Apply button.
+        const controls = document.getElementById('tickets-source-move-controls');
+        if (controls) controls.style.display = 'flex';
+        const applyBtn = document.getElementById('btn-apply-move-ticket');
+        if (applyBtn) { applyBtn.style.display = ''; applyBtn.disabled = true; applyBtn.textContent = 'Move'; }
+        const unassignWrap = document.getElementById('tickets-source-move-linear-unassign-wrap');
+        if (unassignWrap) unassignWrap.style.display = (provider === 'linear') ? 'block' : 'none';
+        const unassign = document.getElementById('tickets-source-move-unassign');
+        if (unassign) unassign.checked = false;
 
-        const closeBtn = document.getElementById('move-modal-close');
-        const cancelBtn = document.getElementById('move-modal-cancel');
-        const submitBtn = document.getElementById('move-modal-submit');
-        const select = document.getElementById('move-target-select');
-        const searchInput = document.getElementById('move-search-input');
-        const refreshBtn = document.getElementById('move-modal-refresh-targets');
-        const unassignCheck = document.getElementById('move-linear-unassign');
-
-        const closeModal = () => modalEl.remove();
-        closeBtn.onclick = closeModal;
-        cancelBtn.onclick = closeModal;
-
-        if (unassignCheck) {
-            unassignCheck.onchange = () => {
-                const checked = unassignCheck.checked;
-                select.disabled = checked;
-                searchInput.disabled = checked;
-                submitBtn.disabled = !checked && !select.value;
+        if (provider === 'clickup') {
+            // --- ClickUp: use the hierarchy nav for move-target browsing. ---
+            // Snapshot the active hierarchy state so exitMoveMode() can restore it.
+            _moveHierarchySnapshot = {
+                clickUpSelectedSpaceId,
+                clickUpSelectedFolderId,
+                clickUpSelectedListId,
+                clickUpAvailableSpaces: clickUpAvailableSpaces.slice(),
+                clickUpAvailableFolders: clickUpAvailableFolders.slice(),
+                clickUpAvailableListsInFolder: clickUpAvailableListsInFolder.slice(),
+                clickUpAvailableDirectLists: clickUpAvailableDirectLists.slice(),
+                clickUpProjectIssues: clickUpProjectIssues.slice(),
+                selectedClickUpIssue,
+                clickUpProjectStatusFilterValue,
+                availableClickUpStatuses: availableClickUpStatuses.slice(),
+                clickUpHierarchyLoading,
+                clickUpProjectLoading,
+                clickUpProjectMessage,
+                clickUpCurrentPage,
+                clickUpProjectHasMore,
+                _lastTicketsClickUpStateFilterHtml,
+                _lastTicketsHierarchyHtml
             };
+
+            // Reset the hierarchy nav to root so the user picks a fresh target.
+            clickUpSelectedSpaceId = '';
+            clickUpSelectedFolderId = '';
+            clickUpSelectedListId = '';
+            clickUpAvailableFolders = [];
+            clickUpAvailableListsInFolder = [];
+            clickUpAvailableDirectLists = [];
+            clickUpProjectIssues = [];
+            selectedClickUpIssue = null;
+            clickUpProjectStatusFilterValue = '';
+            availableClickUpStatuses = [];
+            clickUpHierarchyLoading = false;
+            _lastTicketsClickUpStateFilterHtml = '';
+            _lastTicketsHierarchyHtml = ''; // force re-render
+
+            // Show the hierarchy nav (it is ClickUp-only; renderTicketsClickUpPanel
+            // would show it, but we render it directly here since we're in move mode).
+            const hierarchyNav = document.getElementById('tickets-hierarchy-nav');
+            if (hierarchyNav) hierarchyNav.style.display = 'flex';
+            const hierarchyLabel = hierarchyNav?.parentElement?.querySelector('label');
+            if (hierarchyLabel) hierarchyLabel.style.display = '';
+
+            // Hide the Linear flat-list controls for ClickUp move mode.
+            const flatSelect = document.getElementById('tickets-source-move-target-select');
+            if (flatSelect) flatSelect.style.display = 'none';
+            const flatSearch = document.getElementById('tickets-source-move-search');
+            if (flatSearch) flatSearch.style.display = 'none';
+            const flatRefresh = document.getElementById('tickets-source-move-refresh');
+            if (flatRefresh) flatRefresh.style.display = 'none';
+
+            renderTicketsClickUpHierarchyNav();
+        } else {
+            // --- Linear: no hierarchy nav exists; use the themed flat target list. ---
+            const hierarchyNav = document.getElementById('tickets-hierarchy-nav');
+            if (hierarchyNav) hierarchyNav.style.display = 'none';
+            const hierarchyLabel = hierarchyNav?.parentElement?.querySelector('label');
+            if (hierarchyLabel) hierarchyLabel.style.display = 'none';
+
+            const select = document.getElementById('tickets-source-move-target-select');
+            const searchInput = document.getElementById('tickets-source-move-search');
+            const refreshBtn = document.getElementById('tickets-source-move-refresh');
+            if (select) {
+                select.style.display = '';
+                select.innerHTML = '<option value="" disabled selected>Loading targets...</option>';
+                select.disabled = false;
+                select.onchange = () => {
+                    _moveSelectedTargetId = select.value || null;
+                    const btn = document.getElementById('btn-apply-move-ticket');
+                    if (btn) btn.disabled = !_moveSelectedTargetId;
+                };
+            }
+            if (searchInput) {
+                searchInput.style.display = '';
+                searchInput.value = '';
+                searchInput.disabled = false;
+                searchInput.oninput = () => {
+                    if (!select) return;
+                    const query = searchInput.value.toLowerCase();
+                    select.innerHTML = '';
+                    const filtered = (window._allMoveTargets || []).filter(t =>
+                        (t.path || '').toLowerCase().includes(query) || (t.name || '').toLowerCase().includes(query)
+                    );
+                    if (filtered.length === 0) {
+                        const opt = document.createElement('option');
+                        opt.disabled = true;
+                        opt.textContent = 'No matches found';
+                        select.appendChild(opt);
+                        _moveSelectedTargetId = null;
+                        const btn = document.getElementById('btn-apply-move-ticket');
+                        if (btn) btn.disabled = true;
+                    } else {
+                        filtered.forEach(t => {
+                            const opt = document.createElement('option');
+                            opt.value = t.id;
+                            opt.textContent = t.path || t.name;
+                            select.appendChild(opt);
+                        });
+                        _moveSelectedTargetId = select.value || null;
+                        const btn = document.getElementById('btn-apply-move-ticket');
+                        if (btn) btn.disabled = !_moveSelectedTargetId;
+                    }
+                };
+            }
+            if (refreshBtn) {
+                refreshBtn.style.display = '';
+                refreshBtn.onclick = () => _fetchMoveTargets(true);
+            }
+            if (unassign) {
+                unassign.onchange = () => {
+                    const checked = unassign.checked;
+                    if (select) select.disabled = checked;
+                    if (searchInput) searchInput.disabled = checked;
+                    const btn = document.getElementById('btn-apply-move-ticket');
+                    if (btn) btn.disabled = !checked && !_moveSelectedTargetId;
+                };
+            }
+
+            // Initial fetch of Linear move targets.
+            _fetchMoveTargets(false);
+        }
+    }
+
+    function _fetchMoveTargets(refresh) {
+        const select = document.getElementById('tickets-source-move-target-select');
+        if (select) select.innerHTML = '<option value="" disabled selected>Loading targets...</option>';
+        const applyBtn = document.getElementById('btn-apply-move-ticket');
+        if (applyBtn) applyBtn.disabled = true;
+        setTicketsLoadingState(true);
+        vscode.postMessage({
+            type: 'fetchMoveTargets',
+            provider: _moveProvider,
+            ticketId: _moveTicketId,
+            refresh,
+            workspaceRoot: ticketsWorkspaceRoot
+        });
+    }
+
+    function exitMoveMode() {
+        const wasClickUp = _moveProvider === 'clickup';
+        _moveMode = false;
+        _moveTicketId = null;
+        _moveProvider = null;
+        _moveSelectedTargetId = null;
+        const controls = document.getElementById('tickets-source-move-controls');
+        if (controls) controls.style.display = 'none';
+        const applyBtn = document.getElementById('btn-apply-move-ticket');
+        if (applyBtn) { applyBtn.style.display = 'none'; applyBtn.disabled = true; }
+        const unassignWrap = document.getElementById('tickets-source-move-linear-unassign-wrap');
+        if (unassignWrap) unassignWrap.style.display = 'none';
+        const unassign = document.getElementById('tickets-source-move-unassign');
+        if (unassign) unassign.checked = false;
+
+        // Restore Linear flat-list control visibility defaults.
+        const flatSelect = document.getElementById('tickets-source-move-target-select');
+        if (flatSelect) flatSelect.style.display = '';
+        const flatSearch = document.getElementById('tickets-source-move-search');
+        if (flatSearch) flatSearch.style.display = '';
+        const flatRefresh = document.getElementById('tickets-source-move-refresh');
+        if (flatRefresh) flatRefresh.style.display = '';
+
+        // Restore the hierarchy nav visibility for browse mode (the panel re-render
+        // re-shows it for ClickUp; Linear hides it).
+        const hierarchyNav = document.getElementById('tickets-hierarchy-nav');
+        if (hierarchyNav) hierarchyNav.style.display = '';
+        const hierarchyLabel = hierarchyNav?.parentElement?.querySelector('label');
+        if (hierarchyLabel) hierarchyLabel.style.display = '';
+
+        if (wasClickUp && _moveHierarchySnapshot) {
+            const s = _moveHierarchySnapshot;
+            clickUpSelectedSpaceId = s.clickUpSelectedSpaceId;
+            clickUpSelectedFolderId = s.clickUpSelectedFolderId;
+            clickUpSelectedListId = s.clickUpSelectedListId;
+            clickUpAvailableSpaces = s.clickUpAvailableSpaces;
+            clickUpAvailableFolders = s.clickUpAvailableFolders;
+            clickUpAvailableListsInFolder = s.clickUpAvailableListsInFolder;
+            clickUpAvailableDirectLists = s.clickUpAvailableDirectLists;
+            clickUpProjectIssues = s.clickUpProjectIssues;
+            selectedClickUpIssue = s.selectedClickUpIssue;
+            clickUpProjectStatusFilterValue = s.clickUpProjectStatusFilterValue;
+            availableClickUpStatuses = s.availableClickUpStatuses;
+            clickUpHierarchyLoading = s.clickUpHierarchyLoading;
+            clickUpProjectLoading = s.clickUpProjectLoading;
+            clickUpProjectMessage = s.clickUpProjectMessage;
+            clickUpCurrentPage = s.clickUpCurrentPage;
+            clickUpProjectHasMore = s.clickUpProjectHasMore;
+            _lastTicketsClickUpStateFilterHtml = s._lastTicketsClickUpStateFilterHtml;
+            _lastTicketsHierarchyHtml = s._lastTicketsHierarchyHtml;
+            _moveHierarchySnapshot = null;
+            // Re-render the panel + hierarchy nav with the restored state, and
+            // persist the restored state so any mid-move saveTicketsState calls are
+            // overwritten with the original active source.
+            renderTicketsClickUpPanel();
+            saveTicketsState();
+        }
+    }
+
+    // Opens a themed status-edit modal for a sidebar card click. Builds the option
+    // list from availableLinearStates / availableClickUpStatuses (with the same
+    // derive-from-issues fallback the #select-status-ticket dropdown uses when the
+    // async state catalog is empty), pre-selects the ticket's current status, and
+    // wires Save to post the existing changeTicketStatus message — identical to the
+    // #select-status-ticket change handler. The existing changeTicketStatusResult
+    // handler updates the issue and re-renders the list, so the sidebar card status
+    // text updates after save.
+    function showTicketStatusModal(provider, ticketId) {
+        const modal = document.getElementById('ticket-status-modal');
+        const select = document.getElementById('ticket-status-select');
+        const loading = document.getElementById('ticket-status-modal-loading');
+        const saveBtn = document.getElementById('btn-save-ticket-status');
+        if (!modal || !select) return;
+
+        // Resolve the clicked ticket to find its current status id/name.
+        let currentStatusId = '';
+        let currentStatusName = '';
+        if (provider === 'linear') {
+            const issue = linearProjectIssues.find(i => i.id === ticketId)
+                || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === ticketId))
+                || selectedLinearIssue?.issue;
+            const iss = issue && issue.id ? issue : selectedLinearIssue?.issue;
+            currentStatusId = iss?.state?.id || '';
+            currentStatusName = iss?.state?.name || '';
+        } else {
+            const task = clickUpProjectIssues.find(t => t.id === ticketId)
+                || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === ticketId))
+                || selectedClickUpIssue?.task;
+            const tsk = task && task.id ? task : selectedClickUpIssue?.task;
+            currentStatusName = tsk?.status || '';
         }
 
-        select.onchange = () => {
-            submitBtn.disabled = !select.value;
-        };
-
-        const fetchTargets = (refresh = false) => {
-            select.innerHTML = '<option value="" disabled selected>Loading targets...</option>';
-            submitBtn.disabled = true;
-            setTicketsLoadingState(true);
-            vscode.postMessage({
-                type: 'fetchMoveTargets',
-                provider,
-                ticketId,
-                refresh,
-                workspaceRoot: ticketsWorkspaceRoot
-            });
-        };
-
-        refreshBtn.onclick = () => fetchTargets(true);
-
-        searchInput.oninput = () => {
-            const query = searchInput.value.toLowerCase();
-            select.innerHTML = '';
-            const filtered = (window._allMoveTargets || []).filter(t => 
-                (t.path || '').toLowerCase().includes(query) || (t.name || '').toLowerCase().includes(query)
-            );
-            if (filtered.length === 0) {
-                const opt = document.createElement('option');
-                opt.disabled = true;
-                opt.textContent = 'No matches found';
-                select.appendChild(opt);
-                submitBtn.disabled = true;
+        // Build options. Linear: availableLinearStates (id+name), fallback to deriving
+        // a name→id map from linearProjectIssues. ClickUp: availableClickUpStatuses
+        // (status+id), fallback to deriving a name→id map from clickUpProjectIssues.
+        let options = [];
+        if (provider === 'linear') {
+            if (availableLinearStates && availableLinearStates.length > 0) {
+                options = availableLinearStates.map(s => ({ id: s.id, name: s.name }));
             } else {
-                filtered.forEach(t => {
-                    const opt = document.createElement('option');
-                    opt.value = t.id;
-                    opt.textContent = t.path || t.name;
-                    select.appendChild(opt);
+                const stateMap = new Map();
+                linearProjectIssues.forEach(i => {
+                    if (i.state && i.state.id && i.state.name) stateMap.set(i.state.name, i.state.id);
                 });
-                submitBtn.disabled = !select.value;
+                options = Array.from(stateMap.entries()).map(([name, id]) => ({ id, name }));
             }
-        };
+        } else {
+            if (availableClickUpStatuses && availableClickUpStatuses.length > 0) {
+                // ClickUp: the existing #select-status-ticket dropdown uses the status
+                // NAME as the option value (changeTicketStatus receives the name, and
+                // changeTicketStatusResult sets task.status from option text). Mirror
+                // that so the same backend path works unchanged.
+                options = availableClickUpStatuses.map(s => ({ id: s.status || s.name || s.id, name: s.status || s.name || s.id }));
+            } else {
+                const stateMap = new Map();
+                clickUpProjectIssues.forEach(t => {
+                    if (t.status) stateMap.set(t.status, t.status);
+                });
+                options = Array.from(stateMap.entries()).map(([name, id]) => ({ id, name }));
+            }
+        }
 
-        submitBtn.onclick = () => {
-            const isUnassign = unassignCheck && unassignCheck.checked;
-            const targetId = isUnassign ? null : select.value;
-            if (!isUnassign && !targetId) return;
+        if (options.length === 0) {
+            select.innerHTML = '';
+            if (loading) {
+                loading.style.display = '';
+                loading.textContent = 'Loading statuses…';
+            }
+            if (saveBtn) saveBtn.disabled = true;
+        } else {
+            if (loading) loading.style.display = 'none';
+            select.innerHTML = options.map(o => {
+                const selected = (o.id === currentStatusId) || (o.name === currentStatusName) ? 'selected' : '';
+                return `<option value="${escapeAttr(o.id)}" ${selected}>${escapeHtml(o.name)}</option>`;
+            }).join('');
+            if (saveBtn) saveBtn.disabled = false;
+        }
 
-            setTicketsLoadingState(true);
-            vscode.postMessage({
-                type: 'moveTicket',
-                provider,
-                ticketId,
-                targetId,
-                workspaceRoot: ticketsWorkspaceRoot
-            });
-        };
+        // Stash the target so Save can post without re-reading DOM dataset.
+        _statusModalProvider = provider;
+        _statusModalTicketId = ticketId;
 
-        // Initial fetch
-        fetchTargets(false);
+        modal.style.display = 'flex';
+    }
+
+    function closeTicketStatusModal() {
+        const modal = document.getElementById('ticket-status-modal');
+        if (modal) modal.style.display = 'none';
+        _statusModalProvider = null;
+        _statusModalTicketId = null;
     }
 
     function escapeAttr(value) {
@@ -5410,6 +5625,9 @@
                         renderTicketsClickUpList();
                         renderTicketsClickUpTaskDetail();
                     }
+                    // Refresh the local files sidebar so the deleted ticket's .md file
+                    // disappears from the list (the DB entry was removed by deleteTicket).
+                    loadLocalTicketFiles();
                 } else {
                     showTicketsStatus(msg.error || 'Failed to delete ticket', true);
                 }
@@ -5447,8 +5665,8 @@
                 break;
             case 'moveTargetsResult': {
                 setTicketsLoadingState(false);
-                const select = document.getElementById('move-target-select');
-                const submitBtn = document.getElementById('move-modal-submit');
+                const select = document.getElementById('tickets-source-move-target-select');
+                const applyBtn = document.getElementById('btn-apply-move-ticket');
                 if (select) {
                     select.innerHTML = '';
                     window._allMoveTargets = msg.targets || [];
@@ -5457,7 +5675,7 @@
                         opt.disabled = true;
                         opt.textContent = 'No available move targets found.';
                         select.appendChild(opt);
-                        if (submitBtn) submitBtn.disabled = true;
+                        if (applyBtn) applyBtn.disabled = true;
                     } else {
                         window._allMoveTargets.forEach(t => {
                             const opt = document.createElement('option');
@@ -5466,16 +5684,20 @@
                             select.appendChild(opt);
                         });
                         // Do not enable until something is selected, or if unassigned is checked
-                        const unassignCheck = document.getElementById('move-linear-unassign');
-                        if (submitBtn) submitBtn.disabled = !(unassignCheck && unassignCheck.checked) && !select.value;
+                        const unassignCheck = document.getElementById('tickets-source-move-unassign');
+                        _moveSelectedTargetId = select.value || null;
+                        if (applyBtn) applyBtn.disabled = !(unassignCheck && unassignCheck.checked) && !_moveSelectedTargetId;
                     }
                 }
                 break;
             }
             case 'moveTicketResult': {
                 setTicketsLoadingState(false);
-                const modal = document.getElementById('move-ticket-modal');
-                if (modal) modal.remove();
+                if (_moveMode) {
+                    const srcModal = document.getElementById('tickets-source-modal');
+                    if (srcModal) srcModal.style.display = 'none';
+                    exitMoveMode();
+                }
                 if (msg.success) {
                     let successText = `Moved ✓`;
                     if (msg.warning) {
@@ -8618,18 +8840,38 @@ Return ONLY the drafted prompt with no additional commentary.`;
             if (ticketsSourceModal) {
                 ticketsSourceModal.style.display = 'none';
             }
+            if (_moveMode) exitMoveMode();
         });
 
         btnCloseTicketsSourceModalAction?.addEventListener('click', () => {
             if (ticketsSourceModal) {
                 ticketsSourceModal.style.display = 'none';
             }
+            if (_moveMode) exitMoveMode();
         });
 
         ticketsSourceModal?.addEventListener('click', (e) => {
             if (e.target === e.currentTarget) {
                 e.currentTarget.style.display = 'none';
+                if (_moveMode) exitMoveMode();
             }
+        });
+
+        // Apply/Move button — commits the move in move mode.
+        document.getElementById('btn-apply-move-ticket')?.addEventListener('click', () => {
+            if (!_moveMode) return;
+            const unassign = document.getElementById('tickets-source-move-unassign');
+            const isUnassign = _moveProvider === 'linear' && unassign && unassign.checked;
+            const targetId = isUnassign ? null : _moveSelectedTargetId;
+            if (!isUnassign && !targetId) return;
+            setTicketsLoadingState(true);
+            vscode.postMessage({
+                type: 'moveTicket',
+                provider: _moveProvider,
+                ticketId: _moveTicketId,
+                targetId,
+                workspaceRoot: ticketsWorkspaceRoot
+            });
         });
 
         ticketsAgentApiBtn?.addEventListener('click', () => {
@@ -9144,6 +9386,31 @@ Instructions:
                 return;
             }
 
+            // Editable status row on a sidebar card — select the clicked ticket then
+            // open the status modal. Intercepted before the card-selection fallback so
+            // the click does not also trigger bare-card selection / drill-down.
+            const statusRow = e.target.closest('[data-edit-status]');
+            if (statusRow) {
+                e.stopPropagation();
+                const provider = statusRow.dataset.provider;
+                const id = statusRow.dataset.ticketId;
+                _selectTicketFromCard(provider, id);
+                showTicketStatusModal(provider, id);
+                return;
+            }
+            // Editable assignees row on a sidebar card — select the clicked ticket then
+            // open the existing assignee modal (which keys off selectedLinearIssue /
+            // selectedClickUpIssue).
+            const assigneeRow = e.target.closest('[data-edit-assignees]');
+            if (assigneeRow) {
+                e.stopPropagation();
+                const provider = assigneeRow.dataset.provider;
+                const id = assigneeRow.dataset.ticketId;
+                _selectTicketFromCard(provider, id);
+                openAssignModal();
+                return;
+            }
+
             // Accordion status-group header toggle — checked first, so clicking a header
             // never selects a ticket. Re-renders only the list (cheap); selection intact.
             const statusHeader = e.target.closest('.ticket-status-group-header');
@@ -9358,6 +9625,24 @@ Instructions:
 
         // Assign button
         document.getElementById('btn-assign-ticket')?.addEventListener('click', openAssignModal);
+
+        // Status-edit modal events (opened from sidebar card status rows)
+        document.getElementById('btn-close-ticket-status-modal')?.addEventListener('click', closeTicketStatusModal);
+        document.getElementById('btn-cancel-ticket-status')?.addEventListener('click', closeTicketStatusModal);
+        document.getElementById('ticket-status-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeTicketStatusModal();
+        });
+        document.getElementById('btn-save-ticket-status')?.addEventListener('click', () => {
+            const select = document.getElementById('ticket-status-select');
+            if (!select || !select.value) return;
+            const provider = _statusModalProvider;
+            const id = _statusModalTicketId;
+            if (!provider || !id) return;
+            const statusId = select.value;
+            setTicketsLoadingState(true);
+            vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: ticketsWorkspaceRoot });
+            closeTicketStatusModal();
+        });
 
         // Assign modal events
         document.getElementById('btn-close-assign-modal')?.addEventListener('click', closeAssignModal);
@@ -9971,8 +10256,8 @@ Instructions:
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
             ${priorityDot}
             <div class="tickets-issue-title">${escapeHtml(task.title || task.name || task.identifier || task.id)}</div>
-            <div class="tickets-issue-meta ticket-status-row">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
-            <div class="tickets-issue-meta">${task.assignees && task.assignees.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
+            <div class="tickets-issue-meta ticket-status-row" data-edit-status data-provider="clickup" data-ticket-id="${escapeAttr(task.id)}">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
+            <div class="tickets-issue-meta ticket-edit-assignees" data-edit-assignees data-provider="clickup" data-ticket-id="${escapeAttr(task.id)}">${task.assignees && task.assignees.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
@@ -9999,8 +10284,8 @@ Instructions:
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
             ${priorityDot}
             <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
-            <div class="tickets-issue-meta ticket-status-row">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}</div>
-            <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
+            <div class="tickets-issue-meta ticket-status-row" data-edit-status data-provider="linear" data-ticket-id="${escapeAttr(issue.id)}">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}</div>
+            <div class="tickets-issue-meta ticket-edit-assignees" data-edit-assignees data-provider="linear" data-ticket-id="${escapeAttr(issue.id)}">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
             <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
@@ -10074,6 +10359,57 @@ Instructions:
         _drillDownParentTitle = '';
         _drillDownProvider = null;
         _pendingDrillDownParentId = null;
+    }
+
+    // Selects a ticket from a sidebar card click WITHOUT entering drill-down.
+    // Reuses the same selection logic as the bare-card click branch, but looks up
+    // the issue in linearProjectIssues/clickUpProjectIssues OR _drillDownSubtasks
+    // (so subtask cards work too), sets the selected issue from the detail cache
+    // when available, re-renders the panel, and posts readLocalTicketFile +
+    // loadTaskDetails when not cached. Used by the status/assignee row click
+    // branches so the existing selection-coupled modals (openAssignModal, the
+    // status modal) operate on the clicked ticket.
+    function _selectTicketFromCard(provider, id) {
+        if (!id) return;
+        if (provider === 'linear') {
+            const cachedLinear = linearIssueDetailCache.get(id);
+            if (cachedLinear) {
+                selectedLinearIssue = cachedLinear;
+                renderTicketsLinearPanel();
+            } else {
+                // No detail cache yet — set a lightweight selected object from the
+                // sidebar list (or drill-down subtasks) so selection-coupled modals
+                // (openAssignModal, showTicketStatusModal) work immediately. The full
+                // cache entry replaces this once linearLoadTaskDetails arrives.
+                const issue = linearProjectIssues.find(i => i.id === id)
+                    || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === id));
+                if (issue) {
+                    selectedLinearIssue = { issue, detailsFetched: false };
+                    renderTicketsLinearPanel();
+                }
+            }
+            vscode.postMessage({ type: 'readLocalTicketFile', provider: 'linear', id, workspaceRoot: ticketsWorkspaceRoot });
+            if (!cachedLinear || !cachedLinear.detailsFetched) {
+                vscode.postMessage({ type: 'linearLoadTaskDetails', issueId: id, workspaceRoot: ticketsWorkspaceRoot || undefined });
+            }
+        } else {
+            const cachedClickUp = clickUpTaskDetailCache.get(id);
+            if (cachedClickUp) {
+                selectedClickUpIssue = cachedClickUp;
+                renderTicketsClickUpPanel();
+            } else {
+                const task = clickUpProjectIssues.find(t => t.id === id)
+                    || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === id));
+                if (task) {
+                    selectedClickUpIssue = { task, detailsFetched: false };
+                    renderTicketsClickUpPanel();
+                }
+            }
+            vscode.postMessage({ type: 'readLocalTicketFile', provider: 'clickup', id, workspaceRoot: ticketsWorkspaceRoot });
+            if (!cachedClickUp || !cachedClickUp.detailsFetched) {
+                vscode.postMessage({ type: 'clickupLoadTaskDetails', taskId: id, workspaceRoot: ticketsWorkspaceRoot || undefined });
+            }
+        }
     }
 
     // Parent id of the currently-selected ticket, or null for a top-level ticket.
@@ -10377,7 +10713,11 @@ Instructions:
             clickUpStatusFilter.style.display = (clickUpSelectedListId || clickUpProjectIssues.length > 0) ? '' : 'none';
         }
         if (refreshButton) refreshButton.style.display = '';
-        if (hierarchyNav) hierarchyNav.style.display = '';
+        // In move mode the hierarchy nav display is managed by showMoveTicketModal
+        // (set to 'flex' for ClickUp move-target browsing). Don't reset it here —
+        // resetting to '' would fall back to the inline display:none and hide the nav
+        // mid-browse.
+        if (hierarchyNav && !_moveMode) hierarchyNav.style.display = '';
 
         const importAsPlansBtn = document.getElementById('tickets-import-all-kanban');
         if (importAsPlansBtn) importAsPlansBtn.style.display = clickUpSelectedListId ? '' : 'none';
@@ -10583,6 +10923,18 @@ Instructions:
         listSelect?.addEventListener('change', (e) => {
             _restoringClickUpHierarchy = false;
             const listId = e.target.value;
+            // Move mode: the user is picking a move target, not switching the active
+            // source. Capture the selected list id, enable Apply, and bail before
+            // loadClickUpProject / clickupSaveListSelection / saveTicketsState so the
+            // active source state is not mutated or persisted. exitMoveMode() restores
+            // the snapshotted hierarchy state.
+            if (_moveMode) {
+                clickUpSelectedListId = listId;
+                _moveSelectedTargetId = listId || null;
+                const btn = document.getElementById('btn-apply-move-ticket');
+                if (btn) btn.disabled = !_moveSelectedTargetId;
+                return;
+            }
             clickUpSelectedListId = listId;
             clickUpProjectLoading = false;
             clickUpProjectIssues = [];

@@ -362,7 +362,8 @@ export class RemoteControlService {
                     map.set(p.notionPageId, p);
                 }
             } else if (kind === 'clickup') {
-                // ClickUp: push-only, but index by clickupTaskId for completeness.
+                // ClickUp: state-pull + push. Index by clickupTaskId so inbound
+                // list-move deltas resolve to the local plan for column mirroring.
                 if (p.clickupTaskId) {
                     map.set(p.clickupTaskId, p);
                 }

@@ -2173,10 +2173,8 @@ export class KanbanProvider implements vscode.Disposable {
             active: item.workspaceRoot === workspaceRoot,
         }));
         // Declared provider capabilities for honest UI gating.
-        // Linear: pull+push, Notion: pull+push (after 2/3), ClickUp: push-only.
-        const capabilities = config.provider === 'clickup'
-            ? { pull: false, push: true }
-            : { pull: true, push: true };
+        // Linear: pull+push, Notion: pull+push (after 2/3), ClickUp: state-pull+push (no comment bus).
+        const capabilities = { pull: true, push: true };
         return {
             type: 'remoteConfig',
             config,

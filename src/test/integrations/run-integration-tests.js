@@ -13,10 +13,11 @@ const suites = {
     ],
     clickup: [
         'src/test/integrations/clickup/clickup-sync-service.test.js',
+        'src/test/integrations/clickup/clickup-automation-service.test.js',
+        'src/test/integrations/clickup/clickup-remote-provider.test.js',
         'src/test/integrations/clickup/clickup-import-flow.test.js',
         'src/test/integrations/clickup/clickup-rate-limiting.test.js',
-        'src/test/integrations/clickup/clickup-regression.test.js',
-        'src/test/integrations/clickup/clickup-semantic-tools.test.js'
+        'src/test/integrations/clickup/clickup-regression.test.js'
     ],
     linear: [
         'src/test/integrations/linear/linear-graphql-client.test.js',

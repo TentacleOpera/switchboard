@@ -20928,9 +20928,27 @@ What would you like to find?`;
     }
 
     private async _findTicketDocument(resolvedRoot: string, provider: string, id: string): Promise<string | null> {
-        // Search recursively for the ticket file by its `${provider}_${id}_` prefix.
-        // Don't reconstruct the path from live space/folder/list names — tickets are
-        // imported into nested folder hierarchies (sprints, etc.) that won't match.
+        // DB-FIRST. The Tickets sidebar renders every row from the import registry's
+        // recorded absolute file_path, so the delete path MUST resolve through the
+        // SAME source — otherwise a ticket that's plainly visible in the sidebar
+        // survives on disk after delete because the scan-only fallback searched the
+        // wrong workspace root (the Tickets tab has no explicit workspace assignment;
+        // _resolveWorkspaceRoot falls back to the Kanban board's selected workspace,
+        // which may differ from where the file was imported). Mirrors the fix already
+        // applied in PlanningPanelProvider._findTicketFilePath.
+        try {
+            const cacheService = this._getCacheService(resolvedRoot);
+            const entry = await cacheService.getImportBySlugPrefix(`${provider}_${id}`);
+            if (entry && entry.filePath && fs.existsSync(entry.filePath)) {
+                return entry.filePath;
+            }
+        } catch { /* fall through to filesystem scan */ }
+
+        // Fallback: scan for the `${provider}_${id}_` prefix. Covers legacy/unregistered
+        // files and DB rows whose recorded path went stale. Scan the configured global
+        // location, then EVERY allowed workspace root's .switchboard/tickets — not just
+        // the resolved root — so the scan no longer depends on which workspace the
+        // Kanban board happens to point at.
         const prefix = `${provider}_${id}_`;
         const baseDirs: string[] = [];
         try {
@@ -20939,7 +20957,10 @@ What would you like to find?`;
                 baseDirs.push(path.join(config.ticketSaveLocation, provider));
             }
         } catch { /* ignore */ }
-        baseDirs.push(path.join(resolvedRoot, '.switchboard', 'tickets', provider));
+        const roots = new Set<string>([resolvedRoot, ...this._getAllowedRoots()]);
+        for (const root of roots) {
+            baseDirs.push(path.join(root, '.switchboard', 'tickets', provider));
+        }
 
         for (const dir of baseDirs) {
             const found = this._scanForTicketFile(dir, prefix);

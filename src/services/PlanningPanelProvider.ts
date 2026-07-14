@@ -2465,6 +2465,7 @@ Start by checking which documents exist, then present the menu.`;
             list: task.list,
             url: task.url,
             parentId: task.parentId || task.parent || null,
+            priority: task.priority || null,
             tags: Array.isArray(task.tags) ? task.tags.map((t: any) => ({
                 name: String(t?.name || '').trim(),
                 tagFg: String(t?.tag_fg || t?.tagFg || '').trim(),

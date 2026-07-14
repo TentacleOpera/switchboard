@@ -189,7 +189,7 @@ export class ClickUpRemoteProvider implements RemoteProvider {
     // ── Project-context / archive ────────────────────────────────────
 
     public async pushProjectContext(_bundle: ProjectContextBundle): Promise<ProjectContextPushResult> {
-        return { ok: true, skipped: true, detail: 'ClickUp is a push-only stakeholder mirror — no project context' };
+        return { ok: true, skipped: true, detail: 'ClickUp project-context push is not supported' };
     }
 
     public async archiveCard(_remoteId: string): Promise<ArchiveResult> {
