@@ -83,3 +83,17 @@ No other files require changes. The webview (`planning.js`) already renders `tas
 6. **Subtask drill-down**: open a parent task with subtasks that have priorities set. Confirm subtask priority dots now render (previously also broken via the same mapper).
 7. **Refresh / Refetch buttons**: click both `tickets-refresh` and `tickets-refetch` and confirm priorities survive (both trigger `clickupLoadProject` → the fixed mapper).
 8. **Run existing ClickUp sync tests**: `src/test/integrations/clickup/clickup-sync-service.test.js` to ensure no service-layer regressions (the change is in the panel provider, not the sync service, but worth confirming the suite is green).
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome to the review. I came in expecting a disaster and found... a one-liner. Disappointing. Here's what I scraped together:
+- **NIT** — `task.priority || null` coerces a falsy-but-valid priority object to `null`; ClickUp never returns one, but a defensive `task.priority !== undefined ? task.priority : null` would be bulletproof. Not worth the line noise.
+- **NIT** — The mapper return type is `any`, so no compile-time guard catches a future field-name drift between the mapper and the webview render helpers. Pre-existing tech debt, not introduced here.
+
+**Stage 2 (Balanced):** Both NITs are pre-existing/style-level — no fix warranted. The additive `priority: task.priority || null` at `PlanningPanelProvider.ts:2468` is the exact shape the webview already consumes via optional-chaining (`planning.js:727,730,741,744,10263`). All three call sites (list load `5297`, detail `5339`, subtasks `5340`) benefit; subtask priority dots now render as a bonus. No callers/consumers broken — the mapped object is webview-only, no backend reads `priority` off it. No race (synchronous stateless mapper). No double-trigger (no UI refresh added).
+
+**Regression audit:** Traced all 3 callers of `_mapClickUpTaskToSidebar` → all post to webview → webview reads `task.priority?.*` with optional chaining → `null` pass-through yields "No priority" correctly. No orphaned references. No signature change.
+
+**Files changed:** `src/services/PlanningPanelProvider.ts` (line 2468, +1 line).
+**Validation:** Compilation/tests skipped per directive. Code inspection confirms type-safety (`any` return, optional-chaining consumers) and null-safety.
+**Remaining risks:** None material. Mapper return type `any` is pre-existing debt.

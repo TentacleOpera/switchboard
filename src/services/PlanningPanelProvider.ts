@@ -5486,6 +5486,49 @@ Please format the updated output document strictly as follows:
                 }
                 break;
             }
+            case 'loadTicketMembers': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider;
+                let listId = msg.listId ? String(msg.listId).trim() : '';
+                if (!workspaceRoot || !provider) {
+                    this.postMessageToWebview({
+                        type: 'ticketMembersError',
+                        provider,
+                        error: 'Invalid request parameters.',
+                        workspaceRoot
+                    });
+                    break;
+                }
+                try {
+                    let members: any[] = [];
+                    if (provider === 'linear') {
+                        const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                        members = await linear.getTeamMembers();
+                    } else if (provider === 'clickup') {
+                        const clickup = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                        if (listId) {
+                            members = await clickup.getListMembers(listId);
+                        } else {
+                            // No list selected yet — return empty; webview shows "No members available."
+                            members = [];
+                        }
+                    }
+                    this.postMessageToWebview({
+                        type: 'ticketMembersLoaded',
+                        provider,
+                        members,
+                        workspaceRoot
+                    });
+                } catch (error) {
+                    this.postMessageToWebview({
+                        type: 'ticketMembersError',
+                        provider,
+                        error: error instanceof Error ? error.message : String(error),
+                        workspaceRoot
+                    });
+                }
+                break;
+            }
             case 'linearUpdateIssueAssignee': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const issueId = String(msg.issueId || '').trim();
@@ -7012,7 +7055,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         name: msg.title,
                         listId,
                         description: msg.description,
-                        ...(msg.parentId ? { parent: msg.parentId } : {})
+                        ...(msg.parentId ? { parent: msg.parentId } : {}),
+                        ...(msg.status ? { status: String(msg.status) } : {}),
+                        ...(typeof msg.priority === 'number' && !isNaN(msg.priority) ? { priority: msg.priority } : {}),
+                        ...(Array.isArray(msg.assignees) ? { assignees: msg.assignees.map(Number).filter((n: number) => !isNaN(n)) } : {})
                     });
                     if (task) {
                         // A remote-only ticket diverges from every other ticket in the
@@ -7088,7 +7134,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         title: msg.title,
                         description: msg.description,
                         projectId,
-                        ...(msg.parentId ? { parentId: msg.parentId } : {})
+                        ...(msg.parentId ? { parentId: msg.parentId } : {}),
+                        ...(msg.status ? { stateId: String(msg.status) } : {}),
+                        ...(typeof msg.priority === 'number' && !isNaN(msg.priority) ? { priority: msg.priority } : {}),
+                        ...(msg.assigneeId ? { assigneeId: String(msg.assigneeId) } : {})
                     });
                     // A remote-only ticket diverges from every other ticket in the tab
                     // (which are both local + online). Import it immediately so the local

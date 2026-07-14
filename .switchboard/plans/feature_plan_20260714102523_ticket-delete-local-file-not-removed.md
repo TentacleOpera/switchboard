@@ -204,3 +204,18 @@ case 'ticketDeleted':
    - Delete a ticket when the remote archive fails → local file is NOT deleted (existing `if (res.success)` guard holds).
 
 5. **Regression check**: Verify that `pushTicketEdits` (which also calls `_findTicketDocument`) still works correctly — the DB-first lookup returns the same path the scan would have found, so push-to-remote should be unaffected.
+
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome. You ported a pattern. Let's see if you ported the bugs too.
+- **NIT** — `_getCacheService(resolvedRoot)` opens the DB for `resolvedRoot` only; if the ticket was imported under a *different* workspace root, the DB-first lookup misses and falls through to the scan. The scan (now expanded to all roots) still finds and deletes the file, but the orphan DB row in the other workspace's kanban.db survives. Same limitation exists in the reference `PlanningPanelProvider._findTicketFilePath` — not a regression, but the "DB-first is immune to config drift" claim in the plan is overstated for the cross-workspace case.
+- **NIT** — `loadLocalTicketFiles()` is fire-and-forget in the `ticketDeleted` handler; if the DB-entry deletion at `TaskViewerProvider.ts:21643` fails (caught at 21644), the sidebar re-query returns a stale row pointing at a now-unlinked file. Edge case, pre-existing error-handling gap.
+- **NIT** — Reference uses `loadConfigSync`; this port uses async `loadConfig`. Consistent with the pre-existing code in this method, but a stylistic divergence from the reference. Harmless.
+
+**Stage 2 (Balanced):** All three are NITs — no fix warranted now. The primary bug (local file survives delete) is fixed: DB-first resolves the absolute path in the common case, and the expanded all-roots scan catches the cross-workspace fallback. The `if (res.success)` unlink gate, the ENOENT guard, and the `fs.existsSync` check all hold. `loadLocalTicketFiles()` refreshes the sidebar without double-triggering (it posts a separate `listLocalTicketFiles` message distinct from the remote-list re-render). No race: `deleteTicket` fully commits (unlink + DB delete) before sending `ticketDeleted`, so the re-query sees a consistent state.
+
+**Regression audit:** Traced all 3 callers of `_findTicketDocument` — `deleteTicket` (21614), `pushTicketEdits` (20981), `_resolveCommentsJsonDir` (21718). DB-first returns the same path the sidebar renders from; `pushTicketEdits` and `_resolveCommentsJsonDir` get strictly-more-reliable resolution. `getImportBySlugPrefix` returns `ImportedDocEntry` with `filePath` field (confirmed `PlanningPanelCacheService.ts:542`). `_getAllowedRoots` exists (`TaskViewerProvider.ts:2084`). `_getCacheService` returns `PlanningPanelCacheService` with the needed method (`7015`). No orphaned references. No signature change.
+
+**Files changed:** `src/services/TaskViewerProvider.ts` (lines 20930–20969, DB-first + expanded root scan), `src/webview/planning.js` (line 5630, `loadLocalTicketFiles()` in `ticketDeleted` success branch).
+**Validation:** Compilation/tests skipped per directive. Code inspection confirms the port matches the reference pattern, all guard clauses hold, and all helper methods exist on the class.
+**Remaining risks:** Orphan DB row in cross-workspace delete scenario (NIT, pre-existing in reference). Stale sidebar row if DB-entry deletion fails (NIT, edge case).

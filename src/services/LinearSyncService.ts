@@ -2358,6 +2358,8 @@ export class LinearSyncService {
     projectId?: string;
     stateId?: string;
     parentId?: string;
+    priority?: number;
+    assigneeId?: string;
   }): Promise<{ id: string; identifier: string }> {
     const config = await this.loadConfig();
     if (!config || !config.setupComplete || !config.teamId) {
@@ -2381,7 +2383,9 @@ export class LinearSyncService {
         labelIds: config.switchboardLabelId ? [config.switchboardLabelId] : [],
         ...(params.projectId ? { projectId: params.projectId } : {}),
         ...(params.stateId ? { stateId: params.stateId } : {}),
-        ...(params.parentId ? { parentId: params.parentId } : {})
+        ...(params.parentId ? { parentId: params.parentId } : {}),
+        ...(typeof params.priority === 'number' && Number.isInteger(params.priority) && params.priority >= 0 && params.priority <= 4 ? { priority: params.priority } : {}),
+        ...(params.assigneeId ? { assigneeId: params.assigneeId } : {})
       }
     }));
 

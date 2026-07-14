@@ -1,0 +1,195 @@
+# Fix: Tickets "Sync changes" Dims Doc Previewer for Full Sync Duration
+
+## Goal
+
+When the user clicks **Sync changes** (`#tickets-sync-all`) in the Planning panel's **Tickets** tab to push local ticket edits back to the source integration (Linear/ClickUp), the entire doc previewer (`#markdown-preview-tickets`) drops to `opacity: 0.4` and all meta-bar buttons become disabled for the whole duration of the sync (~5 seconds). The previewer is visually unclickable and unresponsive even though the sync operation does not alter the currently-displayed ticket content. The goal is to keep the previewer fully interactive during sync, disable only the sync button itself, surface live progress in the status footer, and reduce the total sync wall-time by parallelizing the per-ticket pushes.
+
+### Problem Analysis & Root Cause
+
+- **Symptom**: After clicking "Sync changes", the `tickets-loading-state` spinner appears and `#markdown-preview-tickets` is dimmed to `opacity: 0.4` with all `#tickets-preview-meta-bar` / `#tickets-local-meta-bar` buttons disabled. This state persists until the `syncAllTicketsResult` message returns from the extension — roughly 5 seconds for a handful of tickets.
+- **Root cause (webview)**: The click handler at `planning.js` L9028–9036 calls `setTicketsLoadingState(true)`. `setTicketsLoadingState` (L1922–1937) is a **broad** loading gate designed for *loading* ticket content: it sets the preview opacity to `0.4`, shows the full-pane spinner overlay, and disables every button/select in both meta bars. Reusing it for a *background push* operation is wrong — the sync does not change the displayed ticket, so dimming the preview is unnecessary and misleading. The state is only cleared on the `syncAllTicketsResult` message (L5437–5450).
+- **Root cause (backend, the ~5s duration)**: `PlanningPanelProvider.ts` `case 'syncAllTickets'` (L6440–6500) iterates over **all** local ticket files and pushes each one **sequentially**:
+  ```ts
+  for (const ticket of tickets) {
+      const result = await vscode.commands.executeCommand(
+          'switchboard.pushTicketEdits', { workspaceRoot, provider, id: ticket.id });
+      ...
+  }
+  ```
+  Each `pushTicketEdits` (`TaskViewerProvider.ts` L20972) makes a **remote API call** — Linear `updateIssueDescription` (L21039) or ClickUp `updateTask` (L21053) — plus `hostInlineImages` which may upload attachments (L21032–21048). Total wall time = **sum** of all per-ticket API latencies. With N tickets at ~0.5–1s each, the dimmed state lasts N×latency, which matches the reported ~5s.
+- **Why the user sees "animation then dimmed"**: The spinner (`tickets-loading-state` L3905, `animation: spin 0.8s linear infinite`) and the `opacity: 0.4` dimming are toggled together by `setTicketsLoadingState`. The spinner is small (32px) and easy to overlook, so the dominant perceived effect is the dimmed, unclickable previewer lasting the full sequential-sync duration.
+
+The fix has two independent parts: (A) stop dimming the previewer during sync (front-end), and (B) parallelize the pushes with bounded concurrency + live progress (back-end) so even the button-disabled window is short.
+
+## Metadata
+
+- **Tags:** frontend, backend, ui, ux, bugfix, performance
+- **Complexity:** 4
+
+- **Files touched:** `src/webview/planning.js`, `src/services/PlanningPanelProvider.ts`
+
+## Complexity Audit
+
+### Routine
+
+- Replacing the `setTicketsLoadingState(true)` call in the `syncAllButton` click handler (`planning.js` L9029) with a sync-specific lightweight state: disable only `#tickets-sync-all` (already done at L9030) and show a "Syncing…" status via the existing `showTicketsStatus` helper (L1333). No new DOM, no new CSS.
+- Clearing that lightweight state on `syncAllTicketsResult` (L5437–5450) instead of calling `setTicketsLoadingState(false)` — the sync result handler already re-enables the button and calls `showTicketsStatus`; just drop the `setTicketsLoadingState(false)` call.
+- Adding a bounded-concurrency `Promise.all` chunk loop in the `syncAllTickets` backend case — a small, self-contained refactor of the existing sequential `for` loop, no new dependencies.
+
+### Complex / Risky
+
+- **Live progress messages**: To show "Syncing 3/10…", the backend must post incremental `syncAllTicketsProgress` messages and the webview must handle a new message type. This is a new (tiny) message contract on both sides. *Optional* — the core fix (no dimming + parallelization) works without it; progress is a polish that can be deferred.
+- **Bounded concurrency vs. API rate limits**: Parallelizing Linear/ClickUp writes risks hitting rate limits if the ticket count is large. The concurrency cap must be modest (e.g., 4) and the coder should confirm neither provider's token bucket is aggressively limited for writes in this workspace. A safe default of 4 keeps a 10-ticket sync under ~1.5s while staying well below typical integration rate ceilings.
+- **`hostInlineImages` per-ticket side effects**: Each push may upload inline images. Parallelizing means multiple concurrent attachment uploads per provider. The existing `linear.uploadAttachment` / `clickUp.attachFile` calls are stateless per-call, so concurrency is safe, but the coder should verify no shared mutable upload queue exists in either service.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions**: The user could click "Sync changes" again while a sync is in flight. The button is disabled at L9030 during sync, so this is already guarded. The new lightweight state must keep the button disabled until `syncAllTicketsResult` arrives (unchanged behavior).
+- **Empty sync**: When there are no local ticket files, the backend sends `syncAllTicketsResult` with `succeeded: 0` and the webview shows "No local ticket files to sync." (L5442–5443). The button must still re-enable. Unchanged.
+- **Partial failure**: `syncAllTicketsResult` with `failed > 0` shows "Synced N succeeded, M failed." (L5448). The previewer must remain interactive throughout. With the fix, the previewer is never dimmed, so partial failure no longer traps the UI.
+- **Security**: No new credentials, no new network surfaces. The parallelized pushes reuse the existing authenticated `pushTicketEdits` command unchanged.
+- **Side Effects**: `pushTicketEdits` calls `cacheService.registerImportedTicket` (L21064) to update sync timestamps. Running these concurrently is safe — each operates on a distinct ticket id/filePath; the cache service writes are independent rows.
+- **Dependencies & Conflicts**:
+  - `setTicketsLoadingState` is used by many other ticket flows (import, fetch, status load — L1167, L5412, L8881, L8974, etc.). **Do not modify `setTicketsLoadingState` itself.** Only stop calling it from the sync click handler. Other callers legitimately need the full loading gate (they replace preview content).
+  - The `syncAllTicketsResult` handler (L5437–5450) currently calls `setTicketsLoadingState(false)`. After the fix this call becomes a no-op for sync (since sync no longer sets it true), but it is harmless to leave for safety in case another flow set it. Prefer to drop it to avoid masking unrelated loading state.
+
+## Proposed Changes
+
+### 1. `src/webview/planning.js` — stop dimming the previewer during sync
+
+**Click handler (L9028–9036)**: Replace `setTicketsLoadingState(true)` with a sync-scoped status. Keep the button disable.
+
+```js
+syncAllButton?.addEventListener('click', () => {
+    // Do NOT call setTicketsLoadingState(true) — that dims the whole previewer
+    // and disables all meta-bar buttons for the entire sync. The sync is a
+    // background push that does not change the displayed ticket, so only the
+    // sync button itself needs to be disabled.
+    if (syncAllButton) syncAllButton.disabled = true;
+    showTicketsStatus('Syncing changes…', false);
+    vscode.postMessage({
+        type: 'syncAllTickets',
+        provider: lastIntegrationProvider,
+        workspaceRoot: ticketsWorkspaceRoot
+    });
+});
+```
+
+**Result handler (L5437–5450)**: Drop the `setTicketsLoadingState(false)` call (no longer needed for sync); keep the button re-enable and status display.
+
+```js
+case 'syncAllTicketsResult':
+    const syncAllBtn = document.getElementById('tickets-sync-all');
+    if (syncAllBtn) syncAllBtn.disabled = false;
+    if (msg.success) {
+        if (msg.succeeded === 0) {
+            showTicketsStatus('No local ticket files to sync.', false);
+        } else {
+            showTicketsStatus(`Synced ${msg.succeeded} tickets successfully.`, false);
+        }
+    } else {
+        showTicketsStatus(`Synced ${msg.succeeded} succeeded, ${msg.failed} failed.`, true);
+    }
+    break;
+```
+
+**Optional progress handler** (add near the result handler): handle incremental progress so the footer updates live.
+
+```js
+case 'syncAllTicketsProgress':
+    showTicketsStatus(`Syncing… ${msg.done}/${msg.total}`, false);
+    break;
+```
+
+### 2. `src/services/PlanningPanelProvider.ts` — parallelize pushes with bounded concurrency + progress
+
+**`case 'syncAllTickets'` (L6440–6500)**: Replace the sequential `for` loop with a bounded-concurrency runner that posts optional progress messages.
+
+```ts
+case 'syncAllTickets': {
+    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+    const provider = msg.provider;
+    const results = { succeeded: 0, failed: 0, errors: [] as string[] };
+
+    if (!workspaceRoot) {
+        this.postMessageToWebview({
+            type: 'syncAllTicketsResult', success: false, count: 0,
+            succeeded: 0, failed: 0, errors: ['No workspace root resolved']
+        });
+        break;
+    }
+
+    const tickets: any[] = [];
+    for (const dir of this._getTicketDocumentDirs(workspaceRoot, provider)) {
+        if (!fs.existsSync(dir)) { continue; }
+        let files: string[] = [];
+        try { files = fs.readdirSync(dir); } catch { continue; }
+        for (const fileName of files) {
+            const match = fileName.match(/^(linear|clickup)_([^_]+)_(.*)\.md$/);
+            if (!match || match[1] !== provider) { continue; }
+            const filePath = path.join(dir, fileName);
+            try {
+                const content = fs.readFileSync(filePath, 'utf8');
+                tickets.push({ id: match[2], content, filePath });
+            } catch { /* ignore read errors */ }
+        }
+    }
+
+    // Bounded concurrency: push up to 4 tickets at a time so total wall time
+    // is ~ceil(N/4) × per-ticket latency instead of N × per-ticket latency.
+    const CONCURRENCY = 4;
+    let done = 0;
+    const total = tickets.length;
+    for (let i = 0; i < tickets.length; i += CONCURRENCY) {
+        const batch = tickets.slice(i, i + CONCURRENCY);
+        const batchResults = await Promise.all(batch.map(async (ticket) => {
+            try {
+                const result: any = await vscode.commands.executeCommand(
+                    'switchboard.pushTicketEdits',
+                    { workspaceRoot, provider, id: ticket.id }
+                );
+                return result?.success
+                    ? { ok: true }
+                    : { ok: false, error: `${ticket.id}: ${result?.error || 'Unknown error'}` };
+            } catch (err) {
+                return { ok: false, error: `${ticket.id}: ${err instanceof Error ? err.message : String(err)}` };
+            }
+        }));
+        for (const r of batchResults) {
+            if (r.ok) { results.succeeded++; }
+            else { results.failed++; results.errors.push(r.error); }
+        }
+        done += batch.length;
+        this.postMessageToWebview({
+            type: 'syncAllTicketsProgress', done, total
+        });
+    }
+
+    this.postMessageToWebview({
+        type: 'syncAllTicketsResult',
+        success: results.failed === 0,
+        count: tickets.length,
+        succeeded: results.succeeded,
+        failed: results.failed,
+        errors: results.errors
+    });
+    break;
+}
+```
+
+> **Note**: `CONCURRENCY = 4` is a conservative default. If the workspace hits Linear/ClickUp write rate limits, lower it to 2 or 3. The chunked `Promise.all` approach keeps the cap exact (no runaway queue).
+
+## Verification Plan
+
+1. **Reproduce the original bug** (before fix): Open the Tickets tab with ≥3 locally-edited tickets, click "Sync changes", confirm the previewer dims to ~0.4 opacity and meta-bar buttons are disabled for the full sync duration.
+2. **Apply the fix** and reload the webview.
+3. **Previewer stays interactive**: Click "Sync changes" again. Confirm:
+   - The previewer remains at full opacity and is clickable throughout the sync.
+   - Meta-bar buttons (Edit, Push, status select, comment, etc.) remain enabled.
+   - Only the "Sync changes" button is disabled; it re-enables on completion.
+   - The status footer shows "Syncing changes…" then "Synced N tickets successfully."
+4. **Sync still works**: After sync, confirm the tickets' sync status badges update to "synced" (the `registerImportedTicket` timestamp refresh still fires). Verify the remote descriptions were updated in Linear/ClickUp.
+5. **Parallelization timing**: With 8–10 tickets, confirm the total sync time drops from ~N×latency to ~ceil(N/4)×latency (visibly faster than before).
+6. **Partial failure**: Temporarily make one ticket's id invalid (rename its file) and sync. Confirm the previewer stays interactive, the button re-enables, and the footer shows "Synced N succeeded, M failed."
+7. **Empty sync**: With no local ticket files, click "Sync changes". Confirm "No local ticket files to sync." appears and the button re-enables immediately.
+8. **No regression in other flows**: Trigger a ticket import / refetch (which legitimately uses `setTicketsLoadingState`). Confirm the full loading gate (spinner + dim) still appears for those flows — the change is scoped to sync only.

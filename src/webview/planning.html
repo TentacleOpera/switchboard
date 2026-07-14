@@ -4128,6 +4128,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <label for="create-ticket-description" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Description</label>
                     <textarea id="create-ticket-description" class="planning-input" placeholder="Enter ticket description (optional)" style="width: 100%; height: 100px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
                 </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-status" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Status</label>
+                    <select id="create-ticket-status" class="planning-input" style="width: 100%; box-sizing: border-box;">
+                        <option value="">Default</option>
+                    </select>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-priority" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Priority</label>
+                    <select id="create-ticket-priority" class="planning-input" style="width: 100%; box-sizing: border-box;">
+                        <option value="">Default</option>
+                    </select>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Assignees</label>
+                    <div id="create-ticket-assignees" style="border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; padding: 6px; max-height: 140px; overflow-y: auto;">
+                        <div style="font-size: 12px; color: var(--text-secondary);">Loading members…</div>
+                    </div>
+                </div>
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
                     <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
                     <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>

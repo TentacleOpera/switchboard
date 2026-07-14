@@ -4765,7 +4765,7 @@ Each plan file must include:
      * gate and the runtime dispatch see the same "configured" answer.
      */
     public async isResearcherConfigured(workspaceRoot?: string): Promise<boolean> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot || '');
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot || '') ?? undefined;
         const name = await this._getAgentNameForRole('researcher', resolvedRoot);
         return !!name;
     }

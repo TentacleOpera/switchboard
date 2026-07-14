@@ -1326,6 +1326,113 @@
         _statusModalTicketId = null;
     }
 
+    // ── Create-ticket modal metadata helpers ───────────────────────
+    // Populate the Status / Priority / Assignees controls inside the
+    // #create-ticket-modal. Reuse the same option-building logic as
+    // showTicketStatusModal / openPriorityPopover / renderAssignModalList
+    // so the value semantics match the existing edit paths per provider.
+    function _populateCreateModalStatus() {
+        const select = document.getElementById('create-ticket-status');
+        if (!select) return;
+        const provider = lastIntegrationProvider;
+        let options = [];
+        if (provider === 'linear') {
+            if (availableLinearStates && availableLinearStates.length > 0) {
+                options = availableLinearStates.map(s => ({ id: s.id, name: s.name }));
+            } else {
+                const stateMap = new Map();
+                linearProjectIssues.forEach(i => {
+                    if (i.state && i.state.id && i.state.name) stateMap.set(i.state.name, i.state.id);
+                });
+                options = Array.from(stateMap.entries()).map(([name, id]) => ({ id, name }));
+            }
+        } else {
+            if (availableClickUpStatuses && availableClickUpStatuses.length > 0) {
+                options = availableClickUpStatuses.map(s => ({ id: s.status || s.name || s.id, name: s.status || s.name || s.id }));
+            } else {
+                const stateMap = new Map();
+                clickUpProjectIssues.forEach(t => {
+                    if (t.status) stateMap.set(t.status, t.status);
+                });
+                options = Array.from(stateMap.entries()).map(([name, id]) => ({ id, name }));
+            }
+        }
+        select.innerHTML = '<option value="">Default</option>' +
+            options.map(o => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}</option>`).join('');
+    }
+
+    function _populateCreateModalPriority() {
+        const select = document.getElementById('create-ticket-priority');
+        if (!select) return;
+        const provider = lastIntegrationProvider;
+        const opts = provider === 'linear'
+            ? [
+                { value: 0, name: 'No priority' },
+                { value: 1, name: 'Urgent' },
+                { value: 2, name: 'High' },
+                { value: 3, name: 'Normal' },
+                { value: 4, name: 'Low' }
+              ]
+            : _availableClickUpPriorities();
+        select.innerHTML = '<option value="">Default</option>' +
+            opts.map(o => `<option value="${o.value}">${escapeHtml(o.name)}</option>`).join('');
+    }
+
+    function _renderCreateModalAssignees() {
+        const container = document.getElementById('create-ticket-assignees');
+        if (!container) return;
+        const provider = lastIntegrationProvider;
+        if (_assignMembersLoading) {
+            container.innerHTML = '<div style="font-size: 12px; color: var(--text-secondary);">Loading members…</div>';
+            return;
+        }
+        if (!_assignMembers || _assignMembers.length === 0) {
+            container.innerHTML = '<div style="font-size: 12px; color: var(--text-secondary);">No members available.</div>';
+            return;
+        }
+        const inputType = provider === 'linear' ? 'radio' : 'checkbox';
+        container.innerHTML = _assignMembers.map(m => {
+            const idStr = escapeAttr(String(m.id));
+            const labelTxt = escapeHtml(m.name + (m.email ? ` (${m.email})` : ''));
+            return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;">
+                <input type="${inputType}" name="create-ticket-assignee" value="${idStr}" id="cta-${idStr}" />
+                <label for="cta-${idStr}" style="font-size:12px;cursor:pointer;color:var(--text-primary);">${labelTxt}</label>
+            </div>`;
+        }).join('');
+    }
+
+    function _loadCreateModalMembers() {
+        const provider = lastIntegrationProvider;
+        const container = document.getElementById('create-ticket-assignees');
+        if (container) container.innerHTML = '<div style="font-size: 12px; color: var(--text-secondary);">Loading members…</div>';
+        _assignMembersLoading = true;
+        _assignMembers = [];
+        // Brand-new ticket has no id; use the dedicated members-by-list/project load.
+        vscode.postMessage({
+            type: 'loadTicketMembers',
+            provider,
+            listId: clickUpSelectedListId || selectedClickUpIssue?.task?.list?.id || undefined,
+            projectName: linearProjectPickerValue || undefined,
+            workspaceRoot: ticketsWorkspaceRoot
+        });
+    }
+
+    function _resetCreateModalMetadata() {
+        const s = document.getElementById('create-ticket-status'); if (s) s.value = '';
+        const p = document.getElementById('create-ticket-priority'); if (p) p.value = '';
+        const a = document.getElementById('create-ticket-assignees');
+        if (a) a.querySelectorAll('input').forEach(i => i.checked = false);
+    }
+
+    function _collectCreateModalAssignees() {
+        const provider = lastIntegrationProvider;
+        const container = document.getElementById('create-ticket-assignees');
+        if (!container) return undefined;
+        const checked = Array.from(container.querySelectorAll('input[name="create-ticket-assignee"]:checked')).map(i => i.value);
+        if (checked.length === 0) return undefined;
+        return provider === 'linear' ? checked[0] : checked; // Linear: single id string; ClickUp: string[]
+    }
+
     function escapeAttr(value) {
         return String(value || '').replace(/"/g, '&quot;');
     }
@@ -6119,6 +6226,19 @@
                 _assignMembersLoading = false;
                 showTicketsStatus(msg.error || 'Failed to load assignees', true);
                 break;
+            case 'ticketMembersLoaded':
+                _assignMembers = msg.members || [];
+                _assignMembersLoading = false;
+                _renderCreateModalAssignees();
+                break;
+            case 'ticketMembersError':
+                _assignMembersLoading = false;
+                {
+                    const c = document.getElementById('create-ticket-assignees');
+                    if (c) c.innerHTML = '<div style="font-size: 12px; color: var(--text-secondary);">No members available.</div>';
+                    if (msg.error) showTicketsStatus(msg.error, true);
+                }
+                break;
             case 'linearAssigneeUpdated': {
                 const assigneeId = msg.assigneeId;
                 const member = _assignMembers.find(m => String(m.id) === String(assigneeId));
@@ -6607,6 +6727,7 @@
                     const descInput = document.getElementById('create-ticket-description');
                     if (titleInput) titleInput.value = '';
                     if (descInput) descInput.value = '';
+                    _resetCreateModalMetadata();
                     if (_subtaskParent) {
                         const parentId = _subtaskParent.id;
                         _subtaskParent = null;
@@ -6635,6 +6756,7 @@
                     const descInput = document.getElementById('create-ticket-description');
                     if (titleInput) titleInput.value = '';
                     if (descInput) descInput.value = '';
+                    _resetCreateModalMetadata();
                     if (_subtaskParent) {
                         const parentId = _subtaskParent.id;
                         _subtaskParent = null;
@@ -9588,6 +9710,10 @@ Instructions:
                     titleInput.focus();
                 }
                 if (descInput) descInput.value = '';
+                _resetCreateModalMetadata();
+                _populateCreateModalStatus();
+                _populateCreateModalPriority();
+                _loadCreateModalMembers();
             }
         });
 
@@ -9596,6 +9722,7 @@ Instructions:
             const modal = document.getElementById('create-ticket-modal');
             if (modal) modal.style.display = 'none';
             _subtaskParent = null;
+            _resetCreateModalMetadata();
             const modalTitle = document.getElementById('create-ticket-modal-title');
             if (modalTitle) modalTitle.textContent = 'Create New Ticket';
         });
@@ -9603,6 +9730,7 @@ Instructions:
             const modal = document.getElementById('create-ticket-modal');
             if (modal) modal.style.display = 'none';
             _subtaskParent = null;
+            _resetCreateModalMetadata();
             const modalTitle = document.getElementById('create-ticket-modal-title');
             if (modalTitle) modalTitle.textContent = 'Create New Ticket';
         });
@@ -9610,6 +9738,7 @@ Instructions:
             if (e.target === e.currentTarget) {
                 e.currentTarget.style.display = 'none';
                 _subtaskParent = null;
+                _resetCreateModalMetadata();
                 const modalTitle = document.getElementById('create-ticket-modal-title');
                 if (modalTitle) modalTitle.textContent = 'Create New Ticket';
             }
@@ -9697,6 +9826,12 @@ Instructions:
                 submitBtn.textContent = 'Creating...';
             }
 
+            const statusSelect = document.getElementById('create-ticket-status');
+            const prioritySelect = document.getElementById('create-ticket-priority');
+            const status = statusSelect ? statusSelect.value.trim() : '';
+            const priorityVal = prioritySelect ? prioritySelect.value.trim() : '';
+            const assignees = _collectCreateModalAssignees();
+
             vscode.postMessage({
                 type: lastIntegrationProvider === 'clickup' ? 'clickupCreateTask' : 'linearCreateIssue',
                 workspaceRoot: ticketsWorkspaceRoot || undefined,
@@ -9704,6 +9839,9 @@ Instructions:
                 description: description || undefined,
                 listId: clickUpSelectedListId || undefined,
                 projectName: linearProjectPickerValue || undefined,
+                ...(status ? { status } : {}),
+                ...(priorityVal !== '' ? { priority: Number(priorityVal) } : {}),
+                ...(assignees ? (lastIntegrationProvider === 'clickup' ? { assignees } : { assigneeId: assignees }) : {}),
                 ...(_subtaskParent ? { parentId: _subtaskParent.id } : {})
             });
         });
@@ -9727,6 +9865,10 @@ Instructions:
                 const descInput = document.getElementById('create-ticket-description');
                 if (titleInput) { titleInput.value = ''; titleInput.focus(); }
                 if (descInput) descInput.value = '';
+                _resetCreateModalMetadata();
+                _populateCreateModalStatus();
+                _populateCreateModalPriority();
+                _loadCreateModalMembers();
             }
         });
 
