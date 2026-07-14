@@ -6924,7 +6924,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             ...plan,
                             planFile: newPlanFile,
                             workspaceId: targetWorkspaceId,
-                            project: msg.targetProject !== undefined ? msg.targetProject : plan.project,
+                            // project_id is a workspace-local FK, so the source workspace's
+                            // project/projectId are meaningless — and dangling — in the target.
+                            // A dangling project_id makes the card fail the target board's project
+                            // filter and vanish (the bug). Discard the source assignment: null the
+                            // projectId so _resolveProjectForInsert re-resolves against the TARGET
+                            // workspace instead of trusting the source id, and only carry a project
+                            // name if the caller explicitly picked a target project; otherwise land
+                            // unassigned.
+                            project: msg.targetProject !== undefined ? msg.targetProject : '',
+                            projectId: null,
                             updatedAt: new Date().toISOString()
                         });
 

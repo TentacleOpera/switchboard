@@ -6580,7 +6580,7 @@ Please format the updated output document strictly as follows:
                         }));
                         for (const r of batchResults) {
                             if (r.ok) { results.succeeded++; }
-                            else { results.failed++; results.errors.push(r.error); }
+                            else { results.failed++; results.errors.push(r.error ?? 'Unknown error'); }
                         }
                         done += batch.length;
                         this.postMessageToWebview({

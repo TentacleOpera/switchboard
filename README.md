@@ -370,14 +370,6 @@ The built-in Reviewer agent features a Grumpy Principal Engineer persona. It tur
 
 ---
 
-## Claude Desktop MCP Server
-
-Switchboard ships a local stdio MCP server that bridges **Claude Desktop** (and other MCP-only hosts without shell/filesystem access) to Switchboard's LocalApiServer HTTP surface. This lets you read the board, create/move/delete plans, reconcile features, and dispatch coding from Claude Desktop while VS Code runs in the background.
-
-Set it up via the in-extension **Connect Claude Desktop** button in the Setup panel — it writes the MCP config entry for you. The server is a thin bridge; all state lives in the Switchboard extension's local API.
-
----
-
 ## Architecture
 
 - **VS Code Extension** — Terminal orchestration, file watchers, status bar hub.

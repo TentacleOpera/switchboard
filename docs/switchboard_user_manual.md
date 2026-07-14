@@ -841,10 +841,6 @@ Switchboard exposes **four front doors** in IDE chat agents (Windsurf, Cursor, A
 - **accuracy** — High-accuracy mode with self-review. Coder prompt add-on.
 - **switchboard-orchestrator** — Orchestration batch manager. System-launched by the AUTOMATION tab.
 
-**Claude Cowork** is served by a dedicated `switchboard-cowork` skill, exported as a `.zip` from the Setup panel's **"Set up Cowork"** button. Upload it in Cowork's Settings > Capabilities. It bundles the local MCP transport so Cowork can drive the board.
-
-**Claude Desktop MCP Server** — Switchboard ships a local stdio MCP server (`switchboard-mcp`) that bridges Claude Desktop (and other MCP-only hosts without shell/filesystem access) to Switchboard's LocalApiServer HTTP surface. This lets you read the board, create/move/delete plans, reconcile features, and dispatch coding from Claude Desktop while VS Code runs in the background. Set it up via the in-extension **Connect Claude Desktop** button in the Setup panel — it writes the MCP config entry for you. The server is a thin bridge; all state lives in the Switchboard extension's local API.
-
 ---
 
 ## 23. Privacy & Security

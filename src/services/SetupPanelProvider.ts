@@ -17,7 +17,6 @@ import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase'
 import type { KanbanProvider } from './KanbanProvider';
 import { getMappingsFromIndex, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
-import { exportCoworkSkill } from './CoworkSkillExporter';
 
 // Switchboard writes only a marker-delimited MANAGED BLOCK into CLAUDE.md / AGENTS.md
 // (see extension.ts ensureProtocolFile) and only ledger-tracked skills into `.claude/`
@@ -631,12 +630,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'openKanban':
                     await vscode.commands.executeCommand('switchboard.openKanban');
-                    break;
-                case 'connectClaudeDesktop':
-                    await vscode.commands.executeCommand('switchboard.connectClaudeDesktop');
-                    break;
-                case 'setupCowork':
-                    await vscode.commands.executeCommand('switchboard.exportCoworkSkill');
                     break;
                 case 'saveStartupCommands':
                     if (this._setupService) {

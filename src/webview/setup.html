@@ -588,16 +588,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button id="btn-copy-tutorial-prompt" class="action-btn" style="flex: 1;">COPY TUTORIAL PROMPT</button>
                         <button id="btn-open-docs" class="secondary-btn" style="flex: 1;">OPEN DOCS</button>
                     </div>
-                    <div style="margin-top: 10px; padding: 10px; border: 1px solid var(--border-color); border-left: 3px solid var(--accent-teal); border-radius: 4px; background: var(--panel-bg);">
-                        <div class="section-label" style="margin-bottom: 4px;">Claude Desktop bridge</div>
-                        <div class="hint-text" style="margin-bottom: 8px; line-height: 1.5;">Connect Claude Desktop to this workspace's Switchboard board via a local MCP server. Writes an idempotent <code style="font-size:10px;">switchboard-mcp</code> entry into Claude Desktop's config with the workspace root pre-filled. Restart Claude Desktop after connecting.</div>
-                        <button id="btn-connect-claude-desktop" class="action-btn" style="width: 100%;">CONNECT CLAUDE DESKTOP</button>
-                    </div>
-                    <div style="margin-top: 10px; padding: 10px; border: 1px solid var(--border-color); border-left: 3px solid var(--accent-orange); border-radius: 4px; background: var(--panel-bg);">
-                        <div class="section-label" style="margin-bottom: 4px;">Claude Cowork skill</div>
-                        <div class="hint-text" style="margin-bottom: 8px; line-height: 1.5;">Export the self-contained <code style="font-size:10px;">switchboard-cowork</code> skill as a <code style="font-size:10px;">.zip</code> you upload into Cowork's Settings &gt; Capabilities. It bundles the local MCP transport so Cowork can drive this workspace's board.</div>
-                        <button id="btn-setup-cowork" class="action-btn" style="width: 100%;">SET UP COWORK</button>
-                    </div>
                 </div>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     GIT IGNORE STRATEGY
@@ -3474,8 +3464,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'runSetup' });
         });
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
-        document.getElementById('btn-connect-claude-desktop')?.addEventListener('click', () => vscode.postMessage({ type: 'connectClaudeDesktop' }));
-        document.getElementById('btn-setup-cowork')?.addEventListener('click', () => vscode.postMessage({ type: 'setupCowork' }));
         document.getElementById('btn-export-prompts')?.addEventListener('click', () => {
             const statusEl = document.getElementById('prompt-settings-status');
             if (statusEl) {

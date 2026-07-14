@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-14T05:03:57.027Z",
+  "generatedAt": "2026-07-14T07:06:28.027Z",
   "summary": {
-    "totalArms": 617,
-    "totalVerbs": 527,
+    "totalArms": 615,
+    "totalVerbs": 525,
     "totalPushSites": 637,
-    "totalRequestSites": 596,
+    "totalRequestSites": 594,
     "providerArmCounts": {
       "Kanban": 145,
       "Planning": 177,
       "Design": 68,
       "TaskViewer": 110,
-      "Setup": 117
+      "Setup": 115
     },
     "apiEndpointCount": 51,
     "manualReviewCount": 4
@@ -1821,147 +1821,147 @@
         },
         {
           "verb": "copyToClipboard",
-          "line": 6589,
+          "line": 6611,
           "dynamic": false
         },
         {
           "verb": "copyDiagramPrompt",
-          "line": 6643,
+          "line": 6665,
           "dynamic": false
         },
         {
           "verb": "fetchMoveTargets",
-          "line": 6657,
+          "line": 6679,
           "dynamic": false
         },
         {
           "verb": "moveTicket",
-          "line": 6701,
+          "line": 6723,
           "dynamic": false
         },
         {
           "verb": "copyRefinePrompt",
-          "line": 6730,
+          "line": 6752,
           "dynamic": false
         },
         {
           "verb": "refineFeature",
-          "line": 6787,
+          "line": 6809,
           "dynamic": false
         },
         {
           "verb": "changeTicketStatus",
-          "line": 6842,
+          "line": 6864,
           "dynamic": false
         },
         {
           "verb": "postTicketComment",
-          "line": 6870,
+          "line": 6892,
           "dynamic": false
         },
         {
           "verb": "loadTicketComments",
-          "line": 6898,
+          "line": 6920,
           "dynamic": false
         },
         {
           "verb": "postTicketReply",
-          "line": 6931,
+          "line": 6953,
           "dynamic": false
         },
         {
           "verb": "downloadAttachment",
-          "line": 6959,
+          "line": 6981,
           "dynamic": false
         },
         {
           "verb": "viewAttachments",
-          "line": 6986,
+          "line": 7008,
           "dynamic": false
         },
         {
           "verb": "openAttachment",
-          "line": 7028,
+          "line": 7050,
           "dynamic": false
         },
         {
           "verb": "revealAttachment",
-          "line": 7054,
+          "line": 7076,
           "dynamic": false
         },
         {
           "verb": "clickupCreateTask",
-          "line": 7080,
+          "line": 7102,
           "dynamic": false
         },
         {
           "verb": "linearCreateIssue",
-          "line": 7154,
+          "line": 7176,
           "dynamic": false
         },
         {
           "verb": "convertToSubtask",
-          "line": 7239,
+          "line": 7261,
           "dynamic": false
         },
         {
           "verb": "ticketsAskAgent",
-          "line": 7282,
+          "line": 7304,
           "dynamic": false
         },
         {
           "verb": "createOnlineDocument",
-          "line": 7320,
+          "line": 7342,
           "dynamic": false
         },
         {
           "verb": "setUploadLocation",
-          "line": 7417,
+          "line": 7439,
           "dynamic": false
         },
         {
           "verb": "syncDocToOnline",
-          "line": 7441,
+          "line": 7463,
           "dynamic": false
         },
         {
           "verb": "getSyncConfig",
-          "line": 7498,
+          "line": 7520,
           "dynamic": false
         },
         {
           "verb": "loadInsights",
-          "line": 7511,
+          "line": 7533,
           "dynamic": false
         },
         {
           "verb": "readInsight",
-          "line": 7531,
+          "line": 7553,
           "dynamic": false
         },
         {
           "verb": "runTuningExtract",
-          "line": 7552,
+          "line": 7574,
           "dynamic": false
         },
         {
           "verb": "runTuningGovernance",
-          "line": 7589,
+          "line": 7611,
           "dynamic": false
         },
         {
           "verb": "updateInsightStatus",
-          "line": 7598,
+          "line": 7620,
           "dynamic": false
         },
         {
           "verb": "deleteInsight",
-          "line": 7612,
+          "line": 7634,
           "dynamic": false
         },
         {
           "verb": "copyInsightLink",
-          "line": 7626,
+          "line": 7648,
           "dynamic": false
         }
       ]
@@ -3054,7 +3054,7 @@
     },
     "Setup": {
       "file": "src/services/SetupPanelProvider.ts",
-      "armCount": 117,
+      "armCount": 115,
       "dynamicArms": 0,
       "verbs": [
         "applyClickUpConfig",
@@ -3068,7 +3068,6 @@
         "browseWorkspaceMappingFolder",
         "clearControlPlaneCache",
         "configureNotionBackup",
-        "connectClaudeDesktop",
         "copyDbSettingsToGlobal",
         "copyLinearAgentSkill",
         "detectControlPlaneCandidate",
@@ -3169,7 +3168,6 @@
         "setThemeSetting",
         "setUltracodeAnimationSetting",
         "setWorkspaceMappingEnabled",
-        "setupCowork",
         "startRemoteControl",
         "stopRemoteControl",
         "updateGitIgnoreConfig",
@@ -3178,587 +3176,577 @@
       "arms": [
         {
           "verb": "setThemeSetting",
-          "line": 218,
+          "line": 217,
           "dynamic": false
         },
         {
           "verb": "ready",
-          "line": 237,
+          "line": 236,
           "dynamic": false
         },
         {
           "verb": "getIntegrationSetupStates",
-          "line": 244,
+          "line": 243,
           "dynamic": false
         },
         {
           "verb": "exportPromptSettings",
-          "line": 249,
+          "line": 248,
           "dynamic": false
         },
         {
           "verb": "importPromptSettings",
-          "line": 254,
+          "line": 253,
           "dynamic": false
         },
         {
           "verb": "copyDbSettingsToGlobal",
-          "line": 259,
+          "line": 258,
           "dynamic": false
         },
         {
           "verb": "getControlPlaneStatus",
-          "line": 264,
+          "line": 263,
           "dynamic": false
         },
         {
           "verb": "setExplicitControlPlaneRoot",
-          "line": 269,
+          "line": 268,
           "dynamic": false
         },
         {
           "verb": "resetExplicitControlPlaneRoot",
-          "line": 281,
+          "line": 280,
           "dynamic": false
         },
         {
           "verb": "clearControlPlaneCache",
-          "line": 292,
+          "line": 291,
           "dynamic": false
         },
         {
           "verb": "detectControlPlaneCandidate",
-          "line": 317,
+          "line": 316,
           "dynamic": false
         },
         {
           "verb": "previewControlPlaneMigration",
-          "line": 327,
+          "line": 326,
           "dynamic": false
         },
         {
           "verb": "executeControlPlaneMigration",
-          "line": 332,
+          "line": 331,
           "dynamic": false
         },
         {
           "verb": "executeControlPlaneFreshSetup",
-          "line": 367,
+          "line": 366,
           "dynamic": false
         },
         {
           "verb": "setBoardStateExport",
-          "line": 401,
+          "line": 400,
           "dynamic": false
         },
         {
           "verb": "setBoardStateExportRemoteUrl",
-          "line": 410,
+          "line": 409,
           "dynamic": false
         },
         {
           "verb": "initControlPlaneGit",
-          "line": 419,
+          "line": 418,
           "dynamic": false
         },
         {
           "verb": "scaffoldMultiRepo",
-          "line": 448,
+          "line": 447,
           "dynamic": false
         },
         {
           "verb": "applyClickUpConfig",
-          "line": 479,
+          "line": 478,
           "dynamic": false
         },
         {
           "verb": "saveClickUpMappings",
-          "line": 489,
+          "line": 488,
           "dynamic": false
         },
         {
           "verb": "saveClickUpAutomation",
-          "line": 498,
+          "line": 497,
           "dynamic": false
         },
         {
           "verb": "applyLinearConfig",
-          "line": 507,
+          "line": 506,
           "dynamic": false
         },
         {
           "verb": "saveLinearAutomation",
-          "line": 526,
+          "line": 525,
           "dynamic": false
         },
         {
           "verb": "linearBrowseProjects",
-          "line": 535,
+          "line": 534,
           "dynamic": false
         },
         {
           "verb": "enableTriagePipeline",
-          "line": 575,
+          "line": 574,
           "dynamic": false
         },
         {
           "verb": "applyNotionConfig",
-          "line": 586,
+          "line": 585,
           "dynamic": false
         },
         {
           "verb": "configureNotionBackup",
-          "line": 595,
+          "line": 594,
           "dynamic": false
         },
         {
           "verb": "backupToNotion",
-          "line": 603,
+          "line": 602,
           "dynamic": false
         },
         {
           "verb": "restoreFromNotion",
-          "line": 610,
+          "line": 609,
           "dynamic": false
         },
         {
           "verb": "autoCreateNotionDatabase",
-          "line": 617,
+          "line": 616,
           "dynamic": false
         },
         {
           "verb": "runSetup",
-          "line": 624,
+          "line": 623,
           "dynamic": false
         },
         {
           "verb": "openDocs",
-          "line": 629,
+          "line": 628,
           "dynamic": false
         },
         {
           "verb": "openKanban",
-          "line": 632,
-          "dynamic": false
-        },
-        {
-          "verb": "connectClaudeDesktop",
-          "line": 635,
-          "dynamic": false
-        },
-        {
-          "verb": "setupCowork",
-          "line": 638,
+          "line": 631,
           "dynamic": false
         },
         {
           "verb": "saveStartupCommands",
-          "line": 641,
+          "line": 634,
           "dynamic": false
         },
         {
           "verb": "getStartupCommands",
-          "line": 649,
+          "line": 642,
           "dynamic": false
         },
         {
           "verb": "getVisibleAgents",
-          "line": 658,
+          "line": 651,
           "dynamic": false
         },
         {
           "verb": "getCustomAgents",
-          "line": 663,
+          "line": 656,
           "dynamic": false
         },
         {
           "verb": "getKanbanStructure",
-          "line": 669,
+          "line": 662,
           "dynamic": false
         },
         {
           "verb": "getPlanScannerConfig",
-          "line": 674,
+          "line": 667,
           "dynamic": false
         },
         {
           "verb": "setPlanScannerConfig",
-          "line": 680,
+          "line": 673,
           "dynamic": false
         },
         {
           "verb": "getAccurateCodingSetting",
-          "line": 687,
+          "line": 680,
           "dynamic": false
         },
         {
           "verb": "getAdvancedReviewerSetting",
-          "line": 693,
+          "line": 686,
           "dynamic": false
         },
         {
           "verb": "getLeadChallengeSetting",
-          "line": 699,
+          "line": 692,
           "dynamic": false
         },
         {
           "verb": "getAutoCommitOnCodeReviewSetting",
-          "line": 707,
+          "line": 700,
           "dynamic": false
         },
         {
           "verb": "getExcludeReviewedBacklogSetting",
-          "line": 715,
+          "line": 708,
           "dynamic": false
         },
         {
           "verb": "getPersistPanelsSetting",
-          "line": 721,
+          "line": 714,
           "dynamic": false
         },
         {
           "verb": "setExcludeReviewedBacklogSetting",
-          "line": 727,
+          "line": 720,
           "dynamic": false
         },
         {
           "verb": "setPersistPanelsSetting",
-          "line": 731,
+          "line": 724,
           "dynamic": false
         },
         {
           "verb": "getProtocolTarget",
-          "line": 738,
+          "line": 731,
           "dynamic": false
         },
         {
           "verb": "setProtocolTarget",
-          "line": 744,
+          "line": 737,
           "dynamic": false
         },
         {
           "verb": "getStatusShowTerminalsSetting",
-          "line": 752,
+          "line": 745,
           "dynamic": false
         },
         {
           "verb": "setStatusShowTerminalsSetting",
-          "line": 758,
+          "line": 751,
           "dynamic": false
         },
         {
           "verb": "getStatusShowKanbanSetting",
-          "line": 762,
+          "line": 755,
           "dynamic": false
         },
         {
           "verb": "setStatusShowKanbanSetting",
-          "line": 768,
+          "line": 761,
           "dynamic": false
         },
         {
           "verb": "getStatusShowArtifactsSetting",
-          "line": 772,
+          "line": 765,
           "dynamic": false
         },
         {
           "verb": "setStatusShowArtifactsSetting",
-          "line": 778,
+          "line": 771,
           "dynamic": false
         },
         {
           "verb": "getStatusShowDesignSetting",
-          "line": 782,
+          "line": 775,
           "dynamic": false
         },
         {
           "verb": "setStatusShowDesignSetting",
-          "line": 788,
+          "line": 781,
           "dynamic": false
         },
         {
           "verb": "getStatusShowProjectSetting",
-          "line": 792,
+          "line": 785,
           "dynamic": false
         },
         {
           "verb": "setStatusShowProjectSetting",
-          "line": 798,
+          "line": 791,
           "dynamic": false
         },
         {
           "verb": "getStatusShowMemoSetting",
-          "line": 802,
+          "line": 795,
           "dynamic": false
         },
         {
           "verb": "setStatusShowMemoSetting",
-          "line": 808,
+          "line": 801,
           "dynamic": false
         },
         {
           "verb": "getMemoHotkey",
-          "line": 812,
+          "line": 805,
           "dynamic": false
         },
         {
           "verb": "saveMemoHotkey",
-          "line": 818,
+          "line": 811,
           "dynamic": false
         },
         {
           "verb": "openKeybindings",
-          "line": 824,
+          "line": 817,
           "dynamic": false
         },
         {
           "verb": "getThemeSetting",
-          "line": 827,
+          "line": 820,
           "dynamic": false
         },
         {
           "verb": "getCyberAnimationDisabledSetting",
-          "line": 833,
+          "line": 826,
           "dynamic": false
         },
         {
           "verb": "setCyberAnimationDisabledSetting",
-          "line": 839,
+          "line": 832,
           "dynamic": false
         },
         {
           "verb": "getCyberScanlinesDisabledSetting",
-          "line": 844,
+          "line": 837,
           "dynamic": false
         },
         {
           "verb": "setCyberScanlinesDisabledSetting",
-          "line": 850,
+          "line": 843,
           "dynamic": false
         },
         {
           "verb": "getColourKanbanIconsSetting",
-          "line": 855,
+          "line": 848,
           "dynamic": false
         },
         {
           "verb": "setColourKanbanIconsSetting",
-          "line": 861,
+          "line": 854,
           "dynamic": false
         },
         {
           "verb": "getUltracodeAnimationSetting",
-          "line": 870,
+          "line": 863,
           "dynamic": false
         },
         {
           "verb": "setUltracodeAnimationSetting",
-          "line": 876,
+          "line": 869,
           "dynamic": false
         },
         {
           "verb": "getPixelFontSetting",
-          "line": 881,
+          "line": 874,
           "dynamic": false
         },
         {
           "verb": "setPixelFontSetting",
-          "line": 887,
+          "line": 880,
           "dynamic": false
         },
         {
           "verb": "getDesignSystemDocSetting",
-          "line": 893,
+          "line": 886,
           "dynamic": false
         },
         {
           "verb": "getGitIgnoreConfig",
-          "line": 902,
+          "line": 895,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptOverrides",
-          "line": 907,
+          "line": 900,
           "dynamic": false
         },
         {
           "verb": "updateGitIgnoreConfig",
-          "line": 912,
+          "line": 905,
           "dynamic": false
         },
         {
           "verb": "saveDefaultPromptOverrides",
-          "line": 916,
+          "line": 909,
           "dynamic": false
         },
         {
           "verb": "updateKanbanStructure",
-          "line": 921,
+          "line": 914,
           "dynamic": false
         },
         {
           "verb": "restoreKanbanDefaults",
-          "line": 924,
+          "line": 917,
           "dynamic": false
         },
         {
           "verb": "savePlanningSources",
-          "line": 929,
+          "line": 922,
           "dynamic": false
         },
         {
           "verb": "getDefaultPromptPreviews",
-          "line": 948,
+          "line": 941,
           "dynamic": false
         },
         {
           "verb": "getDbPath",
-          "line": 953,
+          "line": 946,
           "dynamic": false
         },
         {
           "verb": "getAllDbPaths",
-          "line": 958,
+          "line": 951,
           "dynamic": false
         },
         {
           "verb": "setLocalDb",
-          "line": 963,
+          "line": 956,
           "dynamic": false
         },
         {
           "verb": "setCustomDbPath",
-          "line": 968,
+          "line": 961,
           "dynamic": false
         },
         {
           "verb": "setPresetDbPath",
-          "line": 974,
+          "line": 967,
           "dynamic": false
         },
         {
           "verb": "resetDatabase",
-          "line": 980,
+          "line": 973,
           "dynamic": false
         },
         {
           "verb": "getPlanningSources",
-          "line": 985,
+          "line": 978,
           "dynamic": false
         },
         {
           "verb": "getWorkspaceMappings",
-          "line": 1001,
+          "line": 994,
           "dynamic": false
         },
         {
           "verb": "setWorkspaceMappingEnabled",
-          "line": 1029,
+          "line": 1022,
           "dynamic": false
         },
         {
           "verb": "saveWorkspaceMappings",
-          "line": 1066,
+          "line": 1059,
           "dynamic": false
         },
         {
           "verb": "initializeWorkspaceDatabase",
-          "line": 1144,
+          "line": 1137,
           "dynamic": false
         },
         {
           "verb": "browseWorkspaceMappingDbPath",
-          "line": 1231,
+          "line": 1224,
           "dynamic": false
         },
         {
           "verb": "browseWorkspaceMappingFolder",
-          "line": 1248,
+          "line": 1241,
           "dynamic": false
         },
         {
           "verb": "browseParentFolder",
-          "line": 1265,
+          "line": 1258,
           "dynamic": false
         },
         {
           "verb": "browseTicketsFolder",
-          "line": 1285,
+          "line": 1278,
           "dynamic": false
         },
         {
           "verb": "saveTicketsFolder",
-          "line": 1302,
+          "line": 1295,
           "dynamic": false
         },
         {
           "verb": "saveTicketsAutoSync",
-          "line": 1318,
+          "line": 1311,
           "dynamic": false
         },
         {
           "verb": "listTicketsFolders",
-          "line": 1322,
+          "line": 1315,
           "dynamic": false
         },
         {
           "verb": "getRemoteConfig",
-          "line": 1341,
+          "line": 1334,
           "dynamic": false
         },
         {
           "verb": "setRemoteConfig",
-          "line": 1346,
+          "line": 1339,
           "dynamic": false
         },
         {
           "verb": "runNotionRemoteSetup",
-          "line": 1351,
+          "line": 1344,
           "dynamic": false
         },
         {
           "verb": "startRemoteControl",
-          "line": 1360,
+          "line": 1353,
           "dynamic": false
         },
         {
           "verb": "stopRemoteControl",
-          "line": 1365,
+          "line": 1358,
           "dynamic": false
         },
         {
           "verb": "getRemoteHealth",
-          "line": 1370,
+          "line": 1363,
           "dynamic": false
         },
         {
           "verb": "copyLinearAgentSkill",
-          "line": 1375,
+          "line": 1368,
           "dynamic": false
         },
         {
           "verb": "getProjectContextSyncStatus",
-          "line": 1388,
+          "line": 1381,
           "dynamic": false
         },
         {
           "verb": "setProjectContextSyncEnabled",
-          "line": 1393,
+          "line": 1386,
           "dynamic": false
         },
         {
           "verb": "projectContextSyncNow",
-          "line": 1398,
+          "line": 1391,
           "dynamic": false
         },
         {
           "verb": "getAgentDirCleanupState",
-          "line": 1405,
+          "line": 1398,
           "dynamic": false
         },
         {
           "verb": "performAgentDirCleanup",
-          "line": 1410,
+          "line": 1403,
           "dynamic": false
         }
       ]
@@ -4169,12 +4157,6 @@
     },
     {
       "verb": "configureNotionBackup",
-      "direction": "request-response",
-      "provider": "Setup",
-      "proposedService": "setupService"
-    },
-    {
-      "verb": "connectClaudeDesktop",
       "direction": "request-response",
       "provider": "Setup",
       "proposedService": "setupService"
@@ -6490,12 +6472,6 @@
       "proposedService": "kanbanService"
     },
     {
-      "verb": "setupCowork",
-      "direction": "request-response",
-      "provider": "Setup",
-      "proposedService": "setupService"
-    },
-    {
       "verb": "setupTicketsWatcher",
       "direction": "request-response",
       "provider": "Planning",
@@ -7532,12 +7508,6 @@
         "workspaceRoot"
       ],
       "siteCount": 2
-    },
-    "connectClaudeDesktop": {
-      "payloadKeys": [
-        "type"
-      ],
-      "siteCount": 1
     },
     "controlPlaneCandidateResult": {
       "payloadKeys": "dynamic",
@@ -10272,12 +10242,6 @@
       "siteCount": 1
     },
     "setupComplete": {
-      "payloadKeys": [
-        "type"
-      ],
-      "siteCount": 1
-    },
-    "setupCowork": {
       "payloadKeys": [
         "type"
       ],
@@ -13616,7 +13580,7 @@
       "verb": "attachmentsListResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7008,
+      "line": 7030,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13631,7 +13595,7 @@
       "verb": "attachmentsListResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 7017,
+      "line": 7039,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13647,7 +13611,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 9187,
+      "line": 9209,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13659,7 +13623,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 9194,
+      "line": 9216,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13671,7 +13635,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 9198,
+      "line": 9220,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13683,7 +13647,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 9219,
+      "line": 9241,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -13697,7 +13661,7 @@
       "verb": "importDevDocResult",
       "direction": "push",
       "file": "src/services/PlanningPanelProvider.ts",
-      "line": 9222,
+      "line": 9244,
       "receiver": "pushTo:planning",
       "provider": "Planning",
       "payloadKeys": [
@@ -17901,7 +17865,7 @@
       "verb": "openSetupSection",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 140,
+      "line": 139,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -17913,7 +17877,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 224,
+      "line": 223,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -17925,7 +17889,7 @@
       "verb": "colourKanbanIconsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 231,
+      "line": 230,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -17937,7 +17901,7 @@
       "verb": "openSetupSection",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 240,
+      "line": 239,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -17949,7 +17913,7 @@
       "verb": "integrationSetupStates",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 246,
+      "line": 245,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -17958,7 +17922,7 @@
       "verb": "exportPromptSettingsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 251,
+      "line": 250,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -17970,7 +17934,7 @@
       "verb": "importPromptSettingsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 256,
+      "line": 255,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -17982,7 +17946,7 @@
       "verb": "copyDbSettingsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 261,
+      "line": 260,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -17994,7 +17958,7 @@
       "verb": "controlPlaneStatusResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 266,
+      "line": 265,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18003,7 +17967,7 @@
       "verb": "controlPlaneOverrideResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 274,
+      "line": 273,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18012,7 +17976,7 @@
       "verb": "controlPlaneOverrideResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 285,
+      "line": 284,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18021,7 +17985,7 @@
       "verb": "controlPlaneOverrideResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 299,
+      "line": 298,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18035,7 +17999,7 @@
       "verb": "controlPlaneOverrideResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 310,
+      "line": 309,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18044,7 +18008,7 @@
       "verb": "controlPlaneCandidateResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 324,
+      "line": 323,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18053,7 +18017,7 @@
       "verb": "controlPlaneMigrationPreview",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 329,
+      "line": 328,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18062,7 +18026,7 @@
       "verb": "controlPlaneMigrationResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 364,
+      "line": 363,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18071,7 +18035,7 @@
       "verb": "controlPlaneFreshSetupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 398,
+      "line": 397,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18080,7 +18044,7 @@
       "verb": "controlPlaneGitInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 433,
+      "line": 432,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18089,7 +18053,7 @@
       "verb": "multiRepoScaffoldResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 466,
+      "line": 465,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18101,7 +18065,7 @@
       "verb": "multiRepoScaffoldResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 468,
+      "line": 467,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18113,7 +18077,7 @@
       "verb": "clickupApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 484,
+      "line": 483,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18122,7 +18086,7 @@
       "verb": "clickupMappingsSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 493,
+      "line": 492,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18131,7 +18095,7 @@
       "verb": "clickupAutomationSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 502,
+      "line": 501,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18140,7 +18104,7 @@
       "verb": "linearApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 513,
+      "line": 512,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18149,7 +18113,7 @@
       "verb": "linearApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 518,
+      "line": 517,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18162,7 +18126,7 @@
       "verb": "linearAutomationSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 530,
+      "line": 529,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18171,7 +18135,7 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 538,
+      "line": 537,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18184,7 +18148,7 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 559,
+      "line": 558,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18198,7 +18162,7 @@
       "verb": "linearBrowseProjectsResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 567,
+      "line": 566,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18211,7 +18175,7 @@
       "verb": "triagePipelineResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 581,
+      "line": 580,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18220,7 +18184,7 @@
       "verb": "notionApplyResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 590,
+      "line": 589,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18229,7 +18193,7 @@
       "verb": "notionBackupConfigResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 600,
+      "line": 599,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18238,7 +18202,7 @@
       "verb": "notionBackupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 607,
+      "line": 606,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18247,7 +18211,7 @@
       "verb": "notionRestoreResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 614,
+      "line": 613,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18256,7 +18220,7 @@
       "verb": "notionAutoCreateResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 621,
+      "line": 620,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18265,7 +18229,7 @@
       "verb": "setupComplete",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 626,
+      "line": 625,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18276,7 +18240,7 @@
       "verb": "startupCommands",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 654,
+      "line": 647,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18285,7 +18249,7 @@
       "verb": "visibleAgents",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 660,
+      "line": 653,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18297,7 +18261,7 @@
       "verb": "customAgents",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 666,
+      "line": 659,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18310,12 +18274,24 @@
       "verb": "kanbanStructure",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 671,
+      "line": 664,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
         "type",
         "items"
+      ]
+    },
+    {
+      "verb": "planScannerConfig",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 668,
+      "receiver": "this",
+      "provider": "Setup",
+      "payloadKeys": [
+        "type",
+        "config"
       ]
     },
     {
@@ -18331,22 +18307,10 @@
       ]
     },
     {
-      "verb": "planScannerConfig",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 682,
-      "receiver": "this",
-      "provider": "Setup",
-      "payloadKeys": [
-        "type",
-        "config"
-      ]
-    },
-    {
       "verb": "accurateCodingSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 688,
+      "line": 681,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18358,7 +18322,7 @@
       "verb": "advancedReviewerSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 694,
+      "line": 687,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18370,7 +18334,7 @@
       "verb": "leadChallengeSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 700,
+      "line": 693,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18382,7 +18346,7 @@
       "verb": "autoCommitOnCodeReviewSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 709,
+      "line": 702,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18394,7 +18358,7 @@
       "verb": "excludeReviewedBacklogSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 716,
+      "line": 709,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18406,7 +18370,7 @@
       "verb": "persistPanelsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 724,
+      "line": 717,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18418,12 +18382,24 @@
       "verb": "persistPanelsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 735,
+      "line": 728,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
         "type",
         "enabled"
+      ]
+    },
+    {
+      "verb": "protocolTarget",
+      "direction": "push",
+      "file": "src/services/SetupPanelProvider.ts",
+      "line": 734,
+      "receiver": "this",
+      "provider": "Setup",
+      "payloadKeys": [
+        "type",
+        "value"
       ]
     },
     {
@@ -18439,22 +18415,10 @@
       ]
     },
     {
-      "verb": "protocolTarget",
-      "direction": "push",
-      "file": "src/services/SetupPanelProvider.ts",
-      "line": 748,
-      "receiver": "this",
-      "provider": "Setup",
-      "payloadKeys": [
-        "type",
-        "value"
-      ]
-    },
-    {
       "verb": "statusShowTerminalsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 753,
+      "line": 746,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18466,7 +18430,7 @@
       "verb": "statusShowKanbanSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 763,
+      "line": 756,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18478,7 +18442,7 @@
       "verb": "statusShowArtifactsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 773,
+      "line": 766,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18490,7 +18454,7 @@
       "verb": "statusShowDesignSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 783,
+      "line": 776,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18502,7 +18466,7 @@
       "verb": "statusShowProjectSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 793,
+      "line": 786,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18514,7 +18478,7 @@
       "verb": "statusShowMemoSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 803,
+      "line": 796,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18526,7 +18490,7 @@
       "verb": "memoHotkey",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 815,
+      "line": 808,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18538,7 +18502,7 @@
       "verb": "memoHotkeySaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 821,
+      "line": 814,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18549,7 +18513,7 @@
       "verb": "switchboardThemeNameSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 830,
+      "line": 823,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18561,7 +18525,7 @@
       "verb": "cyberAnimationDisabledSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 834,
+      "line": 827,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18573,7 +18537,7 @@
       "verb": "cyberScanlinesDisabledSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 845,
+      "line": 838,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18585,7 +18549,7 @@
       "verb": "colourKanbanIconsSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 856,
+      "line": 849,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18597,7 +18561,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 871,
+      "line": 864,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18609,7 +18573,7 @@
       "verb": "pixelFontSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 882,
+      "line": 875,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18621,7 +18585,7 @@
       "verb": "designSystemDocSetting",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 895,
+      "line": 888,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18634,7 +18598,7 @@
       "verb": "gitIgnoreConfig",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 904,
+      "line": 897,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18643,7 +18607,7 @@
       "verb": "defaultPromptOverrides",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 909,
+      "line": 902,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18655,7 +18619,7 @@
       "verb": "planningSourcesSaved",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 944,
+      "line": 937,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18667,7 +18631,7 @@
       "verb": "defaultPromptPreviews",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 950,
+      "line": 943,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18679,7 +18643,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 955,
+      "line": 948,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18688,7 +18652,7 @@
       "verb": "allDbPathsUpdated",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 960,
+      "line": 953,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18700,7 +18664,7 @@
       "verb": "planningSources",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 995,
+      "line": 988,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18712,7 +18676,7 @@
       "verb": "workspaceMappings",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1022,
+      "line": 1015,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18721,7 +18685,7 @@
       "verb": "workspaceMappingEnabled",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1058,
+      "line": 1051,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18733,7 +18697,7 @@
       "verb": "workspaceMappingStatus",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1119,
+      "line": 1112,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18746,7 +18710,7 @@
       "verb": "workspaceMappingStatus",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1139,
+      "line": 1132,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18758,7 +18722,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1147,
+      "line": 1140,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18771,7 +18735,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1160,
+      "line": 1153,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18784,7 +18748,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1168,
+      "line": 1161,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18797,7 +18761,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1178,
+      "line": 1171,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18810,7 +18774,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1222,
+      "line": 1215,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18823,7 +18787,7 @@
       "verb": "workspaceMappingInitResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1227,
+      "line": 1220,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18836,7 +18800,7 @@
       "verb": "workspaceMappingDbPathSelected",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1240,
+      "line": 1233,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18849,7 +18813,7 @@
       "verb": "workspaceMappingFolderSelected",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1256,
+      "line": 1249,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18862,7 +18826,7 @@
       "verb": "parentFolderSelected",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1276,
+      "line": 1269,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18876,7 +18840,7 @@
       "verb": "browseTicketsFolderResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1294,
+      "line": 1287,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18889,7 +18853,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1309,
+      "line": 1302,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18903,7 +18867,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1326,
+      "line": 1319,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18917,7 +18881,7 @@
       "verb": "ticketsFoldersListed",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1332,
+      "line": 1325,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18931,7 +18895,7 @@
       "verb": "notionRemoteSetupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1353,
+      "line": 1346,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18944,7 +18908,7 @@
       "verb": "notionRemoteSetupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1357,
+      "line": 1350,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -18953,7 +18917,7 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1362,
+      "line": 1355,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18965,7 +18929,7 @@
       "verb": "remoteControlState",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1367,
+      "line": 1360,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18977,7 +18941,7 @@
       "verb": "linearAgentSkillText",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1377,
+      "line": 1370,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -18990,7 +18954,7 @@
       "verb": "linearAgentSkillText",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1381,
+      "line": 1374,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -19003,7 +18967,7 @@
       "verb": "projectContextSyncRunning",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1399,
+      "line": 1392,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -19014,7 +18978,7 @@
       "verb": "projectContextSyncStatus",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1402,
+      "line": 1395,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": [
@@ -19027,7 +18991,7 @@
       "verb": "agentDirCleanupState",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1407,
+      "line": 1400,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -19036,7 +19000,7 @@
       "verb": "agentDirCleanupResult",
       "direction": "push",
       "file": "src/services/SetupPanelProvider.ts",
-      "line": 1412,
+      "line": 1405,
       "receiver": "this",
       "provider": "Setup",
       "payloadKeys": "dynamic"
@@ -19067,7 +19031,7 @@
       "verb": "sbInspectToggle",
       "direction": "push",
       "file": "src/webview/planning.js",
-      "line": 8640,
+      "line": 8642,
       "receiver": "frame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -21954,7 +21918,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5819,
+      "line": 5821,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21967,7 +21931,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5830,
+      "line": 5832,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21980,7 +21944,7 @@
       "verb": "viewAttachments",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5923,
+      "line": 5925,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21994,7 +21958,7 @@
       "verb": "fetchImportedDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5973,
+      "line": 5975,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -22004,7 +21968,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6064,
+      "line": 6066,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22018,7 +21982,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6105,
+      "line": 6107,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22032,7 +21996,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6182,
+      "line": 6184,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22045,7 +22009,7 @@
       "verb": "linearLoadAutomationCatalog",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6193,
+      "line": 6195,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22056,7 +22020,7 @@
       "verb": "clickupLoadFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6380,
+      "line": 6382,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22068,7 +22032,7 @@
       "verb": "clickupLoadSpaceTags",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6395,
+      "line": 6397,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22080,7 +22044,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6418,
+      "line": 6420,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22093,7 +22057,7 @@
       "verb": "clickupLoadListStatuses",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6483,
+      "line": 6485,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22105,7 +22069,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6492,
+      "line": 6494,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22118,7 +22082,7 @@
       "verb": "importFullDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6825,
+      "line": 6827,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22131,7 +22095,7 @@
       "verb": "importFullDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6843,
+      "line": 6845,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22144,7 +22108,7 @@
       "verb": "planShown",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6937,
+      "line": 6939,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22155,7 +22119,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6946,
+      "line": 6948,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22167,7 +22131,7 @@
       "verb": "importPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7006,
+      "line": 7008,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -22177,7 +22141,7 @@
       "verb": "submitComment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7131,
+      "line": 7133,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22192,7 +22156,7 @@
       "verb": "copyKanbanPlanPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7319,
+      "line": 7321,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22205,7 +22169,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7351,
+      "line": 7353,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22218,7 +22182,7 @@
       "verb": "getFeatureDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7377,
+      "line": 7379,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22230,7 +22194,7 @@
       "verb": "addSubtaskToFeature",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7389,
+      "line": 7391,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22243,7 +22207,7 @@
       "verb": "deleteFeature",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7398,
+      "line": 7400,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22256,7 +22220,7 @@
       "verb": "removeSubtaskFromFeature",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7412,
+      "line": 7414,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22268,7 +22232,7 @@
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7480,
+      "line": 7482,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22281,7 +22245,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7482,
+      "line": 7484,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22294,7 +22258,7 @@
       "verb": "setKanbanPlanComplexity",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7508,
+      "line": 7510,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22307,7 +22271,7 @@
       "verb": "fetchKanbanPlanLog",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7533,
+      "line": 7535,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22319,7 +22283,7 @@
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7542,
+      "line": 7544,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22332,7 +22296,7 @@
       "verb": "renderMarkdownLive",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7930,
+      "line": 7932,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22344,7 +22308,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7983,
+      "line": 7985,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22356,7 +22320,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7991,
+      "line": 7993,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22370,7 +22334,7 @@
       "verb": "fetchDocsFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7999,
+      "line": 8001,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22382,7 +22346,7 @@
       "verb": "readDevDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8010,
+      "line": 8012,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22393,7 +22357,7 @@
       "verb": "importFullDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8035,
+      "line": 8037,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22406,7 +22370,7 @@
       "verb": "syncToSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8056,
+      "line": 8058,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22417,7 +22381,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8070,
+      "line": 8072,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22431,7 +22395,7 @@
       "verb": "saveOnlineDocFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8079,
+      "line": 8081,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22443,7 +22407,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8111,
+      "line": 8113,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22457,7 +22421,7 @@
       "verb": "getProjectContextEnabled",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8167,
+      "line": 8169,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22468,7 +22432,7 @@
       "verb": "getProjectPrd",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8225,
+      "line": 8227,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22480,7 +22444,7 @@
       "verb": "saveProjectPrd",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8248,
+      "line": 8250,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22494,7 +22458,7 @@
       "verb": "saveProjectPrd",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8269,
+      "line": 8271,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22507,7 +22471,7 @@
       "verb": "readConstitutionFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8302,
+      "line": 8304,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22519,7 +22483,7 @@
       "verb": "saveConstitutionFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8326,
+      "line": 8328,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22532,7 +22496,7 @@
       "verb": "saveConstitutionFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8345,
+      "line": 8347,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22544,7 +22508,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8481,
+      "line": 8483,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22558,7 +22522,7 @@
       "verb": "listPlanningHtmlFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8496,
+      "line": 8498,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22569,7 +22533,7 @@
       "verb": "removePlanningHtmlFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8539,
+      "line": 8541,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22581,7 +22545,7 @@
       "verb": "addPlanningHtmlFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8555,
+      "line": 8557,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22592,7 +22556,7 @@
       "verb": "copyArtifactPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8618,
+      "line": 8620,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22604,7 +22568,7 @@
       "verb": "sendArtifactPromptToTerminal",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8626,
+      "line": 8628,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22617,7 +22581,7 @@
       "verb": "sendHtmlTweakPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8696,
+      "line": 8698,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22629,7 +22593,7 @@
       "verb": "copyHtmlTweakPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8724,
+      "line": 8726,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22640,7 +22604,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8751,
+      "line": 8753,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22651,7 +22615,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8813,
+      "line": 8815,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22662,7 +22626,7 @@
       "verb": "addTicketsFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8820,
+      "line": 8822,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22673,7 +22637,7 @@
       "verb": "addLocalFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8823,
+      "line": 8825,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22684,7 +22648,7 @@
       "verb": "addLocalFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8826,
+      "line": 8828,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22695,7 +22659,7 @@
       "verb": "moveTicket",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9004,
+      "line": 9006,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22709,7 +22673,7 @@
       "verb": "switchTicketsProvider",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9050,
+      "line": 9052,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22721,7 +22685,7 @@
       "verb": "ticketsRootChanged",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9067,
+      "line": 9069,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22732,7 +22696,7 @@
       "verb": "importAllTickets",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9097,
+      "line": 9099,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22746,7 +22710,7 @@
       "verb": "importAllTickets",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9124,
+      "line": 9126,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22760,7 +22724,7 @@
       "verb": "copyToClipboard",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9141,
+      "line": 9143,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22773,7 +22737,7 @@
       "verb": "syncAllTickets",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9153,
+      "line": 9166,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22785,7 +22749,7 @@
       "verb": "saveLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9192,
+      "line": 9205,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22799,7 +22763,7 @@
       "verb": "pushTicket",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9208,
+      "line": 9221,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22812,7 +22776,7 @@
       "verb": "deleteTicketConfirmed",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9219,
+      "line": 9232,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22825,7 +22789,7 @@
       "verb": "changeTicketStatus",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9231,
+      "line": 9244,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22839,7 +22803,7 @@
       "verb": "copyDiagramPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9272,
+      "line": 9285,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22850,7 +22814,7 @@
       "verb": "viewAttachments",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9292,
+      "line": 9305,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22864,7 +22828,7 @@
       "verb": "postTicketComment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9332,
+      "line": 9345,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22879,7 +22843,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9369,
+      "line": 9382,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22892,7 +22856,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9401,
+      "line": 9414,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22905,7 +22869,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9412,
+      "line": 9425,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22918,7 +22882,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9430,
+      "line": 9443,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22932,7 +22896,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9442,
+      "line": 9455,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22946,7 +22910,7 @@
       "verb": "downloadAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9472,
+      "line": 9485,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22962,7 +22926,7 @@
       "verb": "copyRefinePrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9624,
+      "line": 9637,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22977,7 +22941,7 @@
       "verb": "openExternalUrl",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9639,
+      "line": 9652,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22988,7 +22952,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9665,
+      "line": 9678,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23001,7 +22965,7 @@
       "verb": "linearLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9668,
+      "line": 9681,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23013,7 +22977,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9676,
+      "line": 9689,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23026,7 +22990,7 @@
       "verb": "clickupLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9678,
+      "line": 9691,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23038,7 +23002,7 @@
       "verb": "importTicketSubtasks",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9687,
+      "line": 9700,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23051,7 +23015,7 @@
       "verb": "changeTicketStatus",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9786,
+      "line": 9799,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23065,7 +23029,7 @@
       "verb": "convertToSubtask",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9945,
+      "line": 9958,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23079,7 +23043,7 @@
       "verb": "renderMarkdownLive",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10087,
+      "line": 10100,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23091,7 +23055,7 @@
       "verb": "ticketAttachImage",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10099,
+      "line": 10112,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23105,7 +23069,7 @@
       "verb": "openAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10267,
+      "line": 10280,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23117,7 +23081,7 @@
       "verb": "revealAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10278,
+      "line": 10291,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23129,7 +23093,7 @@
       "verb": "downloadAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10293,
+      "line": 10306,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23145,7 +23109,7 @@
       "verb": "openAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10309,
+      "line": 10322,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23157,7 +23121,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10565,
+      "line": 10578,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23170,7 +23134,7 @@
       "verb": "linearLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10567,
+      "line": 10580,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23182,7 +23146,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10582,
+      "line": 10595,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23195,7 +23159,7 @@
       "verb": "clickupLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10584,
+      "line": 10597,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23207,7 +23171,7 @@
       "verb": "clickupLoadFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11017,
+      "line": 11030,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23219,7 +23183,7 @@
       "verb": "clickupSaveSpaceSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11033,
+      "line": 11046,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23232,7 +23196,7 @@
       "verb": "clickupLoadFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11039,
+      "line": 11052,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23244,7 +23208,7 @@
       "verb": "clickupLoadSpaceTags",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11044,
+      "line": 11057,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23256,7 +23220,7 @@
       "verb": "clickupSaveSpaceSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11053,
+      "line": 11066,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23269,7 +23233,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11083,
+      "line": 11096,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23282,7 +23246,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11090,
+      "line": 11103,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23295,7 +23259,7 @@
       "verb": "clickupSaveFolderSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11110,
+      "line": 11123,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23308,7 +23272,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11117,
+      "line": 11130,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23321,7 +23285,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11124,
+      "line": 11137,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23334,7 +23298,7 @@
       "verb": "clickupSaveFolderSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11136,
+      "line": 11149,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23347,7 +23311,7 @@
       "verb": "clickupSaveListSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11175,
+      "line": 11188,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23364,7 +23328,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11207,
+      "line": 11220,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23378,7 +23342,7 @@
       "verb": "linearLoadProject",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11460,
+      "line": 11473,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23389,7 +23353,7 @@
       "verb": "linearLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11467,
+      "line": 11480,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23401,7 +23365,7 @@
       "verb": "clickupLoadProject",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11478,
+      "line": 11491,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23416,7 +23380,7 @@
       "verb": "clickupLoadProject",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11490,
+      "line": 11503,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23432,7 +23396,7 @@
       "verb": "clickupLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11505,
+      "line": 11518,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23444,7 +23408,7 @@
       "verb": "clickupLoadSpaces",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11515,
+      "line": 11528,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23455,7 +23419,7 @@
       "verb": "copyToClipboard",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11615,
+      "line": 11628,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23468,7 +23432,7 @@
       "verb": "ticketsAskAgent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11636,
+      "line": 11649,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23483,7 +23447,7 @@
       "verb": "listLocalTicketFiles",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11654,
+      "line": 11667,
       "receiver": "vscode",
       "payloadKeys": "dynamic"
     },
@@ -23491,7 +23455,7 @@
       "verb": "getTicketSyncStatuses",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11672,
+      "line": 11685,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23504,7 +23468,7 @@
       "verb": "setupTicketsWatcher",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11804,
+      "line": 11817,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23515,7 +23479,7 @@
       "verb": "ticketsDefaultRoot",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11806,
+      "line": 11819,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23525,7 +23489,7 @@
       "verb": "getSyncConfig",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11871,
+      "line": 11884,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23535,7 +23499,7 @@
       "verb": "fetchContainers",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11936,
+      "line": 11949,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23546,7 +23510,7 @@
       "verb": "fetchContainers",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11943,
+      "line": 11956,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23557,7 +23521,7 @@
       "verb": "syncDocToOnline",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12042,
+      "line": 12055,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23573,7 +23537,7 @@
       "verb": "readDevDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12169,
+      "line": 12182,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23585,7 +23549,7 @@
       "verb": "saveDevDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12190,
+      "line": 12203,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23598,7 +23562,7 @@
       "verb": "deleteDevDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12201,
+      "line": 12214,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23610,7 +23574,7 @@
       "verb": "createDevDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12208,
+      "line": 12221,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23620,7 +23584,7 @@
       "verb": "importDevDocFromClipboard",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12228,
+      "line": 12241,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23631,7 +23595,7 @@
       "verb": "draftImproveDevDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12237,
+      "line": 12250,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23646,7 +23610,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12258,
+      "line": 12271,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23657,7 +23621,7 @@
       "verb": "notebookDefaultRoot",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12261,
+      "line": 12274,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23667,7 +23631,7 @@
       "verb": "persistTabState",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12267,
+      "line": 12280,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23679,7 +23643,7 @@
       "verb": "airlock_export",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12275,
+      "line": 12288,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23690,7 +23654,7 @@
       "verb": "airlock_openNotebookLM",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12279,
+      "line": 12292,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23701,7 +23665,7 @@
       "verb": "airlock_openFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12283,
+      "line": 12296,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23712,7 +23676,7 @@
       "verb": "importNotebookLMPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12315,
+      "line": 12328,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -23723,7 +23687,7 @@
       "verb": "fetchRoots",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12383,
+      "line": 12396,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -23733,7 +23697,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12384,
+      "line": 12397,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24867,7 +24831,7 @@
       "verb": "getGitIgnoreConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 1996,
+      "line": 1986,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24877,7 +24841,7 @@
       "verb": "getAutoCommitOnCodeReviewSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 1997,
+      "line": 1987,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24887,7 +24851,7 @@
       "verb": "getExcludeReviewedBacklogSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 1998,
+      "line": 1988,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24897,7 +24861,7 @@
       "verb": "getPersistPanelsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 1999,
+      "line": 1989,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24907,7 +24871,7 @@
       "verb": "getProtocolTarget",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2000,
+      "line": 1990,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24917,7 +24881,7 @@
       "verb": "getAllDbPaths",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2003,
+      "line": 1993,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24927,7 +24891,7 @@
       "verb": "getStartupCommands",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2004,
+      "line": 1994,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24937,7 +24901,7 @@
       "verb": "getPlanningSources",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2008,
+      "line": 1998,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24947,7 +24911,7 @@
       "verb": "getPlanningSources",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2012,
+      "line": 2002,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24957,7 +24921,7 @@
       "verb": "getPlanningSources",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2016,
+      "line": 2006,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24967,7 +24931,7 @@
       "verb": "getControlPlaneStatus",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2019,
+      "line": 2009,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24977,7 +24941,7 @@
       "verb": "getWorkspaceMappings",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2022,
+      "line": 2012,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24987,7 +24951,7 @@
       "verb": "getPlanScannerConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2025,
+      "line": 2015,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -24997,7 +24961,7 @@
       "verb": "getCyberAnimationDisabledSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2028,
+      "line": 2018,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25007,7 +24971,7 @@
       "verb": "getCyberScanlinesDisabledSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2029,
+      "line": 2019,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25017,7 +24981,7 @@
       "verb": "getColourKanbanIconsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2030,
+      "line": 2020,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25027,7 +24991,7 @@
       "verb": "getUltracodeAnimationSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2031,
+      "line": 2021,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25037,7 +25001,7 @@
       "verb": "getPixelFontSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2032,
+      "line": 2022,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25047,7 +25011,7 @@
       "verb": "getThemeSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2033,
+      "line": 2023,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25057,7 +25021,7 @@
       "verb": "getStatusShowTerminalsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2040,
+      "line": 2030,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25067,7 +25031,7 @@
       "verb": "getStatusShowKanbanSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2041,
+      "line": 2031,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25077,7 +25041,7 @@
       "verb": "getStatusShowArtifactsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2042,
+      "line": 2032,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25087,7 +25051,7 @@
       "verb": "getStatusShowDesignSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2043,
+      "line": 2033,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25097,7 +25061,7 @@
       "verb": "getStatusShowProjectSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2044,
+      "line": 2034,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25107,7 +25071,7 @@
       "verb": "getStatusShowMemoSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2045,
+      "line": 2035,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25117,7 +25081,7 @@
       "verb": "getRemoteConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2050,
+      "line": 2040,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25128,7 +25092,7 @@
       "verb": "getProjectContextSyncStatus",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2051,
+      "line": 2041,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25139,7 +25103,7 @@
       "verb": "getRemoteHealth",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2052,
+      "line": 2042,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25150,7 +25114,7 @@
       "verb": "getControlPlaneStatus",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2105,
+      "line": 2095,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25160,7 +25124,7 @@
       "verb": "detectControlPlaneCandidate",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2106,
+      "line": 2096,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25170,7 +25134,7 @@
       "verb": "getDefaultPromptPreviews",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2510,
+      "line": 2500,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25180,7 +25144,7 @@
       "verb": "getIntegrationSetupStates",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2668,
+      "line": 2658,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25190,7 +25154,7 @@
       "verb": "listTicketsFolders",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 2669,
+      "line": 2659,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25200,7 +25164,7 @@
       "verb": "runSetup",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3474,
+      "line": 3464,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25210,27 +25174,7 @@
       "verb": "openDocs",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3476,
-      "receiver": "vscode",
-      "payloadKeys": [
-        "type"
-      ]
-    },
-    {
-      "verb": "connectClaudeDesktop",
-      "direction": "request",
-      "file": "src/webview/setup.html",
-      "line": 3477,
-      "receiver": "vscode",
-      "payloadKeys": [
-        "type"
-      ]
-    },
-    {
-      "verb": "setupCowork",
-      "direction": "request",
-      "file": "src/webview/setup.html",
-      "line": 3478,
+      "line": 3466,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25240,7 +25184,7 @@
       "verb": "exportPromptSettings",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3486,
+      "line": 3474,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25250,7 +25194,7 @@
       "verb": "importPromptSettings",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3495,
+      "line": 3483,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25260,7 +25204,7 @@
       "verb": "setExplicitControlPlaneRoot",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3505,
+      "line": 3493,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25271,7 +25215,7 @@
       "verb": "resetExplicitControlPlaneRoot",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3512,
+      "line": 3500,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25281,7 +25225,7 @@
       "verb": "clearControlPlaneCache",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3516,
+      "line": 3504,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25291,7 +25235,7 @@
       "verb": "previewControlPlaneMigration",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3522,
+      "line": 3510,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25302,7 +25246,7 @@
       "verb": "executeControlPlaneMigration",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3530,
+      "line": 3518,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25315,7 +25259,7 @@
       "verb": "executeControlPlaneFreshSetup",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3541,
+      "line": 3529,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25327,7 +25271,7 @@
       "verb": "scaffoldMultiRepo",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3549,
+      "line": 3537,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25341,7 +25285,7 @@
       "verb": "setBoardStateExport",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3575,
+      "line": 3563,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25352,7 +25296,7 @@
       "verb": "setBoardStateExportRemoteUrl",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3578,
+      "line": 3566,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25363,7 +25307,7 @@
       "verb": "initControlPlaneGit",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3582,
+      "line": 3570,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25374,7 +25318,7 @@
       "verb": "performAgentDirCleanup",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3589,
+      "line": 3577,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25384,7 +25328,7 @@
       "verb": "saveDefaultPromptOverrides",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3598,
+      "line": 3586,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25395,7 +25339,7 @@
       "verb": "applyClickUpConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3673,
+      "line": 3661,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25407,7 +25351,7 @@
       "verb": "enableTriagePipeline",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3686,
+      "line": 3674,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25419,7 +25363,7 @@
       "verb": "enableTriagePipeline",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3695,
+      "line": 3683,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25431,7 +25375,7 @@
       "verb": "saveClickUpMappings",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3700,
+      "line": 3688,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25442,7 +25386,7 @@
       "verb": "saveClickUpAutomation",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3715,
+      "line": 3703,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25453,7 +25397,7 @@
       "verb": "applyLinearConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3727,
+      "line": 3715,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25465,7 +25409,7 @@
       "verb": "saveLinearAutomation",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3740,
+      "line": 3728,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25476,7 +25420,7 @@
       "verb": "linearBrowseProjects",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3746,
+      "line": 3734,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25487,7 +25431,7 @@
       "verb": "linearBrowseProjects",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3749,
+      "line": 3737,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25498,7 +25442,7 @@
       "verb": "browseTicketsFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3778,
+      "line": 3766,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25509,7 +25453,7 @@
       "verb": "browseTicketsFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3781,
+      "line": 3769,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25520,7 +25464,7 @@
       "verb": "saveTicketsFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3786,
+      "line": 3774,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25532,7 +25476,7 @@
       "verb": "saveTicketsFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3791,
+      "line": 3779,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25544,7 +25488,7 @@
       "verb": "saveTicketsAutoSync",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3801,
+      "line": 3789,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25555,7 +25499,7 @@
       "verb": "applyNotionConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3815,
+      "line": 3803,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25566,7 +25510,7 @@
       "verb": "savePlanningSources",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3837,
+      "line": 3825,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25580,7 +25524,7 @@
       "verb": "configureNotionBackup",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3866,
+      "line": 3854,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25592,7 +25536,7 @@
       "verb": "setCustomDbPath",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3908,
+      "line": 3896,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25604,7 +25548,7 @@
       "verb": "setLocalDb",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3910,
+      "line": 3898,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25615,7 +25559,7 @@
       "verb": "setPresetDbPath",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3912,
+      "line": 3900,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25627,7 +25571,7 @@
       "verb": "resetDatabase",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3923,
+      "line": 3911,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25638,7 +25582,7 @@
       "verb": "configureNotionBackup",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3937,
+      "line": 3925,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25650,7 +25594,7 @@
       "verb": "backupToNotion",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3941,
+      "line": 3929,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25661,7 +25605,7 @@
       "verb": "restoreFromNotion",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3951,
+      "line": 3939,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25672,7 +25616,7 @@
       "verb": "autoCreateNotionDatabase",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 3961,
+      "line": 3949,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25683,7 +25627,7 @@
       "verb": "browseWorkspaceMappingDbPath",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4048,
+      "line": 4036,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25694,7 +25638,7 @@
       "verb": "browseParentFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4052,
+      "line": 4040,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25705,7 +25649,7 @@
       "verb": "browseWorkspaceMappingFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4056,
+      "line": 4044,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25716,7 +25660,7 @@
       "verb": "initializeWorkspaceDatabase",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4072,
+      "line": 4060,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25730,7 +25674,7 @@
       "verb": "copyDbSettingsToGlobal",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4105,
+      "line": 4093,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25740,7 +25684,7 @@
       "verb": "setStatusShowTerminalsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4111,
+      "line": 4099,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25751,7 +25695,7 @@
       "verb": "setStatusShowKanbanSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4115,
+      "line": 4103,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25762,7 +25706,7 @@
       "verb": "setStatusShowArtifactsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4119,
+      "line": 4107,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25773,7 +25717,7 @@
       "verb": "setStatusShowDesignSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4123,
+      "line": 4111,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25784,7 +25728,7 @@
       "verb": "setStatusShowProjectSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4127,
+      "line": 4115,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25795,7 +25739,7 @@
       "verb": "setStatusShowMemoSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4131,
+      "line": 4119,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25806,7 +25750,7 @@
       "verb": "saveMemoHotkey",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4135,
+      "line": 4123,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25817,7 +25761,7 @@
       "verb": "openKeybindings",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4139,
+      "line": 4127,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -25827,7 +25771,7 @@
       "verb": "setCyberAnimationDisabledSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4144,
+      "line": 4132,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25838,7 +25782,7 @@
       "verb": "setCyberScanlinesDisabledSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4158,
+      "line": 4146,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25849,7 +25793,7 @@
       "verb": "setColourKanbanIconsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4168,
+      "line": 4156,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25860,7 +25804,7 @@
       "verb": "setUltracodeAnimationSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4179,
+      "line": 4167,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25871,7 +25815,7 @@
       "verb": "setPixelFontSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4189,
+      "line": 4177,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25882,7 +25826,7 @@
       "verb": "setThemeSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4201,
+      "line": 4189,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25893,7 +25837,7 @@
       "verb": "saveStartupCommands",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4207,
+      "line": 4195,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25904,7 +25848,7 @@
       "verb": "setExcludeReviewedBacklogSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4211,
+      "line": 4199,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25915,7 +25859,7 @@
       "verb": "setPersistPanelsSetting",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4215,
+      "line": 4203,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25926,7 +25870,7 @@
       "verb": "setProtocolTarget",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4219,
+      "line": 4207,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25937,7 +25881,7 @@
       "verb": "setWorkspaceMappingEnabled",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4223,
+      "line": 4211,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25948,7 +25892,7 @@
       "verb": "saveWorkspaceMappings",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4264,
+      "line": 4252,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25959,7 +25903,7 @@
       "verb": "setPlanScannerConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4421,
+      "line": 4409,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25970,7 +25914,7 @@
       "verb": "saveTicketsFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4468,
+      "line": 4456,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25982,7 +25926,7 @@
       "verb": "saveTicketsFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4472,
+      "line": 4460,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -25994,7 +25938,7 @@
       "verb": "saveTicketsFolder",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4477,
+      "line": 4465,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26005,7 +25949,7 @@
       "verb": "getAllDbPaths",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 4967,
+      "line": 4955,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -26015,7 +25959,7 @@
       "verb": "getRemoteHealth",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5344,
+      "line": 5332,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26026,7 +25970,7 @@
       "verb": "setRemoteConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5510,
+      "line": 5498,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26038,7 +25982,7 @@
       "verb": "getRemoteConfig",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5515,
+      "line": 5503,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26049,7 +25993,7 @@
       "verb": "getProjectContextSyncStatus",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5516,
+      "line": 5504,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26060,7 +26004,7 @@
       "verb": "setProjectContextSyncEnabled",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5521,
+      "line": 5509,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26072,7 +26016,7 @@
       "verb": "projectContextSyncNow",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5538,
+      "line": 5526,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26083,7 +26027,7 @@
       "verb": "copyLinearAgentSkill",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5543,
+      "line": 5531,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26094,7 +26038,7 @@
       "verb": "runNotionRemoteSetup",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5550,
+      "line": 5538,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -26105,7 +26049,7 @@
       "verb": "ready",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5569,
+      "line": 5557,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -26115,7 +26059,7 @@
       "verb": "getAgentDirCleanupState",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5572,
+      "line": 5560,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -26125,7 +26069,7 @@
       "verb": "getPlanningSources",
       "direction": "request",
       "file": "src/webview/setup.html",
-      "line": 5575,
+      "line": 5563,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -26399,19 +26343,19 @@
     {
       "kind": "dynamic-postMessage-type",
       "file": "src/webview/planning.js",
-      "line": 9835,
+      "line": 9848,
       "raw": "vscode.postMessage({"
     },
     {
       "kind": "dynamic-postMessage-type",
       "file": "src/webview/planning.js",
-      "line": 11524,
+      "line": 11537,
       "raw": "vscode.postMessage({"
     },
     {
       "kind": "dynamic-postMessage-type",
       "file": "src/webview/setup.html",
-      "line": 5561,
+      "line": 5549,
       "raw": "vscode.postMessage({"
     }
   ]

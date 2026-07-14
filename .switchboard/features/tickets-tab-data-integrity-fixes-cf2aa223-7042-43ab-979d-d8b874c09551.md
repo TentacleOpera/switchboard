@@ -13,8 +13,8 @@ Fix two bugs where the planning.html Tickets tab silently loses or fails to clea
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [ClickUp Priority Lost on List Reload in Planning Tickets Tab](../plans/feature_plan_20260714102047_clickup-priority-lost-on-list-reload.md) — **REVIEWED**
-- [x] [Ticket Delete: Local File Not Removed When Remote Is Archived](../plans/feature_plan_20260714102523_ticket-delete-local-file-not-removed.md) — **REVIEWED**
+- [ ] [ClickUp Priority Lost on List Reload in Planning Tickets Tab](../plans/feature_plan_20260714102047_clickup-priority-lost-on-list-reload.md) — **CODE REVIEWED**
+- [ ] [Ticket Delete: Local File Not Removed When Remote Is Archived](../plans/feature_plan_20260714102523_ticket-delete-local-file-not-removed.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

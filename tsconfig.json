@@ -20,7 +20,6 @@
 		"node_modules",
 		"**/*.test.ts",
 		"verify_map.ts",
-		"verify_parsing.ts",
-		"src/mcp"
+		"verify_parsing.ts"
 	]
 }
