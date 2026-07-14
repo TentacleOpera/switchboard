@@ -5542,7 +5542,6 @@
                 _requestTicketSyncStatuses();
                 break;
             case 'syncAllTicketsResult':
-                setTicketsLoadingState(false);
                 const syncAllBtn = document.getElementById('tickets-sync-all');
                 if (syncAllBtn) syncAllBtn.disabled = false;
                 if (msg.success) {
@@ -5554,6 +5553,9 @@
                 } else {
                     showTicketsStatus(`Synced ${msg.succeeded} succeeded, ${msg.failed} failed.`, true);
                 }
+                break;
+            case 'syncAllTicketsProgress':
+                showTicketsStatus(`Syncing… ${msg.done}/${msg.total}`, false);
                 break;
             case 'ticketLinkCopied':
                 if (_lastLinkTicketBtn) {
@@ -9148,8 +9150,19 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
 
         syncAllButton?.addEventListener('click', () => {
-            setTicketsLoadingState(true);
+            // Do NOT call setTicketsLoadingState(true) — that dims the whole previewer
+            // and disables all meta-bar buttons for the entire sync. The sync is a
+            // background push that does not change the displayed ticket, so only the
+            // sync button itself needs to be disabled.
             if (syncAllButton) syncAllButton.disabled = true;
+            showTicketsStatus('Syncing changes…', false);
+            // showTicketsStatus auto-hides after 4s — clear that timeout so the
+            // status persists until syncAllTicketsResult or a progress message
+            // arrives and resets it.
+            if (window._ticketsFooterTimeout) {
+                clearTimeout(window._ticketsFooterTimeout);
+                window._ticketsFooterTimeout = undefined;
+            }
             vscode.postMessage({
                 type: 'syncAllTickets',
                 provider: lastIntegrationProvider,
@@ -10085,6 +10098,24 @@ Instructions:
                     };
                     window.addEventListener('message', handler);
                     vscode.postMessage({ type: 'renderMarkdownLive', requestId, content: markdown });
+                }),
+                onAttachImage: () => new Promise((resolve) => {
+                    const requestId = Date.now() + Math.random();
+                    const handler = (event) => {
+                        const msg = event.data;
+                        if (msg.type === 'ticketImageAttached' && msg.requestId === requestId) {
+                            window.removeEventListener('message', handler);
+                            resolve(msg.success ? { path: msg.relativePath } : null);
+                        }
+                    };
+                    window.addEventListener('message', handler);
+                    vscode.postMessage({
+                        type: 'ticketAttachImage',
+                        requestId,
+                        provider,
+                        id: task.id,
+                        workspaceRoot: ticketsWorkspaceRoot
+                    });
                 })
             });
         }

@@ -216,6 +216,7 @@
             textarea.dataset.mdEditorAttached = "true";
 
             const renderPreview = options.renderPreview || (() => Promise.resolve(''));
+            const onAttachImage = options.onAttachImage || null;
             let currentRequestId = 0;
             let renderTimeout = null;
 
@@ -334,6 +335,39 @@
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
             };
 
+            // Attach an image via a real native file picker (host-supplied — this
+            // module has no filesystem/dialog access of its own) instead of the
+            // old insertLink() placeholder-text approach. Shows a placeholder while
+            // the picker/copy is in flight, then swaps in the real markdown or
+            // removes the placeholder on cancel/failure.
+            const insertImage = async () => {
+                if (!onAttachImage) return;
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                const text = textarea.value;
+                const placeholder = '![Uploading image…]()';
+                textarea.value = text.substring(0, start) + placeholder + text.substring(end);
+                textarea.setSelectionRange(start + placeholder.length, start + placeholder.length);
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+
+                let result = null;
+                try {
+                    result = await onAttachImage();
+                } catch {
+                    result = null;
+                }
+
+                const cur = textarea.value;
+                const placeholderIndex = cur.indexOf(placeholder, start);
+                const replacement = result && result.path ? `![${result.alt || ''}](${result.path})` : '';
+                if (placeholderIndex !== -1) {
+                    textarea.value = cur.substring(0, placeholderIndex) + replacement + cur.substring(placeholderIndex + placeholder.length);
+                    textarea.setSelectionRange(placeholderIndex + replacement.length, placeholderIndex + replacement.length);
+                }
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                textarea.focus();
+            };
+
             // Bold & Italic shortcuts
             textarea.addEventListener('keydown', (e) => {
                 const isMeta = e.ctrlKey || e.metaKey;
@@ -373,6 +407,9 @@
             toolbar.appendChild(createBtn('<code>', 'Inline Code', () => insertText('`', '`')));
             toolbar.appendChild(createBtn('<code-block>', 'Code Block', () => insertText('```\n', '\n```')));
             toolbar.appendChild(createBtn('🔗', 'Link (Ctrl+K)', () => insertLink()));
+            if (onAttachImage) {
+                toolbar.appendChild(createBtn('🖼️', 'Attach image', () => insertImage()));
+            }
 
             // Table picker popover button
             const pickerContainer = document.createElement('div');

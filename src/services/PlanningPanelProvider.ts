@@ -6446,6 +6446,50 @@ Please format the updated output document strictly as follows:
                 }
                 break;
             }
+            case 'ticketAttachImage': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const provider = msg.provider as 'clickup' | 'linear';
+                const id = msg.id;
+                const requestId = msg.requestId;
+                if (!workspaceRoot || !provider || !id) {
+                    this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: false });
+                    break;
+                }
+                try {
+                    const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
+                    if (!filePath) {
+                        vscode.window.showErrorMessage('Save the ticket once before attaching images.');
+                        this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: false });
+                        break;
+                    }
+                    const picked = await vscode.window.showOpenDialog({
+                        canSelectMany: false,
+                        openLabel: 'Attach image',
+                        filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }
+                    });
+                    if (!picked || picked.length === 0) {
+                        this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: false });
+                        break;
+                    }
+                    const srcPath = picked[0].fsPath;
+                    const attachmentsDir = path.join(path.dirname(filePath), 'attachments');
+                    fs.mkdirSync(attachmentsDir, { recursive: true });
+                    const ext = path.extname(srcPath);
+                    const stem = path.basename(srcPath, ext);
+                    let destName = `${stem}${ext}`;
+                    let counter = 1;
+                    while (fs.existsSync(path.join(attachmentsDir, destName))) {
+                        destName = `${stem}-${counter}${ext}`;
+                        counter++;
+                    }
+                    fs.copyFileSync(srcPath, path.join(attachmentsDir, destName));
+                    this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: true, relativePath: `attachments/${destName}` });
+                } catch (err: any) {
+                    vscode.window.showErrorMessage('Failed to attach image: ' + err.message);
+                    this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: false });
+                }
+                break;
+            }
             case 'importTicketSubtasks': {
                 // Progressive subtask import: when a parent is opened, embed its
                 // subtasks into the parent's file (a `## Subtasks` checklist) so they
@@ -6504,28 +6548,50 @@ Please format the updated output document strictly as follows:
                         }
                     }
                     
-                    for (const ticket of tickets) {
-                        try {
-                            const result: any = await vscode.commands.executeCommand(
-                                'switchboard.pushTicketEdits',
-                                { workspaceRoot, provider, id: ticket.id }
-                            );
-                            if (result?.success) {
-                                results.succeeded++;
-                            } else {
-                                results.failed++;
-                                results.errors.push(`${ticket.id}: ${result?.error || 'Unknown error'}`);
+                    // Deduplicate by ticket id — if the same id appears in multiple ticket
+                    // document dirs, keep only the first. This prevents a concurrent
+                    // hostInlineImages file-write race on the same sourceFilePath.
+                    const seenIds = new Set<string>();
+                    const uniqueTickets = tickets.filter(t => {
+                        if (seenIds.has(t.id)) return false;
+                        seenIds.add(t.id);
+                        return true;
+                    });
+
+                    // Bounded concurrency: push up to 4 tickets at a time so total wall time
+                    // is ~ceil(N/4) × per-ticket latency instead of N × per-ticket latency.
+                    const CONCURRENCY = 4;
+                    let done = 0;
+                    const total = uniqueTickets.length;
+                    for (let i = 0; i < uniqueTickets.length; i += CONCURRENCY) {
+                        const batch = uniqueTickets.slice(i, i + CONCURRENCY);
+                        const batchResults = await Promise.all(batch.map(async (ticket) => {
+                            try {
+                                const result: any = await vscode.commands.executeCommand(
+                                    'switchboard.pushTicketEdits',
+                                    { workspaceRoot, provider, id: ticket.id }
+                                );
+                                return result?.success
+                                    ? { ok: true }
+                                    : { ok: false, error: `${ticket.id}: ${result?.error || 'Unknown error'}` };
+                            } catch (err) {
+                                return { ok: false, error: `${ticket.id}: ${err instanceof Error ? err.message : String(err)}` };
                             }
-                        } catch (err) {
-                            results.failed++;
-                            results.errors.push(`${ticket.id}: ${err instanceof Error ? err.message : String(err)}`);
+                        }));
+                        for (const r of batchResults) {
+                            if (r.ok) { results.succeeded++; }
+                            else { results.failed++; results.errors.push(r.error); }
                         }
+                        done += batch.length;
+                        this.postMessageToWebview({
+                            type: 'syncAllTicketsProgress', done, total
+                        });
                     }
-                    
+
                     this.postMessageToWebview({
                         type: 'syncAllTicketsResult',
                         success: results.failed === 0,
-                        count: tickets.length,
+                        count: uniqueTickets.length,
                         succeeded: results.succeeded,
                         failed: results.failed,
                         errors: results.errors
