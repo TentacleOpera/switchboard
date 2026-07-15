@@ -51,6 +51,11 @@
             --spacing-lg: calc(var(--spacing-unit) * 2);
             --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
             --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+            /* Doc preview tokens — aligned with switchboard-site readability */
+            --doc-bg: #101414;
+            --doc-border: #1d2323;   /* site --outline-variant — grey H2 rule + code borders */
+            --doc-text: #a0a6a6;     /* site --on-surface-variant — the muted value <p> actually renders */
+            --doc-heading: var(--accent-primary);
         }body.theme-claudify {
             /* The teal family derives from --accent-primary ON :root, so it resolves to cyan
                there and inherits cyan everywhere. Each must be redeclared here to go terracotta. */
@@ -577,26 +582,36 @@
                 rgba(0, 0, 0, 0.07) 4px
             );
             z-index: 5;
-        }.cyber-theme-enabled .cyber-scanlines { display: block; }.cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
-            content: " ";
-            display: block;
+        }.cyber-theme-enabled .cyber-scanlines { display: block; }/* Grid-lighting mask sweep — ported from switchboard-site .bg-grid::after.
+           A mask-position-animated silver-grid reveal that lights the cyan body grid
+           in place as the band descends, then parks off-screen for ~11s of the 16s cycle.
+           Only active when animation is not disabled. */
+        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            content: "";
             position: absolute;
-            background: linear-gradient(
-                to bottom,
-                rgba(255, 255, 255, 0) 0%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 10%,
-                color-mix(in srgb, var(--accent-primary) 7%, transparent) 50%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 90%,
-                rgba(255, 255, 255, 0) 100%
-            );
-            width: 100%;
-            height: 80px;
+            inset: 0;
             pointer-events: none;
             z-index: 6;
-            animation: scanline-sweep 8s linear infinite;
+            background-image:
+                linear-gradient(180deg, transparent, rgba(214, 232, 238, 0.02), transparent),
+                linear-gradient(to right, rgba(214, 232, 238, 0.11) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(214, 232, 238, 0.11) 1px, transparent 1px);
+            background-size: 100% 100%, 32px 32px, 32px 32px;
+            -webkit-mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            -webkit-mask-size: 100% 40vh;
+            mask-size: 100% 40vh;
+            -webkit-mask-repeat: no-repeat;
+            mask-repeat: no-repeat;
+            -webkit-mask-position: 0 -50vh;
+            mask-position: 0 -50vh;
+            animation: grid-sweep 16s ease-in-out infinite;
         }
 
-        @keyframes scanline-sweep {0% { transform: translateY(-80px); }100% { transform: translateY(100vh); }
+        @keyframes grid-sweep {
+            0%   { mask-position: 0 -50vh; -webkit-mask-position: 0 -50vh; }
+            30%  { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
+            100% { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
         }
 
         @media (prefers-reduced-motion: reduce) {.cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
@@ -611,10 +626,10 @@
         }body.cyber-theme-enabled {
             background-color: #101414;
             background-image:
-                /* Subtle neutral grey grid lines (cyan pulled out of the background per D13) */
-                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
+                /* Cyan grid lines at 32px — restored to match switchboard-site .bg-grid */
+                linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
         }.cyber-theme-enabled .controls-strip, .cyber-theme-enabled .kanban-controls-strip {
             background: rgba(10, 10, 10, 0.65);
             backdrop-filter: blur(10px);
@@ -634,13 +649,7 @@
             background: transparent;
             box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
         }.cyber-theme-enabled #kanban-preview-pane, .cyber-theme-enabled #features-preview-pane, .cyber-theme-enabled #constitution-preview-pane, .cyber-theme-enabled #tuning-preview-pane, .cyber-theme-enabled #projects-preview-pane {
-            background-color: rgba(255, 255, 255, 0.015);
-            background-image:
-                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
+            background: transparent;
         }/* ── Cyber Panel Theme: Neon Glow Effects ── */
         /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
 
@@ -693,20 +702,20 @@
             font-size: 14px;
             line-height: 1.5;
             word-wrap: break-word;
-            color: var(--vscode-editor-foreground, #cccccc);
+            color: var(--doc-text);
         }#kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6, #features-preview-content h1, #features-preview-content h2, #features-preview-content h3, #features-preview-content h4, #features-preview-content h5, #features-preview-content h6, #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6, #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6, #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6, #projects-preview-content h1, #projects-preview-content h2, #projects-preview-content h3, #projects-preview-content h4, #projects-preview-content h5, #projects-preview-content h6 {
             margin-top: 24px;
             margin-bottom: 12px;
             font-weight: 600;
             line-height: 1.25;
-            color: #ffffff;
+            color: var(--doc-heading);
         }/* Cyber theme — display heading typography */
         body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6, body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6, body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6, body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6, body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6, body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             font-family: var(--font-family);
             line-height: 1.1;
-        }/* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
+        }/* Cyber theme — doc preview h1 cyan (accent), h2-h6 cyan (no glow) */
         body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #projects-preview-content h1 {
-            color: #ffffff;
+            color: var(--doc-heading);
         }/* Cyber theme — doc preview h2-h6 use accent color */
         body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             color: var(--accent-primary);
@@ -721,7 +730,7 @@
         }#kanban-preview-content h2, #features-preview-content h2, #constitution-preview-content h2, #system-preview-content h2, #tuning-preview-content h2, #projects-preview-content h2 {
             font-size: 1.5em; /* 1.5em relative to 14px base = 21px */
             padding-bottom: 0.3em;
-            border-bottom: 1px solid var(--accent-teal-dim);
+            border-bottom: 1px solid var(--doc-border);
             border-left: 2px solid var(--accent-teal-dim);
             padding-left: 6px;
             text-transform: uppercase;
@@ -740,7 +749,7 @@
         }#kanban-preview-content p, #features-preview-content p, #constitution-preview-content p, #system-preview-content p, #tuning-preview-content p, #projects-preview-content p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
-            color: var(--text-primary, #e0e0e0);
+            color: var(--doc-text);
             font-size: inherit; /* Inherits from container's 14px */
         }#kanban-preview-content li, #features-preview-content li, #constitution-preview-content li, #system-preview-content li, #tuning-preview-content li, #projects-preview-content li {
             margin-bottom: 6px; /* Tighter list item spacing */
@@ -1119,6 +1128,74 @@
             display: block;
             overflow-y: auto;
         }
+        /* Review Mode popup (ported from planning.html) */
+        .comment-popup {
+            position: fixed;
+            z-index: 999;
+            width: min(420px, calc(100vw - 24px));
+            background: var(--panel-bg, #000000);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            display: none;
+        }
+        .comment-popup.visible {
+            display: block;
+        }
+        .popup-label {
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            margin-bottom: 6px;
+            font-family: var(--font-mono, monospace);
+        }
+        .selected-preview {
+            font-size: 12px;
+            color: var(--text-primary, #ccc);
+            background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 8px;
+            max-height: 80px;
+            overflow: auto;
+        }
+        .comment-popup textarea {
+            width: 100%;
+            min-height: 76px;
+            resize: vertical;
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            color: var(--text-primary, #ccc);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 4px;
+            padding: 8px;
+            font-family: var(--font-family, sans-serif);
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .popup-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .popup-actions button {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: var(--text-secondary, #888);
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .popup-actions button.primary {
+            background: var(--accent-teal, var(--accent-primary));
+            color: #000;
+            border-color: var(--accent-teal, var(--accent-primary));
+        }
+        .review-mode-btn.active {
+            border-color: var(--accent-teal, #00f0ff);
+            color: var(--accent-teal, #00f0ff);
+        }
     </style>
 </head>
 <body>
@@ -1153,6 +1230,7 @@
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add">Import</button>
                 <button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>
                 <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">Chat Prompt</button>
+                <button id="btn-review-kanban" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the plan to comment">Review</button>
                 <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
             </div>
             <div class="content-row">
@@ -1186,6 +1264,7 @@
                 <button id="btn-cancel-projects" class="strip-btn" style="display:none;">Cancel</button>
                 <button class="strip-btn" id="btn-project-context" data-tooltip="When on, the selected project's PRD is injected into every dispatched prompt">PROJECT CONTEXT: OFF</button>
                 <button id="btn-copy-architect-projects" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Architect Prompt</button>
+                <button id="btn-review-projects" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the PRD to comment">Review</button>
                 <span id="projects-prd-status" style="font-size:11px; color:var(--text-secondary);"></span>
             </div>
             <div class="content-row">
@@ -1223,6 +1302,7 @@
                     <option value="">All Columns</option>
                 </select>
                 <button id="btn-new-feature" class="strip-btn">+ New Feature</button>
+                <button id="btn-review-features" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the feature to comment">Review</button>
             </div>
             <div class="content-row">
                 <div id="features-list-pane">
@@ -1268,6 +1348,7 @@
                 <button id="btn-delete-constitution" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
                 <button id="btn-manage-constitution-paths" class="strip-btn" title="Manage constitution file paths" disabled>Manage Paths</button>
                 <button id="btn-copy-architect-constitution" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Architect Prompt</button>
+                <button id="btn-review-constitution" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the constitution to comment">Review</button>
             </div>
             <div class="content-row">
                 <div id="constitution-list-pane">
@@ -1302,6 +1383,7 @@
                 <button id="btn-cancel-system" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-delete-system" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
                 <button id="btn-copy-architect-system" class="strip-btn architect-shortcut-btn" title="Copy the Architect prompt">Architect Prompt</button>
+                <button id="btn-review-system" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the system doc to comment">Review</button>
             </div>
             <div class="content-row">
                 <div id="system-list-pane">
@@ -1450,6 +1532,17 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div class="comment-popup" id="review-comment-popup">
+        <div class="popup-label">Comment on selection</div>
+        <div class="selected-preview" id="review-selected-preview"></div>
+        <textarea id="review-comment-input" placeholder="Add your contextual feedback..."></textarea>
+        <div class="popup-actions">
+            <button id="review-cancel-comment">Cancel</button>
+            <button id="review-copy-prompt">Copy Prompt</button>
+            <button class="primary" id="review-submit-comment">Send to Planner</button>
         </div>
     </div>
 

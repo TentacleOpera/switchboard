@@ -33,5 +33,6 @@
 	"switchboard.statusBar.showDesignButton": true,
 	"switchboard.theme.disableCyberAnimation": true,
 	"switchboard.statusBar.showProjectButton": true,
-	"switchboard.statusBar.showMemoButton": true
+	"switchboard.statusBar.showMemoButton": true,
+	"switchboard.boardStateExport": "none"
 }

@@ -76,6 +76,12 @@
             --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
             --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
 
+            /* Doc preview tokens — aligned with switchboard-site readability */
+            --doc-bg: #101414;
+            --doc-border: #1d2323;   /* site --outline-variant — grey H2 rule + code borders */
+            --doc-text: #a0a6a6;     /* site --on-surface-variant — the muted value <p> actually renders */
+            --doc-heading: var(--accent-primary);
+
         }
 
         body.theme-claudify {
@@ -1047,7 +1053,7 @@
             font-size: 14px;
             line-height: 1.5;
             word-wrap: break-word;
-            color: var(--vscode-editor-foreground, #cccccc);
+            color: var(--doc-text);
         }
 
         #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
@@ -1059,7 +1065,7 @@
             margin-bottom: 12px;
             font-weight: 600;
             line-height: 1.25;
-            color: #ffffff;
+            color: var(--doc-heading);
         }
 
         /* Cyber theme — display heading typography */
@@ -1077,7 +1083,7 @@
         body.cyber-theme-enabled #markdown-preview-design h1,
         body.cyber-theme-enabled #kanban-preview-pane h1,
         body.cyber-theme-enabled #markdown-preview-tickets h1 {
-            color: #ffffff;
+            color: var(--doc-heading);
         }
         /* Cyber theme — doc preview h2-h6 use accent color */
         body.cyber-theme-enabled #markdown-preview h2, body.cyber-theme-enabled #markdown-preview h3, body.cyber-theme-enabled #markdown-preview h4, body.cyber-theme-enabled #markdown-preview h5, body.cyber-theme-enabled #markdown-preview h6,
@@ -1109,7 +1115,7 @@
         #markdown-preview-tickets h2 {
             font-size: 1.5em; /* 1.5em relative to 14px base = 21px */
             padding-bottom: 0.3em;
-            border-bottom: 1px solid var(--accent-teal-dim);
+            border-bottom: 1px solid var(--doc-border);
             border-left: 2px solid var(--accent-teal-dim);
             padding-left: 6px;
             text-transform: uppercase;
@@ -1176,7 +1182,7 @@
         #markdown-preview-tickets p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
-            color: var(--text-primary, #e0e0e0);
+            color: var(--doc-text);
             font-size: inherit; /* Inherits from container's 14px */
         }
 
@@ -2015,29 +2021,36 @@
         }
         .cyber-theme-enabled .cyber-scanlines { display: block; }
 
-        /* Animated CRT rolling sweep beam — only active when animation is not disabled */
+        /* Grid-lighting mask sweep — ported from switchboard-site .bg-grid::after.
+           A mask-position-animated silver-grid reveal that lights the cyan body grid
+           in place as the band descends, then parks off-screen for ~11s of the 16s cycle.
+           Only active when animation is not disabled. */
         .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
-            content: " ";
-            display: block;
+            content: "";
             position: absolute;
-            background: linear-gradient(
-                to bottom,
-                rgba(255, 255, 255, 0) 0%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 10%,
-                color-mix(in srgb, var(--accent-primary) 7%, transparent) 50%,
-                color-mix(in srgb, var(--accent-primary) 3%, transparent) 90%,
-                rgba(255, 255, 255, 0) 100%
-            );
-            width: 100%;
-            height: 80px;
+            inset: 0;
             pointer-events: none;
             z-index: 6;
-            animation: scanline-sweep 8s linear infinite;
+            background-image:
+                linear-gradient(180deg, transparent, rgba(214, 232, 238, 0.02), transparent),
+                linear-gradient(to right, rgba(214, 232, 238, 0.11) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(214, 232, 238, 0.11) 1px, transparent 1px);
+            background-size: 100% 100%, 32px 32px, 32px 32px;
+            -webkit-mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            -webkit-mask-size: 100% 40vh;
+            mask-size: 100% 40vh;
+            -webkit-mask-repeat: no-repeat;
+            mask-repeat: no-repeat;
+            -webkit-mask-position: 0 -50vh;
+            mask-position: 0 -50vh;
+            animation: grid-sweep 16s ease-in-out infinite;
         }
 
-        @keyframes scanline-sweep {
-            0% { transform: translateY(-80px); }
-            100% { transform: translateY(100vh); }
+        @keyframes grid-sweep {
+            0%   { mask-position: 0 -50vh; -webkit-mask-position: 0 -50vh; }
+            30%  { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
+            100% { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
         }
 
         /* Respect reduced-motion preference — suppress ONLY the sweep animation,
@@ -2200,10 +2213,10 @@
         body.cyber-theme-enabled {
             background-color: #101414;
             background-image:
-                /* Subtle neutral grey grid lines (cyan pulled out of the background per D13) */
-                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
+                /* Cyan grid lines at 32px — restored to match switchboard-site .bg-grid */
+                linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
         }
 
 
@@ -2240,29 +2253,17 @@
             background: transparent;
         }
 
-        /* Apply glassmorphism directly on the scroll containers where overflow-y:auto is set.
-           These sit directly above the body grid with no opaque ancestor in the way. */
+        /* Preview scroll panes — transparent so the single cyan body grid shows through.
+           Glass overlay + per-pane grey grid removed (no blur, no moiré). */
         .cyber-theme-enabled #preview-pane,
         .cyber-theme-enabled #preview-pane-online,
         .cyber-theme-enabled #preview-pane-tickets {
-            background-color: rgba(255, 255, 255, 0.015);
-            background-image:
-                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
+            background: transparent;
         }
 
-        /* Kanban preview — same direct-glass approach */
+        /* Kanban preview — same transparent approach */
         .cyber-theme-enabled #kanban-preview-pane {
-            background-color: rgba(255, 255, 255, 0.015);
-            background-image:
-                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
+            background: transparent;
         }
 
         /* Tab content wrappers — solid backgrounds that block the body grid */

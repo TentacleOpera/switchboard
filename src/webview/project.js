@@ -15,6 +15,9 @@
             tab.classList.add('active');
             const targetContent = document.getElementById(`${targetTab}-content`);
             if (targetContent) targetContent.classList.add('active');
+            if (REVIEWABLE_TABS.includes(activeTab) && state.reviewMode[activeTab]) {
+                exitReviewMode(activeTab, true);
+            }
             activeTab = targetTab;
 
             // Apply sidebar state for the active tab
@@ -58,7 +61,8 @@
         editOriginalContent: { kanban: null, constitution: null, features: null, system: null, projects: null },
         dirtyFlags: { kanban: false, constitution: false, features: false, system: false, projects: false },
         externalChangePending: { kanban: false, constitution: false, features: false, system: false, projects: false },
-        reviewMode: { kanban: false },
+        reviewMode: { kanban: false, features: false, projects: false, constitution: false, system: false },
+        reviewSelectedText: '',
         kanbanListCollapsed: false,
         featuresListCollapsed: false,
         constitutionListCollapsed: false,
@@ -1148,6 +1152,18 @@
             case 'architectPromptCopied':
                 showToast('Architect prompt copied to clipboard', 'success');
                 break;
+            case 'commentResult': {
+                const { ok, message } = msg;
+                if (ok) {
+                    hideReviewPopup(true);
+                    showToast('Comment sent to planner', 'success');
+                } else {
+                    const submitBtn = document.getElementById('review-submit-comment');
+                    if (submitBtn) { submitBtn.style.borderColor = '#ff6b6b'; setTimeout(() => { submitBtn.style.borderColor = ''; }, 2000); }
+                    showToast(message || 'Failed to send comment', 'error');
+                }
+                break;
+            }
 
 
 
@@ -2983,6 +2999,8 @@
 
         if (!previewPane || !textarea) return;
 
+        if (state.reviewMode[tab]) exitReviewMode(tab, true);
+
         textarea.value = state.editOriginalContent[tab] || '';
         previewPane.classList.add('edit-mode');
 
@@ -3379,6 +3397,168 @@
         if (score <= 8) return 'high';
         return 'very-high';
     }
+
+    // ─── Review Mode (generalized across project.html tabs) ─────────────────────
+    // Ports the kanban-only review-mode feature from planning.js and generalizes it
+    // to every eligible tab (kanban, features, projects, constitution, system).
+    // Tuning is excluded by design. See plan
+    // feature_plan_20260715105236_restore-review-mode-modal-project-panel.md.
+    const REVIEWABLE_TABS = ['kanban', 'features', 'projects', 'constitution', 'system'];
+
+    function getReviewContext(tab) {
+        switch (tab) {
+            case 'kanban': {
+                const p = _kanbanSelectedPlan;
+                return p ? { planFileAbsolute: p.planFile || '', sessionId: p.sessionId || '', topic: p.topic || '' } : null;
+            }
+            case 'features': {
+                const p = _featureSelectedPlan;
+                const file = _featurePreviewFilePath || (p && p.planFile) || '';
+                return file ? { planFileAbsolute: file, sessionId: (p && p.sessionId) || '', topic: (p && (p.topic || p.name)) || '' } : null;
+            }
+            case 'constitution': {
+                return _constitutionSelectedFile ? { planFileAbsolute: _constitutionSelectedFile, sessionId: '', topic: 'constitution' } : null;
+            }
+            case 'system': {
+                return _systemSelectedFile ? { planFileAbsolute: _systemSelectedFile, sessionId: '', topic: 'system' } : null;
+            }
+            case 'projects': {
+                // PRD is DB-backed (no file). Use the workspace root as the path so the
+                // backend's workspace resolution + boundary check succeed. The project name
+                // is carried in `topic`, but note the backend DROPS topic (see submit handler).
+                const wsRoot = getProjectsTabWorkspaceRoot();
+                return _selectedProjectName && wsRoot ? { planFileAbsolute: wsRoot, sessionId: '', topic: _selectedProjectName } : null;
+            }
+            default:
+                return null;
+        }
+    }
+
+    function enterReviewMode(tab) {
+        if (!REVIEWABLE_TABS.includes(tab)) return;
+        if (state.editMode[tab]) exitEditMode(tab); // project.js exitEditMode: 1 arg, discards silently, returns undefined
+        state.reviewMode[tab] = true;
+        const btn = document.getElementById(`btn-review-${tab}`);
+        if (btn) { btn.classList.add('active'); btn.textContent = 'Exit Review'; }
+    }
+
+    function exitReviewMode(tab, clearPopup) {
+        if (!REVIEWABLE_TABS.includes(tab)) return;
+        state.reviewMode[tab] = false;
+        state.reviewSelectedText = '';
+        if (clearPopup) hideReviewPopup(true);
+        const btn = document.getElementById(`btn-review-${tab}`);
+        if (btn) { btn.classList.remove('active'); btn.textContent = 'Review'; }
+    }
+
+    function hideReviewPopup(clear) {
+        const popup = document.getElementById('review-comment-popup');
+        if (popup) popup.classList.remove('visible');
+        if (clear) {
+            const input = document.getElementById('review-comment-input');
+            if (input) input.value = '';
+            state.reviewSelectedText = '';
+        }
+    }
+
+    function showReviewPopup(rect, selectedText) {
+        const popup = document.getElementById('review-comment-popup');
+        if (!popup) return;
+        const maxLeft = window.innerWidth - popup.offsetWidth - 12;
+        popup.style.left = `${Math.max(12, Math.min(rect.left, maxLeft > 12 ? maxLeft : rect.left))}px`;
+        popup.style.top = `${Math.min(window.innerHeight - 12, rect.bottom + 10)}px`;
+        const preview = document.getElementById('review-selected-preview');
+        if (preview) preview.textContent = selectedText;
+        popup.classList.add('visible');
+        const input = document.getElementById('review-comment-input');
+        if (input) input.focus();
+    }
+
+    function flashSelectedPreviewError() {
+        const preview = document.getElementById('review-selected-preview');
+        if (preview) preview.style.borderColor = '#ff6b6b';
+        setTimeout(() => { if (preview) preview.style.borderColor = ''; }, 2000);
+    }
+
+    function flashCommentInputError() {
+        const input = document.getElementById('review-comment-input');
+        if (input) input.style.borderColor = '#ff6b6b';
+        setTimeout(() => { if (input) input.style.borderColor = ''; }, 2000);
+    }
+
+    // Wire selection listeners on each eligible tab's preview-content element.
+    REVIEWABLE_TABS.forEach(tab => {
+        const previewEl = document.getElementById(`${tab}-preview-content`);
+        if (!previewEl) return;
+        previewEl.addEventListener('mouseup', () => {
+            if (!state.reviewMode[tab]) return;
+            setTimeout(() => {
+                const sel = window.getSelection();
+                if (!sel || sel.rangeCount === 0) { hideReviewPopup(false); return; }
+                const text = sel.toString().trim();
+                if (!text) { hideReviewPopup(false); return; }
+                const rect = sel.getRangeAt(0).getBoundingClientRect();
+                state.reviewSelectedText = text;
+                showReviewPopup(rect, text);
+            }, 0);
+        });
+        previewEl.addEventListener('mousedown', (event) => {
+            if (!state.reviewMode[tab]) return;
+            const popup = document.getElementById('review-comment-popup');
+            if (popup && !popup.contains(event.target)) {
+                const sel = window.getSelection();
+                if (!sel || !sel.toString().trim()) hideReviewPopup(false);
+            }
+        });
+    });
+
+    // Wire the popup action buttons (Cancel, Copy Prompt, Send to Planner).
+    const reviewCancelBtn = document.getElementById('review-cancel-comment');
+    if (reviewCancelBtn) reviewCancelBtn.addEventListener('click', () => hideReviewPopup(true));
+
+    const reviewCopyPromptBtn = document.getElementById('review-copy-prompt');
+    if (reviewCopyPromptBtn) reviewCopyPromptBtn.addEventListener('click', () => {
+        if (!state.reviewSelectedText) { flashSelectedPreviewError(); return; }
+        const ctx = getReviewContext(activeTab);
+        const comment = (document.getElementById('review-comment-input')?.value || '').trim();
+        const prompt = `> [${state.reviewSelectedText.replace(/\s+/g, ' ').trim()}]${comment ? ` — Comment: "${comment}"` : ''}${ctx?.topic ? `\nContext: ${ctx.topic}` : ''}`;
+        navigator.clipboard.writeText(prompt).then(() => {
+            reviewCopyPromptBtn.textContent = 'Copied!';
+            setTimeout(() => { reviewCopyPromptBtn.textContent = 'Copy Prompt'; }, 2000);
+        });
+    });
+
+    const reviewSubmitBtn = document.getElementById('review-submit-comment');
+    if (reviewSubmitBtn) reviewSubmitBtn.addEventListener('click', () => {
+        const comment = (document.getElementById('review-comment-input')?.value || '').trim();
+        if (!state.reviewSelectedText) { flashSelectedPreviewError(); return; }
+        if (!comment) { flashCommentInputError(); return; }
+        const ctx = getReviewContext(activeTab);
+        if (!ctx || !ctx.planFileAbsolute) { showToast('No document loaded to review.', 'error'); return; }
+        // The backend payload builder ignores `topic`; for the file-less Projects tab, fold the
+        // project name into the comment so the planner actually receives the project context.
+        const outgoingComment = (activeTab === 'projects' && ctx.topic)
+            ? `[Project: ${ctx.topic}] ${comment}`
+            : comment;
+        vscode.postMessage({
+            type: 'submitComment',
+            sessionId: ctx.sessionId,
+            topic: ctx.topic,
+            planFileAbsolute: ctx.planFileAbsolute,
+            selectedText: state.reviewSelectedText,
+            comment: outgoingComment
+        });
+    });
+
+    // Wire each tab's Review Mode toggle button.
+    REVIEWABLE_TABS.forEach(tab => {
+        const btn = document.getElementById(`btn-review-${tab}`);
+        if (btn) btn.addEventListener('click', () => {
+            if (state.reviewMode[tab]) exitReviewMode(tab, true);
+            else enterReviewMode(tab);
+        });
+    });
+    // ─── End Review Mode ────────────────────────────────────────────────────────
 
     // Initialize sidebar state on load
     applySidebarState('kanban', state.kanbanListCollapsed);

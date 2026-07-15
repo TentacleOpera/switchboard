@@ -148,7 +148,13 @@ export class SetupPanelProvider implements vscode.Disposable {
             vscode.ViewColumn.One,
             {
                 enableScripts: true,
-                retainContextWhenHidden: true,
+                // retainContextWhenHidden intentionally OFF: keeping the hidden
+                // Setup webview's full renderer heap resident is pure memory cost
+                // here. The panel already rehydrates cleanly on reload — the inline
+                // script re-posts `ready` (→ postSetupPanelState re-pushes all
+                // extension-owned state) and the active tab is restored via
+                // vscode.getState()/setState(), which survives reloads by design.
+                retainContextWhenHidden: false,
                 localResourceRoots: [this._extensionUri]
             }
         );
