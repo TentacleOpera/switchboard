@@ -753,7 +753,7 @@ All commands registered in `extension.ts` and declared in `package.json`:
 ### Panels
 | Command ID | Title |
 |------------|-------|
-| `switchboard.openPlanningPanel` | Open Planning Panel |
+| `switchboard.openPlanningPanel` | Open Artifacts Panel |
 | `switchboard.openProjectPanel` | Open Project Panel |
 | `switchboard.openDesignPanel` | Open Design Panel |
 | `switchboard.openHub` | Open Status Bar Hub |

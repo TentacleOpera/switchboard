@@ -695,6 +695,14 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
         WHEN status = 'deleted' AND excluded.status = 'active' THEN excluded.status
         ELSE status
     END,
+    -- On reactivation (deleted → active — e.g. a plan moved back into a workspace that
+    -- still holds its archived COMPLETED tombstone), restore the incoming column;
+    -- otherwise leave kanban_column untouched, because the board is the source of truth
+    -- for column moves and a file re-import must never yank a card out of its column.
+    kanban_column = CASE
+        WHEN status = 'deleted' AND excluded.status = 'active' THEN excluded.kanban_column
+        ELSE kanban_column
+    END,
     complexity = excluded.complexity,
     tags = excluded.tags,
     repo_scope = excluded.repo_scope,

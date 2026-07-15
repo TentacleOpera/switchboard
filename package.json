@@ -122,7 +122,7 @@
       },
       {
         "command": "switchboard.openPlanningPanel",
-        "title": "Switchboard: Open Planning Panel",
+        "title": "Switchboard: Open Artifacts Panel",
         "category": "Switchboard"
       },
       {

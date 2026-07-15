@@ -142,6 +142,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `worktree-cleanup` | Mark a worktree merged and clean it up (kind-aware) via LocalApiServer. |
 | `switchboard-orchestrator` | Launched by the Orchestration automation mode (Start orchestrator button / autoban wake). Do NOT invoke ad hoc — side-effecting unattended batch manager (grouping, dispatch, merge-back). For deliberate resume/debug, read `.agents/skills/switchboard-orchestrator/SKILL.md` by path. |
 | `switchboard-orchestration` | Fleet coding/review agents working inside orchestration worktrees — discover the API port, read board/features/plans/worktrees, file requests to the orchestrator, and read the session log via HTTP endpoints. |
+| `switchboard-mcp` | Local stdio MCP server bridging Claude Desktop (and other MCP-only hosts with no shell/filesystem) to LocalApiServer. Claude Desktop reaches the management surface via this MCP server, not shell. Use the in-extension **Connect Claude Desktop** button (Setup panel) to write the config entry. |
 | `switchboard-contracts` | Agent-facing *behavior* contracts — consult when unsure how the system behaves (cards move on coding start, completion = plan-file mtime advance, plan files are write-once-at-the-end, subtask column exclusion). Never for invocation — use `switchboard-orchestration` + `GET /catalog` for that. |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.

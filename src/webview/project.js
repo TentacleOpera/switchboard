@@ -690,6 +690,11 @@
                 if (kanbanColumnFilter) kanbanColumnFilter.value = '';
                 kanbanFilters.complexity = '';
                 if (kanbanComplexityFilter) kanbanComplexityFilter.value = '';
+                // Clear the search too — a lingering term (e.g. from the search box) filters the
+                // list before the Review Plan target scrolls into view, so it would hijack every
+                // navigation to whatever's typed. Wipe it so the target card is the one shown.
+                kanbanFilters.search = '';
+                if (kanbanSearch) kanbanSearch.value = '';
 
                 // Activate the Kanban tab — its click handler fires fetchKanbanPlans.
                 const kanbanTabBtn = document.querySelector('.shared-tab-btn[data-tab="kanban"]');
