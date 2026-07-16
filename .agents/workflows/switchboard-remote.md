@@ -201,17 +201,15 @@ property updates — which is all this flow needs. If your specific connector la
 create-row, fall back to creating a child page under the Comments DB with the same
 properties, or report the gap to the user.
 
-## Feature Grouping
+## Plan Sizing & Feature Grouping
 
-When the work described will span 3 or more plan files on a related topic (sharing a
-common feature area or root cause):
+**Plan Sizing — split before drafting.** Before writing any plan file, assess whether the work is one plan or multiple. Auto-split into separate plan files when EITHER signal is present:
+- **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
+- **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own.
+When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. If the user explicitly asks for a single plan, respect that and write one.
 
-- **Early (during scoping):** Flag it once: *"This looks like it will produce 3+
-  related plans — once they're all drafted, want me to group them under a feature?"*
-  Do not create anything yet.
-- **Closing (when all plans are drafted):** Offer again: *"You now have [N] plans
-  covering [topic] — want me to create a feature to group them?"*
+**Feature Grouping.** When the work described will span 3 or more plan files on a related topic (sharing a common feature area or root cause):
+- **Early (during scoping):** Flag it once: *"This looks like it will produce 3+ related plans — once they're all drafted, want me to group them under a feature?"* Do not create anything yet.
+- **Closing (when all plans are drafted):** Offer again: *"You now have [N] plans covering [topic] — want me to create a feature to group them?"*
 
-Only create the feature if the user confirms. In a remote session, feature creation follows
-the `/create-feature` skill (direct file write to `.switchboard/features/`) or the
-`create-feature.js` script if the extension is reachable.
+Only create the feature if the user confirms. In a remote session, feature creation follows the `/create-feature` skill (direct file write to `.switchboard/features/`) or the `create-feature.js` script if the extension is reachable.

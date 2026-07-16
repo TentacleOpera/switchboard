@@ -13,8 +13,8 @@ Improve the reliability and output quality of the memo→plan pipeline so it pro
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Plan: Memo Capture Should Prompt Agent to Suggest Feature Groupings When Relevant](../plans/feature_plan_20260716_memo_capture_should_prompt_feature_grouping.md) — **INTERN CODED**
-- [x] [Memo Process Prompt: Add Complexity Ratings & Correct Metadata Format](../plans/feature_plan_20260716125702_memo-process-prompt-complexity-format.md) — **INTERN CODED**
+- [ ] [Plan: Memo Capture Should Prompt Agent to Suggest Feature Groupings When Relevant](../plans/feature_plan_20260716_memo_capture_should_prompt_feature_grouping.md) — **CODE REVIEWED**
+- [ ] [Memo Process Prompt: Add Complexity Ratings & Correct Metadata Format](../plans/feature_plan_20260716125702_memo-process-prompt-complexity-format.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,3 +30,7 @@ Improve the reliability and output quality of the memo→plan pipeline so it pro
 ## Completion Summary
 
 Implemented both memo-workflow-quality subtasks across the two memo entry points. Updated `src/services/TaskViewerProvider.ts` `_buildMemoPlannerPrompt` to use the explicit `**Complexity:**`, `**Tags:**`, and `**Project:**` metadata format and lowered the feature-grouping offer to a 2-plan threshold with active title review. Synced `authentication` into `DEFAULT_CHAT_BASE_INSTRUCTIONS` (`src/services/agentPromptBuilder.ts`) and `.agents/workflows/switchboard-cloud.md`. Restructured `.agents/workflows/switchboard-memo.md` step 5 into a mandatory `[FEATURE GROUPING CHECK]` gate with the same 2-plan threshold. Static grep verification passed; compilation and automated tests were skipped per session directives.
+
+## Review Findings
+
+Both subtasks' own edits verified correct against their plans. Review uncovered a CRITICAL pre-existing regression (introduced by the unrelated commit `a1928ce`, not by this feature): the Plan Sizing splitting signals required by `src/test/prompt-split-guidance-sync.test.js` had been deleted from `switchboard-memo.md` step 4, `switchboard-cloud.md`, and `switchboard-remote.md`, leaving the regression guard cited by both plans silently failing on 3 of 5 surfaces. Fixes applied during review: restored the "Before writing / 3+ distinct deliverables / 2+ independently-shippable phases / no orphan plans" sentence to `switchboard-memo.md:53` step 4; restored the 3-step "Assess scope → Plan → Gate" Process (with splitting signals) and the "step 5 (Gate)" pointer in `switchboard-cloud.md`, removing the forbidden standalone `## Feature Grouping` section; restored the `## Plan Sizing & Feature Grouping` header + splitting signals in `switchboard-remote.md`. Verification: 33 static assertions replicating the sync test's exact checks across all 5 prompt surfaces now pass (compilation and automated tests skipped per directives). Remaining risk: the `a1928ce` compact-Process rewrite of `switchboard-cloud.md` is partially reverted — if that compactness was a deliberate UX choice it warrants a separate follow-up.
