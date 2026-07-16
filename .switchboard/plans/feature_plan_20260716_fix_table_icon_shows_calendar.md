@@ -85,3 +85,6 @@ Complexity 1 → **Send to Intern.** Mechanical one-character label fix; the onl
 
 ## Completion Report (2026-07-16)
 Implemented as planned: swapped the Insert Table toolbar button label from 📅 to ⊞ (U+229E) in `src/webview/markdownEditor.js` (~line 416), leaving the title and click handler untouched. Single file changed. Syntax-checked with node --check; no issues encountered. Visual glyph-render confirmation remains a manual step in the running webview.
+
+## Review Findings
+Reviewed against plan and regression-audited the `createBtn` call path. No CRITICAL/MAJOR findings: the change is a single hard-coded glyph literal swap with no signature, state, or message-contract impact; `createBtn`'s `innerHTML` assignment carries no user input here (no injection surface). No orphaned references to the old 📅 label (it was a literal, not an identifier). No code fixes applied. Remaining risk: cosmetic only — confirm `⊞` (U+229E) renders in the webview font (not tofu); fallbacks `▦`/`▤` are documented in the plan.

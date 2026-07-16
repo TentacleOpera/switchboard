@@ -15,12 +15,15 @@ Fix a cluster of UX and visual defects in the Switchboard markdown editor — a 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Plan: Fix Markdown Editor Internal Scrollbar](../plans/feature_plan_20260716_fix_markdown_editor_internal_scrollbar.md) — **CODER CODED**
-- [ ] [Plan: Fix Blue Background on Markdown Editor Panel](../plans/feature_plan_20260716_fix_blue_background_on_markdown_editor.md) — **CODER CODED**
-- [ ] [Plan: Fix Image Attachments Not Showing in Edit Preview](../plans/feature_plan_20260716_fix_image_attachments_not_showing_in_edit_preview.md) — **CODER CODED**
-- [ ] [Plan: Fix Table Icon Shows Calendar Emoji](../plans/feature_plan_20260716_fix_table_icon_shows_calendar.md) — **CODER CODED**
+- [ ] [Plan: Fix Markdown Editor Internal Scrollbar](../plans/feature_plan_20260716_fix_markdown_editor_internal_scrollbar.md) — **CODE REVIEWED**
+- [ ] [Plan: Fix Blue Background on Markdown Editor Panel](../plans/feature_plan_20260716_fix_blue_background_on_markdown_editor.md) — **CODE REVIEWED**
+- [ ] [Plan: Fix Image Attachments Not Showing in Edit Preview](../plans/feature_plan_20260716_fix_image_attachments_not_showing_in_edit_preview.md) — **CODE REVIEWED**
+- [ ] [Plan: Fix Table Icon Shows Calendar Emoji](../plans/feature_plan_20260716_fix_table_icon_shows_calendar.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
 
 The CSS background fix and scrollbar fix both touch `markdownEditor.js` styling and should be landed together to avoid conflicting stylesheet edits. The image-preview fix touches `PlanningPanelProvider.ts` + the webview message contract and is independent. The icon fix is fully independent. No hard ordering constraints otherwise; subtasks can largely be executed in parallel with care around the shared `markdownEditor.js` stylesheet.
+
+## Review Findings
+All four subtasks reviewed in-place against their plans with advanced regression analysis (caller/consumer tracing, double-trigger, race, orphaned-reference, and full execution-path audits). No CRITICAL or MAJOR findings — no code fixes were required. Files changed across the feature: `src/webview/markdownEditor.js` (icon swap + 5 background-var swaps + scrollbar height-chain relaxation), `src/services/PlanningPanelProvider.ts` (`renderMarkdownLive` image-path rewrite guard), `src/webview/planning.js` (tickets edit-preview message now carries `provider`/`id`/`workspaceRoot`). Key regression checks passed: all 5 `renderMarkdownLive` callers verified (only tickets sends identity → others no-op); shared-shell height change confirmed safe across all editor mounts via flex-stretch; no orphaned CSS-var references remain in the editor. Remaining risks are empirical/manual only: glyph render of `⊞`, split-view visual balance, and multi-mount theme eyeball — none block delivery.

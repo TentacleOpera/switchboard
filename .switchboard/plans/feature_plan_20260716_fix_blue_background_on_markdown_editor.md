@@ -98,3 +98,6 @@ Complexity 3 → **Send to Intern.** Routine single-file CSS alignment; the only
 
 ## Completion Report (2026-07-16)
 Implemented all five edits in the injected `<style>` block of `src/webview/markdownEditor.js`: `.md-editor-shell` → `var(--panel-bg, #000000)`; `.md-toolbar`, `.md-view-toggle`, `.md-live-preview`, `.md-table-popover` → `var(--panel-bg2, #0a0a0a)`. Grep confirms no `#0d1117`/`#161b22` fallbacks remain in the file. Landed together with the scrollbar fix's edits to the same `.md-editor-shell` rule block as one coherent change. No issues encountered; multi-mount visual check remains manual.
+
+## Review Findings
+Reviewed all five var swaps against the plan; no CRITICAL/MAJOR findings. Orphaned-reference audit: no remaining `--bg-color`/`--toolbar-bg`/`--preview-bg`/`--toggle-bg` usages in `markdownEditor.js` (the matches in `kanban.html`/`implementation.html`/`setup.html` are those files' own `:root` definitions for unrelated surfaces — not the editor). `--panel-bg`/`--panel-bg2` are defined in all six webview `:root` blocks, so the vars resolve at every mount point; black fallbacks keep it safe if a host omits them. No code fixes applied. Remaining risk: none functional — only the manual multi-mount eyeball that the split-view editor/preview border stays legible with `--panel-bg2` on the preview.
