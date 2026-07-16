@@ -5699,8 +5699,6 @@ Each plan file must include:
             enabled: this.handleGetUltracodeAnimationSetting()
         });
 
-
-
         const gitIgnoreConfig = this.handleGetGitIgnoreConfig();
         this._setupPanelProvider.postMessage({ type: 'gitIgnoreConfig', ...gitIgnoreConfig });
 

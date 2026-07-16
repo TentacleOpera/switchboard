@@ -19,7 +19,11 @@ Two Claudify/planning-tab UI fixes surfaced during testing: (1) remove the pixel
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Remove the Pixel-Font Option From the Claudify Theme](../plans/feature_plan_20260716151401_remove-claudify-pixel-font-option.md) — **INTERN CODED**
-- [ ] [Give the Dev Docs Tab Proper Sidebar Cards Like the Other Tabs](../plans/feature_plan_20260716151402_devdocs-tab-sidebar-cards.md) — **INTERN CODED**
+- [ ] [Remove the Pixel-Font Option From the Claudify Theme](../plans/feature_plan_20260716151401_remove-claudify-pixel-font-option.md) — **CODE REVIEWED**
+- [ ] [Give the Dev Docs Tab Proper Sidebar Cards Like the Other Tabs](../plans/feature_plan_20260716151402_devdocs-tab-sidebar-cards.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Both subtasks reviewed in-place against their plan criteria. Pixel-font removal: 16-file excision confirmed complete (grep sweep zero matches; parity check passes); fixed stale "keep base GeistPixel" comment in 3 webviews and collapsed cosmetic blank lines in `TaskViewerProvider.ts`. Dev Docs sidebar cards: implementation correct (`.tree-node` cards, both querySelectors swapped, `buildSidebarToggleRow` confirmed not a `.tree-node`); no fixes needed. Files changed in review: `src/webview/planning.html`, `src/webview/design.html`, `src/webview/project.html`, `src/services/TaskViewerProvider.ts`. Remaining risk: dead `--display-font`/`GeistPixel` `@font-face` + URI injection remain (out of scope, harmless).
 
