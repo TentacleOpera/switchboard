@@ -6321,6 +6321,7 @@ Please format the updated output document strictly as follows:
                                     let dateCreated: string | undefined;
                                     let syncStatus: 'synced' | 'modified' | 'local-only' = 'local-only';
                                     let assignees: string[] = [];
+                                    let priority: { priority: string; color: string; orderindex: string } | null = null;
                                     if (fs.existsSync(dbT.filePath)) {
                                         try {
                                             const content = fs.readFileSync(dbT.filePath, 'utf8');
@@ -6343,6 +6344,20 @@ Please format the updated output document strictly as follows:
                                                 if (cm) { dateCreated = cm[1].trim(); }
                                                 const am = fm[1].match(/^assignees:\s*(.+)$/m);
                                                 if (am) { assignees = am[1].split(',').map((s: string) => s.trim()).filter(Boolean); }
+                                                // ClickUp priority, persisted at import time so the
+                                                // file-backed sidebar renders the priority dot without
+                                                // re-hitting the API. Reconstruct the { priority, color,
+                                                // orderindex } shape the webview render helpers consume.
+                                                const prm = fm[1].match(/^priority:\s*(.+)$/m);
+                                                const prcm = fm[1].match(/^priorityColor:\s*(.+)$/m);
+                                                const prom = fm[1].match(/^priorityOrderIndex:\s*(.+)$/m);
+                                                if (prm || prom) {
+                                                    priority = {
+                                                        priority: prm ? prm[1].trim() : '',
+                                                        color: prcm ? prcm[1].trim() : '',
+                                                        orderindex: prom ? prom[1].trim() : ''
+                                                    };
+                                                }
                                             }
                                             // Fallback to file mtime for older files lacking a `created:` field,
                                             // so they still sort in a reasonable order rather than to the end.
@@ -6374,7 +6389,8 @@ Please format the updated output document strictly as follows:
                                         syncStatus,
                                         url: dbT.url || '',
                                         dateCreated,
-                                        assignees
+                                        assignees,
+                                        priority
                                     });
                                 }
                             }
@@ -9451,6 +9467,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 let kanbanColumn = '';
                 let dateCreated: string | undefined;
                 let assignees: string[] = [];
+                let priority: { priority: string; color: string; orderindex: string } | null = null;
                 try {
                     const content = nfs.readFileSync(fullPath, 'utf8');
                     const fm = content.match(/^---\n([\s\S]*?)\n---/);
@@ -9458,6 +9475,16 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         const km = fm[1].match(/kanbanColumn:\s*(.+)/); if (km) { kanbanColumn = km[1].trim(); }
                         const cm = fm[1].match(/^created:\s*(.+)$/m); if (cm) { dateCreated = cm[1].trim(); }
                         const am = fm[1].match(/^assignees:\s*(.+)$/m); if (am) { assignees = am[1].split(',').map(s => s.trim()).filter(Boolean); }
+                        const prm = fm[1].match(/^priority:\s*(.+)$/m);
+                        const prcm = fm[1].match(/^priorityColor:\s*(.+)$/m);
+                        const prom = fm[1].match(/^priorityOrderIndex:\s*(.+)$/m);
+                        if (prm || prom) {
+                            priority = {
+                                priority: prm ? prm[1].trim() : '',
+                                color: prcm ? prcm[1].trim() : '',
+                                orderindex: prom ? prom[1].trim() : ''
+                            };
+                        }
                     }
                     const h1 = content.match(/^#\s+(.+)$/m);
                     if (h1) { title = h1[1].trim(); }
@@ -9467,7 +9494,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 if (!dateCreated) {
                     try { dateCreated = nfs.statSync(fullPath).mtime.toISOString(); } catch {}
                 }
-                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '', dateCreated, assignees });
+                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '', dateCreated, assignees, priority });
             }
         }
     }

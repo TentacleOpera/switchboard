@@ -25,6 +25,21 @@ No hard ordering constraints; subtasks can be executed in parallel. They touch d
 
 Implemented both subtasks. Subtask 1 (ClickUp priority lost on list reload): added `priority: task.priority || null` to `_mapClickUpTaskToSidebar` in `src/services/PlanningPanelProvider.ts` (line 2468) so the normalized priority survives the list-reload re-fetch — one-line additive mapper fix, null pass-through preserved. Subtask 2 (ticket delete local file not removed): ported the DB-first lookup pattern into `TaskViewerProvider._findTicketDocument` (`src/services/TaskViewerProvider.ts`, lines 20930–20969) — now consults `cacheService.getImportBySlugPrefix` before scanning, with the filesystem fallback expanded to cover all `_getAllowedRoots()` instead of just the resolved root; and added `loadLocalTicketFiles()` to the `ticketDeleted` success branch in `src/webview/planning.js` (line 5529) so the local files sidebar refreshes after delete. Files changed: `src/services/PlanningPanelProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/planning.js`. No issues encountered; all changes match the plan specs exactly and were verified present in the working tree. Red-team review passed — null/falsy edge cases, ENOENT guards, and the `if (res.success)` unlink gate all hold.
 
+## UAT Failure & Correct Fix (priority still missing)
+
+The original subtask-1 fix was **incomplete** — it patched the wrong path. `_mapClickUpTaskToSidebar` only feeds the transient API path (`clickupProjectLoaded`). The Tickets tab sidebar is **file-backed** ("the sidebar is always file-backed" — planning.js:5540): after any import/delete/initial-load, `loadLocalTicketFiles()` → `localTicketFilesListed` overwrites `clickUpProjectIssues` from the ticket `.md` files, discarding the API-mapped priority. So priority flashed on list-select then vanished — hence UAT "priority still missing".
+
+Priority was dropped at four points along the file-backed path, none touched by the mapper fix. Fixed all four:
+
+1. **`TaskViewerProvider._buildClickUpImportPlanContent`** — now writes `priority`, `priorityColor`, `priorityOrderIndex` to the ticket-file YAML frontmatter at import time (omitted when the task has no priority set).
+2. **`PlanningPanelProvider` `listLocalTicketFiles` (DB path)** — parses those three keys and emits `priority: { priority, color, orderindex }` on each sidebar ticket.
+3. **`PlanningPanelProvider._scanLocalTicketFiles` (fallback live scan)** — same parse + emit, so the DB-cold path also carries priority.
+4. **`planning.js` `localTicketFilesListed` handler** — passes `priority` through into the rebuilt `clickUpProjectIssues` objects (was dropping it).
+
+The webview render helpers (`_clickUpPriorityColor` / `_clickUpPriorityName` / `_renderClickUpTicketCard`) already consume `task.priority.{color,orderindex,priority}`, so no render change was needed.
+
+**Re-test note:** already-imported ticket files predate the frontmatter change and won't show priority until rewritten. Selecting the list re-imports and rewrites its files WITH the new keys (same mechanism `listId`/`status` frontmatter relies on), so the dots appear after the next list select. Files changed: `src/services/TaskViewerProvider.ts`, `src/services/PlanningPanelProvider.ts`, `src/webview/planning.js`. `npm run compile` clean.
+
 ## Review Findings
 
 Direct reviewer pass completed for both subtasks. No CRITICAL or MAJOR findings — both implementations match their plans exactly and pass the advanced regression audit (caller/consumer tracing, double-trigger check, race-condition check, orphaned-reference grep, full execution-path audit). Only NIT-level findings, all pre-existing or edge-case:

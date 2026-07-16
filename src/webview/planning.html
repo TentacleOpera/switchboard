@@ -80,6 +80,7 @@
             --doc-bg: #101414;
             --doc-border: #1d2323;   /* site --outline-variant — grey H2 rule + code borders */
             --doc-text: #a0a6a6;     /* site --on-surface-variant — the muted value <p> actually renders */
+            --doc-text-bright: #e2e8f0; /* site .docs-article / --on-surface — bright inherited text for non-<p> elements */
             --doc-heading: var(--accent-primary);
 
         }
@@ -907,8 +908,7 @@
             border-radius: 4px;
             margin: 3px 0;
             border: 1px solid var(--border-color);
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border-left: 3px solid var(--accent-teal-dim);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             cursor: pointer;
             user-select: none;
             font-size: 12px;
@@ -1045,15 +1045,15 @@
         #kanban-preview-pane {
             flex: 1;
             overflow-y: auto;
-            padding: 16px;
+            padding: 32px 24px 40px;
             width: 100%;
             box-sizing: border-box;
             margin: 0;
             font-family: var(--font-family);
             font-size: 14px;
-            line-height: 1.5;
+            line-height: 1.6;
             word-wrap: break-word;
-            color: var(--doc-text);
+            color: var(--doc-text-bright);
         }
 
         #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
@@ -1075,7 +1075,7 @@
         body.cyber-theme-enabled #kanban-preview-pane h1, body.cyber-theme-enabled #kanban-preview-pane h2, body.cyber-theme-enabled #kanban-preview-pane h3, body.cyber-theme-enabled #kanban-preview-pane h4, body.cyber-theme-enabled #kanban-preview-pane h5, body.cyber-theme-enabled #kanban-preview-pane h6,
         body.cyber-theme-enabled #markdown-preview-tickets h1, body.cyber-theme-enabled #markdown-preview-tickets h2, body.cyber-theme-enabled #markdown-preview-tickets h3, body.cyber-theme-enabled #markdown-preview-tickets h4, body.cyber-theme-enabled #markdown-preview-tickets h5, body.cyber-theme-enabled #markdown-preview-tickets h6 {
             font-family: var(--font-family);
-            line-height: 1.1;
+            line-height: 1.2;
         }
         /* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
         body.cyber-theme-enabled #markdown-preview h1,
@@ -1099,7 +1099,7 @@
         #markdown-preview-design h1,
         #kanban-preview-pane h1,
         #markdown-preview-tickets h1 {
-            font-size: 2em; /* 2em relative to 14px base = 28px */
+            font-size: 2.25rem; /* 36px — matches site .docs-article h1 */
             margin-top: 0;
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--accent-teal-dim);
@@ -1113,7 +1113,8 @@
         #markdown-preview-design h2,
         #kanban-preview-pane h2,
         #markdown-preview-tickets h2 {
-            font-size: 1.5em; /* 1.5em relative to 14px base = 21px */
+            font-size: 1.5rem; /* 24px — matches site .docs-article h2 */
+            margin-top: 36px;
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--doc-border);
             border-left: 2px solid var(--accent-teal-dim);
@@ -1148,7 +1149,7 @@
         #markdown-preview-design h3,
         #kanban-preview-pane h3,
         #markdown-preview-tickets h3 {
-            font-size: 1.25em; /* 1.25em relative to 14px base = 17.5px */
+            font-size: 1.2rem; /* 19px — matches site .docs-article h3 */
         }
 
         #markdown-preview h4,
@@ -1193,7 +1194,7 @@
         #markdown-preview-tickets li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
-            color: var(--vscode-editor-foreground, #cccccc);
+            color: var(--doc-text-bright);
             font-size: inherit;
         }
 
@@ -1255,7 +1256,7 @@
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
             border-radius: 2px;
-            color: var(--vscode-editor-foreground, var(--text-secondary));
+            color: var(--doc-text);
             background: transparent;
         }
 
@@ -1938,7 +1939,7 @@
         }
         .cyber-theme-enabled .sidebar-search-input {
             background: rgba(10, 10, 10, 0.70);
-            border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            border-color: var(--border-color);
         }
         #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
         #kanban-list-pane { flex: 1; overflow-y: auto; }
@@ -1953,8 +1954,7 @@
             margin: 4px 0;
             border: 1px solid var(--border-color);
             /* Match kanban board card gradient */
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border-left: 3px solid var(--accent-teal-dim);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             cursor: pointer;
             transition: all 0.15s;
         }
@@ -2134,46 +2134,32 @@
         /* ── Cyber Panel Theme: Neon Glow Effects ── */
         /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
 
-        /* Preview panel wrapper: subtle outer glow border */
-        .cyber-theme-enabled .preview-panel-wrapper {
-            box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
-        }
+        /* Preview panel wrapper: no surface glow — matches switchboard-site, whose
+           .docs-article reading surface has no inset glow (that glow lives only on the
+           site's decorative .window/.clip frames, not the docs page). */
 
-        /* Inline code: neon glow */
-        .cyber-theme-enabled #markdown-preview code,
-        .cyber-theme-enabled #markdown-preview-online code,
-        .cyber-theme-enabled #markdown-preview-design code,
-        .cyber-theme-enabled #kanban-preview-pane code,
-        .cyber-theme-enabled #markdown-preview-tickets code {
-            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
-        }
+        /* Inline code: no glow (site inline code has none) */
 
-        /* Code blocks: subtle glow border */
+        /* Code blocks: faint glow border, matching the site's 5% */
         .cyber-theme-enabled #markdown-preview pre,
         .cyber-theme-enabled #markdown-preview-online pre,
         .cyber-theme-enabled #markdown-preview-design pre,
         .cyber-theme-enabled #kanban-preview-pane pre,
         .cyber-theme-enabled #markdown-preview-tickets pre {
-            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
-                        inset 0 0 12px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 0 15px color-mix(in srgb, var(--accent-teal) 5%, transparent),
+                        inset 0 0 10px rgba(0, 0, 0, 0.5);
         }
 
-        /* Blockquotes: glowing left border */
+        /* Blockquotes: cyan left border, no glow (matches the site) */
         .cyber-theme-enabled #markdown-preview blockquote,
         .cyber-theme-enabled #markdown-preview-online blockquote,
         .cyber-theme-enabled #markdown-preview-design blockquote,
         .cyber-theme-enabled #kanban-preview-pane blockquote,
         .cyber-theme-enabled #markdown-preview-tickets blockquote {
             border-left-color: var(--accent-teal);
-            box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
 
-        /* Markdown alerts: enhanced glow */
-        .cyber-theme-enabled .alert-note { box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent); }
-        .cyber-theme-enabled .alert-tip { box-shadow: 0 0 8px rgba(102, 187, 106, 0.15); }
-        .cyber-theme-enabled .alert-important { box-shadow: 0 0 8px rgba(187, 134, 252, 0.15); }
-        .cyber-theme-enabled .alert-warning { box-shadow: 0 0 8px rgba(255, 183, 77, 0.15); }
-        .cyber-theme-enabled .alert-caution { box-shadow: 0 0 8px rgba(255, 138, 101, 0.15); }
+        /* Markdown alerts: no glow (matches the site — tint + left border only) */
 
         /* Kanban plan items: neon glow on selection/hover */
         .cyber-theme-enabled .kanban-plan-item.selected {
@@ -2226,7 +2212,7 @@
             background: rgba(10, 10, 10, 0.65);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-            border-bottom-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            border-bottom-color: var(--border-color);
         }
 
         /* Sidebar tree panes */
@@ -2236,7 +2222,7 @@
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            border-right-color: var(--border-color);
         }
 
         /* Kanban list pane */
@@ -2288,7 +2274,7 @@
             background: rgba(13, 13, 13, 0.60);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            border-color: var(--border-color);
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 6%, transparent), 0 4px 12px rgba(0, 0, 0, 0.4);
         }
 
@@ -2321,7 +2307,7 @@
 
         /* Secondary planning buttons */
         .cyber-theme-enabled .planning-button.secondary {
-            border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            border-color: var(--border-color);
             background: rgba(10, 10, 10, 0.50);
         }
         .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
@@ -2333,7 +2319,7 @@
         .cyber-theme-enabled .planning-select,
         .cyber-theme-enabled .planning-input {
             background: rgba(10, 10, 10, 0.70);
-            border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            border-color: var(--border-color);
         }
         .cyber-theme-enabled .planning-select:focus,
         .cyber-theme-enabled .planning-input:focus {
@@ -2800,8 +2786,7 @@
             border-radius: 4px;
             margin: 4px 0;
             border: 1px solid var(--border-color);
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border-left: 3px solid var(--accent-teal-dim);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             cursor: pointer;
             user-select: none;
             font-size: 12px;

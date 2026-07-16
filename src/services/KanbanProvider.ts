@@ -1320,6 +1320,11 @@ export class KanbanProvider implements vscode.Disposable {
             this._lastPushKey = '';
             this._webviewReady = false;
             this._pendingWebviewMessages = [];
+            // Defense-in-depth: clear the broadcaster's webview reference so any
+            // messages sent between dispose and reopen queue in the broadcaster's
+            // own _pendingWebviewMessages (flushed on the next setWebview) instead
+            // of being silently dropped to the now-dead webview.
+            this._broadcaster?.setWebview(null);
         }, null, this._disposables);
 
         const workspaceRoot = this._resolveWorkspaceRoot();
@@ -1327,6 +1332,15 @@ export class KanbanProvider implements vscode.Disposable {
             void this._getKanbanDb(workspaceRoot).ensureReady();
             await this.applyLiveSyncConfig(workspaceRoot);
         }
+
+        // Mirror deserializeWebviewPanel(): re-init the kanban service so the
+        // _broadcaster singleton's webview reference is updated to the freshly
+        // created panel. Without this, reopening the Kanban tab (e.g. after VS
+        // Code destroys the webview under memory pressure) leaves the broadcaster
+        // pointing at the dead webview and all host→webview messages are silently
+        // lost — the board cannot load workspaces. Placed AFTER _resolveWorkspaceRoot()
+        // so _currentWorkspaceRoot is set before the broadcaster is (re)initialized.
+        this._initKanbanService();
 
         this._panel.onDidChangeViewState(
             (e) => {
@@ -1388,6 +1402,11 @@ export class KanbanProvider implements vscode.Disposable {
             this._lastPushKey = '';
             this._webviewReady = false;
             this._pendingWebviewMessages = [];
+            // Defense-in-depth: clear the broadcaster's webview reference so any
+            // messages sent between dispose and reopen queue in the broadcaster's
+            // own _pendingWebviewMessages (flushed on the next setWebview) instead
+            // of being silently dropped to the now-dead webview.
+            this._broadcaster?.setWebview(null);
         }, null, this._disposables);
 
         const workspaceRoot = this._resolveWorkspaceRoot();
@@ -10082,7 +10101,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                     this.postMessage({ type: 'showStatusMessage', message: 'No loose active pre-coding cards to group into features (in the current project scope).', isError: true });
                     break;
                 }
-                const prompt = this._buildSuggestFeaturesPrompt(workspaceRoot, projectFilter);
+                const prompt = this._buildSuggestFeaturesPrompt(workspaceRoot, projectFilter, candidateCards);
                 await vscode.env.clipboard.writeText(prompt);
                 this.postMessage({ type: 'showStatusMessage', message: `Suggest-features prompt copied (${candidateCards.length} pre-coding card(s) in scope). Paste into chat.`, isError: false });
                 break;
@@ -11746,53 +11765,51 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
     }
 
     /**
-     * Build the clipboard prompt for the "Suggest Features" board button. The procedure
-     * lives in the model-invocable `group-into-features` skill (`.agents/skills/group-into-features/SKILL.md`);
-     * this method reads that skill file and injects the dynamic workspace root, mirroring
-     * how `copyRefinePrompt` reads `refine_ticket.md`. This keeps the button's clipboard
-     * output self-contained (host-agnostic) while eliminating procedure duplication — an
-     * agent can also load the skill directly by description without clicking the button.
-     * Falls back to an embedded copy if the skill file is missing (older install / dev).
+     * Build the clipboard prompt for the "Suggest Features" board button. Emits a compact
+     * pointer prompt — a task directive, the candidate plan list (already pre-filtered by the
+     * caller), the skill file path, and an explicit placeholder map — instead of dumping the
+     * raw `group-into-features/SKILL.md` body verbatim. The agent reads and executes the skill
+     * itself; this method no longer reads the filesystem or transforms the skill body.
+     *
+     * Trade-off vs. `copyRefinePrompt`: a missing skill file is treated as a broken install
+     * (the skill ships with the extension) — the agent reports it cannot read the file and
+     * stops. The embedded fallback that `copyRefinePrompt` keeps is deliberately dropped here
+     * in exchange for a single source of truth (no procedure duplication). See plan
+     * `feature_plan_20260716_fix_suggest_features_button_prompt_confuses_agents.md`.
      */
-    private _buildSuggestFeaturesPrompt(workspaceRoot: string, projectFilter: string | null = null): string {
-        const skillPath = path.join(workspaceRoot, '.agents', 'skills', 'group-into-features', 'SKILL.md');
-        let skillBody = '';
-        try {
-            skillBody = fs.readFileSync(skillPath, 'utf8');
-        } catch {
-            // Legacy .agent/ folder fallback, then embedded fallback.
-            try {
-                skillBody = fs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'group-into-features', 'SKILL.md'), 'utf8');
-            } catch {
-                skillBody = `You are grouping loose Switchboard plans into features. Follow this flow exactly — do not create any feature before the user approves.
+    private _buildSuggestFeaturesPrompt(
+        workspaceRoot: string,
+        projectFilter: string | null = null,
+        candidateCards: KanbanCard[] = []
+    ): string {
+        const skillPath = `${workspaceRoot}/.agents/skills/group-into-features/SKILL.md`;
+        const activeProject = projectFilter ?? '(unassigned)';
 
-1. SCAN
-   Read the board snapshot:
-     cat {{WORKSPACE_ROOT}}/.switchboard/kanban-board.md
-   Scope: CREATED and PLAN REVIEWED columns only. Ignore BACKLOG and all post-coding columns.
-   Each plan line ends with an HTML comment with a planId: value — use that (not the filename) when calling create-feature.js. Skip lines tagged feature or subtask-of:...
+        const candidateList = candidateCards.length > 0
+            ? candidateCards.map(c =>
+                `- **${c.topic || c.planFile || 'Untitled'}** (planId: ${c.planId}, column: ${c.column})`
+              ).join('\n')
+            : '(No candidate cards found — read the board snapshot to discover them.)';
 
-2. READ PLAN BODIES — extract goal/problem/dependencies/tags; cluster by capability theme.
+        return `You are grouping loose Switchboard plans into features.
 
-3. PROPOSE (single message, all groups at once) — min 2 plans/feature; standalone section for singles; flag overlap/redundancy/gap. For each: name, Goal, How the Subtasks Achieve This, member plans. Then stop and wait.
+Read and execute the skill at ${skillPath} against the candidate plans listed below.
 
-4. CONFIRM — wait for user approval. Do not touch the database until confirmed.
+## Workspace
+- **Root:** ${workspaceRoot}
+- **Active project filter:** ${activeProject}
 
-5. EXECUTE — for each approved group:
-   node .agents/skills/kanban_operations/create-feature.js "<feature name>" '["planId1","planId2",...]' "{{WORKSPACE_ROOT}}" "<goal text with escaped quotes>"
-   Then manually write the ## How the Subtasks Achieve This section into each feature file.
+## Candidate Plans (${candidateCards.length} found)
+${candidateList}
 
-6. BACKLOG (optional) — ask the user; only proceed if they say yes.
+## Skip the SCAN Step
+The candidate plans above are already filtered to the pre-coding columns (CREATED, PLAN REVIEWED) and the active project scope. **Do NOT re-scan the board or re-read \`${workspaceRoot}/.switchboard/kanban-board.md\`.** Start at the skill's READ PLAN BODIES step (step 2) using the candidate list above.
 
-Note: feature creation updates the Switchboard board and writes a .switchboard/features/ file. Feature creation syncs the feature as a parent issue/task and links subtasks as children in Linear/ClickUp IF real-time sync is enabled.`;
-            }
-        }
-        // Strip YAML frontmatter (the skill description is for model-invocation discovery,
-        // not part of the pasted procedure) and substitute the workspace root placeholder.
-        const bodyWithoutFrontmatter = skillBody.replace(/^---\n[\s\S]*?\n---\n/, '');
-        const activeProject = projectFilter ?? '';
-        return bodyWithoutFrontmatter
-            .replace(/\{\{WORKSPACE_ROOT\}\}/g, workspaceRoot)
-            .replace(/\{\{ACTIVE_PROJECT_FILTER\}\}/g, activeProject);
+## Placeholder Map
+The skill file contains literal placeholders that are NOT pre-substituted. When following the skill, substitute:
+- \`{{WORKSPACE_ROOT}}\` → \`${workspaceRoot}\`
+- \`{{ACTIVE_PROJECT_FILTER}}\` → \`${activeProject}\`
+
+Follow the skill's procedure from step 2 onward: read plan bodies, propose feature groupings, and wait for user approval before creating any features. Report back with your proposed groupings.`;
     }
 }

@@ -55,6 +55,7 @@
             --doc-bg: #101414;
             --doc-border: #1d2323;   /* site --outline-variant — grey H2 rule + code borders */
             --doc-text: #a0a6a6;     /* site --on-surface-variant — the muted value <p> actually renders */
+            --doc-text-bright: #e2e8f0; /* site .docs-article / --on-surface — bright inherited text for non-<p> elements */
             --doc-heading: var(--accent-primary);
         }body.theme-claudify {
             /* The teal family derives from --accent-primary ON :root, so it resolves to cyan
@@ -273,15 +274,14 @@
             border: 1px solid var(--border-color);
             border-radius: 4px;
             margin: 3px 0;
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border-left: 3px solid var(--accent-teal-dim);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
         }.kanban-plan-item:hover {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }.kanban-plan-item.selected {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
@@ -301,15 +301,14 @@
             border: 1px solid var(--border-color);
             border-radius: 4px;
             margin: 3px 0;
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border-left: 3px solid var(--accent-teal-dim);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
         }.feature-plan-item:hover {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }.feature-plan-item.selected {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
@@ -328,15 +327,14 @@
             border: 1px solid var(--border-color);
             border-radius: 4px;
             margin: 3px 0;
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border-left: 3px solid var(--accent-teal-dim);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
         }.constitution-file-item:hover, .system-file-item:hover {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }.constitution-file-item.selected, .system-file-item.selected {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border-color: var(--accent-teal);
             border-left-color: var(--accent-teal);
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
@@ -359,13 +357,12 @@
             border: 1px solid var(--border-color);
             border-radius: 4px;
             margin: 3px 0;
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border-left: 3px solid var(--accent-teal-dim);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             display: flex;
             align-items: center;
             gap: 8px;
         }.doc-list-item:hover {
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
@@ -647,23 +644,20 @@
             border-right-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
         }.cyber-theme-enabled .preview-panel-wrapper {
             background: transparent;
-            box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
         }.cyber-theme-enabled #kanban-preview-pane, .cyber-theme-enabled #features-preview-pane, .cyber-theme-enabled #constitution-preview-pane, .cyber-theme-enabled #tuning-preview-pane, .cyber-theme-enabled #projects-preview-pane {
             background: transparent;
         }/* ── Cyber Panel Theme: Neon Glow Effects ── */
         /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
 
-        /* Inline code: neon glow */
-        .cyber-theme-enabled #kanban-preview-content code, .cyber-theme-enabled #features-preview-content code, .cyber-theme-enabled #constitution-preview-content code, .cyber-theme-enabled #system-preview-content code, .cyber-theme-enabled #tuning-preview-content code, .cyber-theme-enabled #projects-preview-content code {
-            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
-        }/* Code blocks: subtle glow border */
+        /* Inline code: no glow (site inline code has none) */
+
+        /* Code blocks: faint glow border, matching the site's 5% */
         .cyber-theme-enabled #kanban-preview-content pre, .cyber-theme-enabled #features-preview-content pre, .cyber-theme-enabled #constitution-preview-content pre, .cyber-theme-enabled #system-preview-content pre, .cyber-theme-enabled #tuning-preview-content pre, .cyber-theme-enabled #projects-preview-content pre {
-            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
-                         inset 0 0 12px rgba(0, 0, 0, 0.3);
-        }/* Blockquotes: glowing left border */
+            box-shadow: 0 0 15px color-mix(in srgb, var(--accent-teal) 5%, transparent),
+                         inset 0 0 10px rgba(0, 0, 0, 0.5);
+        }/* Blockquotes: cyan left border, no glow (matches the site) */
         .cyber-theme-enabled #kanban-preview-content blockquote, .cyber-theme-enabled #features-preview-content blockquote, .cyber-theme-enabled #constitution-preview-content blockquote, .cyber-theme-enabled #system-preview-content blockquote, .cyber-theme-enabled #tuning-preview-content blockquote, .cyber-theme-enabled #projects-preview-content blockquote {
             border-left-color: var(--accent-teal);
-            box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }/* Controls strip buttons: glow on hover */
         .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
             box-shadow: var(--glow-teal);
@@ -698,11 +692,12 @@
             width: 100%;
             box-sizing: border-box;
             margin: 0;
+            padding: 32px 24px 40px;
             font-family: var(--font-family);
             font-size: 14px;
-            line-height: 1.5;
+            line-height: 1.6;
             word-wrap: break-word;
-            color: var(--doc-text);
+            color: var(--doc-text-bright);
         }#kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3, #kanban-preview-content h4, #kanban-preview-content h5, #kanban-preview-content h6, #features-preview-content h1, #features-preview-content h2, #features-preview-content h3, #features-preview-content h4, #features-preview-content h5, #features-preview-content h6, #constitution-preview-content h1, #constitution-preview-content h2, #constitution-preview-content h3, #constitution-preview-content h4, #constitution-preview-content h5, #constitution-preview-content h6, #system-preview-content h1, #system-preview-content h2, #system-preview-content h3, #system-preview-content h4, #system-preview-content h5, #system-preview-content h6, #tuning-preview-content h1, #tuning-preview-content h2, #tuning-preview-content h3, #tuning-preview-content h4, #tuning-preview-content h5, #tuning-preview-content h6, #projects-preview-content h1, #projects-preview-content h2, #projects-preview-content h3, #projects-preview-content h4, #projects-preview-content h5, #projects-preview-content h6 {
             margin-top: 24px;
             margin-bottom: 12px;
@@ -712,7 +707,7 @@
         }/* Cyber theme — display heading typography */
         body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6, body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6, body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6, body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6, body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6, body.cyber-theme-enabled #projects-preview-content h1, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             font-family: var(--font-family);
-            line-height: 1.1;
+            line-height: 1.2;
         }/* Cyber theme — doc preview h1 cyan (accent), h2-h6 cyan (no glow) */
         body.cyber-theme-enabled #kanban-preview-content h1, body.cyber-theme-enabled #features-preview-content h1, body.cyber-theme-enabled #constitution-preview-content h1, body.cyber-theme-enabled #system-preview-content h1, body.cyber-theme-enabled #tuning-preview-content h1, body.cyber-theme-enabled #projects-preview-content h1 {
             color: var(--doc-heading);
@@ -720,7 +715,7 @@
         body.cyber-theme-enabled #kanban-preview-content h2, body.cyber-theme-enabled #kanban-preview-content h3, body.cyber-theme-enabled #kanban-preview-content h4, body.cyber-theme-enabled #kanban-preview-content h5, body.cyber-theme-enabled #kanban-preview-content h6, body.cyber-theme-enabled #features-preview-content h2, body.cyber-theme-enabled #features-preview-content h3, body.cyber-theme-enabled #features-preview-content h4, body.cyber-theme-enabled #features-preview-content h5, body.cyber-theme-enabled #features-preview-content h6, body.cyber-theme-enabled #constitution-preview-content h2, body.cyber-theme-enabled #constitution-preview-content h3, body.cyber-theme-enabled #constitution-preview-content h4, body.cyber-theme-enabled #constitution-preview-content h5, body.cyber-theme-enabled #constitution-preview-content h6, body.cyber-theme-enabled #system-preview-content h2, body.cyber-theme-enabled #system-preview-content h3, body.cyber-theme-enabled #system-preview-content h4, body.cyber-theme-enabled #system-preview-content h5, body.cyber-theme-enabled #system-preview-content h6, body.cyber-theme-enabled #tuning-preview-content h2, body.cyber-theme-enabled #tuning-preview-content h3, body.cyber-theme-enabled #tuning-preview-content h4, body.cyber-theme-enabled #tuning-preview-content h5, body.cyber-theme-enabled #tuning-preview-content h6, body.cyber-theme-enabled #projects-preview-content h2, body.cyber-theme-enabled #projects-preview-content h3, body.cyber-theme-enabled #projects-preview-content h4, body.cyber-theme-enabled #projects-preview-content h5, body.cyber-theme-enabled #projects-preview-content h6 {
             color: var(--accent-primary);
         }#kanban-preview-content h1, #features-preview-content h1, #constitution-preview-content h1, #system-preview-content h1, #tuning-preview-content h1, #projects-preview-content h1 {
-            font-size: 2em; /* 2em relative to 14px base = 28px */
+            font-size: 2.25rem; /* 36px — matches site .docs-article h1 */
             margin-top: 0;
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--accent-teal-dim);
@@ -728,7 +723,8 @@
             padding-left: 8px;
             text-transform: uppercase;
         }#kanban-preview-content h2, #features-preview-content h2, #constitution-preview-content h2, #system-preview-content h2, #tuning-preview-content h2, #projects-preview-content h2 {
-            font-size: 1.5em; /* 1.5em relative to 14px base = 21px */
+            font-size: 1.5rem; /* 24px — matches site .docs-article h2 */
+            margin-top: 36px;
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--doc-border);
             border-left: 2px solid var(--accent-teal-dim);
@@ -739,7 +735,7 @@
             text-transform: uppercase;
             color: var(--accent-teal);
         }#kanban-preview-content h3, #features-preview-content h3, #constitution-preview-content h3, #system-preview-content h3, #tuning-preview-content h3, #projects-preview-content h3 {
-            font-size: 1.25em; /* 1.25em relative to 14px base = 17.5px */
+            font-size: 1.2rem; /* 19px — matches site .docs-article h3 */
         }#kanban-preview-content h4, #features-preview-content h4, #constitution-preview-content h4, #system-preview-content h4, #tuning-preview-content h4, #projects-preview-content h4 {
             font-size: 1em;
         }#kanban-preview-content h5, #features-preview-content h5, #constitution-preview-content h5, #system-preview-content h5, #tuning-preview-content h5, #projects-preview-content h5 {
@@ -754,7 +750,7 @@
         }#kanban-preview-content li, #features-preview-content li, #constitution-preview-content li, #system-preview-content li, #tuning-preview-content li, #projects-preview-content li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
-            color: var(--vscode-editor-foreground, #cccccc);
+            color: var(--doc-text-bright);
             font-size: inherit;
         }#kanban-preview-content li p, #features-preview-content li p, #constitution-preview-content li p, #system-preview-content li p, #tuning-preview-content li p, #projects-preview-content li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
@@ -786,7 +782,7 @@
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
             border-radius: 2px;
-            color: var(--vscode-editor-foreground, var(--text-secondary));
+            color: var(--doc-text);
             background: transparent;
         }#kanban-preview-content ul, #kanban-preview-content ol, #features-preview-content ul, #features-preview-content ol, #constitution-preview-content ul, #constitution-preview-content ol, #system-preview-content ul, #system-preview-content ol, #tuning-preview-content ul, #tuning-preview-content ol, #projects-preview-content ul, #projects-preview-content ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */

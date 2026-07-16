@@ -5581,7 +5581,11 @@
                         assignees: Array.isArray(t.assignees) ? t.assignees.map(n => ({ username: n })) : [],
                         filePath: t.filePath,
                         syncStatus: t.syncStatus, url: t.url,
-                        dateCreated: t.dateCreated
+                        dateCreated: t.dateCreated,
+                        // Priority persisted in the ticket file frontmatter (backend reads it
+                        // into { priority, color, orderindex }); pass it through so the
+                        // file-backed sidebar renders the priority dot instead of "No priority".
+                        priority: t.priority || null
                     }));
                     clickUpProjectStatus = 'loaded';
                     clickUpProjectMessage = '';

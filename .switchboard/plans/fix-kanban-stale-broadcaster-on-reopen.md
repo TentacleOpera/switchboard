@@ -265,3 +265,7 @@ verification is manual.
 ---
 
 **Recommendation:** Complexity 3 → Send to Intern.
+
+## Completion Report
+
+Implemented both changes in `src/services/KanbanProvider.ts`. Change 1: added `this._initKanbanService()` call in `open()` after the `_resolveWorkspaceRoot()` + `ensureReady()` + `applyLiveSyncConfig()` block (before `onDidChangeViewState` registration), mirroring the proven `deserializeWebviewPanel()` pattern so the `_broadcaster` singleton's webview reference is updated to the freshly created panel on reopen. Change 2: added `this._broadcaster?.setWebview(null)` in both `onDidDispose` callbacks (in `open()` and `deserializeWebviewPanel()`) as defense-in-depth, so messages sent between dispose and reopen queue in the broadcaster's `_pendingWebviewMessages` instead of being silently dropped to a dead webview. No issues encountered; compilation and tests skipped per session directive. Red-team review confirmed all edge cases (race during `await`, null workspace root, undefined broadcaster, stale queue flush) are mitigated by existing queue/fallback behavior.

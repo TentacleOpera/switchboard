@@ -16,13 +16,14 @@ import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
 
 // @google/stitch-sdk is ESM-only (its exports map has no "require" condition), so a
-// static import fails resolution in this CJS bundle. A dynamic import() resolves with
-// the "import" condition, and webpackMode: "eager" inlines the SDK into the main
-// bundle — required because the installed extension ships dist/ without node_modules.
+// static import fails resolution in this CJS bundle. A dynamic import() resolves it via
+// the "import" condition at build time. Webpack emits it as a lazy chunk in dist/ (like
+// the other split chunks the extension already ships), so the SDK's code is loaded only
+// when the Design panel is first used instead of sitting resident in the main bundle.
 let _stitchSdkPromise: Promise<any> | undefined;
 function loadStitch(_accessToken: string): Promise<any> {
     if (!_stitchSdkPromise) {
-        _stitchSdkPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then(m => m.stitch);
+        _stitchSdkPromise = import('@google/stitch-sdk').then(m => m.stitch);
     }
     return _stitchSdkPromise;
 }
@@ -34,7 +35,7 @@ function loadStitch(_accessToken: string): Promise<any> {
 let _stitchRawClientPromise: Promise<any> | undefined;
 function loadStitchRawClient(): Promise<any> {
     if (!_stitchRawClientPromise) {
-        _stitchRawClientPromise = import(/* webpackMode: "eager" */ '@google/stitch-sdk').then((m: any) => new m.StitchToolClient());
+        _stitchRawClientPromise = import('@google/stitch-sdk').then((m: any) => new m.StitchToolClient());
     }
     return _stitchRawClientPromise;
 }
@@ -1567,7 +1568,7 @@ window.addEventListener('message', function(e) {
     private async _screenToolCall(toolName: string, args: any, projectId: string): Promise<{
         screens: any[]; summary: string; suggestions: Array<{ label: string; prompt: string }>;
     }> {
-        const mod: any = await import(/* webpackMode: "eager" */ '@google/stitch-sdk');
+        const mod: any = await import('@google/stitch-sdk');
         const client = await loadStitchRawClient();
         const raw = await client.callTool(toolName, args);
         const comps: any[] = raw?.outputComponents ?? [];

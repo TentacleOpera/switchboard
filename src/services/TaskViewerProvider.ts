@@ -6564,6 +6564,19 @@ Each plan file must include:
         if (cuType) { fmLines.push(`statusType: ${cuType}`); }
         if (task?.list?.id) { fmLines.push(`listId: ${String(task.list.id).trim()}`); }
         if (task?.parentId) { fmLines.push(`parentId: ${String(task.parentId).trim()}`); }
+        // Persist ClickUp priority so the file-backed sidebar can render the priority
+        // dot without re-hitting the API. The normalized priority shape is
+        // { id, priority, color, orderindex }; we persist the three fields the webview
+        // render helpers read (name, color, orderindex). A task with no priority set
+        // has `priority: null` — we simply omit the keys, and the sidebar falls back
+        // to "No priority", which is correct.
+        const cuPriorityName = task?.priority?.priority ? String(task.priority.priority).trim() : '';
+        const cuPriorityColor = task?.priority?.color ? String(task.priority.color).trim() : '';
+        const cuPriorityOrder = (task?.priority?.orderindex !== undefined && task?.priority?.orderindex !== null)
+            ? String(task.priority.orderindex).trim() : '';
+        if (cuPriorityName) { fmLines.push(`priority: ${cuPriorityName}`); }
+        if (cuPriorityColor) { fmLines.push(`priorityColor: ${cuPriorityColor}`); }
+        if (cuPriorityOrder) { fmLines.push(`priorityOrderIndex: ${cuPriorityOrder}`); }
         // Persist assignee display names so the file-backed sidebar can show them
         // without re-hitting the API (the Assign modal uses the live detail fetch).
         const cuAssignees = Array.isArray(task?.assignees)
