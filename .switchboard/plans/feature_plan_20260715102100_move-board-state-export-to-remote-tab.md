@@ -129,3 +129,7 @@ The live sub-parts (heading, description, select, remote-url row) are byte-for-b
 ## Recommendation
 
 Complexity 2 → **Send to Intern**. Pure HTML relocation + dead-row drop, single file, zero JS changes on kept elements, verified-safe against the live code. The leftover dead JS/TS handlers are null-guarded no-ops and flagged as an optional follow-up, not work for this plan.
+
+## Completion Summary
+
+Relocated the live Board State Export block (heading, description, export-destination select, reserved remote-URL row) from the Control Plane tab's `control-plane-fields` div into the Remote tab's `remote-fields` div, placed after the Notion setup block and before the trailing `remote-config-status` span. Dropped the dead `board-state-export-init-git-row` (unreachable `btn-init-control-plane-git` button + `control-plane-git-init-status` div) rather than porting it. File changed: `src/webview/setup.html` (one removal at the old L711–735, one insertion at the new L1499–1520). Verified via grep: `board-state-export-select` has a single HTML id (no duplicates), and the three dropped dead IDs have zero HTML matches (only 4 null-guarded JS references remain, which no-op silently). No JS or backend changes were made. No issues encountered.

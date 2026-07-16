@@ -412,6 +412,69 @@ ${perPlanDirectories}`
     };
 }
 
+export interface FeaturePlanGroup {
+    feature: BatchPromptPlan;
+    subtasks: BatchPromptPlan[];
+}
+
+/**
+ * Partition a flat `plans` array into per-feature groups plus loose plans.
+ * Feature cards are keyed by their `planId` (falling back to `sessionId`); each
+ * subtask is attached to the group whose key matches its `featureId`. Orphaned
+ * subtasks and non-feature plans land in `loosePlans`. Selection order of
+ * feature groups is preserved; subtasks keep their relative order within the
+ * input but are always placed after their owning feature.
+ */
+export function partitionPlansByFeature(plans: BatchPromptPlan[]): { featureGroups: FeaturePlanGroup[]; loosePlans: BatchPromptPlan[] } {
+    const featureGroups: FeaturePlanGroup[] = [];
+    const loosePlans: BatchPromptPlan[] = [];
+    const indexByFeatureId = new Map<string, number>();
+
+    // First pass: establish groups in selection order so subtasks that appear
+    // before their owning feature still attach correctly.
+    for (const plan of plans) {
+        if (plan.isFeature) {
+            const key = plan.planId || plan.sessionId || '';
+            if (!key) {
+                // A feature with no id is unusable; treat it as loose.
+                loosePlans.push(plan);
+                continue;
+            }
+            if (indexByFeatureId.has(key)) {
+                // Duplicate feature key in the same selection — last one wins,
+                // but preserve the earlier group slot.
+                const idx = indexByFeatureId.get(key)!;
+                console.warn(`[partitionPlansByFeature] Duplicate feature key ${key}; replacing previous feature`);
+                featureGroups[idx] = { feature: plan, subtasks: [] };
+            } else {
+                indexByFeatureId.set(key, featureGroups.length);
+                featureGroups.push({ feature: plan, subtasks: [] });
+            }
+        }
+    }
+
+    // Second pass: attach subtasks and collect anything that is not part of a
+    // known feature group.
+    for (const plan of plans) {
+        if (plan.isFeature) {
+            continue;
+        }
+        if (plan.featureId) {
+            const idx = indexByFeatureId.get(plan.featureId);
+            if (idx !== undefined) {
+                featureGroups[idx].subtasks.push(plan);
+            } else {
+                // Orphaned subtask or a featureId not present in this selection.
+                loosePlans.push(plan);
+            }
+            continue;
+        }
+        loosePlans.push(plan);
+    }
+
+    return { featureGroups, loosePlans };
+}
+
 /**
  * §Git — Granular git policy.
  *
@@ -790,7 +853,7 @@ Hard Rules:
 2. **No eager context.** Discard automatically injected active documents from IDE metadata unless the user explicitly or implicitly references a file path (e.g., "look at file X," "in file Y this needs changing"). In that case, read it immediately without requiring a directive verb.
 3. **No eager research.** On the first turn, your only action is to respond with a brief greeting and wait for input — do not plan, research, or run any tool. Do not run codebase searches, file views, or directory listings during general onboarding or until the user specifies a problem.
 4. **Orchestrate, don't develop.** Your task is to clarify the "What" and "Why," identify edge cases, define constraints, and produce a complete, user-approved plan before any code is written.
-5. **Plan artifact & quality gate.** Write the plan to one of the paths listed in the PLAN DESTINATION directive below (configured by the user in Switchboard Setup), using a unique filename — only those locations; do not write or copy the plan anywhere else, including any session/brain directory. Every plan must have a descriptive H1 title (never generic), and a \`## Metadata\` section with \`**Complexity:**\` (1–10), \`**Tags:**\` (comma-separated, from: frontend, backend, auth, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library), and \`**Project:**\` (if the PROJECT PIN directive is present, write the exact project name specified).
+5. **Plan artifact & quality gate.** Write the plan to one of the paths listed in the PLAN DESTINATION directive below (configured by the user in Switchboard Setup), using a unique filename — only those locations; do not write or copy the plan anywhere else, including any session/brain directory. Every plan must have a descriptive H1 title (never generic), and a \`## Metadata\` section with \`**Complexity:**\` (1–10), \`**Tags:**\` (comma-separated, from: frontend, backend, auth, authentication, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library), and \`**Project:**\` (if the PROJECT PIN directive is present, write the exact project name specified).
 6. **No self-editing of system files.** If workflow configurations or persona files need changes, notify the user and ask for explicit permission.
 7. **Stay in chat.** Do not pivot to execution or delegation unless the user explicitly requests it.
 8. **Project Pinning:** When the dispatch prompt carries a PROJECT PIN directive, write the \`**Project:\` line into each plan file's metadata block.

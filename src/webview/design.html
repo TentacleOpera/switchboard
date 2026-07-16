@@ -78,7 +78,7 @@
             --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
 
             /* Doc preview tokens — aligned with switchboard-site readability */
-            --doc-bg: #101414;
+            --doc-bg: #1a1a1a;
             --doc-border: #1d2323;   /* site --outline-variant — grey H2 rule + code borders */
             --doc-text: #a0a6a6;     /* site --on-surface-variant — the muted value <p> actually renders */
             --doc-text-bright: #e2e8f0; /* site .docs-article / --on-surface — bright inherited text for non-<p> elements */
@@ -157,6 +157,8 @@
 
         body {
             font-family: var(--font-family);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
             font-size: 13px;
             color: var(--text-primary);
             background: var(--panel-bg);
@@ -2132,7 +2134,7 @@
         /* NOTE: body.cyber-theme-enabled (not .cyber-theme-enabled body) because the class is
            applied directly to document.body via classList.add — body cannot be a descendant of itself. */
         body.cyber-theme-enabled {
-            background-color: #101414;
+            background-color: #171717;   /* neutral dark surface — a touch lighter than the site's #101414, no teal bias */
             background-image:
                 /* Cyan grid lines at 32px — restored to match switchboard-site .bg-grid */
                 linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
@@ -2297,27 +2299,11 @@
         body.theme-claudify #stitch-content,
         body.theme-claudify #preview-pane-design,
         body.theme-claudify #stitch-preview-pane {
-            background-color: #0a0a0a;   /* neutral flat surface (claudify has no glass overlay) */
+            background-color: #171717;   /* neutral flat surface (claudify has no glass overlay) */
             background-image:
-                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
-        }
-
-        /* Claudify: h1 — pixel font, terracotta */
-        body.theme-claudify #markdown-preview-briefs h1,
-        body.theme-claudify #markdown-preview-design h1 {
-            font-family: 'GeistPixel', var(--font-family);
-            letter-spacing: -0.05em;
-            font-stretch: 90%;
-            color: #D97757;
-        }
-
-        body.theme-claudify.claudify-pixel-font-disabled #markdown-preview-briefs h1,
-        body.theme-claudify.claudify-pixel-font-disabled #markdown-preview-design h1 {
-            font-family: var(--font-family);
-            letter-spacing: normal;
-            font-stretch: 100%;
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
         }
 
         /* Claudify: h2-h6 — Hanken, terracotta */
@@ -4277,6 +4263,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{MARKDOWN_EDITOR_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{DESIGN_JS_URI}}"></script>
-    <script nonce="{{NONCE}}" src="{{INSPECT_JS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{INSPECT_JS_URI}}" onerror="console.error('[design.html] inspect.js failed to load'); window.__sbInspectLoadError = true;"></script>
 </body>
 </html>

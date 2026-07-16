@@ -24,6 +24,7 @@
             --text-secondary: #8C8C8C;
             --accent-primary: #00e5ff;
             --accent-teal: var(--accent-primary);
+            --sweep-grid: 32px;   /* afterburner grid pitch — sweep aligns to the cyan grid */
             --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
             --accent-green: #4ec9b0;
             --accent-red: #f85149;
@@ -39,6 +40,7 @@
             --accent-teal: #D97757;
             --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
             --accent-teal-bright: #E2A188;
+            --sweep-grid: 32px;   /* claudify grid pitch — now 32px, matching afterburner */
             --glow-green: none;
             --glow-red: none;
             --text-secondary: #8C8C8C;  /* setup is a settings panel — keep its body text grey, headings warm */
@@ -63,6 +65,8 @@
             background: var(--bg-color);
             color: var(--text-primary);
             font-family: var(--font-family);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
             font-size: 13px;
         }
 
@@ -453,31 +457,85 @@
            glass content panels + CRT scanlines. Claudify = flat neutral
            grid surface, no glass. implementation.html stays plain (D3). */
 
-        /* Afterburner: cool-neutral ground + grey ambient grid */
+        /* Afterburner: neutral-dark ground + cyan grid (matches the doc panels) */
         body.cyber-theme-enabled {
-            background-color: #101414;
+            background-color: #171717;
             background-image:
-                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
+                linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
         }
         /* Glass content panels float over the grid */
         .cyber-theme-enabled .shared-tab-content {
-            background: rgba(10, 10, 10, 0.70);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+            background: transparent;   /* transparent so the body grid shows through, like the doc panels */
+            border-color: var(--border-color);
         }
 
         body.theme-claudify {
-            background-color: #0a0a0a;
+            background-color: #171717;
             background-image:
-                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
         }
         body.theme-claudify .shared-tab-content {
-            background: var(--panel-bg);
+            background: transparent;
+        }
+
+        /* ── Grid-lighting sweep — matches the doc panels (planning/project) ── */
+        .cyber-scanlines {
+            display: none;
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.07) 2px,
+                rgba(0, 0, 0, 0.07) 4px
+            );
+            z-index: 5;
+        }
+        .cyber-theme-enabled .cyber-scanlines,
+        body.theme-claudify .cyber-scanlines { display: block; }
+
+        body:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 6;
+            background-image:
+                linear-gradient(180deg, transparent, rgba(214, 232, 238, 0.02), transparent),
+                linear-gradient(to right, rgba(214, 232, 238, 0.11) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(214, 232, 238, 0.11) 1px, transparent 1px);
+            background-size: 100% 100%, var(--sweep-grid) var(--sweep-grid), var(--sweep-grid) var(--sweep-grid);
+            /* Viewport-anchored so the sweep grid shares the body grid's origin (both tile from 0,0). */
+            background-attachment: fixed;
+            -webkit-mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            -webkit-mask-size: 100% 40vh;
+            mask-size: 100% 40vh;
+            -webkit-mask-repeat: no-repeat;
+            mask-repeat: no-repeat;
+            -webkit-mask-position: 0 -50vh;
+            mask-position: 0 -50vh;
+            animation: grid-sweep 16s ease-in-out infinite;
+        }
+        @keyframes grid-sweep {
+            0%   { mask-position: 0 -50vh; -webkit-mask-position: 0 -50vh; }
+            30%  { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
+            100% { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            body:not(.cyber-animation-disabled) .cyber-scanlines::before {
+                animation: none;
+                display: none;
+            }
+        }
+        .cyber-scanlines-disabled .cyber-scanlines {
+            display: none !important;
         }
     </style>
     <style>
@@ -553,6 +611,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 </head>
 
 <body class="cyber-theme-enabled">
+    <div class="cyber-scanlines"></div>
     <div class="setup-shell">
         <!-- Tab Navigation -->
         <div class="shared-tab-bar" role="tablist" aria-label="Setup sections">
@@ -707,32 +766,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     The Control Plane creates a parent workspace (e.g. <code>~/Projects/</code>) that holds the shared <code>.switchboard/</code>, <code>.agents/</code>, and <code>AGENTS.md</code> configuration. Your actual repositories live as sibling folders and share this external configuration.
                 </div>
                 <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">OPEN CONTROL PLANE SETUP</button>
-
-                <div style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 16px;">
-                    <div style="font-size: 10px; color: var(--text-secondary); margin: 0 0 8px; font-family: var(--font-mono); letter-spacing: 1px;">
-                        BOARD STATE EXPORT
-                    </div>
-                    <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
-                        Choose where the kanban board state gets mirrored for remote/web-agent visibility. <strong>Default: none</strong> — no git footprint. <code>read-only-snapshot</code> publishes a one-directional, read-only snapshot (<code>board.json</code> + <code>board.md</code>) to the orphan branch <code>switchboard/board</code> — read-only, not a control channel. Notion/Linear are governed by their existing provider config.
-                    </div>
-                    <label class="startup-row" style="display:block; margin-top:8px;">
-                        <span style="display:block; margin-bottom:4px;">Export destination</span>
-                        <select id="board-state-export-select" style="width:100%; padding:4px 8px; background:var(--panel-bg); color:var(--text-primary); border:1px solid var(--border-color); border-radius:3px;">
-                            <option value="none">none — no git footprint</option>
-                            <option value="read-only-snapshot">read-only-snapshot — publish to orphan branch switchboard/board (read-only)</option>
-                        </select>
-                    </label>
-                    <div id="board-state-export-remote-url-row" class="hidden" style="margin-top:8px;">
-                        <label class="startup-row" style="display:block;">
-                            <span style="display:block; margin-bottom:4px;">Git remote URL (reserved — currently unused)</span>
-                            <input id="board-state-export-remote-url" type="text" placeholder="reserved" style="width:100%;">
-                        </label>
-                    </div>
-                    <div id="board-state-export-init-git-row" class="hidden" style="margin-top:8px;">
-                        <button id="btn-init-control-plane-git" class="secondary-btn w-full">INITIALIZE CONTROL PLANE GIT REPO</button>
-                        <div id="control-plane-git-init-status" style="font-size:10px; color:var(--text-secondary); margin-top:4px;"></div>
-                    </div>
-                </div>
             </div>
 
         <div class="shared-tab-content" id="mappings-fields" data-tab-content="mappings">
@@ -1267,6 +1300,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <input type="radio" name="theme-selection" value="claudify">
                     <span>Claudify</span>
                 </label>
+                <label class="db-radio-option">
+                    <input type="radio" name="theme-selection" value="pixel">
+                    <span>Pixel</span>
+                </label>
             </div>
             <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
             <div id="theme-animation-settings">
@@ -1308,19 +1345,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
                 </label>
                 <div id="colour-kanban-icons-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
-            </div>
-            <div id="theme-pixel-font-settings">
-                <div class="subsection-header">
-                    <span>Pixel Font</span>
-                </div>
-                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
-                    <input id="pixel-font-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                    <div style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Pixel-font H1 headings</span>
-                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Render document H1 headings in the pixel display font. Turn off to match H2–H6.</span>
-                    </div>
-                </label>
-                <div id="pixel-font-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
             </div>
         </div>
 
@@ -1520,6 +1544,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         </div>
                         <button id="btn-notion-remote-setup" class="action-btn">Run Notion setup sync</button>
                         <span id="remote-notion-setup-status" style="display:block; margin-top:6px; font-size:10px; color:var(--text-secondary);"></span>
+                    </div>
+
+                    <!-- Board state export: where the kanban board state gets mirrored for remote/web-agent visibility. -->
+                    <div style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+                        <div style="font-size: 10px; color: var(--text-secondary); margin: 0 0 8px; font-family: var(--font-mono); letter-spacing: 1px;">
+                            BOARD STATE EXPORT
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
+                            Choose where the kanban board state gets mirrored for remote/web-agent visibility. <strong>Default: none</strong> — no git footprint. <code>read-only-snapshot</code> publishes a one-directional, read-only snapshot (<code>board.json</code> + <code>board.md</code>) to the orphan branch <code>switchboard/board</code> — read-only, not a control channel. Notion/Linear are governed by their existing provider config.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-top:8px;">
+                            <span style="display:block; margin-bottom:4px;">Export destination</span>
+                            <select id="board-state-export-select" style="width:100%; padding:4px 8px; background:var(--panel-bg); color:var(--text-primary); border:1px solid var(--border-color); border-radius:3px;">
+                                <option value="none">none — no git footprint</option>
+                                <option value="read-only-snapshot">read-only-snapshot — publish to orphan branch switchboard/board (read-only)</option>
+                            </select>
+                        </label>
+                        <div id="board-state-export-remote-url-row" class="hidden" style="margin-top:8px;">
+                            <label class="startup-row" style="display:block;">
+                                <span style="display:block; margin-bottom:4px;">Git remote URL (reserved — currently unused)</span>
+                                <input id="board-state-export-remote-url" type="text" placeholder="reserved" style="width:100%;">
+                            </label>
+                        </div>
                     </div>
 
                     <span id="remote-config-status" style="font-size:10px; color:var(--text-secondary);"></span>
@@ -1915,15 +1962,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function updateAnimationSectionVisibility(theme) {
             const t = theme || currentSwitchboardTheme || 'afterburner';
             const section = document.getElementById('theme-animation-settings');
-            if (section) section.style.display = (t === 'afterburner') ? '' : 'none';
+            if (section) section.style.display = (t === 'afterburner' || t === 'pixel') ? '' : 'none';
             // Colour-icons checkbox: only Claudify uses the grey icon rules.
             const colourSection = document.getElementById('theme-colour-icons-settings');
             if (colourSection) {
                 colourSection.style.display = (t === 'claudify') ? '' : 'none';
-            }
-            const pixelFontSection = document.getElementById('theme-pixel-font-settings');
-            if (pixelFontSection) {
-                pixelFontSection.style.display = (t === 'claudify') ? '' : 'none';
             }
         }
 
@@ -2019,7 +2062,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'getCyberScanlinesDisabledSetting' });
                     vscode.postMessage({ type: 'getColourKanbanIconsSetting' });
                     vscode.postMessage({ type: 'getUltracodeAnimationSetting' });
-                    vscode.postMessage({ type: 'getPixelFontSetting' });
                     vscode.postMessage({ type: 'getThemeSetting' });
                     const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
@@ -4173,16 +4215,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
 
-        document.getElementById('pixel-font-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'setPixelFontSetting', enabled: e.target.checked });
-            document.body.classList.toggle('claudify-pixel-font-disabled', !e.target.checked);
-            const statusEl = document.getElementById('pixel-font-status');
-            if (statusEl) {
-                statusEl.textContent = 'Saved';
-                setTimeout(() => { statusEl.textContent = ''; }, 2000);
-            }
-        });
-
         document.querySelectorAll('input[name="theme-selection"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
                 currentSwitchboardTheme = e.target.value;
@@ -4476,12 +4508,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // Compute the desired theme class set without touching unrelated classes
                     // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                     // injected server-side by applyThemeBodyClass().
-                    const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
+                    const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
                     const desired = new Set();
                     if (theme === 'afterburner') {
                         desired.add('cyber-theme-enabled');
                     } else if (theme === 'claudify') {
                         desired.add('theme-claudify');
+                    } else if (theme === 'pixel') {
+                        desired.add('cyber-theme-enabled');
+                        desired.add('theme-pixel');
                     }
                     // Remove only theme classes that should NOT be present — leave the
                     // correct ones in place so there is no flash if they were already
@@ -4903,15 +4938,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
-                case 'pixelFontSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('pixel-font-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
-                        document.body.classList.toggle('claudify-pixel-font-disabled', message.enabled === false);
-                    });
-                    break;
-                }
-
                 case 'gitIgnoreConfig': {
                     runSetupHydration(() => {
                         const validStrategies = ['targetedGitignore', 'localExclude', 'custom', 'none'];

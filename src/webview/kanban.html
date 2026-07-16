@@ -13,6 +13,13 @@
             font-weight: 100 900;
             font-display: swap;
         }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
         :root {
             --bg-color: #1a1a1a;
             --panel-bg: #000000;
@@ -194,6 +201,13 @@
         body.theme-claudify .plan-title {
             color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
         }
+
+        /* Pixel theme — GeistPixel on kanban card titles only (otherwise identical to Afterburner) */
+        body.theme-pixel .card-topic {
+            font-family: 'GeistPixel', var(--font-family);
+            letter-spacing: -0.03em;
+        }
+
         body.theme-claudify .column-name { color: #8a8a8a; }
         /* No warm text — card buttons and agent names fall back to the neutral greys
            (--text-secondary resting, --text-primary on hover) from the base rules. */
@@ -247,6 +261,8 @@
 
         body {
             font-family: var(--font-family);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
             background: var(--bg-color);
             color: var(--text-primary);
             height: 100vh;
@@ -4072,8 +4088,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let columnDefinitions = [
             { id: 'CREATED', label: 'New', role: null, autobanEnabled: true },
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', autobanEnabled: true },
-            { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', autobanEnabled: true },
-            { id: 'CODER CODED', label: 'Coder', role: 'coder', autobanEnabled: true },
+            { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', kind: 'coded', autobanEnabled: true },
+            { id: 'CODER CODED', label: 'Coder', role: 'coder', kind: 'coded', autobanEnabled: true },
+            { id: 'INTERN CODED', label: 'Intern', role: 'intern', kind: 'coded', autobanEnabled: true },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', autobanEnabled: false },
             { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
@@ -4093,9 +4110,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         let collapseCodersEnabled = true;
         let unrenderedColumnRefreshRequested = false;
+        let savedState = null;
         // Restore collapse toggle from webview state if available
         try {
-            const savedState = vscode.getState();
+            savedState = vscode.getState();
             if (savedState && typeof savedState.collapseCodersEnabled === 'boolean') {
                 collapseCodersEnabled = savedState.collapseCodersEnabled;
             }
@@ -4137,7 +4155,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let currentWorkspaceRoot = '';
         try {
             const attr = document.body?.dataset?.initialWorkspaceRoot;
-            if (attr) currentWorkspaceRoot = decodeURIComponent(attr);
+            if (attr) {
+                currentWorkspaceRoot = decodeURIComponent(attr);
+            } else if (savedState && typeof savedState.currentWorkspaceRoot === 'string') {
+                currentWorkspaceRoot = savedState.currentWorkspaceRoot;
+            }
         } catch (_) {}
         let activeWorkspaceFilter = null;
         let activeProjectFilter = null;
@@ -4350,6 +4372,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         function getActiveWorkspaceRoot() {
             return currentWorkspaceRoot || (workspaceItems[0] && workspaceItems[0].workspaceRoot) || '';
+        }
+
+        function saveWebviewState() {
+            try {
+                const state = vscode.getState() || {};
+                state.collapseCodersEnabled = collapseCodersEnabled;
+                state.currentAutomationMode = currentAutomationMode;
+                state.lastAntigravityBatchSize = lastAntigravityBatchSize;
+                state.currentWorkspaceRoot = currentWorkspaceRoot;
+                vscode.setState(state);
+            } catch (_) {}
         }
 
         function postKanbanMessage(message) {
@@ -5927,8 +5960,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             columns.forEach(col => {
-                // In collapsed mode, skip the individual coder columns (rendered above as CODED_AUTO)
-                if (collapseCodersEnabled && CODED_IDS.includes(col)) return;
+                // In collapsed mode, skip the individual coder columns only when the
+                // synthetic CODED_AUTO container actually exists. If it does not (e.g.
+                // the fallback column list has not yet formed AUTOCODE), render the
+                // individual coder columns normally so cards do not vanish.
+                if (collapseCodersEnabled && CODED_IDS.includes(col) && document.getElementById('col-CODED_AUTO')) return;
                 const container = document.getElementById('col-' + col);
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
@@ -6871,13 +6907,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         // Compute the desired theme class set without touching unrelated classes
                         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                         // injected server-side by applyThemeBodyClass().
-                        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
+                        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
                         const desired = new Set();
                         // Cyber CRT effects belong to Afterburner ONLY (matches the other panels).
                         if (msg.theme === 'afterburner') {
                             desired.add('cyber-theme-enabled');
                         } else if (msg.theme === 'claudify') {
                             desired.add('theme-claudify');
+                        } else if (msg.theme === 'pixel') {
+                            desired.add('cyber-theme-enabled');
+                            desired.add('theme-pixel');
                         }
                         // Remove only theme classes that should NOT be present — leave the
                         // correct ones in place so there is no flash if they were already
@@ -6904,10 +6943,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'cyberScanlinesSetting': {
                     document.body.classList.toggle('cyber-scanlines-disabled', !!msg.disabled);
-                    break;
-                }
-                case 'pixelFontSetting': {
-                    document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
                     break;
                 }
                 case 'ultracodeAnimationSetting': {
@@ -6942,6 +6977,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                     if (msg.allWorkspaceProjects && typeof msg.allWorkspaceProjects === 'object') {
                         allWorkspaceProjects = msg.allWorkspaceProjects;
+                    }
+
+                    if (previousRoot !== currentWorkspaceRoot) {
+                        saveWebviewState();
                     }
 
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
@@ -7459,11 +7498,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     autobanConfig = msg.state || null;
                     if (autobanConfig && autobanConfig.automationMode) {
                         currentAutomationMode = autobanConfig.automationMode;
-                        try {
-                            const wsState = vscode.getState() || {};
-                            wsState.currentAutomationMode = currentAutomationMode;
-                            vscode.setState(wsState);
-                        } catch (_) {}
+                        saveWebviewState();
                     }
                     updateAutobanIndicators(true);
                     syncAutobanCountdownTimer();
@@ -8313,11 +8348,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 btn.classList.toggle('is-active', !collapseCodersEnabled);
                 btn.classList.toggle('is-off', collapseCodersEnabled);
             }
-            try {
-                const state = vscode.getState() || {};
-                state.collapseCodersEnabled = collapseCodersEnabled;
-                vscode.setState(state);
-            } catch (_) {}
+            saveWebviewState();
             renderColumns();
             renderBoard(currentCards);
             updateAllColumnAgents();
@@ -8531,11 +8562,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const newMode = modeSelect.value;
                 currentAutomationMode = newMode;
                 modeHelpText.textContent = modeDescriptions[newMode] || '';
-                try {
-                    const wsState = vscode.getState() || {};
-                    wsState.currentAutomationMode = currentAutomationMode;
-                    vscode.setState(wsState);
-                } catch (_) {}
+                saveWebviewState();
 
                 postKanbanMessage({ type: 'setAutomationMode', mode: currentAutomationMode, enabled: false, workspaceRoot: getActiveWorkspaceRoot() });
                 updateAutobanButtonState();
@@ -9596,11 +9623,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
                 batchSizeSelect.addEventListener('change', () => {
                     lastAntigravityBatchSize = parseInt(batchSizeSelect.value, 10) || 5;
-                    try {
-                        const wsState = vscode.getState() || {};
-                        wsState.lastAntigravityBatchSize = lastAntigravityBatchSize;
-                        vscode.setState(wsState);
-                    } catch (_) {}
+                    saveWebviewState();
                 });
                 batchSizeRow.appendChild(batchSizeLabel);
                 batchSizeRow.appendChild(batchSizeSelect);
@@ -10489,6 +10512,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // lives in project.html now, so this webview no longer requests the
         // config on tab-switch — only the active flag from the payload is used).
         postKanbanMessage({ type: 'getRemoteConfig' });
+
+        // If the host did not inject an initial workspace root, seed the selection
+        // from persisted webview state so a restored panel can self-recover. The
+        // backend validates the root through the existing selectWorkspace handler.
+        if (!document.body?.dataset?.initialWorkspaceRoot && currentWorkspaceRoot) {
+            postKanbanMessage({ type: 'selectWorkspace', workspaceRoot: currentWorkspaceRoot, project: null });
+        }
 
 
         function renderUATChecklist(plans) {

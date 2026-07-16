@@ -40,6 +40,19 @@ import { ResearchImportService } from './services/ResearchImportService';
 import { showTemporaryNotification } from './utils/showTemporaryNotification';
 import { PlanAutoFetchService } from './services/PlanAutoFetchService';
 import { MigrationService } from './services/MigrationService';
+import { switchboardCommandRegistry } from './services/commandRegistry';
+
+/**
+ * Verb Engine · 1 — register a `switchboard.*` command in BOTH the host-agnostic
+ * command registry (so seam-routed _handleMessage arms dispatch it in-process,
+ * with no vscode command infrastructure on the path) AND with vscode (palette,
+ * keybindings, other extensions). The vscode registration is the thin caller;
+ * the registry holds the body. Use this for every command a provider arm invokes.
+ */
+function registerSwitchboardCommand(name: string, handler: (...args: any[]) => any): vscode.Disposable {
+    switchboardCommandRegistry.register(name, handler);
+    return vscode.commands.registerCommand(name, handler);
+}
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -899,6 +912,10 @@ export async function activate(context: vscode.ExtensionContext) {
     const taskViewerProvider = new TaskViewerProvider(context.extensionUri, context);
     activeTaskViewerProvider = taskViewerProvider;
     taskViewerProvider.setRegisteredTerminals(registeredTerminals);
+    // Oversight-pass engine: completion signal = the watcher's plan-file mtime
+    // advance (the activity-light OFF-switch). Also resumes a pass interrupted
+    // by an extension reload from .switchboard/oversight-state.md.
+    taskViewerProvider.attachOversightWatcher(globalPlanWatcher);
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
         void taskViewerProvider.deregisterAllTerminals(true).then(() => {
@@ -927,37 +944,37 @@ export async function activate(context: vscode.ExtensionContext) {
     // Register core commands immediately after primary dependencies are ready.
     // This prevents 'command not found' errors if the user interacts with the
     // sidebar (e.g. clicks "OPEN AGENT TERMINALS") before the rest of activation completes.
-    const setupDisposable = vscode.commands.registerCommand('switchboard.setup', async () => {
+    const setupDisposable = registerSwitchboardCommand('switchboard.setup', async () => {
         await showSetupWizard(context, taskViewerProvider);
     });
     context.subscriptions.push(setupDisposable);
 
-    const initiatePlanDisposable = vscode.commands.registerCommand('switchboard.initiatePlan', async () => {
+    const initiatePlanDisposable = registerSwitchboardCommand('switchboard.initiatePlan', async () => {
         await taskViewerProvider?.createDraftPlanTicket();
     });
     context.subscriptions.push(initiatePlanDisposable);
 
-    const importFromClipboardDisposable = vscode.commands.registerCommand('switchboard.importPlanFromClipboard', async (markdownText?: string) => {
+    const importFromClipboardDisposable = registerSwitchboardCommand('switchboard.importPlanFromClipboard', async (markdownText?: string) => {
         await taskViewerProvider?.importPlanFromClipboard(markdownText);
     });
     context.subscriptions.push(importFromClipboardDisposable);
 
-    const importNotebookLMPlansDisposable = vscode.commands.registerCommand('switchboard.importNotebookLMPlans', async (workspaceRoot?: string) => {
+    const importNotebookLMPlansDisposable = registerSwitchboardCommand('switchboard.importNotebookLMPlans', async (workspaceRoot?: string) => {
         return await taskViewerProvider?.importNotebookLMPlans(workspaceRoot);
     });
     context.subscriptions.push(importNotebookLMPlansDisposable);
 
-    const selectSessionDisposable = vscode.commands.registerCommand('switchboard.selectSession', (sessionId: string) => {
+    const selectSessionDisposable = registerSwitchboardCommand('switchboard.selectSession', (sessionId: string) => {
         if (typeof sessionId === 'string' && sessionId.trim()) {
             taskViewerProvider.selectSession(sessionId);
         }
     });
     context.subscriptions.push(selectSessionDisposable);
 
-    const createAgentGridDisposable = vscode.commands.registerCommand('switchboard.createAgentGrid', async (args?: any) => {
+    const createAgentGridDisposable = registerSwitchboardCommand('switchboard.createAgentGrid', async (args?: any) => {
         await createAgentGrid(args);
     });
-    const createAgentGridEditorDisposable = vscode.commands.registerCommand('switchboard.createAgentGridEditor', async () => {
+    const createAgentGridEditorDisposable = registerSwitchboardCommand('switchboard.createAgentGridEditor', async () => {
         await createAgentGrid();
     });
     const disposeAllGridTerminalsDisposable = vscode.commands.registerCommand('switchboard.disposeAllGridTerminals', async () => {
@@ -1058,7 +1075,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (workspaceRoot) {
         await taskViewerProvider.initializeKanbanDbOnStartup();
     }
-    const openKanbanDisposable = vscode.commands.registerCommand('switchboard.openKanban', async (tab?: string) => {
+    const openKanbanDisposable = registerSwitchboardCommand('switchboard.openKanban', async (tab?: string) => {
         await kanbanProvider!.open(tab);
     });
     context.subscriptions.push(openKanbanDisposable);
@@ -1149,25 +1166,25 @@ export async function activate(context: vscode.ExtensionContext) {
         await context.secrets.delete('switchboard.stitch.accessToken');
     }
 
-    const openPlanningPanelDisposable = vscode.commands.registerCommand(
+    const openPlanningPanelDisposable = registerSwitchboardCommand(
         'switchboard.openPlanningPanel',
         async () => { await planningPanelProvider.open(); }
     );
     context.subscriptions.push(openPlanningPanelDisposable);
 
-    const openProjectPanelDisposable = vscode.commands.registerCommand(
+    const openProjectPanelDisposable = registerSwitchboardCommand(
         'switchboard.openProjectPanel',
         async () => { await planningPanelProvider.openProject(); }
     );
     context.subscriptions.push(openProjectPanelDisposable);
 
-    const openDesignPanelDisposable = vscode.commands.registerCommand(
+    const openDesignPanelDisposable = registerSwitchboardCommand(
         'switchboard.openDesignPanel',
         async () => { await designPanelProvider.open(); }
     );
     context.subscriptions.push(openDesignPanelDisposable);
 
-    const openSetupPanelDisposable = vscode.commands.registerCommand('switchboard.openSetupPanel', async (section?: string) => {
+    const openSetupPanelDisposable = registerSwitchboardCommand('switchboard.openSetupPanel', async (section?: string) => {
         await setupPanelProvider.open(typeof section === 'string' ? section : undefined);
     });
     context.subscriptions.push(openSetupPanelDisposable);
@@ -1179,7 +1196,7 @@ export async function activate(context: vscode.ExtensionContext) {
         await setupPanelProvider.open('control-plane');
     });
     context.subscriptions.push(setupControlPlaneDisposable);
-    const clearControlPlaneCacheDisposable = vscode.commands.registerCommand('switchboard.clearControlPlaneCache', async () => {
+    const clearControlPlaneCacheDisposable = registerSwitchboardCommand('switchboard.clearControlPlaneCache', async () => {
         const selectedWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
             vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
@@ -1202,7 +1219,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
     context.subscriptions.push(clearControlPlaneCacheDisposable);
-    const refreshControlPlaneRuntimeDisposable = vscode.commands.registerCommand('switchboard.refreshControlPlaneRuntime', async () => {
+    const refreshControlPlaneRuntimeDisposable = registerSwitchboardCommand('switchboard.refreshControlPlaneRuntime', async () => {
         const selectedWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
             vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
@@ -1219,14 +1236,14 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     // Full sync: file→DB sync + refresh both sidebar and kanban from DB
-    const fullSyncDisposable = vscode.commands.registerCommand('switchboard.fullSync', async () => {
+    const fullSyncDisposable = registerSwitchboardCommand('switchboard.fullSync', async () => {
         await taskViewerProvider.fullSync();
     });
     context.subscriptions.push(fullSyncDisposable);
 
     // Manual "Import plans" — list unclaimed plans across configured sources (any age)
     // and let the user pick which to add to the board.
-    const importPlansDisposable = vscode.commands.registerCommand('switchboard.importUnclaimedPlans', async () => {
+    const importPlansDisposable = registerSwitchboardCommand('switchboard.importUnclaimedPlans', async () => {
         await taskViewerProvider.handleImportUnclaimedPlans();
     });
     context.subscriptions.push(importPlansDisposable);
@@ -1247,7 +1264,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(copyChatPromptDisposable);
 
     // Reset Kanban Database command — deletes local DB and rebuilds from plan files
-    const resetKanbanDbDisposable = vscode.commands.registerCommand('switchboard.resetKanbanDb', async (targetWorkspaceRoot?: string) => {
+    const resetKanbanDbDisposable = registerSwitchboardCommand('switchboard.resetKanbanDb', async (targetWorkspaceRoot?: string) => {
         const workspaceRoot = targetWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
@@ -1317,7 +1334,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(syncImportedPlansDisposable);
 
     // Reconcile Kanban Databases command — merge split databases
-    const reconcileKanbanDisposable = vscode.commands.registerCommand('switchboard.reconcileKanbanDbs', async () => {
+    const reconcileKanbanDisposable = registerSwitchboardCommand('switchboard.reconcileKanbanDbs', async () => {
         const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
@@ -1392,12 +1409,12 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    const refreshUIDisposable = vscode.commands.registerCommand('switchboard.refreshUI', async (workspaceRoot?: string) => {
+    const refreshUIDisposable = registerSwitchboardCommand('switchboard.refreshUI', async (workspaceRoot?: string) => {
         await taskViewerProvider.refreshUI(workspaceRoot);
     });
     context.subscriptions.push(refreshUIDisposable);
 
-    const mappingsChangedDisposable = vscode.commands.registerCommand('switchboard.mappingsChanged', async () => {
+    const mappingsChangedDisposable = registerSwitchboardCommand('switchboard.mappingsChanged', async () => {
         // Clear mapping cache
         const { clearMappingCache } = require('./services/WorkspaceIdentityService');
         clearMappingCache();
@@ -1415,12 +1432,12 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(mappingsChangedDisposable);
 
     // Helper commands for Kanban ↔ sidebar delegation
-    const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
+    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
         return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
-    const analystMapFromKanbanDisposable = vscode.commands.registerCommand('switchboard.analystMapFromKanban', async (sessionId: string, workspaceRoot?: string) => {
+    const analystMapFromKanbanDisposable = registerSwitchboardCommand('switchboard.analystMapFromKanban', async (sessionId: string, workspaceRoot?: string) => {
         return await taskViewerProvider.handleAnalystContextMap(sessionId, workspaceRoot);
     });
     context.subscriptions.push(analystMapFromKanbanDisposable);
@@ -1435,32 +1452,32 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(triggerPlanScanDisposable);
 
-    const batchTriggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
+    const batchTriggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
         return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride);
     });
     context.subscriptions.push(batchTriggerFromKanbanDisposable);
 
-    const batchDispatchLowDisposable = vscode.commands.registerCommand('switchboard.batchDispatchLow', async (workspaceRoot?: string) => {
+    const batchDispatchLowDisposable = registerSwitchboardCommand('switchboard.batchDispatchLow', async (workspaceRoot?: string) => {
         return taskViewerProvider.handleBatchDispatchLow(workspaceRoot);
     });
     context.subscriptions.push(batchDispatchLowDisposable);
 
-    const kanbanBackwardMoveDisposable = vscode.commands.registerCommand('switchboard.kanbanBackwardMove', async (sessionIds: string[], targetColumn: string, workspaceRoot?: string) => {
+    const kanbanBackwardMoveDisposable = registerSwitchboardCommand('switchboard.kanbanBackwardMove', async (sessionIds: string[], targetColumn: string, workspaceRoot?: string) => {
         return taskViewerProvider.handleKanbanBackwardMove(sessionIds, targetColumn, workspaceRoot);
     });
     context.subscriptions.push(kanbanBackwardMoveDisposable);
 
-    const kanbanForwardMoveDisposable = vscode.commands.registerCommand('switchboard.kanbanForwardMove', async (sessionIds: string[], targetColumn: string, workspaceRoot?: string, sourceColumn?: string) => {
+    const kanbanForwardMoveDisposable = registerSwitchboardCommand('switchboard.kanbanForwardMove', async (sessionIds: string[], targetColumn: string, workspaceRoot?: string, sourceColumn?: string) => {
         return taskViewerProvider.handleKanbanForwardMove(sessionIds, targetColumn, workspaceRoot, sourceColumn);
     });
     context.subscriptions.push(kanbanForwardMoveDisposable);
 
-    const completePlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.completePlanFromKanban', async (sessionId: string, workspaceRoot?: string) => {
+    const completePlanFromKanbanDisposable = registerSwitchboardCommand('switchboard.completePlanFromKanban', async (sessionId: string, workspaceRoot?: string) => {
         return taskViewerProvider.handleKanbanCompletePlan(sessionId, workspaceRoot);
     });
     context.subscriptions.push(completePlanFromKanbanDisposable);
 
-    const restorePlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.restorePlanFromKanban', async (planId: string, workspaceRoot?: string) => {
+    const restorePlanFromKanbanDisposable = registerSwitchboardCommand('switchboard.restorePlanFromKanban', async (planId: string, workspaceRoot?: string) => {
         return taskViewerProvider.handleKanbanRestorePlan(planId, workspaceRoot);
     });
     context.subscriptions.push(restorePlanFromKanbanDisposable);
@@ -1483,27 +1500,27 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(moveKanbanCardByPlanFileDisposable);
 
-    const setAutobanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) => {
+    const setAutobanFromKanbanDisposable = registerSwitchboardCommand('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) => {
         await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled);
     });
     context.subscriptions.push(setAutobanFromKanbanDisposable);
 
-    const resetAutobanTimersDisposable = vscode.commands.registerCommand('switchboard.resetAutobanTimersFromKanban', async () => {
+    const resetAutobanTimersDisposable = registerSwitchboardCommand('switchboard.resetAutobanTimersFromKanban', async () => {
         await taskViewerProvider.resetAutobanTimersFromKanban();
     });
     context.subscriptions.push(resetAutobanTimersDisposable);
 
-    const setAutobanPausedDisposable = vscode.commands.registerCommand('switchboard.setAutobanPausedFromKanban', async (paused: boolean) => {
+    const setAutobanPausedDisposable = registerSwitchboardCommand('switchboard.setAutobanPausedFromKanban', async (paused: boolean) => {
         await taskViewerProvider.setAutobanPausedFromKanban(!!paused);
     });
     context.subscriptions.push(setAutobanPausedDisposable);
 
-    const setPairProgrammingModeDisposable = vscode.commands.registerCommand('switchboard.setPairProgrammingModeFromKanban', async (mode: string) => {
+    const setPairProgrammingModeDisposable = registerSwitchboardCommand('switchboard.setPairProgrammingModeFromKanban', async (mode: string) => {
         await taskViewerProvider.setPairProgrammingMode(mode);
     });
     context.subscriptions.push(setPairProgrammingModeDisposable);
 
-    const addAutobanTerminalDisposable = vscode.commands.registerCommand('switchboard.addAutobanTerminalFromKanban', async (role: string, requestedName?: string, cwd?: string) => {
+    const addAutobanTerminalDisposable = registerSwitchboardCommand('switchboard.addAutobanTerminalFromKanban', async (role: string, requestedName?: string, cwd?: string) => {
         await taskViewerProvider.addAutobanTerminalFromKanban(role, requestedName, cwd);
     });
     context.subscriptions.push(addAutobanTerminalDisposable);
@@ -1513,42 +1530,42 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(revealWorktreeTerminalDisposable);
 
-    const removeAutobanTerminalDisposable = vscode.commands.registerCommand('switchboard.removeAutobanTerminalFromKanban', async (role: string, terminalName: string) => {
+    const removeAutobanTerminalDisposable = registerSwitchboardCommand('switchboard.removeAutobanTerminalFromKanban', async (role: string, terminalName: string) => {
         await taskViewerProvider.removeAutobanTerminalFromKanban(role, terminalName);
     });
     context.subscriptions.push(removeAutobanTerminalDisposable);
 
-    const launchMcpMonitorTerminalDisposable = vscode.commands.registerCommand('switchboard.launchMcpMonitorTerminal', async () => {
+    const launchMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.launchMcpMonitorTerminal', async () => {
         await taskViewerProvider.launchMcpMonitorTerminal();
     });
     context.subscriptions.push(launchMcpMonitorTerminalDisposable);
 
-    const stopMcpMonitorTerminalDisposable = vscode.commands.registerCommand('switchboard.stopMcpMonitorTerminal', async () => {
+    const stopMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.stopMcpMonitorTerminal', async () => {
         await taskViewerProvider.stopMcpMonitorTerminal();
     });
     context.subscriptions.push(stopMcpMonitorTerminalDisposable);
 
-    const checkMcpMonitorAuthDisposable = vscode.commands.registerCommand('switchboard.checkMcpMonitorAuth', async () => {
+    const checkMcpMonitorAuthDisposable = registerSwitchboardCommand('switchboard.checkMcpMonitorAuth', async () => {
         await taskViewerProvider.checkMcpMonitorAuth();
     });
     context.subscriptions.push(checkMcpMonitorAuthDisposable);
 
-    const startMcpMonitorPollingDisposable = vscode.commands.registerCommand('switchboard.startMcpMonitorPolling', async () => {
+    const startMcpMonitorPollingDisposable = registerSwitchboardCommand('switchboard.startMcpMonitorPolling', async () => {
         await taskViewerProvider.startMcpMonitorPolling();
     });
     context.subscriptions.push(startMcpMonitorPollingDisposable);
 
-    const stopMcpMonitorPollingDisposable = vscode.commands.registerCommand('switchboard.stopMcpMonitorPolling', async () => {
+    const stopMcpMonitorPollingDisposable = registerSwitchboardCommand('switchboard.stopMcpMonitorPolling', async () => {
         await taskViewerProvider.stopMcpMonitorPolling();
     });
     context.subscriptions.push(stopMcpMonitorPollingDisposable);
 
-    const resetAutobanPoolsDisposable = vscode.commands.registerCommand('switchboard.resetAutobanPoolsFromKanban', async () => {
+    const resetAutobanPoolsDisposable = registerSwitchboardCommand('switchboard.resetAutobanPoolsFromKanban', async () => {
         await taskViewerProvider.resetAutobanPoolsFromKanban();
     });
     context.subscriptions.push(resetAutobanPoolsDisposable);
 
-    const dispatchToCoderTerminalDisposable = vscode.commands.registerCommand('switchboard.dispatchToCoderTerminal', async (prompt: string, worktreePath?: string) => {
+    const dispatchToCoderTerminalDisposable = registerSwitchboardCommand('switchboard.dispatchToCoderTerminal', async (prompt: string, worktreePath?: string) => {
         await taskViewerProvider.dispatchToCoderTerminal(prompt, worktreePath);
     });
     context.subscriptions.push(dispatchToCoderTerminalDisposable);
@@ -2496,7 +2513,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     // Register IDE setup command
-    const ideSetupDisposable = vscode.commands.registerCommand('switchboard.setupIDEs', async () => {
+    const ideSetupDisposable = registerSwitchboardCommand('switchboard.setupIDEs', async () => {
         await showSetupWizard(context, taskViewerProvider);
     });
     context.subscriptions.push(ideSetupDisposable);
@@ -2505,7 +2522,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Register focus terminal command
     // NOTE: vscode.window.terminals[n].processId returns the HOST shell PID (e.g., powershell.exe),
     // not necessarily the child workers running inside it.
-    const focusTerminalDisposable = vscode.commands.registerCommand('switchboard.focusTerminal', async (pid: number) => {
+    const focusTerminalDisposable = registerSwitchboardCommand('switchboard.focusTerminal', async (pid: number) => {
         const terminals = vscode.window.terminals;
         try {
             const pidMap = await Promise.all(terminals.map(async t => ({ term: t, pid: await waitWithTimeout(t.processId, 1000, undefined) })));
@@ -2542,7 +2559,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(focusTerminalDisposable);
 
     // Register focus terminal by name command (reliable — uses in-memory terminal map)
-    const focusTerminalByNameDisposable = vscode.commands.registerCommand('switchboard.focusTerminalByName', async (terminalName: string) => {
+    const focusTerminalByNameDisposable = registerSwitchboardCommand('switchboard.focusTerminalByName', async (terminalName: string) => {
         const normalizeName = (value: string | undefined): string =>
             (value || '').toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
         const target = normalizeName(terminalName);
@@ -2619,7 +2636,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(focusAllTerminalsDisposable);
 
     // Register open plan command with configurable preview/edit mode
-    const openPlanDisposable = vscode.commands.registerCommand('switchboard.openPlan', async (uri: vscode.Uri | string) => {
+    const openPlanDisposable = registerSwitchboardCommand('switchboard.openPlan', async (uri: vscode.Uri | string) => {
         if (!uri) return;
 
         let targetUri: vscode.Uri;
@@ -2882,7 +2899,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     for (const [name, info] of Object.entries(terminalState || {})) {
                         const entry = info as any;
                         const termWtPath = entry.worktreePath ? path.resolve(entry.worktreePath) : '';
-                        if (termWtPath === path.resolve(effectiveCwd)) {
+                        if (!termWtPath || termWtPath === path.resolve(effectiveCwd)) {
                             mainRepoTerminalNames.add(name);
                             mainRepoTerminalNames.add(entry.friendlyName || name);
                         }
@@ -3004,7 +3021,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         friendlyName: agent.name,
                         skipParentResolution: true,
                         ideName: vscode.env.appName,
-                        worktreePath: effectiveCwd
+                        worktreePath: effectiveCwd !== effectiveWorkspaceRoot ? effectiveCwd : undefined
                     });
                     outputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
                     gridTerminals.set(suffixedName(agent.name), terminal);

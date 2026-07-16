@@ -2,9 +2,9 @@
 description: "Feature A · A2b follow-on: make the extension's verb handlers genuinely host-agnostic for B1 (headless, no VS Code). REVISED after a design audit — the original shim→twin-method recipe is the wrong vehicle; this plan uses INVERT-AND-INJECT (the provider becomes the host-agnostic engine; seams are injected in-place) plus a generic dispatch fallback. Plan only; do NOT start."
 ---
 
-# Feature A · A2b — Host-Agnostic Verb Engine (INVERT-AND-INJECT)
+# A2b — Host-Agnostic Verb Engine — Design Record (INVERT-AND-INJECT)
 
-> **Status: PLAN ONLY — do not begin. Supersedes the earlier shim-extraction approach (see "Why the shim approach was rejected").**
+> **Status: DESIGN RECORD — do not dispatch this card.** Implementation was split (2026-07-16) into the "Host-Agnostic Verb Engine" feature's six subtasks (`a2b-verb-engine-01-foundations.md` — the hard part — plus one burndown per provider, 02–06). This file is kept as the authoritative design rationale: the shim-rejection audit, the INVERT-AND-INJECT approach, and the global constraints. It supersedes the earlier shim-extraction approach (see "Why the shim approach was rejected").
 
 ## Goal
 

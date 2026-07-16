@@ -1,7 +1,8 @@
 
-import { HostSeams, createVscodeHostSeams } from './hostSeams';
+import { HostSeams, HostWatchHandle, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import { DESIGN_VERBS } from '../generated/verbAllowlist';
+import { validateVerbPayload } from './verbSchemas';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -68,9 +69,17 @@ export class DesignPanelProvider implements vscode.Disposable {
         if (!DESIGN_VERBS.has(verb)) {
             throw new Error(`Unknown Design verb: '${verb}'`);
         }
-        // VS Code is the host here; _handleMessage runs in-process. Command verbs
-        // return the route layer's {success:true} ack (most _handleMessage impls are
-        // void); read verbs emit their result over the WS hub (see plan).
+        // Network boundary: HTTP payloads are untrusted (webview postMessage was
+        // not) — validate against the verb's schema before dispatch. Verbs with
+        // no schema yet pass through (generic-dispatch contract, zero per-verb code).
+        const validation = validateVerbPayload('design', verb, payload);
+        if (!validation.ok) {
+            throw new Error(`Invalid payload for Design verb '${verb}': ${validation.error}`);
+        }
+        // VS Code is the host here; _handleMessage runs in-process. Migrated arms
+        // RETURN their result (returned to the HTTP caller in the response body;
+        // the webview push stays additive); un-migrated arms still `break` and the
+        // route layer sends its {success:true} ack.
         // `type` is set LAST so a payload `type` field can never override the
         // allowlist-checked verb, regardless of caller.
         return this._handleMessage({ ...(payload ?? {}), type: verb });
@@ -84,12 +93,26 @@ export class DesignPanelProvider implements vscode.Disposable {
             this._broadcaster = undefined;
             return;
         }
-        this._hostSeams = createVscodeHostSeams(workspaceRoot);
+        this._hostSeams = createVscodeHostSeams(workspaceRoot, this._context.secrets);
         if (!this._broadcaster) {
             this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
         }
+    }
+
+    /**
+     * Seam bundle accessor for migrated _handleMessage arms. Lazily builds the
+     * vscode-backed bundle when the provider is driven before `_initDesignService`
+     * ran (or when no workspace root resolved — seams still work; path-scoped
+     * config reads just resolve against the empty root). The test-seam harness
+     * injects a headless bundle by assigning `_hostSeams` directly.
+     */
+    private _seams(): HostSeams {
+        if (!this._hostSeams) {
+            this._hostSeams = createVscodeHostSeams(this._getWorkspaceRoot() || '', this._context.secrets);
+        }
+        return this._hostSeams;
     }
 
     public setApiServer(server: any): void {
@@ -102,12 +125,12 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _panel?: vscode.WebviewPanel;
     private _disposables: vscode.Disposable[] = [];
     private _nonce: string = '';
-    private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
-    private _claudeFolderWatchers: vscode.FileSystemWatcher[] = [];
-    private _designFolderWatchers: vscode.FileSystemWatcher[] = [];
-    private _imagesFolderWatchers: vscode.FileSystemWatcher[] = [];
-    private _briefsFolderWatchers: vscode.FileSystemWatcher[] = [];
-    private _stitchHtmlFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _htmlFolderWatchers: HostWatchHandle[] = [];
+    private _claudeFolderWatchers: HostWatchHandle[] = [];
+    private _designFolderWatchers: HostWatchHandle[] = [];
+    private _imagesFolderWatchers: HostWatchHandle[] = [];
+    private _briefsFolderWatchers: HostWatchHandle[] = [];
+    private _stitchHtmlFolderWatchers: HostWatchHandle[] = [];
     private _saveTextDocListener?: vscode.Disposable;
     private _htmlDocsDebounce?: NodeJS.Timeout;
     private _claudeDocsDebounce?: NodeJS.Timeout;
@@ -493,10 +516,6 @@ window.addEventListener('message', function(e) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this.postMessage({ type: 'switchboardThemeChanged', theme });
                     }
-                    if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
-                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                        this.postMessage({ type: 'pixelFontSetting', enabled });
-                    }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
                         this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
@@ -599,10 +618,6 @@ window.addEventListener('message', function(e) {
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this.postMessage({ type: 'switchboardThemeChanged', theme });
-                    }
-                    if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
-                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                        this.postMessage({ type: 'pixelFontSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
@@ -710,6 +725,10 @@ window.addEventListener('message', function(e) {
         const inspectJsUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'inspect.js')
         );
+        const inspectJsPath = vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'inspect.js').fsPath;
+        if (!fs.existsSync(inspectJsPath)) {
+            console.error('[DesignPanelProvider] dist/webview/inspect.js is missing; Inspect buttons will not work.');
+        }
         htmlContent = htmlContent.replace(/\{\{INSPECT_JS_URI\}\}/g, inspectJsUri.toString());
 
         const geistPixelFontUri = webview.asWebviewUri(
@@ -727,7 +746,7 @@ window.addEventListener('message', function(e) {
     }
 
     private _getWorkspaceRoots(): string[] {
-        return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        return this._seams().workspace.getWorkspaceRoots();
     }
 
     private _getLocalFolderService(workspaceRoot: string): LocalFolderService {
@@ -764,17 +783,12 @@ window.addEventListener('message', function(e) {
                 const paths = service.getHtmlFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const pattern = new vscode.RelativePattern(p, '**/*');
-                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                        watcher.onDidChange((uri) => {
+                        const watcher = this._seams().watcher.watchFolder(p, (event, filePath) => {
                             this._sendHtmlDocsReady();
-                            this._autoRefreshHtmlPreview(uri);
+                            if (event !== 'delete') {
+                                this._autoRefreshHtmlPreview(filePath);
+                            }
                         });
-                        watcher.onDidCreate((uri) => {
-                            this._sendHtmlDocsReady();
-                            this._autoRefreshHtmlPreview(uri);
-                        });
-                        watcher.onDidDelete(() => this._sendHtmlDocsReady());
                         this._htmlFolderWatchers.push(watcher);
                     }
                 }
@@ -800,23 +814,14 @@ window.addEventListener('message', function(e) {
             if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
             const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
             if (!fs.existsSync(cacheDir)) return;
-            const pattern = new vscode.RelativePattern(cacheDir, '**/*');
-            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-            watcher.onDidChange((uri) => {
+            const watcher = this._seams().watcher.watchFolder(cacheDir, (event, filePath) => {
                 // Bail if the active project changed between watcher creation and fire —
                 // a callback from a just-discarded project must not refresh the new view.
                 if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
                 void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
-                this._autoRefreshHtmlPreview(uri);
-            });
-            watcher.onDidCreate((uri) => {
-                if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
-                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
-                this._autoRefreshHtmlPreview(uri);
-            });
-            watcher.onDidDelete(() => {
-                if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
-                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                if (event !== 'delete') {
+                    this._autoRefreshHtmlPreview(filePath);
+                }
             });
             this._stitchHtmlFolderWatchers.push(watcher);
         } catch {}
@@ -832,19 +837,14 @@ window.addEventListener('message', function(e) {
                 const paths = service.getClaudeFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const pattern = new vscode.RelativePattern(p, '**/*');
-                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                        watcher.onDidChange((uri) => {
+                        const watcher = this._seams().watcher.watchFolder(p, (event, filePath) => {
                             this._sendClaudeDocsReady();
                             // _autoRefreshHtmlPreview already checks _activeClaudePreview, so it
                             // covers Claude-tab auto-refresh too.
-                            this._autoRefreshHtmlPreview(uri);
+                            if (event !== 'delete') {
+                                this._autoRefreshHtmlPreview(filePath);
+                            }
                         });
-                        watcher.onDidCreate((uri) => {
-                            this._sendClaudeDocsReady();
-                            this._autoRefreshHtmlPreview(uri);
-                        });
-                        watcher.onDidDelete(() => this._sendClaudeDocsReady());
                         this._claudeFolderWatchers.push(watcher);
                     }
                 }
@@ -862,11 +862,7 @@ window.addEventListener('message', function(e) {
                 const paths = service.getDesignFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const pattern = new vscode.RelativePattern(p, '**/*');
-                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                        watcher.onDidChange(() => this._sendDesignDocsReady());
-                        watcher.onDidCreate(() => this._sendDesignDocsReady());
-                        watcher.onDidDelete(() => this._sendDesignDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, () => this._sendDesignDocsReady());
                         this._designFolderWatchers.push(watcher);
                     }
                 }
@@ -1078,11 +1074,7 @@ window.addEventListener('message', function(e) {
                 const paths = service.getImagesFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const pattern = new vscode.RelativePattern(p, '**/*');
-                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                        watcher.onDidChange(() => this._sendImagesDocsReady());
-                        watcher.onDidCreate(() => this._sendImagesDocsReady());
-                        watcher.onDidDelete(() => this._sendImagesDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, () => this._sendImagesDocsReady());
                         this._imagesFolderWatchers.push(watcher);
                     }
                 }
@@ -1152,11 +1144,7 @@ window.addEventListener('message', function(e) {
                 const paths = service.getBriefsFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const pattern = new vscode.RelativePattern(p, '**/*');
-                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                        watcher.onDidChange(() => this._sendBriefsDocsReady());
-                        watcher.onDidCreate(() => this._sendBriefsDocsReady());
-                        watcher.onDidDelete(() => this._sendBriefsDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, () => this._sendBriefsDocsReady());
                         this._briefsFolderWatchers.push(watcher);
                     }
                 }
@@ -1636,7 +1624,7 @@ window.addEventListener('message', function(e) {
     }
 
     private async _setupStitchAuth(): Promise<{ valid: boolean; apiKey: string }> {
-        const apiKey = (await this._context.secrets.get('switchboard.stitch.apiKey')) || '';
+        const apiKey = (await this._seams().secrets.get('switchboard.stitch.apiKey')) || '';
         const finalKey = apiKey || process.env.STITCH_API_KEY || '';
         if (finalKey) {
             process.env.STITCH_API_KEY = finalKey;
@@ -2010,7 +1998,15 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         return processedHtml;
     }
 
-    private async _handleMessage(message: any): Promise<void> {
+    /**
+     * The verb engine (INVERT-AND-INJECT). Arms migrated to the A2b pattern
+     * RETURN their result — the HTTP rail sends it in the response body, and any
+     * webview push the arm makes stays additive (live-UI update), in the same
+     * order as before. Un-migrated arms still `break` (resolving undefined; the
+     * rail acks `{success:true}`). The webview postMessage path ignores the
+     * return value, so returning is byte-compatible for panel callers.
+     */
+    private async _handleMessage(message: any): Promise<any> {
         const authInfo = await this._setupStitchAuth();
         const hasKey = authInfo.valid;
 
@@ -2072,14 +2068,15 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'persistTabState': {
                 const { tabKey, workspaceRoot: root, state } = message;
-                if (tabKey) {
-                    if (root) {
-                        await this._stateStore.setRootState(tabKey, root, state);
-                    } else {
-                        await this._stateStore.setPanelState(tabKey, state);
-                    }
+                if (!tabKey) {
+                    return { success: false, error: 'tabKey is required' };
                 }
-                break;
+                if (root) {
+                    await this._stateStore.setRootState(tabKey, root, state);
+                } else {
+                    await this._stateStore.setPanelState(tabKey, state);
+                }
+                return { success: true };
             }
             case 'inspectRequestDataUrl': {
                 const filePath = message.filePath;
@@ -2101,6 +2098,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         requestId: message.requestId
                     });
                 } catch (e) {
+                    console.error('[DesignPanelProvider] inspectRequestDataUrl failed', e);
                     this.postMessage({ type: 'inspectDataUrlError', requestId: message.requestId, error: String(e) });
                 }
                 break;
@@ -2121,7 +2119,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 } else {
                     this._stopExternalFilePoll();
                 }
-                break;
+                return { success: true, activeTab: this._activeTab };
             }
             case 'setActivePlanningContext': {
                 try {
@@ -2315,10 +2313,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'copyStitchTweakPrompt': {
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
-                await vscode.env.clipboard.writeText(prompt);
-                showTemporaryNotification('Copied element tweak prompt to clipboard.');
-                break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
+                await this._seams().clipboard.writeText(prompt);
+                this._seams().ui.showTemporaryNotification('Copied element tweak prompt to clipboard.');
+                return { success: true };
             }
 
             case 'sendStitchTweakPrompt': {
@@ -2336,10 +2334,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'copyHtmlTweakPrompt': {
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
-                await vscode.env.clipboard.writeText(prompt);
-                showTemporaryNotification('Copied element tweak prompt to clipboard.');
-                break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
+                await this._seams().clipboard.writeText(prompt);
+                this._seams().ui.showTemporaryNotification('Copied element tweak prompt to clipboard.');
+                return { success: true };
             }
 
             case 'sendHtmlTweakPrompt': {
@@ -2442,20 +2440,21 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             case 'stitchSaveApiKey':
                 try {
                     if (message.apiKey) {
-                        await this._context.secrets.store('switchboard.stitch.apiKey', message.apiKey);
+                        await this._seams().secrets.store('switchboard.stitch.apiKey', message.apiKey);
                     } else {
-                        await this._context.secrets.delete('switchboard.stitch.apiKey');
+                        await this._seams().secrets.delete('switchboard.stitch.apiKey');
                     }
                     process.env.STITCH_API_KEY = message.apiKey || '';
                     invalidateStitchSdkCache();
                     const auth = await this._setupStitchAuth();
                     this.postMessage({ type: 'stitchApiKeyStatus', configured: auth.valid });
                     this.postMessage({ type: 'stitchAuthStatus', configured: auth.valid, valid: auth.valid });
-                    showTemporaryNotification('Stitch API Key saved successfully.');
+                    this._seams().ui.showTemporaryNotification('Stitch API Key saved successfully.');
+                    return { success: true, configured: auth.valid };
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to save API key: ' + err.message);
+                    void this._seams().ui.showErrorMessage('Failed to save API key: ' + err.message);
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchSaveAuthConfig':
                 try {
@@ -3136,24 +3135,24 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const service = this._getLocalFolderService(root);
                 const paths = service.getDesignFolderPaths();
                 this.postMessage({ type: 'designFoldersListed', paths, workspaceRoot: root });
-                break;
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'addDesignFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add Design Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addDesignFolderPath(result[0].fsPath);
-                    this._setupDesignFolderWatchers();
-                    await this._sendDesignDocsReady();
-                    this.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
+                // HTTP callers pass folderPath directly; the webview flow keeps the host folder picker.
+                const picked = (typeof message.folderPath === 'string' && message.folderPath.trim())
+                    ? message.folderPath.trim()
+                    : await this._seams().ui.pickFolder('Add Design Folder');
+                if (!picked) {
+                    return { success: false, error: 'No folder selected' };
                 }
-                break;
+                const service = this._getLocalFolderService(root);
+                await service.addDesignFolderPath(picked);
+                this._setupDesignFolderWatchers();
+                await this._sendDesignDocsReady();
+                const paths = service.getDesignFolderPaths();
+                this.postMessage({ type: 'designFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'removeDesignFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3161,8 +3160,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await service.removeDesignFolderPath(message.folderPath);
                 this._setupDesignFolderWatchers();
                 await this._sendDesignDocsReady();
-                this.postMessage({ type: 'designFoldersListed', paths: service.getDesignFolderPaths(), workspaceRoot: root });
-                break;
+                const paths = service.getDesignFolderPaths();
+                this.postMessage({ type: 'designFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
 
             case 'listHtmlFolders': {
@@ -3170,24 +3170,23 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const service = this._getLocalFolderService(root);
                 const paths = service.getHtmlFolderPaths();
                 this.postMessage({ type: 'htmlFoldersListed', paths, workspaceRoot: root });
-                break;
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'addHtmlFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add HTML Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addHtmlFolderPath(result[0].fsPath);
-                    this._setupHtmlFolderWatchers();
-                    await this._sendHtmlDocsReady();
-                    this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
+                const picked = (typeof message.folderPath === 'string' && message.folderPath.trim())
+                    ? message.folderPath.trim()
+                    : await this._seams().ui.pickFolder('Add HTML Folder');
+                if (!picked) {
+                    return { success: false, error: 'No folder selected' };
                 }
-                break;
+                const service = this._getLocalFolderService(root);
+                await service.addHtmlFolderPath(picked);
+                this._setupHtmlFolderWatchers();
+                await this._sendHtmlDocsReady();
+                const paths = service.getHtmlFolderPaths();
+                this.postMessage({ type: 'htmlFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'removeHtmlFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3195,32 +3194,32 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await service.removeHtmlFolderPath(message.folderPath);
                 this._setupHtmlFolderWatchers();
                 await this._sendHtmlDocsReady();
-                this.postMessage({ type: 'htmlFoldersListed', paths: service.getHtmlFolderPaths(), workspaceRoot: root });
-                break;
+                const paths = service.getHtmlFolderPaths();
+                this.postMessage({ type: 'htmlFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'listClaudeFolders': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
                 const service = this._getLocalFolderService(root);
                 const paths = service.getClaudeFolderPaths();
                 this.postMessage({ type: 'claudeFoldersListed', paths, workspaceRoot: root });
-                break;
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'addClaudeFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add Claude Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addClaudeFolderPath(result[0].fsPath);
-                    this._setupClaudeFolderWatchers();
-                    await this._sendClaudeDocsReady();
-                    this.postMessage({ type: 'claudeFoldersListed', paths: service.getClaudeFolderPaths(), workspaceRoot: root });
+                const picked = (typeof message.folderPath === 'string' && message.folderPath.trim())
+                    ? message.folderPath.trim()
+                    : await this._seams().ui.pickFolder('Add Claude Folder');
+                if (!picked) {
+                    return { success: false, error: 'No folder selected' };
                 }
-                break;
+                const service = this._getLocalFolderService(root);
+                await service.addClaudeFolderPath(picked);
+                this._setupClaudeFolderWatchers();
+                await this._sendClaudeDocsReady();
+                const paths = service.getClaudeFolderPaths();
+                this.postMessage({ type: 'claudeFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'removeClaudeFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3228,8 +3227,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await service.removeClaudeFolderPath(message.folderPath);
                 this._setupClaudeFolderWatchers();
                 await this._sendClaudeDocsReady();
-                this.postMessage({ type: 'claudeFoldersListed', paths: service.getClaudeFolderPaths(), workspaceRoot: root });
-                break;
+                const paths = service.getClaudeFolderPaths();
+                this.postMessage({ type: 'claudeFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
 
             // Re-scan the source folders for a tab on demand. The webview posts this when
@@ -3276,24 +3276,23 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const service = this._getLocalFolderService(root);
                 const paths = service.getImagesFolderPaths();
                 this.postMessage({ type: 'imagesFoldersListed', paths, workspaceRoot: root });
-                break;
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'addImagesFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add Images Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addImagesFolderPath(result[0].fsPath);
-                    this._setupImagesFolderWatchers();
-                    await this._sendImagesDocsReady();
-                    this.postMessage({ type: 'imagesFoldersListed', paths: service.getImagesFolderPaths(), workspaceRoot: root });
+                const picked = (typeof message.folderPath === 'string' && message.folderPath.trim())
+                    ? message.folderPath.trim()
+                    : await this._seams().ui.pickFolder('Add Images Folder');
+                if (!picked) {
+                    return { success: false, error: 'No folder selected' };
                 }
-                break;
+                const service = this._getLocalFolderService(root);
+                await service.addImagesFolderPath(picked);
+                this._setupImagesFolderWatchers();
+                await this._sendImagesDocsReady();
+                const paths = service.getImagesFolderPaths();
+                this.postMessage({ type: 'imagesFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'removeImagesFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3301,8 +3300,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await service.removeImagesFolderPath(message.folderPath);
                 this._setupImagesFolderWatchers();
                 await this._sendImagesDocsReady();
-                this.postMessage({ type: 'imagesFoldersListed', paths: service.getImagesFolderPaths(), workspaceRoot: root });
-                break;
+                const paths = service.getImagesFolderPaths();
+                this.postMessage({ type: 'imagesFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
 
             case 'listStitchFolders': {
@@ -3310,29 +3310,29 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const service = this._getLocalFolderService(root);
                 const paths = service.getStitchFolderPaths();
                 this.postMessage({ type: 'stitchFoldersListed', paths, workspaceRoot: root });
-                break;
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'addStitchFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add Stitch Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addStitchFolderPath(result[0].fsPath);
-                    this.postMessage({ type: 'stitchFoldersListed', paths: service.getStitchFolderPaths(), workspaceRoot: root });
+                const picked = (typeof message.folderPath === 'string' && message.folderPath.trim())
+                    ? message.folderPath.trim()
+                    : await this._seams().ui.pickFolder('Add Stitch Folder');
+                if (!picked) {
+                    return { success: false, error: 'No folder selected' };
                 }
-                break;
+                const service = this._getLocalFolderService(root);
+                await service.addStitchFolderPath(picked);
+                const paths = service.getStitchFolderPaths();
+                this.postMessage({ type: 'stitchFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'removeStitchFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
                 const service = this._getLocalFolderService(root);
                 await service.removeStitchFolderPath(message.folderPath);
-                this.postMessage({ type: 'stitchFoldersListed', paths: service.getStitchFolderPaths(), workspaceRoot: root });
-                break;
+                const paths = service.getStitchFolderPaths();
+                this.postMessage({ type: 'stitchFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
 
             case 'listBriefsFolders': {
@@ -3340,24 +3340,23 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const service = this._getLocalFolderService(root);
                 const paths = service.getBriefsFolderPaths();
                 this.postMessage({ type: 'briefsFoldersListed', paths, workspaceRoot: root });
-                break;
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'addBriefsFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Add Briefs Folder',
-                    canSelectFiles: false,
-                    canSelectFolders: true,
-                    canSelectMany: false
-                });
-                if (result && result.length > 0) {
-                    const service = this._getLocalFolderService(root);
-                    await service.addBriefsFolderPath(result[0].fsPath);
-                    this._setupBriefsFolderWatchers();
-                    await this._sendBriefsDocsReady();
-                    this.postMessage({ type: 'briefsFoldersListed', paths: service.getBriefsFolderPaths(), workspaceRoot: root });
+                const picked = (typeof message.folderPath === 'string' && message.folderPath.trim())
+                    ? message.folderPath.trim()
+                    : await this._seams().ui.pickFolder('Add Briefs Folder');
+                if (!picked) {
+                    return { success: false, error: 'No folder selected' };
                 }
-                break;
+                const service = this._getLocalFolderService(root);
+                await service.addBriefsFolderPath(picked);
+                this._setupBriefsFolderWatchers();
+                await this._sendBriefsDocsReady();
+                const paths = service.getBriefsFolderPaths();
+                this.postMessage({ type: 'briefsFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'removeBriefsFolder': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3365,8 +3364,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await service.removeBriefsFolderPath(message.folderPath);
                 this._setupBriefsFolderWatchers();
                 await this._sendBriefsDocsReady();
-                this.postMessage({ type: 'briefsFoldersListed', paths: service.getBriefsFolderPaths(), workspaceRoot: root });
-                break;
+                const paths = service.getBriefsFolderPaths();
+                this.postMessage({ type: 'briefsFoldersListed', paths, workspaceRoot: root });
+                return { success: true, paths, workspaceRoot: root };
             }
             case 'createBrief': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3374,7 +3374,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const title = message.title;
                 if (!sourceFolder || !title) {
                     this.postMessage({ type: 'briefCreated', success: false, error: 'Source folder and title are required' });
-                    break;
+                    return { success: false, error: 'Source folder and title are required' };
                 }
                 try {
                     const service = this._getLocalFolderService(root);
@@ -3382,7 +3382,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const isAllowed = service.getBriefsFolderPaths().some(p => path.resolve(p) === resolvedSource);
                     if (!isAllowed) {
                         this.postMessage({ type: 'briefCreated', success: false, error: 'Source folder is not a configured briefs folder' });
-                        break;
+                        return { success: false, error: 'Source folder is not a configured briefs folder' };
                     }
                     let fileName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
                     if (!fileName) {
@@ -3406,16 +3406,17 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const folderIndex = folderPaths.findIndex(p => path.resolve(p) === resolvedSource);
                     
                     await this._sendBriefsDocsReady();
-                    this.postMessage({ 
-                        type: 'briefCreated', 
+                    const created = {
                         success: true,
                         docId: folderIndex >= 0 ? `${folderIndex}:${path.relative(sourceFolder, finalPath)}` : undefined,
                         sourceFolder: sourceFolder
-                    });
+                    };
+                    this.postMessage({ type: 'briefCreated', ...created });
+                    return created;
                 } catch (err: any) {
                     this.postMessage({ type: 'briefCreated', success: false, error: String(err) });
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
             case 'deleteBrief': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3423,7 +3424,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const docId = message.docId;
                 if (!sourceFolder || !docId) {
                     this.postMessage({ type: 'briefDeleted', success: false, error: 'Source folder and docId are required' });
-                    break;
+                    return { success: false, error: 'Source folder and docId are required' };
                 }
                 try {
                     const relativePath = docId.includes(':')
@@ -3446,10 +3447,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     }
                     await this._sendBriefsDocsReady();
                     this.postMessage({ type: 'briefDeleted', success: true });
+                    return { success: true };
                 } catch (err: any) {
                     this.postMessage({ type: 'briefDeleted', success: false, error: String(err) });
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
             case 'stitchPickAttachFiles': {
                 try {
@@ -4103,13 +4105,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         this._saveTextDocListener = vscode.workspace.onDidSaveTextDocument((document) => {
             if (!this._panel?.visible) return;
             if (!this._activeHtmlPreview && !this._activeClaudePreview && !this._activeStitchHtmlPreview) return;
-            this._autoRefreshHtmlPreview(document.uri);
+            this._autoRefreshHtmlPreview(document.uri.fsPath);
         });
         this._disposables.push(this._saveTextDocListener);
     }
 
-    private _autoRefreshHtmlPreview(changedUri: vscode.Uri): void {
-        const changedPath = path.resolve(changedUri.fsPath);
+    private _autoRefreshHtmlPreview(changedFsPath: string): void {
+        const changedPath = path.resolve(changedFsPath);
 
         const checkAndRefresh = (active: typeof this._activeHtmlPreview, target?: string) => {
             if (!active) return;

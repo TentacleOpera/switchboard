@@ -2,6 +2,7 @@
 import { HostSeams, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import { TASKVIEWER_VERBS } from '../generated/verbAllowlist';
+import { validateVerbPayload } from './verbSchemas';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
@@ -17,6 +18,7 @@ import type { JSDOM } from 'jsdom';
 let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
+import { OversightPassService } from './OversightPassService';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
@@ -37,6 +39,7 @@ import {
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import {
     BatchPromptPlan,
+    partitionPlansByFeature,
     columnToPromptRole,
     resolveWorkingDir,
     normalizeNewlines,
@@ -280,6 +283,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!TASKVIEWER_VERBS.has(verb)) {
             throw new Error(`Unknown TaskViewer verb: '${verb}'`);
         }
+        // Network boundary: validate untrusted HTTP payloads against the verb's
+        // schema (verbs with no schema yet pass through — generic-dispatch contract).
+        const validation = validateVerbPayload('taskViewer', verb, payload);
+        if (!validation.ok) {
+            throw new Error(`Invalid payload for TaskViewer verb '${verb}': ${validation.error}`);
+        }
         // VS Code is the host here; _handleMessage runs in-process. Command verbs
         // return the route layer's {success:true} ack (most _handleMessage impls are
         // void); read verbs emit their result over the WS hub (see plan).
@@ -296,7 +305,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._broadcaster = undefined;
             return;
         }
-        this._hostSeams = createVscodeHostSeams(workspaceRoot);
+        this._hostSeams = createVscodeHostSeams(workspaceRoot, this._context.secrets);
         if (!this._broadcaster) {
             this._broadcaster = new BroadcastHub({ webview: this._view?.webview, apiServer: null });
         } else {
@@ -458,6 +467,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private _localApiServer: LocalApiServer | null = null;
+    // In-extension attended oversight-pass engine (POST /oversight/*). Created
+    // eagerly in the constructor (before the async API-server start) so the
+    // watcher can be attached in either order.
+    private _oversightPass: OversightPassService | null = null;
     // Phone-a-Friend dispatch serialization guard — a single in-flight promise that
     // prevents interleaved /clear + prompt sequences when multiple POSTs arrive
     // near-simultaneously at batch end. Keyed on the one phone-a-friend terminal.
@@ -580,6 +593,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._refreshJulesStatus();
         }, 30000);
 
+        // Oversight-pass engine — created before the API server so the /oversight/*
+        // callbacks and the watcher attach (extension.ts) can land in either order.
+        // The dispatch dep is the SAME internal code path POST /kanban/dispatch
+        // uses (performKanbanDispatch), called in-process — never over HTTP.
+        this._oversightPass = new OversightPassService({
+            dispatch: async (wsRoot, planRef, targetColumn) => {
+                if (!this._localApiServer) {
+                    return { status: 503, payload: { success: false, error: 'Local API server not started' } };
+                }
+                return this._localApiServer.performKanbanDispatch(wsRoot, planRef, targetColumn);
+            },
+            getKanbanDatabase: async (wsRoot) => this._getKanbanDb(wsRoot),
+            resolveDispatchRole: async (wsRoot, targetColumn) => {
+                if (!this._kanbanProvider) return { role: null };
+                const gate = await this._kanbanProvider.resolveDispatchForApi(wsRoot, targetColumn);
+                return { role: gate.role };
+            },
+            // Autoban and an attended pass both dispatch cards — never run both.
+            isAutomationArmed: () => this._autobanState.enabled === true
+        });
+
         // Start local API server for agent access
         void this._startLocalApiServer();
         void this._validateNoSwitchboardPollution();
@@ -589,6 +623,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public getAutomationMode(): string | undefined {
         return this._autobanState.automationMode;
+    }
+
+    /**
+     * Wire the oversight-pass engine to the plan watcher's native completion
+     * signal (plan-file mtime advance — the activity-light OFF-switch) and
+     * resume any pass interrupted by an extension reload. Called from
+     * extension.ts once the GlobalPlanWatcherService exists.
+     */
+    public attachOversightWatcher(watcher: GlobalPlanWatcherService): void {
+        if (!this._oversightPass) return;
+        this._oversightPass.attachWatcher(watcher);
+        void this._oversightPass.resumeFromDisk(this._filterMappedRoots(this._getWorkspaceRoots()));
     }
 
     private _initEventHandlers() {
@@ -625,12 +671,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         .getConfiguration('switchboard')
                         .get<boolean>('theme.disableCyberScanlines', false);
                     this.broadcastToWebviews({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
-                }
-                if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
-                    const enabled = vscode.workspace
-                        .getConfiguration('switchboard')
-                        .get<boolean>('theme.pixelFont', true);
-                    this.broadcastToWebviews({ type: 'pixelFontSetting', enabled });
                 }
                 if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                     const enabled = vscode.workspace
@@ -1716,6 +1756,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             },
             orchestrationStop: async () => {
                 await this.stopOrchestratorFromKanban();
+            },
+            oversightStart: async (body) => {
+                if (!this._oversightPass) {
+                    return { status: 503, body: { success: false, error: 'Oversight pass engine not available' } };
+                }
+                return this._oversightPass.start(body);
+            },
+            oversightStatus: (wsRoot) => {
+                if (!this._oversightPass) {
+                    return { status: 503, body: { success: false, error: 'Oversight pass engine not available' } };
+                }
+                return this._oversightPass.status(wsRoot);
+            },
+            oversightStop: async (body) => {
+                if (!this._oversightPass) {
+                    return { status: 503, body: { success: false, error: 'Oversight pass engine not available' } };
+                }
+                return this._oversightPass.stop(body);
             },
             catalogProvider: async () => {
                 // Serve the checked-in protocol-catalog.json. Prefer the extension
@@ -3998,9 +4056,12 @@ For EACH issue above:
 ## Plan File Format
 
 Each plan file must include:
-- # Title (derived from the issue)
+- # Title (derived from the issue — descriptive, never generic)
 - ## Goal (with problem analysis and root cause)
-- ## Metadata (tags, complexity 1-10)
+- ## Metadata — this section is REQUIRED and must contain these exact fields:
+  - **Complexity:** <1-10> — assign a numeric complexity rating (1-2 Very Low, 3-4 Low, 5-6 Medium, 7-8 High, 9-10 Very High). This is mandatory; do not leave it blank or write "Unknown".
+  - **Tags:** <comma-separated, from this allowed list ONLY: frontend, backend, auth, authentication, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library>. Do NOT invent tags outside the list. If none apply, write **Tags:** none
+  - **Project:** <name> — include this line ONLY if a PROJECT PIN directive is present below; write the exact project name it specifies. Otherwise omit the line. The workspace/repo name is NOT a project — never use it as a pin.
 - ## Complexity Audit (Routine vs Complex/Risky)
 - ## Edge-Case & Dependency Audit
 - ## Proposed Changes (per-file breakdown with code snippets)
@@ -4010,7 +4071,7 @@ Each plan file must include:
 - Create ${issues.length} plan file(s) total — one per issue (more if any issue is split per the splitting rule above)
 - Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
 - Do NOT skip the investigation step — read the relevant code before writing each plan
-- If you created 3 or more plan files that cover a related topic (sharing a common feature area or root cause), offer to create a feature grouping them: "These [N] plans cover related work — want me to create a feature to group them together?" Only create the feature if the user confirms. Do NOT hand-write the feature file. If the VS Code extension is running (check ${workspaceRoot}/.switchboard/api-server-port.txt), run: node "${workspaceRoot}/.agents/skills/kanban_operations/create-feature.js" "<featureName>" '<planIdsJson>' "${workspaceRoot}" "<description>" — this does DB upsert + subtask linking atomically. If the extension is not reachable, invoke the create-feature skill (direct file write to .switchboard/features/). Use planId UUIDs from the kanban DB or kanban-board.md, NOT filenames.`;
+- After writing all plan files, review the titles you just created and look for 2 or more that share a common feature area or root cause. For each such cluster, offer to create a feature grouping them: "These [N] plans cover related work — want me to create a feature to group them together?" Only create the feature if the user confirms. Do NOT hand-write the feature file. If the VS Code extension is running (check ${workspaceRoot}/.switchboard/api-server-port.txt), run: node "${workspaceRoot}/.agents/skills/kanban_operations/create-feature.js" "<featureName>" '<planIdsJson>' "${workspaceRoot}" "<description>" — this does DB upsert + subtask linking atomically. If the extension is not reachable, invoke the create-feature skill (direct file write to .switchboard/features/). Use planId UUIDs from the kanban DB or kanban-board.md, NOT filenames.`;
 
         if (projectName) {
             prompt += '\n\n' + PROJECT_LINE_DIRECTIVE(projectName);
@@ -4558,102 +4619,168 @@ Each plan file must include:
             return false;
         }
 
-        const commonWorktree = validPlans[0].worktreePath;
-        const allSameWorktree = validPlans.every(p => p.worktreePath === commonWorktree);
-        const worktreeForBatch = allSameWorktree ? commonWorktree : undefined;
-        const targetAgent = String(targetTerminalOverride || '').trim()
-            || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreeForBatch);
-        if (!targetAgent) {
-            vscode.window.showErrorMessage(`No agent assigned to role '${role}'. Cannot dispatch batch.`);
-            return false;
-        }
-        if (!this._isValidAgentName(targetAgent)) {
-            console.error(`[TaskViewerProvider] Rejected invalid agent name for batch dispatch: ${targetAgent}`);
-            return false;
-        }
-
         // Determine workflow name for runsheet updates
         if (role === 'tester' && !await this._ensureAcceptanceTesterDispatchEligible(resolvedWorkspaceRoot)) {
             return false;
         }
 
         const workflowName = this._workflowNameForDispatchRole(role, instruction);
-        const prompt = await this._kanbanProvider.generateUnifiedPrompt(role, validPlans, resolvedWorkspaceRoot, { instruction });
-        const finalPrompt = this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
         const targetColumn = options?.targetColumn
             ? this._normalizeLegacyKanbanColumn(options.targetColumn)
             : this._targetColumnForRole(role);
 
-        // Update runsheet and kanban column BEFORE dispatch (immediate UI feedback)
-        for (const plan of validPlans) {
-            try {
-                if (workflowName) {
-                    await this._updateSessionRunSheet(plan.sessionId, workflowName, undefined, false, resolvedWorkspaceRoot);
-                }
-                await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, plan.sessionId, targetColumn);
-                // Record dispatch identity
-                if (targetColumn) {
-                    await this._kanbanProvider?._recordDispatchIdentity(
-                        resolvedWorkspaceRoot, plan.sessionId, targetColumn, targetAgent
-                    );
-                }
-            } catch (err) {
-                console.error(`[TaskViewerProvider] Batch column update failed for ${plan.sessionId}:`, err);
-                // Continue with remaining cards rather than aborting the entire batch
+        // Partition the batch by feature so each feature can be routed to its own
+        // terminal when per-feature worktree mode is in play.
+        const partition = partitionPlansByFeature(validPlans);
+        const groups: Array<{ label: string; plans: BatchPromptPlan[]; worktreePath?: string; targetAgent: string }> = [];
+
+        for (let i = 0; i < partition.featureGroups.length; i++) {
+            const g = partition.featureGroups[i];
+            const groupPlans = [g.feature, ...g.subtasks];
+            const groupCommonWorktree = groupPlans[0]?.worktreePath;
+            const groupAllSameWorktree = groupPlans.every(p => p.worktreePath === groupCommonWorktree);
+            const worktreePath = groupAllSameWorktree ? groupCommonWorktree : undefined;
+            const targetAgent = String(targetTerminalOverride || '').trim()
+                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+            if (!targetAgent || !this._isValidAgentName(targetAgent)) {
+                vscode.window.showErrorMessage(`No agent assigned to role '${role}' for feature '${g.feature.topic || 'Untitled'}'. Cannot dispatch batch.`);
+                return false;
             }
+            groups.push({ label: g.feature.topic || 'Untitled', plans: groupPlans, worktreePath, targetAgent });
         }
-        this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);   // immediate board refresh
 
-        // Dispatch the batched prompt after cards are moved
-        try {
-            vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
-            await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, finalPrompt, {
-                batch: true,
-                sessionIds: validPlans.map(p => p.sessionId)
-            });
+        if (partition.loosePlans.length > 0) {
+            const loose = partition.loosePlans;
+            const looseCommonWorktree = loose[0]?.worktreePath;
+            const looseAllSameWorktree = loose.every(p => p.worktreePath === looseCommonWorktree);
+            const worktreePath = looseAllSameWorktree ? looseCommonWorktree : undefined;
+            const targetAgent = String(targetTerminalOverride || '').trim()
+                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+            if (!targetAgent || !this._isValidAgentName(targetAgent)) {
+                vscode.window.showErrorMessage(`No agent assigned to role '${role}' for loose plans. Cannot dispatch batch.`);
+                return false;
+            }
+            groups.push({ label: 'Loose plans', plans: loose, worktreePath, targetAgent });
+        }
 
-            await this._logEvent('dispatch', {
-                event: 'batch_dispatch_sent',
-                role,
-                sessionIds: validPlans.map(p => p.sessionId),
-                targetAgent,
-                planCount: validPlans.length
-            }, undefined, resolvedWorkspaceRoot);
+        if (groups.length === 0) {
+            console.warn('[TaskViewerProvider] Batch trigger: no dispatch groups after partition.');
+            return false;
+        }
+
+        const commonWorktree = validPlans[0].worktreePath;
+        const allSameWorktree = validPlans.every(p => p.worktreePath === commonWorktree);
+        const worktreeForBatch = allSameWorktree ? commonWorktree : undefined;
+
+        const allSameTarget = groups.every(g => g.targetAgent === groups[0].targetAgent);
+
+        const dispatchToGroup = async (group: typeof groups[0]): Promise<boolean> => {
+            const prompt = await this._kanbanProvider!.generateUnifiedPrompt(role, group.plans, resolvedWorkspaceRoot, { instruction });
+            const finalPrompt = this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
+
+            // Persist this group's cards before dispatch (immediate UI feedback)
+            for (const plan of group.plans) {
+                const sessionId = plan.sessionId || plan.planId || '';
+                if (!sessionId) {
+                    console.warn('[TaskViewerProvider] Batch dispatch skipping plan with no sessionId or planId');
+                    continue;
+                }
+                try {
+                    if (workflowName) {
+                        await this._updateSessionRunSheet(sessionId, workflowName, undefined, false, resolvedWorkspaceRoot);
+                    }
+                    await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, targetColumn);
+                    // Record dispatch identity
+                    if (targetColumn) {
+                        await this._kanbanProvider?._recordDispatchIdentity(
+                            resolvedWorkspaceRoot, sessionId, targetColumn, group.targetAgent
+                        );
+                    }
+                } catch (err) {
+                    console.error(`[TaskViewerProvider] Batch column update failed for ${sessionId}:`, err);
+                    // Continue with remaining cards in this group rather than aborting the entire batch
+                }
+            }
+
+            // Send the prompt to the resolved terminal
+            try {
+                vscode.commands.executeCommand('switchboard.focusTerminalByName', group.targetAgent);
+                const sent = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, group.targetAgent, finalPrompt, {
+                    batch: true,
+                    sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean)
+                });
+                if (!sent) {
+                    throw new Error(`Could not deliver prompt to '${group.targetAgent}'`);
+                }
+                await this._logEvent('dispatch', {
+                    event: 'batch_dispatch_sent',
+                    role,
+                    sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean),
+                    targetAgent: group.targetAgent,
+                    planCount: group.plans.length
+                }, undefined, resolvedWorkspaceRoot);
+            } catch (e) {
+                await this._logEvent('dispatch', {
+                    event: 'batch_dispatch_failed',
+                    role,
+                    sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean),
+                    targetAgent: group.targetAgent,
+                    error: String(e)
+                }, undefined, resolvedWorkspaceRoot);
+                console.error(`[TaskViewerProvider] Batch dispatch failed for role '${role}' group '${group.label}':`, e);
+                vscode.window.showErrorMessage(`Failed to dispatch '${group.label}' to '${group.targetAgent}'. Remaining groups not advanced.`);
+                return false;
+            }
 
             // Pair Programming: if lead dispatch and pair programming enabled, also dispatch to coder
             if (role === 'lead' && this._autobanState.pairProgrammingMode !== 'off') {
                 const coderUsesIde = this._autobanState.pairProgrammingMode === 'cli-ide'
                     || this._autobanState.pairProgrammingMode === 'ide-ide';
-                const coderPrompt = await this._kanbanProvider.generateUnifiedPrompt('coder', validPlans, resolvedWorkspaceRoot, {
+                const coderPrompt = await this._kanbanProvider!.generateUnifiedPrompt('coder', group.plans, resolvedWorkspaceRoot, {
                     pairProgrammingEnabled: true,
                     accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled()
                 });
                 if (coderUsesIde) {
                     await vscode.env.clipboard.writeText(coderPrompt);
                     const choice = await vscode.window.showInformationMessage(
-                        'Pair Programming: Routine tasks ready. Copy Coder prompt?',
+                        `Pair Programming: Routine tasks ready for ${group.label}. Copy Coder prompt?`,
                         'Copy Coder Prompt'
                     );
                     if (choice === 'Copy Coder Prompt') {
                         await vscode.env.clipboard.writeText(coderPrompt);
                     }
                 } else {
-                    await this.dispatchToCoderTerminal(coderPrompt, worktreeForBatch);
+                    await this.dispatchToCoderTerminal(coderPrompt, group.worktreePath);
                 }
             }
 
             return true;
-        } catch (e) {
-            await this._logEvent('dispatch', {
-                event: 'batch_dispatch_failed',
-                role,
-                sessionIds: validPlans.map(p => p.sessionId),
-                targetAgent,
-                error: String(e)
-            }, undefined, resolvedWorkspaceRoot);
-            console.error(`[TaskViewerProvider] Batch dispatch failed for role '${role}':`, e);
-            return false;
+        };
+
+        if (allSameTarget) {
+            // Shared terminal: dispatch one concatenated prompt covering all groups.
+            const sharedGroup: typeof groups[0] = {
+                label: 'All plans',
+                plans: validPlans,
+                worktreePath: worktreeForBatch,
+                targetAgent: groups[0].targetAgent
+            };
+            const success = await dispatchToGroup(sharedGroup);
+            if (success) {
+                this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
+            }
+            return success;
         }
+
+        // Divergent terminals: per-group persist-then-send, stopping on first failure.
+        for (const group of groups) {
+            const success = await dispatchToGroup(group);
+            if (!success) {
+                return false;
+            }
+            this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
+        }
+        return true;
     }
 
     public async handleKanbanCompletePlan(sessionId: string, workspaceRoot?: string): Promise<boolean> {
@@ -5152,16 +5279,6 @@ Each plan file must include:
         await config.update('theme.colourKanbanIcons', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
-    public handleGetPixelFontSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-    }
-
-    public async handleSetPixelFontSetting(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.pixelFont', enabled, vscode.ConfigurationTarget.Global);
-        await config.update('theme.pixelFont', undefined, vscode.ConfigurationTarget.Workspace);
-    }
-
     public handleGetUltracodeAnimationSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
     }
@@ -5580,11 +5697,6 @@ Each plan file must include:
         this._setupPanelProvider.postMessage({
             type: 'ultracodeAnimationSetting',
             enabled: this.handleGetUltracodeAnimationSetting()
-        });
-
-        this._setupPanelProvider.postMessage({
-            type: 'pixelFontSetting',
-            enabled: this.handleGetPixelFontSetting()
         });
 
 
@@ -17070,7 +17182,10 @@ What would you like to find?`;
         const selectedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : this._resolveWorkspaceRoot();
-        if (!selectedWorkspaceRoot) return;
+        if (!selectedWorkspaceRoot) {
+            this._kanbanProvider?.setPendingRootRecovery(true);
+            return;
+        }
         const resolvedWorkspaceRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
 
         // Guard: only refresh if resolvedWorkspaceRoot matches the currently selected workspace root in the Kanban board
@@ -20701,6 +20816,8 @@ What would you like to find?`;
 
 
     public dispose() {
+        this._oversightPass?.dispose();
+        this._oversightPass = null;
         this._stopAutobanEngine();
         this._stopMcpMonitorLoop();
         this.stopPlanScanner();
@@ -22250,7 +22367,7 @@ What would you like to find?`;
                 output: content,
                 timestamp: stat.mtime.toISOString()
             };
-            this._view?.webview.postMessage(message);
+            this.postMessage(message);
             this._kanbanProvider?.postMessage(message);
         } catch {
             const message = {
@@ -22258,7 +22375,7 @@ What would you like to find?`;
                 output: null,
                 timestamp: new Date().toISOString()
             };
-            this._view?.webview.postMessage(message);
+            this.postMessage(message);
             this._kanbanProvider?.postMessage(message);
         }
     }

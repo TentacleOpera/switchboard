@@ -2,6 +2,7 @@
 import { HostSeams, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import { PLANNING_VERBS } from '../generated/verbAllowlist';
+import { validateVerbPayload } from './verbSchemas';
 import * as vscode from 'vscode';
 import { showTemporaryNotification } from '../utils/showTemporaryNotification';
 import * as path from 'path';
@@ -81,6 +82,12 @@ export class PlanningPanelProvider {
         if (!PLANNING_VERBS.has(verb)) {
             throw new Error(`Unknown Planning verb: '${verb}'`);
         }
+        // Network boundary: validate untrusted HTTP payloads against the verb's
+        // schema (verbs with no schema yet pass through — generic-dispatch contract).
+        const validation = validateVerbPayload('planning', verb, payload);
+        if (!validation.ok) {
+            throw new Error(`Invalid payload for Planning verb '${verb}': ${validation.error}`);
+        }
         // VS Code is the host here; _handleMessage runs in-process. Command verbs
         // return the route layer's {success:true} ack (most _handleMessage impls are
         // void); read verbs emit their result over the WS hub (see plan).
@@ -97,7 +104,7 @@ export class PlanningPanelProvider {
             this._broadcaster = undefined;
             return;
         }
-        this._hostSeams = createVscodeHostSeams(workspaceRoot);
+        this._hostSeams = createVscodeHostSeams(workspaceRoot, this._context.secrets);
         if (!this._broadcaster) {
             this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
         } else {
@@ -595,10 +602,6 @@ export class PlanningPanelProvider {
                 const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
                 this.postMessageToProjectWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
             }
-            if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
-                const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                this.postMessageToProjectWebview({ type: 'pixelFontSetting', enabled });
-            }
             if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                 const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
                 this.postMessageToProjectWebview({ type: 'ultracodeAnimationSetting', enabled });
@@ -754,10 +757,6 @@ export class PlanningPanelProvider {
                 if (e.affectsConfiguration('switchboard.theme.name')) {
                     const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                     this.postMessageToWebview({ type: 'switchboardThemeChanged', theme });
-                }
-                if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
-                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                    this.postMessageToWebview({ type: 'pixelFontSetting', enabled });
                 }
                 if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                     const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
@@ -921,10 +920,6 @@ export class PlanningPanelProvider {
                     if (e.affectsConfiguration('switchboard.theme.name')) {
                         const themeName = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
                         this.postMessageToWebview({ type: 'switchboardThemeChanged', theme: themeName });
-                    }
-                    if (e.affectsConfiguration('switchboard.theme.pixelFont')) {
-                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.pixelFont', true);
-                        this.postMessageToWebview({ type: 'pixelFontSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                         const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
@@ -2545,7 +2540,18 @@ Start by checking which documents exist, then present the menu.`;
         switch (msg.type) {
             case 'renderMarkdownLive': {
                 try {
-                    const html = await vscode.commands.executeCommand<string>('markdown.api.render', msg.content || '');
+                    let content = msg.content || '';
+                    // Tickets edit-preview: resolve the ticket file's directory and rewrite
+                    // relative image paths to webview URIs (mirrors the view-mode path).
+                    // Non-ticket editor mounts send no provider/id → no rewrite.
+                    if (msg.provider && msg.id) {
+                        const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                        const ticketFilePath = await this._findTicketFilePath(wsRoot, msg.provider, msg.id);
+                        if (ticketFilePath) {
+                            content = this._rewriteLocalImagePaths(content, path.dirname(ticketFilePath));
+                        }
+                    }
+                    const html = await vscode.commands.executeCommand<string>('markdown.api.render', content);
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     this._pushTo(targetPanel, 'planning', {
                         type: 'markdownLiveRendered',

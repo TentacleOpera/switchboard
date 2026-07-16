@@ -1,0 +1,124 @@
+# Plan: Add an Oversight-Pass Engine to Replace the Prose-Enforced Oversight Loop
+
+## Goal
+Encode the column-oversight pass loop deterministically so the supervising manager agent stops re-deriving a full state machine before every dispatch, and collapse the skill's §6/§6a/§6b/§7 prose to short invocation guidance.
+
+> **Superseded:** "Encode … as a script under `.agents/skills/kanban_operations/`" (a sibling of `move-card.js`/`get-state.js`).
+> **Reason:** Web research proved a script cannot hold the hours-long wait in either host (10-min foreground ceiling; background processes orphaned across compaction/resume/`-p`), and the correct home for a durable pass is the party that already outlives agent turns and already owns the completion signal. The plan title still says "Script" for file-identity stability only.
+> **Replaced with:** Encode the loop as an **in-extension oversight-pass service** exposed via `LocalApiServer` endpoints (Option B — chosen by the user), riding the existing `GlobalPlanWatcherService` completion signal. See User Review Required and Proposed Changes.
+
+### Problem
+The manager skill (`.agents/workflows/switchboard.md`) enforces the column-oversight pass (§6, §6a, §6b, §7) entirely as prose. Every pass forces the supervising agent to re-derive a full state machine — queue resolution, two execution lanes, the 2-minute planner cooldown, `cardStage`/`stage`/`plannerLane` field semantics, halt rules, and `oversight-state.md`/`oversight-log.md` bookkeeping — before it can issue a single dispatch. The result is minutes of visible deliberation per action, making the manager workflow nearly unusable.
+
+### Root Cause
+- Deterministic loop logic lives as natural-language rules (~640 lines of skill text) that the model must re-check on every turn; the skill explicitly declares the lane rules "prose-enforced," which slows a careful agent further.
+- §6's queue rule ("exclude feature rows and epic subtasks", `switchboard.md:421`) contradicts §6a's targeted pass ("the explicit list IS the queue", `:488`) on boards where most plans are feature subtasks — resolving which section governs is the single most expensive deliberation. **This is a documentation defect first, a missing-script problem second.**
+- No script equivalent exists: `kanban_operations` ships `move-card.js` and `get-state.js`, but nothing that runs a pass.
+
+## Metadata
+- **Tags:** backend, api, reliability, refactor, docs
+- **Complexity:** 8
+
+## User Review Required
+- **Approach: DECIDED — Option B (VS Code extension endpoint).** The original plan committed to a single long-running Node script that owns the whole loop (dispatch + poll + advance) as one process; web research (completed — see Uncertain Assumptions) proved that impossible in both target hosts. The user chose **Option B** over the alternative (C, a step-wise sibling script): the extension runs the pass internally on its **existing native plan-file watcher** (`GlobalPlanWatcherService`) — the same signal that already drives the activity light and autoban — and exposes `POST /oversight/start` + `GET /oversight/status` + `POST /oversight/stop`. This matches the research's headline recommendation exactly: "an externally-owned artifact that outlives any single agent invocation, woken by native re-invocation, never depending on the agent process surviving the multi-hour gap." The extension already owns the unattended equivalent (autoban), so this is an extension of proven machinery, not a new subsystem. Trade-off accepted: this is a real extension change (compiled TypeScript in `src/services/`), not a sibling script under `.agents/skills/kanban_operations/`.
+
+## Complexity Audit
+
+### Routine
+- Reuses existing, proven extension internals: the dispatch code path behind `POST /kanban/dispatch` (`LocalApiServer.ts:572`/`:2610`), the completion signal already computed by `GlobalPlanWatcherService` (the activity-light OFF-switch = first plan-file mtime advance after dispatch), and the request/response plumbing every other `LocalApiServer` route uses.
+- The autoban engine is the working precedent: it already runs an unattended dispatch-and-advance loop inside the extension host. This endpoint is the *attended/queued* sibling of that machinery.
+
+### Complex / Risky
+- **Encodes a concurrent two-lane state machine.** §6a's planner lane **overlaps** the coding lane (two cards in flight at once, independent completion signals, a 2-minute planner cooldown). A naïve "WIP 1" loop cannot reproduce this — see the superseded callout. The pass service must model both lanes.
+- **Extension-host lifecycle & singleton discipline.** The pass runs for hours inside the extension host. It must be a well-behaved singleton (one active pass at a time; a second `start` returns the in-flight pass, never a second loop), must not pin the host or interact badly with the refresh-storm failure mode that has starved the API-server/terminal singletons before, and must survive/clean-up correctly on extension deactivation + reactivation (resume from `oversight-state.md`).
+- **Autoban coordination.** Autoban and an attended oversight pass both dispatch cards. Running both against overlapping columns would double-dispatch. The pass must refuse to start (or explicitly coordinate) when autoban is armed on the same scope, and must never arm `/orchestration/start` itself (§6.5 hard guardrail — that unattended engine is a separate mode).
+- **Single-writer on `oversight-state.md`.** The extension becomes the **sole writer** of `oversight-state.md`/`oversight-log.md` during a pass. The collapsed prose must tell the agent to *read* these for the §1 resume prompt but never write them.
+- **Multi-host prose contract.** `switchboard.md` is read directly by Antigravity (filesystem discovery) and mirrored to Claude Code via the manifest. Fixing the §6/§6a queue contradiction only in code leaves it live for any prose-reading host. The prose fix is mandatory, not optional.
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:**
+  - **`oversight-state.md` single-writer.** During a pass, only the extension writes `oversight-state.md`/`oversight-log.md`; the agent reads them (for the §1 resume prompt) but must not write them. Document this in the collapsed prose.
+  - **move↔dispatch coupling.** The dispatch persists the move *before* firing the role prompt and reports whether the dispatch actually happened. The pass service must record the baseline plan-file mtime **after** a confirmed dispatch, never before — else a hollow ack produces a false "in flight" with a stale baseline. (Reuse the internal dispatch result rather than re-calling `/kanban/dispatch` over HTTP from within the extension.)
+  - **Completion via the existing watcher, not a poll.** Completion = the first plan-file mtime advance after the recorded dispatch time — subscribe to `GlobalPlanWatcherService` (which already emits this for the activity light) instead of adding a second polling loop.
+  - **Planner-lane cooldown.** The ≥2-minute gate is measured from the previous planner dispatch's *completion signal*, not its dispatch time; the cooldown timestamp lives in `oversight-state.md` under `plannerLane`.
+- **Security:** None new. Same trust boundary as the rest of `LocalApiServer` (localhost, extension-owned).
+- **Side Effects:**
+  - Collapsing §6/§6a/§6b/§7 prose changes a large, load-bearing section of the manager skill. `switchboard.md` is host-mirrored — the change must survive the Claude Code mirror manifest and Antigravity filesystem discovery (verify the mirror after edit).
+  - Skill/API documentation (`SKILL.md` and/or the `switchboard-orchestration` skill's `/catalog` surface) must document the three endpoints and the status payload shape.
+  - **Not the orchestrator.** This is the *attended* pass; it must never arm `/orchestration/start` (§6.5 hard guardrail) — that unattended engine is a separate, extension-owned mode.
+  - **VSIX rebuild required to test.** Per CLAUDE.md, testing is via an installed VSIX, not the repo `dist/` — an extension change means a rebuild/reinstall to exercise it. (Compilation itself is out of scope for *this* planning session per directive.)
+- **Dependencies & Conflicts:**
+  - The pass lives in the running extension by construction; if the extension is down there is no pass (correct — dispatch fires role prompts only the extension can trigger).
+  - `§7` project pipeline walks *multiple* stage transitions; one `start` call covers *one* stage/lane configuration. The endpoint should accept the stage/scope so the collapsed §7 prose can drive it stage by stage — a single call is not a whole pipeline. Do not overstate "collapse §7."
+  - Must coordinate with autoban (see Complex/Risky) so the two engines never double-dispatch the same scope.
+
+## Dependencies
+- None (no upstream planning sessions).
+
+## Adversarial Synthesis
+Key risks: (1) a long pass running inside the extension host must be a disciplined singleton that survives deactivation/reactivation and does not pin the host or fall to the known refresh-storm starvation of the API-server/terminal singletons; (2) autoban and the attended pass can double-dispatch the same scope if not coordinated; (3) a single "WIP 1" model cannot reproduce §6a's *overlapping* planner lane and 2-minute cooldown, so both lanes must be modeled concurrently; (4) fixing the §6-vs-§6a queue contradiction only in code leaves it live for Antigravity, which reads the prose directly. Mitigations: implement the pass as a single-instance service that resumes from `oversight-state.md` on reactivation and is the sole writer of the state/log files; subscribe to the existing `GlobalPlanWatcherService` completion signal instead of adding a poll loop; refuse to start (or coordinate) when autoban is armed on the same scope; model both lanes with the cooldown persisted in state; and resolve the queue-semantics contradiction in the prose as well as the code.
+
+## Proposed Changes
+
+### 1. Extension: an oversight-pass service + `LocalApiServer` endpoints
+
+**Context.** The pass state machine moves *into the extension host* — the only party that already outlives agent turns, context compaction, and session resume, and that already owns both the completion signal (`GlobalPlanWatcherService`) and the unattended precedent (autoban). The agent stops re-deriving anything: it starts a pass, then reads status in short turns.
+
+> **Superseded:** "Add `oversee-pass.js` … that encodes the pass loop deterministically" as a **single long-running Node script** with "**Loop (WIP 1):** dispatch → record baseline mtime → **poll mtime every 60s** → completion = first mtime advance → advance queue," where "the supervising agent [just] watch[es] its stdout." (The intermediate step-wise-driver script, option C, was also considered and set aside — see below.)
+> **Reason (confirmed by web research):** (a) A 20-plan pass runs for hours; a single foreground invocation exceeds both hosts' hard limits — Claude Code caps a Bash call at 10 min (`BASH_MAX_TIMEOUT_MS`, hard ceiling), and Antigravity's `command_status` poll caps at 5 min per check — so no foreground process can hold the wait. (b) Backgrounding it does not save it: research documents that **background-task registries orphan or kill long-lived processes across context compaction, session resume, and `-p`/headless re-invocation** — Claude Code explicitly *never restores* background Bash on resume, and `-p` ends background tasks after the run. (c) "WIP 1" cannot reproduce §6a's **overlapping planner lane**. (d) "watch its stdout" assumes incremental streaming; Antigravity has **no push channel at all** (pull-only). The stated goal is to remove *rule re-derivation*, not to remove the agent from the loop. A step-wise script (option C) fixes (a)–(d) but leaves the hours-long *wait* as an agent-turn-driven poll loop, burning turns and still riding the fragile background surface if ever detached.
+> **Replaced with (Option B, chosen):** move the loop into the extension, where the wait costs no agent turns and rides the native watcher instead of a poll. Three endpoints on `LocalApiServer`:
+> - **`POST /oversight/start`** — body: `{ workspaceRoot, queue: { planIds?[] | sourceColumn? }, targetColumn?, stage?, cooldownMs?, stuckThresholdMs? }`. Resolves the queue once, starts the in-extension pass service, returns `{ passId, state }`. If a pass is already in flight → returns that pass (never a second loop).
+> - **`GET /oversight/status`** — returns the live pass state: queue remaining (ordered), in-flight card(s) + lane + `cardStage`, `plannerLane` cooldown, completed list with durations, halt reason if any. This is what the agent reads in short turns to narrate progress and build the digest.
+> - **`POST /oversight/stop`** — cancels the running pass; leaves the board as-is; writes a halt/stop log line.
+
+**Logic (in the pass service).**
+- **Inputs & queue semantics resolved once, in code AND prose:** explicit-list mode → the list IS the queue, includes feature subtasks (§6a); column-sweep mode → excludes feature rows and epic subtasks that carry their own `kanban_column` (§6). Defaults: planner cooldown 120000 ms; stuck threshold `switchboard.activityLight.timeoutMs`.
+- **Dispatch:** call the **internal** dispatch code path that backs `POST /kanban/dispatch` (`LocalApiServer.ts:572`/`:2610`) directly — do not HTTP-call the server from within itself. Record the baseline plan-file mtime only after a confirmed dispatch.
+- **Completion signal:** subscribe to `GlobalPlanWatcherService` — completion = first plan-file mtime advance after the recorded dispatch time (the exact activity-light OFF-switch). No second poll loop.
+- **Two overlapping lanes:** coding lane WIP-1 review-gated (`cardStage` = `coding`|`review`); planner lane overlaps it with a ≥2-min cooldown measured from the previous planner *completion* (`plannerLane` timestamp). Both persisted in `oversight-state.md`.
+- **Halt-on-failure:** any dispatch failure, timeout, or error halts the whole pass; never re-dispatch, never skip silently, never move a card backward.
+- **Durable state:** the service is the **sole writer** of `oversight-state.md` (rewritten per state change, same schema so the §1 resume offer keeps working) and `oversight-log.md` (appended per event; state file deleted only after the final pass-summary line). On extension reactivation, the service resumes an in-flight pass from `oversight-state.md`.
+- **Singleton + autoban coordination:** one active pass per workspace; refuse-or-coordinate if autoban is armed on the same scope; never arm `/orchestration/start`.
+
+**Implementation.** Model the service on the autoban engine (its existing dispatch-and-advance machinery is the closest precedent) and register the three routes beside the other `/kanban/*` and `/orchestration/*` routes in `LocalApiServer.ts`. Wire the completion callback to `GlobalPlanWatcherService`'s existing plan-file-mtime event rather than adding a timer.
+
+**Edge Cases.** `start` with an existing in-flight pass → return it, do not start a second. Reactivation mid-pass → resume from `oversight-state.md`; re-arm the watcher for the in-flight card rather than re-dispatching. Empty queue → write the final log line, delete the state file, mark the pass ended.
+
+### 2. `.agents/workflows/switchboard.md`
+
+Reduce §6, §6a, §6b, and §7 to a short paragraph each: `POST /oversight/start`, poll `GET /oversight/status` in short turns (and `POST /oversight/stop` to cancel), then produce the end-of-pass digest (reading the actioned plan files stays agent work). **Critically, resolve the §6-vs-§6a queue-semantics contradiction in the prose itself** (explicit list ⇒ list-is-queue incl. subtasks; column sweep ⇒ exclude feature rows/epic subtasks) — do not rely on the endpoint to hide it, because Antigravity reads this prose directly. State that during a pass the **extension** is the sole writer of `oversight-state.md`/`oversight-log.md` (the agent reads them for the §1 resume prompt, never writes them). Keep §6b's single-dispatch watch as the lightweight agent-driven `stat` watch (session-scoped; must not touch the state/log files or trip the §1 resume prompt). For §7, keep the stage-walking as agent work that calls `start` once per stage (passing `stage`/scope).
+
+### 3. `.agents/skills/kanban_operations/SKILL.md` (and the `switchboard-orchestration` skill / `GET /catalog`)
+
+Document the three `/oversight/*` endpoints alongside the existing `/kanban/*` surface: request/response shapes, the status payload, halt/resume/stop semantics, the singleton + autoban-coordination rule, and "requires the running extension." Since these are HTTP endpoints (not a kanban_operations script), the primary home is the orchestration HTTP contract; cross-reference from `SKILL.md`. Preserve the existing "MANUAL FALLBACK ONLY" framing for `move-card.js`.
+
+## Verification Plan
+
+### Automated Tests
+- Out of scope per session directive (skip tests, skip compilation). The pass service's queue-resolution and lane/cooldown logic is deliberately unit-testable (pure state-in → decision-out) should a harness be added later. Note (CLAUDE.md): exercising the endpoints requires a VSIX rebuild/reinstall, not the repo `dist/`.
+
+### Manual Verification
+- **Targeted 2-plan pass:** `POST /oversight/start` with an explicit 2-plan list; confirm dispatches fire, `GET /oversight/status` reflects each transition, `oversight-state.md` rewrites per event, `oversight-log.md` appends, and completion is detected on the first mtime advance after each dispatch (via the watcher, not a poll).
+- **Overlapping lanes:** with one coding-lane plan and one planner-lane plan, confirm both can be in flight at once when the planner cooldown has elapsed, and that the planner lane respects the ≥2-minute cooldown from the previous planner completion.
+- **Resume across reactivation:** start a pass, reload/deactivate+reactivate the extension mid-pass; confirm the service resumes from `oversight-state.md` without re-dispatching the in-flight card.
+- **Singleton + autoban:** a second `POST /oversight/start` returns the in-flight pass, not a second loop; starting a pass on a scope autoban is armed on is refused/coordinated (no double-dispatch).
+- **Failure path:** a failed dispatch halts the pass (honest log entry), with no re-dispatch and no backward move; `POST /oversight/stop` cancels cleanly and leaves the board as-is.
+- **Prose contradiction:** read the collapsed §6/§6a — confirm the queue-semantics rule is unambiguous for both explicit-list and column-sweep modes.
+- **Host mirror:** confirm the edited `switchboard.md` still resolves for both Claude Code (mirror manifest) and Antigravity (filesystem discovery).
+- **Manager-session check:** a full pass now needs one `start` call plus short status reads, and no protocol deliberation before the first dispatch.
+
+## Uncertain Assumptions (research completed)
+The one load-bearing external uncertainty — agent-host long-running-process + output-streaming behavior — was researched before finalizing this plan. Findings (all confirming the step-wise / extension-endpoint direction, none contradicting it):
+- **Foreground shell is minute-bounded in both hosts.** Claude Code: 2-min default, 10-min hard ceiling on a single Bash call. Antigravity: `run_command` blocks at most 10 s (`WaitMsBeforeAsync`) before detaching; `command_status` polls at most 5 min per check. → A monolithic hours-long foreground loop is impossible in both. **Design impact:** ruled out approach (A); each script invocation and each agent poll chunk must finish well under 10 min.
+- **Backgrounded long-lived processes are not durable across the very boundaries a pass crosses.** Documented failure modes: background-task handles orphaned after context compaction; killed by session cleanup; Claude Code *never restores* background Bash/Monitor tasks on resume; `-p` headless mode ends background tasks after the run. **Design impact:** the durable state must live in `oversight-state.md` (already specified) and the loop must be re-enterable from that file on every fresh turn — never assume the launching process survives.
+- **Antigravity is pull-only (no event/stdout push); Claude Code has push surfaces (Monitor tool, Channels) but they are session-scoped and not on all deployment backends.** **Design impact:** don't design around incremental stdout streaming; the agent only ever does short `GET /oversight/status` reads, and the completion signal is the extension's native watcher — not any agent-side stream.
+- **The research's cross-host recommended pattern is "an externally-owned artifact that outlives any single agent turn, woken by native re-invocation — not one long process the agent blocks on, and not a naive sleep-loop that burns turns."** **Design impact:** this is exactly why **Option B was chosen** — the extension is that externally-owned artifact, and `GlobalPlanWatcherService` is its native completion signal. The pass survives agent compaction/resume because it never lived in the agent to begin with. See User Review Required.
+
+Repo-internal facts needed no web research: the internal dispatch path, the `GlobalPlanWatcherService` mtime-advance completion signal, and the `LocalApiServer` routing conventions are confirmed in-tree; the one open in-tree item — the exact dispatch result fields (`dispatched`/`dispatchedAt`) the service should key its baseline off — is confirmable by reading `LocalApiServer.ts:572`/`:2610` during implementation.
+
+## Recommendation
+Complexity 8 → **Send to Lead Coder.** A new in-extension pass service encoding a concurrent two-lane state machine, three new `LocalApiServer` endpoints, integration with `GlobalPlanWatcherService` + autoban coordination + extension-host singleton/reactivation discipline, plus surgery on a large host-mirrored prose section. Approach is decided (Option B). Coordinate with the autoban engine owner during implementation to avoid double-dispatch.
+
+## Completion Report (2026-07-16)
+
+Implemented Option B as decided: a new `src/services/OversightPassService.ts` runs the attended oversight pass inside the extension host — queue resolved once (explicit list = list-is-queue incl. feature subtasks; column sweep excludes feature rows and feature subtasks), two overlapping lanes (coding WIP-1 with optional review-gating via `cardStage`, planner lane with a ≥2-min cooldown measured from planner *completion*), completion via a `GlobalPlanWatcherService.onPlanDiscovered` subscription (baseline mtime recorded only after a confirmed dispatch), halt-on-failure/stuck-timeout, per-workspace singleton, 409-refusal while autoban is armed, sole-writer `oversight-state.md`/`oversight-log.md`, and resume-from-state-file on extension reactivation. `LocalApiServer.ts` gained `POST /oversight/start`, `GET /oversight/status`, `POST /oversight/stop`, and the dispatch core was extracted into a public `performKanbanDispatch()` so the pass service calls it in-process (no HTTP self-call); `TaskViewerProvider.ts` constructs and wires the service, and `extension.ts` attaches the watcher + triggers disk resume. Prose: `switchboard.md` §6/§6a/§6b/§7 collapsed to short endpoint-driven guidance with the §6-vs-§6a queue contradiction resolved explicitly in the prose; `switchboard-orchestration/SKILL.md` gained §4a documenting the three endpoints; `kanban_operations/SKILL.md` cross-references them (move-card.js keeps its MANUAL FALLBACK framing). `protocol-catalog.json` regenerated (picks up the three routes) and the `.claude/skills` mirror regenerated — `check-claude-mirror.js` and `check-protocol-parity.js` both pass. Compilation and automated tests skipped per session directive; all four edited TS files pass typescript parseDiagnostics, and exercising the endpoints will need a VSIX rebuild/reinstall. No issues encountered beyond the known mirror-drift step, resolved by regenerating the mirror.

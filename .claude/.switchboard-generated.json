@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
   "version": "1.7.13",
-  "generatedAt": "2026-07-15T10:09:22.147Z",
+  "generatedAt": "2026-07-16T20:09:26.643Z",
   "skills": [
     {
       "source": "workflows/switchboard.md",
@@ -227,11 +227,6 @@
       "source": "skills/web-research",
       "name": "switchboard-research",
       "relPath": ".claude/skills/switchboard-research/SKILL.md"
-    },
-    {
-      "source": "skills/switchboard-mcp",
-      "name": "switchboard-mcp",
-      "relPath": ".claude/skills/switchboard-mcp/SKILL.md"
     }
   ],
   "settingsAllowEntries": [

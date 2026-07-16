@@ -311,6 +311,7 @@
     // Status-edit modal target (set by showTicketStatusModal, read by Save).
     let _statusModalProvider = null;
     let _statusModalTicketId = null;
+    let _pendingStatusChangeName = '';
     let _tagsModalOpen = false;
     let _tagsCatalogLoading = false;
     let _assignModalOpen = false;
@@ -329,9 +330,7 @@
     let _lastTicketsClickUpIssuesContainerHtml = '';
     let _lastTicketsClickUpDetailContentHtml = '';
     let _lastTicketsClickUpStateFilterHtml = '';
-    let _lastTicketsClickUpStatusSelectHtml = '';
     let _lastTicketsClickUpSubtasksNavHtml = '';
-    let _lastTicketsLinearStatusSelectHtml = '';
     let _lastTicketsLinearSubtasksNavHtml = '';
     let _lastTicketsTagsKey = '';
     let _lastTicketsTagsProvider = '';
@@ -1234,13 +1233,11 @@
     }
 
     // Opens a themed status-edit modal for a sidebar card click. Builds the option
-    // list from availableLinearStates / availableClickUpStatuses (with the same
-    // derive-from-issues fallback the #select-status-ticket dropdown uses when the
-    // async state catalog is empty), pre-selects the ticket's current status, and
-    // wires Save to post the existing changeTicketStatus message — identical to the
-    // #select-status-ticket change handler. The existing changeTicketStatusResult
-    // handler updates the issue and re-renders the list, so the sidebar card status
-    // text updates after save.
+    // list from availableLinearStates / availableClickUpStatuses, with a derive-from-issues
+    // fallback when the async state catalog is empty, pre-selects the ticket's current
+    // status, and wires Save to post the existing changeTicketStatus message. The
+    // changeTicketStatusResult handler updates the issue and re-renders the list, so
+    // the sidebar card status text updates after save.
     function showTicketStatusModal(provider, ticketId) {
         const modal = document.getElementById('ticket-status-modal');
         const select = document.getElementById('ticket-status-select');
@@ -1282,10 +1279,9 @@
             }
         } else {
             if (availableClickUpStatuses && availableClickUpStatuses.length > 0) {
-                // ClickUp: the existing #select-status-ticket dropdown uses the status
-                // NAME as the option value (changeTicketStatus receives the name, and
-                // changeTicketStatusResult sets task.status from option text). Mirror
-                // that so the same backend path works unchanged.
+                // ClickUp: use the status NAME as the option value (changeTicketStatus
+                // receives the name, and changeTicketStatusResult sets task.status from
+                // option text), matching the backend's expected status format.
                 options = availableClickUpStatuses.map(s => ({ id: s.status || s.name || s.id, name: s.status || s.name || s.id }));
             } else {
                 const stateMap = new Map();
@@ -2069,7 +2065,6 @@
             btnEditTicket: document.getElementById('btn-edit-ticket'),
             btnPushTicket: document.getElementById('btn-push-ticket'),
             btnDeleteTicket: document.getElementById('btn-delete-ticket'),
-            selectStatusTicket: document.getElementById('select-status-ticket'),
             btnCommentTicket: document.getElementById('btn-comment-ticket'),
             btnViewAttachments: document.getElementById('btn-view-attachments'),
             btnDiagramPrompt: document.getElementById('btn-diagram-prompt'),
@@ -4129,7 +4124,7 @@
         // Compute the desired theme class set without touching unrelated classes
         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
         // injected server-side by applyThemeBodyClass().
-        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
+        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
         const desired = new Set();
         // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic.
         // Toggle cyber-theme-enabled: on for afterburner ONLY.
@@ -4137,6 +4132,9 @@
             desired.add('cyber-theme-enabled');
         } else if (state.switchboardTheme === 'claudify') {
             desired.add('theme-claudify');
+        } else if (state.switchboardTheme === 'pixel') {
+            desired.add('cyber-theme-enabled');
+            desired.add('theme-pixel');
         }
         // Remove only theme classes that should NOT be present — leave the
         // correct ones in place so there is no flash if they were already
@@ -4872,10 +4870,6 @@
                 document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
                 break;
             }
-            case 'pixelFontSetting': {
-                document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
-                break;
-            }
             case 'ultracodeAnimationSetting': {
                 document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);
                 break;
@@ -5410,7 +5404,7 @@
                     checkProjectContextEnabled(activeWorkspace, (enabled) => {
                         let statusText = `Imported as PRD for ${msg.projectName}`;
                         if (!enabled) {
-                            statusText += ' — enable Project Context in the Projects tab to activate it for agent dispatch.';
+                            statusText += ' — enable Project Context in the PRDS tab to activate it for agent dispatch.';
                         }
                         showStatus(statusText);
                     });
@@ -5751,27 +5745,16 @@
                     showTicketsStatus('Status updated ✓', false);
                     if (lastIntegrationProvider === 'linear') {
                         const issue = linearProjectIssues.find(i => i.id === msg.id);
-                        if (issue) {
-                            const stateSelect = document.getElementById('select-status-ticket');
-                            const selectedOption = stateSelect?.querySelector(`option[value="${msg.statusId}"]`);
-                            if (selectedOption && issue.state) {
-                                issue.state.name = selectedOption.textContent;
-                            }
-                        }
+                        if (issue && issue.state && _pendingStatusChangeName) issue.state.name = _pendingStatusChangeName;
                         loadLinearTaskDetails(msg.id);
                         renderTicketsLinearList();
                     } else {
                         const task = clickUpProjectIssues.find(t => t.id === msg.id);
-                        if (task) {
-                            const stateSelect = document.getElementById('select-status-ticket');
-                            const selectedOption = stateSelect?.querySelector(`option[value="${msg.statusId}"]`);
-                            if (selectedOption) {
-                                task.status = selectedOption.textContent;
-                            }
-                        }
+                        if (task && _pendingStatusChangeName) task.status = _pendingStatusChangeName;
                         loadClickUpTaskDetails(msg.id);
                         renderTicketsClickUpList();
                     }
+                    _pendingStatusChangeName = '';
                 } else {
                     showTicketsStatus(msg.error || 'Failed to update status', true);
                 }
@@ -8156,7 +8139,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const projects = _kanbanAllWorkspaceProjects[activeWorkspace] || [];
         btnSetPrd.disabled = projects.length === 0;
         btnSetPrd.title = btnSetPrd.disabled
-            ? 'No projects in this workspace yet — create one in the Projects tab first.'
+            ? 'No projects in this workspace yet — create one on the Kanban board first (+ Add Project).'
             : "Copy the open document into a project's PRD. You'll choose the project; if it already has a PRD you can keep, append, or replace it.";
     }
 
@@ -8188,7 +8171,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
             // Get projects for active workspace
             const projects = _kanbanAllWorkspaceProjects[activeWorkspace] || [];
             if (projects.length === 0) {
-                showStatus('No projects found in this workspace. Create one in the Projects tab first.', true);
+                showStatus('No projects found in this workspace. Create one on the Kanban board first (+ Add Project).', true);
                 return;
             }
 
@@ -9236,18 +9219,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
             vscode.postMessage({ type: 'deleteTicketConfirmed', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
-        // Action bar: Change Status
-        document.getElementById('select-status-ticket')?.addEventListener('change', (e) => {
-            const provider = lastIntegrationProvider;
-            const id = provider === 'linear'
-                ? selectedLinearIssue?.issue.id
-                : selectedClickUpIssue?.task.id;
-            if (!id) return;
-            const statusId = e.target.value;
-            setTicketsLoadingState(true);
-            vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: ticketsWorkspaceRoot });
-        });
-
         // Action bar: Comment button → open comment manager panel
         document.getElementById('btn-comment-ticket')?.addEventListener('click', () => {
             const provider = lastIntegrationProvider;
@@ -9799,6 +9770,7 @@ Instructions:
             const id = _statusModalTicketId;
             if (!provider || !id) return;
             const statusId = select.value;
+            _pendingStatusChangeName = select.options[select.selectedIndex]?.text || '';
             setTicketsLoadingState(true);
             vscode.postMessage({ type: 'changeTicketStatus', provider, id, statusId, workspaceRoot: ticketsWorkspaceRoot });
             closeTicketStatusModal();
@@ -10101,7 +10073,14 @@ Instructions:
                         }
                     };
                     window.addEventListener('message', handler);
-                    vscode.postMessage({ type: 'renderMarkdownLive', requestId, content: markdown });
+                    vscode.postMessage({
+                        type: 'renderMarkdownLive',
+                        requestId,
+                        content: markdown,
+                        provider,
+                        id: task.id,
+                        workspaceRoot: ticketsWorkspaceRoot
+                    });
                 }),
                 onAttachImage: () => new Promise((resolve) => {
                     const requestId = Date.now() + Math.random();
@@ -10374,9 +10353,14 @@ Instructions:
             ].join('\n').toLowerCase();
             return haystack.includes(search);
         });
-        // Newest-first by creation date, with a stable title tiebreak so the order
-        // doesn't flicker across re-renders. Missing dates sort last (treated as 0).
+        // Priority first (urgent first), then newest-first by creation date, with a
+        // stable title tiebreak so the order doesn't flicker across re-renders.
+        // Linear priority is a number: 0=No priority, 1=Urgent … 4=Low. Map 0 → 99 so
+        // unprioritised issues sink to the bottom of their status group.
         return filtered.sort((a, b) => {
+            const pa = a.priority || 99;
+            const pb = b.priority || 99;
+            if (pa !== pb) return pa - pb;
             const aTime = a.dateCreated ? new Date(a.dateCreated).getTime() : 0;
             const bTime = b.dateCreated ? new Date(b.dateCreated).getTime() : 0;
             if (bTime !== aTime) return bTime - aTime;
@@ -10416,8 +10400,8 @@ Instructions:
     }
 
     // Groups an already-sorted ticket array by status name, preserving each group's
-    // internal order (newest-first from getFiltered*), then orders the groups by the
-    // logical status order. Returns [[statusName, tickets], ...].
+    // internal order (priority-first, then newest-first from getFiltered*), then
+    // orders the groups by the logical status order. Returns [[statusName, tickets], ...].
     function _groupTicketsByStatus(tickets, statusGetter) {
         const groups = new Map();
         for (const t of tickets) {
@@ -10450,8 +10434,8 @@ Instructions:
             <div class="tickets-issue-meta ticket-status-row" data-edit-status data-provider="clickup" data-ticket-id="${escapeAttr(task.id)}">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
             <div class="tickets-issue-meta ticket-edit-assignees" data-edit-assignees data-provider="clickup" data-ticket-id="${escapeAttr(task.id)}">${task.assignees && task.assignees.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
             <div class="card-actions">
-                <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup">Add to kanban</button>
-                <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Link to ticket</button>
+                <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup" title="Add to kanban">To kanban</button>
+                <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Link to ticket">Link</button>
                 <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Refine</button>
                 <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Move</button>
                 ${openBtn}
@@ -10479,8 +10463,8 @@ Instructions:
             <div class="tickets-issue-meta ticket-edit-assignees" data-edit-assignees data-provider="linear" data-ticket-id="${escapeAttr(issue.id)}">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
             <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
             <div class="card-actions">
-                <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear">Add to kanban</button>
-                <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Link to ticket</button>
+                <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear" title="Add to kanban">To kanban</button>
+                <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Link to ticket">Link</button>
                 <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Refine</button>
                 <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Move</button>
                 ${openBtn}
@@ -10718,7 +10702,8 @@ Instructions:
         emptyState.style.display = 'none';
 
         // Normal mode: group by status into collapsible accordion sections. Issues are
-        // already newest-first from getFilteredLinearIssues, so each group stays sorted.
+        // already sorted by priority then newest-first from getFilteredLinearIssues,
+        // so each group stays sorted.
         const groups = _groupTicketsByStatus(filteredIssues, i => i.state?.name || '');
         let newHtml = groups.map(([statusName, groupIssues]) => {
             if (groupIssues.length === 0) return '';
@@ -10751,11 +10736,6 @@ Instructions:
                 subtasksNav.style.display = 'none';
             }
             if (_lastTicketsDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsDetailContentHtml = ''; }
-            if (_lastTicketsLinearStatusSelectHtml !== '') {
-                const statusSelect = document.getElementById('select-status-ticket');
-                if (statusSelect) statusSelect.innerHTML = '';
-                _lastTicketsLinearStatusSelectHtml = '';
-            }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
             const tagsButton = document.getElementById('tickets-tags');
@@ -10780,52 +10760,6 @@ Instructions:
             }
             if (btnDiagramPrompt) {
                 btnDiagramPrompt.style.display = '';
-            }
-            const statusSelect = document.getElementById('select-status-ticket');
-            if (statusSelect) {
-                let newHtml = '';
-                if (availableLinearStates.length > 0) {
-                    newHtml = availableLinearStates
-                        .map(s => `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`)
-                        .join('');
-                } else {
-                    const stateMap = new Map();
-                    linearProjectIssues.forEach(i => {
-                        if (i.state && i.state.id && i.state.name) {
-                            stateMap.set(i.state.name, i.state.id);
-                        }
-                    });
-                    newHtml = Array.from(stateMap.entries())
-                        .map(([name, id]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`)
-                        .join('');
-                }
-
-                if (_lastTicketsLinearStatusSelectHtml !== newHtml) {
-                    statusSelect.innerHTML = newHtml;
-                    _lastTicketsLinearStatusSelectHtml = newHtml;
-                }
-
-                if (availableLinearStates.length > 0) {
-                    if (issue.state && issue.state.id) {
-                        statusSelect.value = issue.state.id;
-                    } else if (issue.state && issue.state.name) {
-                        const matched = availableLinearStates.find(s => s.name === issue.state.name);
-                        if (matched) statusSelect.value = matched.id;
-                    }
-                } else {
-                    const stateMap = new Map();
-                    linearProjectIssues.forEach(i => {
-                        if (i.state && i.state.id && i.state.name) {
-                            stateMap.set(i.state.name, i.state.id);
-                        }
-                    });
-                    if (issue.state && issue.state.id) {
-                        statusSelect.value = issue.state.id;
-                    } else if (issue.state && issue.state.name) {
-                        const matchedId = stateMap.get(issue.state.name);
-                        if (matchedId) statusSelect.value = matchedId;
-                    }
-                }
             }
         }
 
@@ -11273,9 +11207,15 @@ Instructions:
             ].join('\n').toLowerCase();
             return haystack.includes(search);
         });
-        // Newest-first by creation date, with a stable title tiebreak so the order
-        // doesn't flicker across re-renders. Missing dates sort last (treated as 0).
+        // Priority first (urgent first), then newest-first by creation date, with a
+        // stable title tiebreak. ClickUp priority is an OBJECT ({priority,color,
+        // orderindex}) or null — extract orderindex exactly as _renderClickUpTicketCard
+        // / _clickUpPriorityName do. 1=Urgent … 4=Low; missing/0 → 99 so unprioritised
+        // tasks sink to the bottom of their status group.
         return filtered.sort((a, b) => {
+            const pa = Number(a.priority?.orderindex) || 99;
+            const pb = Number(b.priority?.orderindex) || 99;
+            if (pa !== pb) return pa - pb;
             const aTime = a.dateCreated ? new Date(a.dateCreated).getTime() : 0;
             const bTime = b.dateCreated ? new Date(b.dateCreated).getTime() : 0;
             if (bTime !== aTime) return bTime - aTime;
@@ -11319,7 +11259,7 @@ Instructions:
                 html = `<div class="empty-state">No tasks found.</div>`;
             } else {
                 // Normal mode: group by status into collapsible accordion sections. Tasks
-                // are already newest-first from getFilteredClickUpTasks.
+                // are already sorted by priority then newest-first from getFilteredClickUpTasks.
                 const groups = _groupTicketsByStatus(tasks, t => t.status || '');
                 html = groups.map(([statusName, groupTasks]) => {
                     if (groupTasks.length === 0) return '';
@@ -11358,11 +11298,6 @@ Instructions:
                 subtasksNav.style.display = 'none';
             }
             if (_lastTicketsClickUpDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsClickUpDetailContentHtml = ''; }
-            if (_lastTicketsClickUpStatusSelectHtml !== '') {
-                const statusSelect = document.getElementById('select-status-ticket');
-                if (statusSelect) statusSelect.innerHTML = '';
-                _lastTicketsClickUpStatusSelectHtml = '';
-            }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
             const tagsButton = document.getElementById('tickets-tags');
@@ -11387,22 +11322,6 @@ Instructions:
             }
             if (btnDiagramPrompt) {
                 btnDiagramPrompt.style.display = '';
-            }
-            const statusSelect = document.getElementById('select-status-ticket');
-            if (statusSelect) {
-                const statuses = availableClickUpStatuses.length > 0
-                    ? availableClickUpStatuses.map(s => s.status)
-                    : Array.from(new Set(clickUpProjectIssues.map(t => t.status || 'Unknown'))).sort();
-                const newStatusHtml = statuses
-                    .map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}</option>`)
-                    .join('');
-                if (_lastTicketsClickUpStatusSelectHtml !== newStatusHtml) {
-                    statusSelect.innerHTML = newStatusHtml;
-                    _lastTicketsClickUpStatusSelectHtml = newStatusHtml;
-                }
-                if (task.status) {
-                    statusSelect.value = task.status;
-                }
             }
         }
 
@@ -11753,9 +11672,7 @@ Instructions:
         _lastTicketsClickUpIssuesContainerHtml = '';
         _lastTicketsClickUpDetailContentHtml = '';
         _lastTicketsClickUpStateFilterHtml = '';
-        _lastTicketsClickUpStatusSelectHtml = '';
         _lastTicketsClickUpSubtasksNavHtml = '';
-        _lastTicketsLinearStatusSelectHtml = '';
         _lastTicketsLinearSubtasksNavHtml = '';
         _lastTicketsTagsKey = '';
         _lastTicketsTagsProvider = '';
@@ -12152,19 +12069,35 @@ Instructions:
 
         docs.forEach(doc => {
             const row = document.createElement('div');
-            row.className = 'system-file-item';
+            row.className = 'tree-node';
             if (_devDocSelected && _devDocSelected.path === doc.path) row.classList.add('selected');
             row.dataset.path = doc.path;
-            const wsLabel = !_devDocsWsFilter && doc.workspaceLabel
-                ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">${escapeHtml(doc.workspaceLabel)}</div>`
-                : '';
-            const readmeBadge = doc.sourceType === 'readme'
-                ? ` <span style="font-size:9px; background:var(--accent-teal); color:#000; padding:1px 5px; border-radius:3px; margin-left:6px; vertical-align:middle;">README</span>`
-                : '';
-            row.innerHTML = `<div style="font-weight:500;">${escapeHtml(doc.title || doc.fileName)}${readmeBadge}</div>${wsLabel}`;
+
+            const cardText = document.createElement('div');
+            cardText.className = 'card-text';
+
+            const cardTitle = document.createElement('div');
+            cardTitle.className = 'card-title';
+            cardTitle.textContent = doc.title || doc.fileName;
+            if (doc.sourceType === 'readme') {
+                const badge = document.createElement('span');
+                badge.style.cssText = 'font-size:9px; background:var(--accent-teal); color:#000; padding:1px 5px; border-radius:3px; margin-left:6px; vertical-align:middle;';
+                badge.textContent = 'README';
+                cardTitle.appendChild(badge);
+            }
+            cardText.appendChild(cardTitle);
+
+            if (!_devDocsWsFilter && doc.workspaceLabel) {
+                const cardSubtitle = document.createElement('div');
+                cardSubtitle.className = 'card-subtitle';
+                cardSubtitle.textContent = doc.workspaceLabel;
+                cardText.appendChild(cardSubtitle);
+            }
+            row.appendChild(cardText);
+
             row.addEventListener('click', () => {
                 if (state.dirtyFlags.devdocs) exitEditMode('devdocs');
-                devdocsListPane.querySelectorAll('.system-file-item').forEach(el => el.classList.remove('selected'));
+                devdocsListPane.querySelectorAll('.tree-node').forEach(el => el.classList.remove('selected'));
                 row.classList.add('selected');
                 selectDevDoc(doc);
             });
@@ -12174,7 +12107,7 @@ Instructions:
         // Auto-select the first visible doc when the current selection isn't shown.
         const stillVisible = _devDocSelected && docs.some(d => d.path === _devDocSelected.path);
         if (!stillVisible && docs.length > 0) {
-            const first = devdocsListPane.querySelector('.system-file-item');
+            const first = devdocsListPane.querySelector('.tree-node');
             if (first) first.classList.add('selected');
             selectDevDoc(docs[0]);
         }

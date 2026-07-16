@@ -305,13 +305,6 @@ What would you like to do?
 - **Guided setup (onboarding)** — see §5 below. Interactive, one step at a time.
 - **Guided tour (feature walkthrough)** — see §5 below. For set-up users.
 
-> **Claude Desktop** reaches this surface via the **local stdio MCP server**
-> (`@switchboard/mcp` / `switchboard-mcp`), not shell — it has no shell or
-> filesystem. The MCP server is a stateless thin HTTP client of the same
-> `LocalApiServer` surface this skill drives; the curated `switchboard_*` tools
-> map 1:1 to the endpoints above. Use the in-extension **Connect Claude Desktop**
-> button (Setup panel) to write the config entry idempotently.
-
 For the complete endpoint reference (request bodies, response shapes, error codes), read
 the **`switchboard-orchestration` skill** — this skill does not duplicate that contract.
 

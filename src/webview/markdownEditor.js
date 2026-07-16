@@ -8,11 +8,11 @@
                 display: none;
                 flex-direction: column;
                 border: 1px solid var(--border-color, #30363d);
-                background: var(--bg-color, #0d1117);
+                background: var(--panel-bg, #000000);
                 border-radius: 6px;
                 overflow: hidden;
                 width: 100%;
-                height: 100%;
+                min-height: 480px;
                 box-sizing: border-box;
             }
             .edit-mode .md-editor-shell {
@@ -24,7 +24,7 @@
                 align-items: center;
                 gap: 4px;
                 padding: 6px;
-                background: var(--toolbar-bg, #161b22);
+                background: var(--panel-bg2, #0a0a0a);
                 border-bottom: 1px solid var(--border-color, #30363d);
                 user-select: none;
             }
@@ -56,7 +56,7 @@
             .md-view-toggle {
                 margin-left: auto;
                 display: flex;
-                background: var(--toggle-bg, #0d1117);
+                background: var(--panel-bg2, #0a0a0a);
                 border: 1px solid var(--border-color, #30363d);
                 border-radius: 4px;
                 overflow: hidden;
@@ -82,7 +82,6 @@
                 position: relative;
                 overflow: hidden;
                 width: 100%;
-                height: 100%;
                 box-sizing: border-box;
             }
             .md-body > textarea.markdown-editor {
@@ -96,7 +95,7 @@
                 padding: 12px;
                 box-sizing: border-box;
                 outline: none;
-                height: 100% !important;
+                height: auto;
                 margin: 0 !important;
                 display: block !important; /* override outer display:none */
             }
@@ -106,7 +105,7 @@
                 padding: 12px;
                 overflow-y: auto;
                 box-sizing: border-box;
-                background: var(--preview-bg, #0d1117);
+                background: var(--panel-bg2, #0a0a0a);
                 height: 100%;
             }
             /* Markdown styling integration */
@@ -135,7 +134,7 @@
                 position: absolute;
                 top: 26px;
                 left: 0;
-                background: var(--toolbar-bg, #161b22);
+                background: var(--panel-bg2, #0a0a0a);
                 border: 1px solid var(--border-color, #30363d);
                 border-radius: 6px;
                 padding: 8px;
@@ -414,7 +413,7 @@
             // Table picker popover button
             const pickerContainer = document.createElement('div');
             pickerContainer.className = 'md-table-picker-container';
-            const tableBtn = createBtn('📅', 'Insert Table', () => {
+            const tableBtn = createBtn('⊞', 'Insert Table', () => {
                 popover.classList.toggle('show');
             });
             pickerContainer.appendChild(tableBtn);

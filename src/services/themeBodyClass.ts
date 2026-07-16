@@ -43,21 +43,28 @@ export function getEffectiveColourKanbanIcons(): boolean {
 export function getThemeBodyClass(): string {
     const cfg = vscode.workspace.getConfiguration('switchboard');
     const theme = cfg.get<string>('theme.name', 'afterburner');
+    if (theme === 'pixel') {
+        const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
+        const scanlinesDisabled = cfg.get<boolean>('theme.disableCyberScanlines', false);
+        const ultracodeEnabled = cfg.get<boolean>('theme.ultracodeAnimation', false);
+        return 'cyber-theme-enabled theme-pixel'
+            + (animDisabled ? ' cyber-animation-disabled' : '')
+            + (scanlinesDisabled ? ' cyber-scanlines-disabled' : '')
+            + (ultracodeEnabled ? ' ultracode-animation-enabled' : '');
+    }
     if (theme === 'afterburner') {
         const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
         const scanlinesDisabled = cfg.get<boolean>('theme.disableCyberScanlines', false);
         const ultracodeEnabled = cfg.get<boolean>('theme.ultracodeAnimation', false);
-        return 'cyber-theme-enabled' + 
-            (animDisabled ? ' cyber-animation-disabled' : '') + 
+        return 'cyber-theme-enabled' +
+            (animDisabled ? ' cyber-animation-disabled' : '') +
             (scanlinesDisabled ? ' cyber-scanlines-disabled' : '') +
             (ultracodeEnabled ? ' ultracode-animation-enabled' : '');
     }
     const colourIcons = getEffectiveColourKanbanIcons();
     const colourClass = colourIcons ? ' kanban-icons-colour' : '';
     if (theme === 'claudify') {
-        const pixelFontEnabled = cfg.get<boolean>('theme.pixelFont', true);
-        const pixelFontClass = !pixelFontEnabled ? ' claudify-pixel-font-disabled' : '';
-        return 'theme-claudify' + colourClass + pixelFontClass;
+        return 'theme-claudify' + colourClass;
     }
     return '';
 }

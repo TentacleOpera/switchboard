@@ -47,6 +47,7 @@
             --accent-teal: var(--accent-primary);
             --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
             --accent-teal-bright: #5ce8e6;
+            --sweep-grid: 32px;   /* afterburner grid pitch — sweep aligns to the cyan body grid */
             --accent-orange: #d18616;
             --accent-neon: var(--accent-teal);
             --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
@@ -77,7 +78,7 @@
             --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
 
             /* Doc preview tokens — aligned with switchboard-site readability */
-            --doc-bg: #101414;
+            --doc-bg: #1a1a1a;
             --doc-border: #1d2323;   /* site --outline-variant — grey H2 rule + code borders */
             --doc-text: #a0a6a6;     /* site --on-surface-variant — the muted value <p> actually renders */
             --doc-text-bright: #e2e8f0; /* site .docs-article / --on-surface — bright inherited text for non-<p> elements */
@@ -92,6 +93,7 @@
             --accent-teal: #D97757;
             --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
             --accent-teal-bright: #E2A188;
+            --sweep-grid: 32px;   /* claudify grid pitch — now 32px, matching afterburner */
             --accent-neon: #D97757;
             --glow-teal: none;           /* kill all variable-routed neon glow */
             --text-secondary: #8C8C8C;
@@ -159,6 +161,8 @@
 
         body {
             font-family: var(--font-family);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
             font-size: 13px;
             color: var(--text-primary);
             background: var(--panel-bg);
@@ -2019,13 +2023,14 @@
             );
             z-index: 5;
         }
-        .cyber-theme-enabled .cyber-scanlines { display: block; }
+        .cyber-theme-enabled .cyber-scanlines,
+        body.theme-claudify .cyber-scanlines { display: block; }
 
         /* Grid-lighting mask sweep — ported from switchboard-site .bg-grid::after.
            A mask-position-animated silver-grid reveal that lights the cyan body grid
            in place as the band descends, then parks off-screen for ~11s of the 16s cycle.
            Only active when animation is not disabled. */
-        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+        body:not(.cyber-animation-disabled) .cyber-scanlines::before {
             content: "";
             position: absolute;
             inset: 0;
@@ -2035,7 +2040,11 @@
                 linear-gradient(180deg, transparent, rgba(214, 232, 238, 0.02), transparent),
                 linear-gradient(to right, rgba(214, 232, 238, 0.11) 1px, transparent 1px),
                 linear-gradient(to bottom, rgba(214, 232, 238, 0.11) 1px, transparent 1px);
-            background-size: 100% 100%, 32px 32px, 32px 32px;
+            background-size: 100% 100%, var(--sweep-grid) var(--sweep-grid), var(--sweep-grid) var(--sweep-grid);
+            /* Anchor the sweep grid to the viewport so its tiling shares the same origin as the
+               theme's background grid (both tile from viewport 0,0). --sweep-grid matches each
+               theme's pitch: 32px afterburner (cyan grid), 40px claudify (grey grid). */
+            background-attachment: fixed;
             -webkit-mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
             mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
             -webkit-mask-size: 100% 40vh;
@@ -2056,7 +2065,7 @@
         /* Respect reduced-motion preference — suppress ONLY the sweep animation,
            not the static scanline texture. Selector matches the animated rule precisely. */
         @media (prefers-reduced-motion: reduce) {
-            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            body:not(.cyber-animation-disabled) .cyber-scanlines::before {
                 animation: none;
                 display: none;
             }
@@ -2091,8 +2100,8 @@
             display: none !important;
         }
 
-        /* Global scanline suppression — toggled by the Setup panel checkbox */
-        .cyber-theme-enabled.cyber-scanlines-disabled .cyber-scanlines {
+        /* Global scanline suppression — toggled by the Setup panel checkbox (both themes) */
+        .cyber-scanlines-disabled .cyber-scanlines {
             display: none !important;
         }
 
@@ -2197,7 +2206,7 @@
         /* NOTE: body.cyber-theme-enabled (not .cyber-theme-enabled body) because the class is
            applied directly to document.body via classList.add — body cannot be a descendant of itself. */
         body.cyber-theme-enabled {
-            background-color: #101414;
+            background-color: #171717;   /* neutral dark surface — a touch lighter than the site's #101414, no teal bias */
             background-image:
                 /* Cyan grid lines at 32px — restored to match switchboard-site .bg-grid */
                 linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
@@ -2348,27 +2357,12 @@
         body.theme-claudify #tickets-content,
         body.theme-claudify #preview-pane,
         body.theme-claudify #preview-pane-tickets {
-            background-color: #0a0a0a;   /* neutral flat surface (claudify has no glass overlay) */
+            background-color: #171717;   /* neutral flat surface (claudify has no glass overlay) */
             background-image:
-                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
-        }
-
-        /* Claudify: h1 — pixel font, terracotta */
-        body.theme-claudify #markdown-preview h1,
-        body.theme-claudify #markdown-preview-tickets h1 {
-            font-family: 'GeistPixel', var(--font-family);
-            letter-spacing: -0.05em;
-            font-stretch: 90%;
-            color: #D97757;
-        }
-
-        body.theme-claudify.claudify-pixel-font-disabled #markdown-preview h1,
-        body.theme-claudify.claudify-pixel-font-disabled #markdown-preview-tickets h1 {
-            font-family: var(--font-family);
-            letter-spacing: normal;
-            font-stretch: 100%;
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
+            background-attachment: fixed;   /* viewport-anchored so the grid-sweep aligns to it */
         }
 
         /* Claudify: h2-h6 — Hanken, terracotta */
@@ -2842,6 +2836,9 @@
         .ticket-node .tickets-issue-meta[data-edit-status],
         .ticket-node .tickets-issue-meta[data-edit-assignees] {
             cursor: pointer;
+            align-self: flex-start; /* override .ticket-node's align-items:stretch */
+            width: fit-content;     /* size the click target to the text, not the row */
+            max-width: 100%;        /* never overflow the card on long assignee lists */
         }
         .ticket-node .tickets-issue-meta[data-edit-status]:hover,
         .ticket-node .tickets-issue-meta[data-edit-assignees]:hover {
@@ -2854,7 +2851,7 @@
             gap: 4px;
             margin-top: 4px;
             flex-wrap: wrap;
-            justify-content: flex-end;
+            justify-content: flex-start;
         }
 
         .ticket-node .card-actions .card-icon-btn {
@@ -3533,11 +3530,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         #notebook-content { padding: 16px; }
         #notebook-content .planning-card { max-width: 720px; }
         body.theme-claudify #notebook-content {
-            background-color: #0a0a0a;
+            background-color: #171717;
             background-image:
-                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-            background-size: 40px 40px, 40px 40px;
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
         }
         #devdocs-preview-pane {
             flex: 1;
@@ -3575,7 +3572,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             border-bottom: 1px solid rgba(217, 119, 87, 0.25);
         }
         body.theme-claudify #devdocs-preview-pane {
-            background-color: #1a1a1a;
+            background-color: #171717;
             color: #e0e0e0;
         }
         body.theme-claudify #devdocs-preview-content h1 {
@@ -3647,7 +3644,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel" class="strip-btn" style="display:none;">Cancel</button>
                 <button id="btn-push-doc" class="strip-btn" disabled title="Push local changes to the online source">Push</button>
-                <button id="btn-set-prd" class="strip-btn strip-btn--primary" disabled title="No projects in this workspace yet — create one in the Projects tab first.">Save as PRD</button>
+                <button id="btn-set-prd" class="strip-btn strip-btn--primary" disabled title="No projects in this workspace yet — create one on the Kanban board first (+ Add Project).">Save as PRD</button>
                 <button id="btn-set-constitution" class="strip-btn strip-btn--primary" title="Copy the open document into this workspace's Constitution. If one already exists you can keep, append, or replace it.">Save as Constitution</button>
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Copy to Online…</button>
                 <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
@@ -3854,10 +3851,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
                             <button id="btn-push-ticket" class="strip-btn">Push</button>
                             <button id="btn-delete-ticket" class="strip-btn">Delete</button>
-                            <div class="kanban-meta-group">
-                                <span class="kanban-meta-label">Status:</span>
-                                <select id="select-status-ticket" class="kanban-meta-dropdown" style="display:inline-block; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-secondary); font-size: 11px;"></select>
-                            </div>
                             <button id="btn-assign-ticket" class="strip-btn" title="Assign members">Assign</button>
                             <button id="tickets-tags" class="strip-btn" title="Edit tags">Tags</button>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>

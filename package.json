@@ -750,12 +750,6 @@
           "description": "Render kanban board icons in full color at rest (terracotta for Claudify) instead of flat grey with a color click-flash. Only affects the Claudify theme.",
           "scope": "window"
         },
-        "switchboard.theme.pixelFont": {
-          "type": "boolean",
-          "default": true,
-          "description": "Claudify only: render document H1 headings in the pixel display font. Turn off to render H1 in the body font like H2–H6.",
-          "scope": "window"
-        },
         "switchboard.theme.ultracodeAnimation": {
           "type": "boolean",
           "default": false,
@@ -766,11 +760,13 @@
           "type": "string",
           "enum": [
             "afterburner",
-            "claudify"
+            "claudify",
+            "pixel"
           ],
           "enumDescriptions": [
             "Afterburner — Cyan immersive theme: Hanken headings (no glow), scanlines and glass always on, CRT sweep toggleable",
-            "Claudify — Claude terracotta accent, Hanken headings, flat neutral surface"
+            "Claudify — Claude terracotta accent, Hanken headings, flat neutral surface",
+            "Pixel — Afterburner cyan theme with GeistPixel kanban card titles"
           ],
           "default": "afterburner",
           "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",
@@ -814,6 +810,8 @@
     "test:regression:native-project-api": "node src/test/native-project-api-commands-regression.test.js",
     "test:contract:research-modal": "node src/test/research-modal-contract.test.js",
     "test:contract:request-id-wire": "node src/test/research-modal-request-id-wire-contract.test.js",
+    "test:contract:verb-engine": "node src/test/verb-engine-headless-seams.test.js",
+    "test:contract:verb-engine-kanban": "node src/test/verb-engine-kanban-headless.test.js",
     "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node src/test/integrations/run-integration-tests.js all",
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\"",
     "catalog:generate": "node scripts/generate-protocol-catalog.js --write && node scripts/generate-verb-allowlist.js --write",

@@ -3,6 +3,7 @@ import { HostSeams, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import { SetupService, SetupServiceContext } from './setupService';
 import { SETUP_VERBS } from '../generated/verbAllowlist';
+import { validateVerbPayload } from './verbSchemas';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -48,6 +49,12 @@ export class SetupPanelProvider implements vscode.Disposable {
         }
         if (!SETUP_VERBS.has(verb)) {
             throw new Error(`Unknown Setup verb: '${verb}'`);
+        }
+        // Network boundary: validate untrusted HTTP payloads against the verb's
+        // schema (verbs with no schema yet pass through — generic-dispatch contract).
+        const validation = validateVerbPayload('setup', verb, payload);
+        if (!validation.ok) {
+            throw new Error(`Invalid payload for Setup verb '${verb}': ${validation.error}`);
         }
         // VS Code is the host here; _handleMessage runs in-process. Command verbs
         // return the route layer's {success:true} ack (most _handleMessage impls are
@@ -874,17 +881,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'setUltracodeAnimationSetting':
                     await this._taskViewerProvider.handleSetUltracodeAnimationSetting(message.enabled);
-                    await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
-                    break;
-                case 'getPixelFontSetting':
-                    this.postMessage({
-                        type: 'pixelFontSetting',
-                        enabled: this._taskViewerProvider.handleGetPixelFontSetting()
-                    });
-                    break;
-                case 'setPixelFontSetting':
-                    await this._taskViewerProvider.handleSetPixelFontSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;

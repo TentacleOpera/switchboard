@@ -147,12 +147,15 @@
         // Compute the desired theme class set without touching unrelated classes
         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
         // injected server-side by applyThemeBodyClass().
-        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
+        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
         const desired = new Set();
         if (state.switchboardTheme === 'afterburner') {
             desired.add('cyber-theme-enabled');
         } else if (state.switchboardTheme === 'claudify') {
             desired.add('theme-claudify');
+        } else if (state.switchboardTheme === 'pixel') {
+            desired.add('cyber-theme-enabled');
+            desired.add('theme-pixel');
         }
         // Remove only theme classes that should NOT be present — leave the
         // correct ones in place so there is no flash if they were already
@@ -416,9 +419,6 @@
                 break;
             case 'cyberAnimationSetting':
                 document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
-                break;
-            case 'pixelFontSetting':
-                document.body.classList.toggle('claudify-pixel-font-disabled', msg.enabled === false);
                 break;
             case 'ultracodeAnimationSetting':
                 document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);

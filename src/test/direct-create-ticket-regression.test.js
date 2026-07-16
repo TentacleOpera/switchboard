@@ -89,7 +89,9 @@ async function run() {
     const kanbanSource = await fs.promises.readFile(kanbanSourcePath, 'utf8');
 
     assert.ok(
-        kanbanSource.includes("await vscode.commands.executeCommand('switchboard.initiatePlan');"),
+        // Verb Engine · 4: the arm is seam-routed (registry-first HostCommands)
+        // but still dispatches the shared initiatePlan command.
+        kanbanSource.includes("await this._seams().commands.executeCommand('switchboard.initiatePlan');"),
         'kanban create action should keep using the shared initiatePlan command'
     );
 

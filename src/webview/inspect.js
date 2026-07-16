@@ -1,4 +1,6 @@
 (function() {
+    window.__sbInspectLoaded = true;
+    console.log('[inspect.js] loaded', document.getElementById('btn-inspect-images'));
     const vscode = acquireVsCodeApi();
 
     let state = {
@@ -55,12 +57,15 @@
     window.addEventListener('message', event => {
         const msg = event.data;
         if (msg.type === 'inspectDataUrl') {
+            console.log('[inspect.js] inspectDataUrl received', msg.requestId, 'current', state.requestId);
             if (msg.requestId === state.requestId) {
                 loadCanvasFromUrl(msg.dataUrl);
             }
         } else if (msg.type === 'inspectDataUrlError') {
+            console.error('[inspect.js] inspectDataUrlError received', msg.error);
             if (msg.requestId === state.requestId) {
                 readout.innerHTML = `<span style="color: var(--accent-orange, #ff5f00);">Fallback Error: ${msg.error}</span>`;
+                interactionLayer.style.cursor = 'not-allowed';
             }
         }
     });
@@ -75,13 +80,18 @@
         selectionBox.style.display = 'none';
         autoDetectBounds.style.display = 'none';
         readout.innerHTML = '';
-        
+
         if (mode === 'autodetect') {
+            if (!state.ctx) {
+                readout.innerHTML = 'Preparing canvas…';
+                return;
+            }
             runAutoDetect();
         }
     }
 
     function toggleInspector(tab, imgId, containerId) {
+        console.log('[inspect.js] toggleInspector', tab, imgId, containerId);
         if (state.overlayActive && state.activeTab === tab) {
             closeInspector();
             return;
@@ -89,6 +99,7 @@
 
         const img = document.getElementById(imgId);
         const container = document.getElementById(containerId);
+        console.log('[inspect.js] toggleInspector img', img, img?.src);
         if (!img || !img.src) return;
 
         state.activeTab = tab;
@@ -103,6 +114,7 @@
         overlay.style.left = `${rect.left}px`;
         overlay.style.width = `${rect.width}px`;
         overlay.style.height = `${rect.height}px`;
+        console.log('[inspect.js] toggleInspector overlay show', rect);
         overlay.style.display = 'flex';
 
         // Check if filename suggests screenshot
@@ -112,36 +124,55 @@
         updateGuardrailVisibility();
 
         readout.innerHTML = 'Loading pixel context...';
+        interactionLayer.style.cursor = 'wait';
         setMode('eyedrop');
-
-        // Build dedicated CORS image
-        const probe = new Image();
-        probe.crossOrigin = "anonymous";
-        state.probeImg = probe;
 
         const currentRequestId = state.requestId;
 
-        probe.onload = () => {
-            if (currentRequestId !== state.requestId) return;
-            setupCanvas(probe);
-        };
-
-        probe.onerror = () => {
-            if (currentRequestId !== state.requestId) return;
-            // CORS or fetch error: fallback to base64 relay
+        if (img.dataset.filePath) {
+            // Local image: asWebviewUri resources are cross-origin and lack CORS headers,
+            // so the probe path always fails. Use the data-URL relay directly — it is
+            // guaranteed untainted and is the spec-correct primary path.
+            console.log('[inspect.js] toggleInspector local -> requestDataUrlFallback', img.dataset.filePath);
             requestDataUrlFallback(img.dataset.filePath);
-        };
+        } else {
+            // Remote / no file path: attempt CORS probe; on failure report unsupported.
+            console.log('[inspect.js] toggleInspector remote -> probe', img.src);
+            const probe = new Image();
+            probe.crossOrigin = "anonymous";
+            state.probeImg = probe;
 
-        // Trigger load
-        probe.src = img.src;
+            probe.onload = () => {
+                console.log('[inspect.js] probe.onload');
+                if (currentRequestId !== state.requestId) return;
+                try {
+                    setupCanvas(probe);
+                } catch (e) {
+                    console.error('[inspect.js] setupCanvas failed', e);
+                    readout.innerHTML = `<span style="color: var(--accent-orange, #ff5f00);">Failed to prepare canvas: ${e.message}</span>`;
+                    interactionLayer.style.cursor = 'not-allowed';
+                }
+            };
+
+            probe.onerror = () => {
+                console.error('[inspect.js] probe.onerror');
+                if (currentRequestId !== state.requestId) return;
+                requestDataUrlFallback(img.dataset.filePath);
+            };
+
+            probe.src = img.src;
+        }
     }
 
     function requestDataUrlFallback(filePath) {
+        console.log('[inspect.js] requestDataUrlFallback', filePath);
         if (!filePath) {
-            readout.innerHTML = '<span style="color: var(--accent-orange, #ff5f00);">CORS blocked. Remote image inspection not supported.</span>';
+            readout.innerHTML = '<span style="color: var(--accent-orange, #ff5f00);">Remote image inspection not supported.</span>';
+            interactionLayer.style.cursor = 'not-allowed';
             return;
         }
-        readout.innerHTML = 'CORS blocked. Fetching local data URL...';
+        readout.innerHTML = 'Fetching local image as data URL...';
+        interactionLayer.style.cursor = 'wait';
         vscode.postMessage({
             type: 'inspectRequestDataUrl',
             filePath,
@@ -150,38 +181,56 @@
     }
 
     function loadCanvasFromUrl(dataUrl) {
+        console.log('[inspect.js] loadCanvasFromUrl');
         const probe = new Image();
         probe.onload = () => {
-            setupCanvas(probe);
+            console.log('[inspect.js] loadCanvasFromUrl onload');
+            try {
+                setupCanvas(probe);
+            } catch (e) {
+                console.error('[inspect.js] loadCanvasFromUrl setupCanvas failed', e);
+                readout.innerHTML = `<span style="color: var(--accent-orange, #ff5f00);">Failed to prepare canvas: ${e.message}</span>`;
+                interactionLayer.style.cursor = 'not-allowed';
+            }
         };
-        probe.onerror = () => {
+        probe.onerror = (e) => {
+            console.error('[inspect.js] loadCanvasFromUrl onerror', e);
             readout.innerHTML = '<span style="color: var(--accent-orange, #ff5f00);">Failed to load fallback data URL.</span>';
+            interactionLayer.style.cursor = 'not-allowed';
         };
+        // data: URLs do not need crossOrigin and must not have it set.
         probe.src = dataUrl;
     }
 
     function setupCanvas(probe) {
-        const canvas = document.createElement('canvas');
-        canvas.width = probe.naturalWidth;
-        canvas.height = probe.naturalHeight;
-
-        const useP3 = window.matchMedia('(color-gamut: p3)').matches;
-        let ctx;
         try {
-            ctx = canvas.getContext('2d', {
-                colorSpace: useP3 ? 'display-p3' : 'srgb',
-                willReadFrequently: true
-            });
+            const canvas = document.createElement('canvas');
+            canvas.width = probe.naturalWidth;
+            canvas.height = probe.naturalHeight;
+
+            const useP3 = window.matchMedia('(color-gamut: p3)').matches;
+            let ctx;
+            try {
+                ctx = canvas.getContext('2d', {
+                    colorSpace: useP3 ? 'display-p3' : 'srgb',
+                    willReadFrequently: true
+                });
+            } catch (e) {
+                ctx = canvas.getContext('2d', { willReadFrequently: true });
+            }
+
+            ctx.drawImage(probe, 0, 0);
+
+            state.canvas = canvas;
+            state.ctx = ctx;
+            interactionLayer.style.cursor = 'crosshair';
+
+            readout.innerHTML = `Loaded (${probe.naturalWidth}x${probe.naturalHeight}). Ready to inspect.`;
         } catch (e) {
-            ctx = canvas.getContext('2d', { willReadFrequently: true });
+            console.error('[inspect.js] setupCanvas failed', e);
+            readout.innerHTML = `<span style="color: var(--accent-orange, #ff5f00);">Failed to prepare canvas: ${e.message}</span>`;
+            interactionLayer.style.cursor = 'not-allowed';
         }
-
-        ctx.drawImage(probe, 0, 0);
-
-        state.canvas = canvas;
-        state.ctx = ctx;
-
-        readout.innerHTML = `Loaded (${probe.naturalWidth}x${probe.naturalHeight}). Ready to inspect.`;
     }
 
     function closeInspector() {
@@ -206,23 +255,33 @@
 
     // Coordinate mapping client-space -> image-space
     function getImgCoordinates(clientX, clientY) {
-        if (!state.activeImg) return null;
-        const r = state.activeImg.getBoundingClientRect();
-        
-        // Ensure within bounds
-        const xPercent = (clientX - r.left) / r.width;
-        const yPercent = (clientY - r.top) / r.height;
+        try {
+            if (!state.activeImg) return null;
+            const r = state.activeImg.getBoundingClientRect();
 
-        const ix = Math.floor(xPercent * state.activeImg.naturalWidth);
-        const iy = Math.floor(yPercent * state.activeImg.naturalHeight);
+            // Ensure within bounds
+            const xPercent = (clientX - r.left) / r.width;
+            const yPercent = (clientY - r.top) / r.height;
 
-        return { ix, iy, inBounds: (xPercent >= 0 && xPercent <= 1 && yPercent >= 0 && yPercent <= 1) };
+            const ix = Math.floor(xPercent * state.activeImg.naturalWidth);
+            const iy = Math.floor(yPercent * state.activeImg.naturalHeight);
+
+            return { ix, iy, inBounds: (xPercent >= 0 && xPercent <= 1 && yPercent >= 0 && yPercent <= 1) };
+        } catch (e) {
+            console.error('[inspect.js] getImgCoordinates failed', e);
+            return null;
+        }
     }
 
     // Interaction Layer Events
     interactionLayer.addEventListener('mousedown', (e) => {
-        if (!state.overlayActive || !state.ctx || e.button !== 0) return;
-        
+        if (!state.overlayActive || e.button !== 0) return;
+
+        if (!state.ctx) {
+            readout.innerHTML = 'Preparing canvas…';
+            return;
+        }
+
         // If zooming/panning container is active, don't interfere
         if (state.activeContainer?.classList.contains('panning')) return;
 
@@ -302,34 +361,58 @@
     });
 
     function performEyedrop(clientX, clientY) {
-        const coords = getImgCoordinates(clientX, clientY);
-        if (!coords || !coords.inBounds) return;
-
-        const N = 5; // Sample window N x N
-        const half = Math.floor(N / 2);
-        const sx = Math.max(0, coords.ix - half);
-        const sy = Math.max(0, coords.iy - half);
-        
-        let imgData;
         try {
-            imgData = state.ctx.getImageData(sx, sy, N, N, { colorSpace: 'srgb' });
-        } catch (e) {
-            imgData = state.ctx.getImageData(sx, sy, N, N);
-        }
+            const coords = getImgCoordinates(clientX, clientY);
+            if (!coords || !coords.inBounds) return;
 
-        const dominant = getDominantColor(imgData);
-        displayColorResult(dominant, `Pixel: ${coords.ix}, ${coords.iy}`);
+            const N = 5; // Sample window N x N
+            const half = Math.floor(N / 2);
+            const sx = Math.max(0, coords.ix - half);
+            const sy = Math.max(0, coords.iy - half);
+
+            let imgData;
+            try {
+                imgData = state.ctx.getImageData(sx, sy, N, N, { colorSpace: 'srgb' });
+            } catch (e) {
+                console.error('[inspect.js] getImageData (with options) failed', e);
+                try {
+                    imgData = state.ctx.getImageData(sx, sy, N, N);
+                } catch (e2) {
+                    console.error('[inspect.js] getImageData fallback failed', e2);
+                    readout.innerHTML = '<span style="color: var(--accent-orange, #ff5f00);">Canvas tainted — cannot read pixels. Reopen Inspect to retry.</span>';
+                    return;
+                }
+            }
+
+            const dominant = getDominantColor(imgData);
+            displayColorResult(dominant, `Pixel: ${coords.ix}, ${coords.iy}`);
+        } catch (e) {
+            console.error('[inspect.js] performEyedrop failed', e);
+            readout.innerHTML = `<span style="color: var(--accent-orange, #ff5f00);">Inspect error: ${e.message}</span>`;
+        }
     }
 
     function performMeasure(x, y, w, h) {
-        let imgData;
         try {
-            imgData = state.ctx.getImageData(x, y, w, h, { colorSpace: 'srgb' });
+            let imgData;
+            try {
+                imgData = state.ctx.getImageData(x, y, w, h, { colorSpace: 'srgb' });
+            } catch (e) {
+                console.error('[inspect.js] getImageData (with options) failed', e);
+                try {
+                    imgData = state.ctx.getImageData(x, y, w, h);
+                } catch (e2) {
+                    console.error('[inspect.js] getImageData fallback failed', e2);
+                    readout.innerHTML = '<span style="color: var(--accent-orange, #ff5f00);">Canvas tainted — cannot read pixels. Reopen Inspect to retry.</span>';
+                    return;
+                }
+            }
+            const dominant = getDominantColor(imgData);
+            displayColorResult(dominant, `Box: ${w} × ${h} px`);
         } catch (e) {
-            imgData = state.ctx.getImageData(x, y, w, h);
+            console.error('[inspect.js] performMeasure failed', e);
+            readout.innerHTML = `<span style="color: var(--accent-orange, #ff5f00);">Inspect error: ${e.message}</span>`;
         }
-        const dominant = getDominantColor(imgData);
-        displayColorResult(dominant, `Box: ${w} × ${h} px`);
     }
 
     function getDominantColor(imgData) {
@@ -405,79 +488,91 @@
 
     // Auto detect artwork proportions
     function runAutoDetect() {
-        if (!state.ctx || !state.canvas) return;
-        const w = state.canvas.width;
-        const h = state.canvas.height;
-        
-        const imgData = state.ctx.getImageData(0, 0, w, h);
-        const data = imgData.data;
+        try {
+            if (!state.ctx || !state.canvas) return;
+            const w = state.canvas.width;
+            const h = state.canvas.height;
 
-        // Sampling corners to detect background color
-        const cornerColors = [
-            getPixelColor(data, 0, 0, w),
-            getPixelColor(data, w - 1, 0, w),
-            getPixelColor(data, 0, h - 1, w),
-            getPixelColor(data, w - 1, h - 1, w)
-        ];
+            let imgData;
+            try {
+                imgData = state.ctx.getImageData(0, 0, w, h);
+            } catch (e) {
+                console.error('[inspect.js] runAutoDetect getImageData failed', e);
+                readout.innerHTML = '<span style="color: var(--accent-orange, #ff5f00);">Canvas tainted — cannot read pixels. Reopen Inspect to retry.</span>';
+                return;
+            }
+            const data = imgData.data;
 
-        // Find majority corner color
-        const bg = getMajorityColor(cornerColors);
+            // Sampling corners to detect background color
+            const cornerColors = [
+                getPixelColor(data, 0, 0, w),
+                getPixelColor(data, w - 1, 0, w),
+                getPixelColor(data, 0, h - 1, w),
+                getPixelColor(data, w - 1, h - 1, w)
+            ];
 
-        // Find bounding box of foreground (pixels that differ significantly from bg)
-        let minX = w, maxX = 0, minY = h, maxY = 0;
-        const threshold = 30; // diff threshold
+            // Find majority corner color
+            const bg = getMajorityColor(cornerColors);
 
-        for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-                const idx = (y * w + x) * 4;
-                const r = data[idx];
-                const g = data[idx+1];
-                const b = data[idx+2];
-                const a = data[idx+3];
+            // Find bounding box of foreground (pixels that differ significantly from bg)
+            let minX = w, maxX = 0, minY = h, maxY = 0;
+            const threshold = 30; // diff threshold
 
-                if (a < 30) continue; // transparent is foreground/bg ignored
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = (y * w + x) * 4;
+                    const r = data[idx];
+                    const g = data[idx+1];
+                    const b = data[idx+2];
+                    const a = data[idx+3];
 
-                const diff = Math.abs(r - bg.r) + Math.abs(g - bg.g) + Math.abs(b - bg.b);
-                if (diff > threshold) {
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                    if (y < minY) minY = y;
-                    if (y > maxY) maxY = y;
+                    if (a < 30) continue; // transparent is foreground/bg ignored
+
+                    const diff = Math.abs(r - bg.r) + Math.abs(g - bg.g) + Math.abs(b - bg.b);
+                    if (diff > threshold) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
                 }
             }
-        }
 
-        if (maxX >= minX && maxY >= minY) {
-            const bboxW = (maxX - minX) + 1;
-            const bboxH = (maxY - minY) + 1;
-            const ratio = (bboxW / bboxH).toFixed(3);
+            if (maxX >= minX && maxY >= minY) {
+                const bboxW = (maxX - minX) + 1;
+                const bboxH = (maxY - minY) + 1;
+                const ratio = (bboxW / bboxH).toFixed(3);
 
-            // Display bounds in UI
-            const clientImgRect = state.activeImg.getBoundingClientRect();
-            const containerRect = state.activeContainer.getBoundingClientRect();
+                // Display bounds in UI
+                const clientImgRect = state.activeImg.getBoundingClientRect();
+                const containerRect = state.activeContainer.getBoundingClientRect();
 
-            // Coordinate conversion back to viewport client space relative to overlay
-            const scaleX = clientImgRect.width / w;
-            const scaleY = clientImgRect.height / h;
+                // Coordinate conversion back to viewport client space relative to overlay
+                const scaleX = clientImgRect.width / w;
+                const scaleY = clientImgRect.height / h;
 
-            const boxLeft = clientImgRect.left - containerRect.left + minX * scaleX;
-            const boxTop = clientImgRect.top - containerRect.top + minY * scaleY;
-            const boxW = bboxW * scaleX;
-            const boxH = bboxH * scaleY;
+                const boxLeft = clientImgRect.left - containerRect.left + minX * scaleX;
+                const boxTop = clientImgRect.top - containerRect.top + minY * scaleY;
+                const boxW = bboxW * scaleX;
+                const boxH = bboxH * scaleY;
 
-            autoDetectBounds.style.left = `${boxLeft}px`;
-            autoDetectBounds.style.top = `${boxTop}px`;
-            autoDetectBounds.style.width = `${boxW}px`;
-            autoDetectBounds.style.height = `${boxH}px`;
-            autoDetectBounds.style.display = 'block';
+                autoDetectBounds.style.left = `${boxLeft}px`;
+                autoDetectBounds.style.top = `${boxTop}px`;
+                autoDetectBounds.style.width = `${boxW}px`;
+                autoDetectBounds.style.height = `${boxH}px`;
+                autoDetectBounds.style.display = 'block';
 
-            readout.innerHTML = `
-                <span style="font-weight: bold; color: var(--accent-green, #00ff66);">Artwork Box:</span> 
-                <span>${bboxW} × ${bboxH} px</span> 
-                <span style="color: var(--text-secondary);">(Ratio: ${ratio})</span>
-            `;
-        } else {
-            readout.innerHTML = 'Auto-detect: No distinct foreground detected.';
+                readout.innerHTML = `
+                    <span style="font-weight: bold; color: var(--accent-green, #00ff66);">Artwork Box:</span>
+                    <span>${bboxW} × ${bboxH} px</span>
+                    <span style="color: var(--text-secondary);">(Ratio: ${ratio})</span>
+                `;
+            } else {
+                readout.innerHTML = 'Auto-detect: No distinct foreground detected.';
+            }
+        } catch (e) {
+            console.error('[inspect.js] runAutoDetect failed', e);
+            readout.innerHTML = `<span style="color: var(--accent-orange, #ff5f00);">Auto-detect failed: ${e.message}</span>`;
         }
     }
 
