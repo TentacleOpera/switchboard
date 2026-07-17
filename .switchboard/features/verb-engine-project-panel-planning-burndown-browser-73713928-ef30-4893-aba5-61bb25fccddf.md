@@ -24,3 +24,7 @@ Make the Project panel (PlanningPanelProvider / project.html) host-agnostic (·6
 - [ ] [Headless Project Panel (Browser)](../plans/headless-project-panel-browser.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
+## Review Findings (feature)
+
+Reviewed both subtasks in-place 2026-07-17. **·6 Planning Burndown:** arm-level host coupling is genuinely migrated behind `this._seams()`, shims deleted, dispatch allowlist+schema-gated (176 verbs); the return-in-body contract is the one material deviation (arms still push over WS instead of returning data in the HTTP body — browser unaffected, external HTTP read-agents affected). **Headless Project Panel:** routing/serving/auth/transport-shim/capability-hook all wired; applied one MAJOR fix — capability-gating now hides the Project panel's four AI-builder terminal-dispatch buttons when `terminalDispatch:false` (was a board-only no-op) — in `src/webview/transport.js`. **Top remaining risk:** the standalone `planningVerb` is a stub (`bootstrap.ts:537`), so `npx switchboard` serves the panel but no verb functions; combined with `serveStatic` being standalone-only (not extension-hosted), the browser Project panel has no functional home until the documented B1 final-wiring lands. Only `src/webview/transport.js` changed during review; compile/tests skipped per session directives.
+

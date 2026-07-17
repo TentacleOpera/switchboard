@@ -491,8 +491,11 @@ setTimeout(reportDims, 0);
             this._disposables
         );
 
+        this._initDesignService();
+
         this._panel.onDidDispose(() => {
             this._panel = undefined;
+            this._broadcaster?.setWebview(null);
             this.disposeWatchers();
             this._stopExternalFilePoll();
         }, null, this._disposables);
@@ -592,8 +595,11 @@ setTimeout(reportDims, 0);
             this._disposables
         );
 
+        this._initDesignService();
+
         this._panel.onDidDispose(() => {
             this._panel = undefined;
+            this._broadcaster?.setWebview(null);
             this.disposeWatchers();
             this._stopExternalFilePoll();
         }, null, this._disposables);

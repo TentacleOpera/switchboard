@@ -204,7 +204,16 @@
 .host-terminal-dispatch-false #agents-tab-content,
 .host-terminal-dispatch-false #automation-tab-content,
 .host-terminal-dispatch-false #worktrees-tab-content,
-.host-terminal-dispatch-false button[data-action="julesSelected"] {
+.host-terminal-dispatch-false button[data-action="julesSelected"],
+/* Project panel (data-panel="project"): the AI-builder verbs dispatch a prompt
+   into a host terminal (invokeConstitutionBuilder/Updater, invokeSystemBuilder,
+   invokePrdBuilder). In a no-terminal host they cannot fire, so hide the
+   "Build/Update via Planner" affordances. The sibling Copy Build/Update Prompt
+   buttons stay — they return the prompt in the HTTP body and copy client-side. */
+.host-terminal-dispatch-false #btn-build-via-planner,
+.host-terminal-dispatch-false #btn-update-via-planner,
+.host-terminal-dispatch-false #btn-build-system,
+.host-terminal-dispatch-false #btn-build-prd-via-planner {
     display: none !important;
 }
 /* NOTE: moveSelected / moveAll are NOT hidden. In a headless host they degrade

@@ -406,3 +406,7 @@ verification is manual.
 ---
 
 **Recommendation:** Complexity 3 → Send to Intern.
+
+## Completion Report
+
+Implemented the stale-broadcaster fix in `src/services/PlanningPanelProvider.ts` and `src/services/DesignPanelProvider.ts`. Both providers now call their respective `_init*Service()` methods after panel creation in `open()` and `deserializeWebviewPanel()`/`_hydratePanel()` (planning only, guarded by `!isProject`), and clear the broadcaster’s webview reference with `_broadcaster?.setWebview(null)` in each `onDidDispose` block. The project panel path is intentionally left unchanged because `_pushTo()` delivers via the explicit project webview. No compilation or tests were run per the session skip directives. No issues encountered; the diff matches the plan exactly.

@@ -742,8 +742,11 @@ export class PlanningPanelProvider {
             this._disposables
         );
 
+        this._initPlanningService();
+
         this._panel.onDidDispose(
             () => {
+                this._broadcaster?.setWebview(null);
                 this.dispose();
             },
             null,
@@ -866,6 +869,10 @@ export class PlanningPanelProvider {
             this._disposables
         );
 
+        if (!isProject) {
+            this._initPlanningService();
+        }
+
         // Use the same dispose semantics as open(): for the planning panel,
         // dispose all shared resources; for project panel, full cleanup mirroring
         // openProject()'s onDidDispose (line 382-394) — null the ref, reset ready
@@ -899,6 +906,7 @@ export class PlanningPanelProvider {
             );
         } else {
             panel.onDidDispose(() => {
+                this._broadcaster?.setWebview(null);
                 this.dispose();
             }, null, this._disposables);
         }
