@@ -203,6 +203,11 @@
     }
 
     function setupCanvas(probe) {
+        // Reset canvas state up front so a failed re-setup (e.g. drawImage
+        // throws on a tainted image after a tab switch without close) does
+        // not leave state.ctx pointing at the previous image's canvas.
+        state.canvas = null;
+        state.ctx = null;
         try {
             const canvas = document.createElement('canvas');
             canvas.width = probe.naturalWidth;

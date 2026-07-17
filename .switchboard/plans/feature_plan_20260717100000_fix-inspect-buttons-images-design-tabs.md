@@ -172,3 +172,13 @@ Implemented the inspect-button fix in `src/webview/inspect.js`, `src/webview/des
 Files changed: `src/webview/inspect.js`, `src/webview/design.js`, `src/webview/design.html`, `src/services/DesignPanelProvider.ts`.
 
 No issues encountered. JS syntax verified with `node --check` for `inspect.js` and `design.js`. Per session directives, no compilation or automated tests were run.
+
+## Review Findings
+
+Reviewed the implementation against the plan's Proposed Changes (items 1–7). The core fix is correct: local images now use the `inspectRequestDataUrl` data-URL relay as the primary canvas-load path (`inspect.js:132-137`), eliminating the cross-origin `SecurityError`; all `getImageData` calls in `performEyedrop`, `performMeasure`, and `runAutoDetect` are wrapped in try/catch surfacing "Canvas tainted" instead of failing silently; the load beacon, `design.js` warning, `design.html` script `onerror`, and `DesignPanelProvider.ts` `fs.existsSync` check are all present and correct; the `inspectRequestDataUrl` path-security guard (`DesignPanelProvider.ts:2085-2091`) is preserved.
+
+**Fix applied:** `src/webview/inspect.js:205-210` — `setupCanvas` now resets `state.canvas`/`state.ctx` to `null` before attempting `drawImage`, so a failed re-setup (tab switch without close, tainted image) does not leave `state.ctx` pointing at the previous image's canvas (stale-context regression). Without this, a second `toggleInspector` whose `drawImage` throws would leave the user sampling pixels from the wrong image.
+
+**Remaining risks:** (1) `dist/webview/inspect.js` and `dist/extension.js` are stale (Jul 16 17:06, pre-fix) — `dist/` is gitignored, so the developer must rebuild (`npm run package` / `vsce package`) before the fix ships in a VSIX; the `fs.existsSync` guard passes on the stale file because it checks existence, not content. (2) 19 `console.log`/`console.error` calls ship to production — functional but verbose; defer to a polish pass. (3) Remote `probe.onerror` routes through `requestDataUrlFallback('')` which works (hits the `!filePath` guard) but is semantically indirect — cosmetic only.
+
+**Validation:** `node --check` passed for `src/webview/inspect.js` and `src/webview/design.js`. Grep verification: working HTML-preview buttons (`stitch-html-btn-inspect`, `html-btn-inspect`) and `#inspect-overlay` intact; beacon `__sbInspectLoaded` present in both files; "Canvas tainted" handling present (3 sites); path-security guard present. No compilation or automated tests run per session directives.
