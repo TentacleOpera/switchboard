@@ -205,7 +205,125 @@ function renderMarkdown(markdown) {
     }
     flushTableBlock();
 
-    processed = processedLines.join('\n');
+    // List-block grouping pass: collect consecutive list lines into fully-formed,
+    // nested <ul>/<ol>/<li> HTML and emit each list block as a single
+    // HTML_LIST_START...HTML_LIST_END sentinel line (mirrors the table sentinel
+    // pattern at line 161). The sentinel is converted back to HTML late, outside
+    // the <p> wrapping, so lists are not nested inside <p>. Item text stays raw
+    // (already HTML-escaped) so the inline .replace chain below still applies
+    // bold/italic/code/link/image formatting inside list items.
+    const LIST_UNORDERED_RE = /^(\s*)([-*+])\s+(.+)$/;
+    const LIST_ORDERED_RE = /^(\s*)(\d+[.)])\s+(.+)$/;
+
+    const isSentinelLine = (s) => typeof s === 'string' && (
+        s.startsWith('HTML_TABLE_START') ||
+        s.startsWith('HTML_BLOCKQUOTE_START') ||
+        s.startsWith('HTML_ALERT_START')
+    );
+
+    const matchListLine = (line) => {
+        if (typeof line !== 'string') return null;
+        const u = line.match(LIST_UNORDERED_RE);
+        if (u) return { indent: u[1].length, ordered: false, text: u[3] };
+        const o = line.match(LIST_ORDERED_RE);
+        if (o) return { indent: o[1].length, ordered: true, text: o[3] };
+        return null;
+    };
+
+    // Build nested <ul>/<ol> HTML from a flat run of {indent, ordered, text}.
+    // Emits a single-line string with no internal \n so the \n-><br> mapping
+    // below does not insert <br> between <li>s.
+    const buildListHtml = (run) => {
+        let html = '';
+        const stack = []; // { indent, ordered }
+        for (const item of run) {
+            while (stack.length && item.indent < stack[stack.length - 1].indent) {
+                const top = stack.pop();
+                html += `</li></${top.ordered ? 'ol' : 'ul'}>`;
+            }
+            if (stack.length === 0) {
+                html += `<${item.ordered ? 'ol' : 'ul'}><li>${item.text}`;
+                stack.push({ indent: item.indent, ordered: item.ordered });
+            } else if (item.indent > stack[stack.length - 1].indent) {
+                html += `<${item.ordered ? 'ol' : 'ul'}><li>${item.text}`;
+                stack.push({ indent: item.indent, ordered: item.ordered });
+            } else {
+                const top = stack[stack.length - 1];
+                if (item.ordered === top.ordered) {
+                    html += `</li><li>${item.text}`;
+                } else {
+                    stack.pop();
+                    html += `</li></${top.ordered ? 'ol' : 'ul'}>`;
+                    html += `<${item.ordered ? 'ol' : 'ul'}><li>${item.text}`;
+                    stack.push({ indent: item.indent, ordered: item.ordered });
+                }
+            }
+        }
+        while (stack.length) {
+            const top = stack.pop();
+            html += `</li></${top.ordered ? 'ol' : 'ul'}>`;
+        }
+        return html;
+    };
+
+    const listProcessedLines = [];
+    let listCodeFence = false;
+    let k = 0;
+    while (k < processedLines.length) {
+        const line = processedLines[k];
+        if (typeof line === 'string' && line.trim().startsWith('```')) {
+            listCodeFence = !listCodeFence;
+            listProcessedLines.push(line);
+            k++;
+            continue;
+        }
+        if (listCodeFence || isSentinelLine(line)) {
+            listProcessedLines.push(line);
+            k++;
+            continue;
+        }
+        const firstMatch = matchListLine(line);
+        if (!firstMatch) {
+            listProcessedLines.push(line);
+            k++;
+            continue;
+        }
+        // Collect a run of list lines, allowing blank lines between items (loose lists).
+        const run = [];
+        run.push(firstMatch);
+        k++;
+        while (k < processedLines.length) {
+            const cur = processedLines[k];
+            if (typeof cur === 'string' && cur.trim().startsWith('```')) break;
+            if (isSentinelLine(cur)) break;
+            const m = matchListLine(cur);
+            if (m) {
+                run.push(m);
+                k++;
+            } else if (typeof cur === 'string' && cur.trim() === '') {
+                // Blank line: continue run only if a subsequent list line exists.
+                let j = k + 1;
+                while (j < processedLines.length &&
+                       typeof processedLines[j] === 'string' &&
+                       processedLines[j].trim() === '') {
+                    j++;
+                }
+                if (j < processedLines.length &&
+                    !isSentinelLine(processedLines[j]) &&
+                    !(typeof processedLines[j] === 'string' && processedLines[j].trim().startsWith('```')) &&
+                    matchListLine(processedLines[j])) {
+                    k = j;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        listProcessedLines.push(`HTML_LIST_START${buildListHtml(run)}HTML_LIST_END`);
+    }
+
+    processed = listProcessedLines.join('\n');
 
     let html = processed
         .replace(/```(\w*)([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
@@ -218,9 +336,6 @@ function renderMarkdown(markdown) {
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>')
         .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/^\* (.+)$/gm, '<li>$1</li>')
-        .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-        .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
         .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
             const safeUrl = escapeAttr(sanitizeUrl(url));
             return `<img src="${safeUrl}" alt="${escapeAttr(alt)}" style="max-width:100%;height:auto;display:block;margin:4px 0;">`;
@@ -237,8 +352,6 @@ function renderMarkdown(markdown) {
         return part.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
     }).join('');
 
-    html = html.replace(/<\/li><br><li>/g, '</li><li>');
-
     html = `<p>${html}</p>`;
     html = html.replace(/<p>\s*<\/p>/g, '');
 
@@ -250,6 +363,9 @@ function renderMarkdown(markdown) {
     });
     html = html.replace(/HTML_BLOCKQUOTE_START([\s\S]*?)HTML_BLOCKQUOTE_END/g, (_, body) => {
         return `</p><blockquote>${body}</blockquote><p>`;
+    });
+    html = html.replace(/HTML_LIST_START([\s\S]*?)HTML_LIST_END/g, (_, listHtml) => {
+        return `</p>${listHtml}<p>`;
     });
     html = html.replace(/<p>\s*<\/p>/g, '');
 

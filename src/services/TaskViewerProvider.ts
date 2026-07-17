@@ -4674,7 +4674,7 @@ Each plan file must include:
 
         const allSameTarget = groups.every(g => g.targetAgent === groups[0].targetAgent);
 
-        const dispatchToGroup = async (group: typeof groups[0]): Promise<boolean> => {
+        const dispatchToGroup = async (group: typeof groups[0], unsentLabels?: string[]): Promise<boolean> => {
             const prompt = await this._kanbanProvider!.generateUnifiedPrompt(role, group.plans, resolvedWorkspaceRoot, { instruction });
             const finalPrompt = this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
 
@@ -4701,6 +4701,9 @@ Each plan file must include:
                     // Continue with remaining cards in this group rather than aborting the entire batch
                 }
             }
+            // Refresh the board now that this group's cards are persisted — restores the
+            // pre-fix "immediate UI feedback" timing (cards move before the send, not after).
+            this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
 
             // Send the prompt to the resolved terminal
             try {
@@ -4728,7 +4731,10 @@ Each plan file must include:
                     error: String(e)
                 }, undefined, resolvedWorkspaceRoot);
                 console.error(`[TaskViewerProvider] Batch dispatch failed for role '${role}' group '${group.label}':`, e);
-                vscode.window.showErrorMessage(`Failed to dispatch '${group.label}' to '${group.targetAgent}'. Remaining groups not advanced.`);
+                const unsent = unsentLabels && unsentLabels.length > 0
+                    ? ` Not advanced (re-dispatch): ${unsentLabels.join(', ')}.`
+                    : ' Remaining groups not advanced.';
+                vscode.window.showErrorMessage(`Failed to dispatch '${group.label}' to '${group.targetAgent}'.${unsent}`);
                 return false;
             }
 
@@ -4773,8 +4779,11 @@ Each plan file must include:
         }
 
         // Divergent terminals: per-group persist-then-send, stopping on first failure.
-        for (const group of groups) {
-            const success = await dispatchToGroup(group);
+        for (let gi = 0; gi < groups.length; gi++) {
+            const group = groups[gi];
+            // Unsent features = the groups after this one (this group is the failing one).
+            const unsentLabels = groups.slice(gi + 1).map(g => g.label);
+            const success = await dispatchToGroup(group, unsentLabels);
             if (!success) {
                 return false;
             }

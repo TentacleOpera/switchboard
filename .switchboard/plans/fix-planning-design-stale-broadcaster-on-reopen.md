@@ -68,6 +68,14 @@ broadcaster is aligned with the live panel, and messages flow correctly.
 **Complexity:** 3
 **Tags:** bugfix, ui, reliability
 
+## User Review Required
+
+Yes — review the corrected `_pushTo()` rationale (Change 2 and the
+PlanningPanelProvider Edge Cases) and the idempotency Clarification below
+before dispatch. The fix scope and approach are unchanged from the prior
+version; only the reasoning behind the `!isProject` guard was corrected
+(the conclusion stands). No new product scope added.
+
 ## Complexity Audit
 
 ### Routine
@@ -125,21 +133,40 @@ broadcaster is aligned with the live panel, and messages flow correctly.
 
 ## Adversarial Synthesis
 
-Key risks: (1) `_init*Service()` called when `_getWorkspaceRoot()`
-returns undefined would destroy the broadcaster — but this is
-self-mitigating because `postMessage()` falls back to direct
-`this._panel?.webview.postMessage()`, and the injected root function is
-synchronous (no startup race like KanbanProvider's async
-`_resolveWorkspaceRoot()`); (2) PlanningPanelProvider's `dispose()`
-method (line 9758) is called from the planning panel's `onDidDispose`
-(line 887) and disposes ALL `_disposables` — adding `setWebview(null)`
-must go BEFORE `this.dispose()` is called, or the broadcaster reference
-clearing happens after full disposal (harmless but semantically wrong
-ordering); (3) PlanningPanelProvider has TWO panels (planning + project)
-— the project panel uses `_pushTo()` which calls `pushTo(panel.webview,
-...)` directly, so it is NOT affected by the stale broadcaster. Only the
-main planning panel's `postMessageToWebview()` is affected. The fix
-targets the main panel's lifecycle only.
+Key risks: (1) null-root at init time sets `_broadcaster = undefined` —
+self-mitigating via the direct `this._panel?.webview.postMessage()`
+fallback, and the injected `_getWorkspaceRoot()` is synchronous (no
+startup race like KanbanProvider's async `_resolveWorkspaceRoot()`);
+(2) PlanningPanelProvider's `onDidDispose` calls full `dispose()` (line
+9758, tears down `_disposables`) while DesignPanelProvider's does not —
+but the broadcaster is NOT in `_disposables` in either provider, so it
+survives both paths and `setWebview(null)` ordering is safe either way;
+(3) the `!isProject` guard is required because `_initPlanningService()`
+binds the broadcaster to `this._panel` (the main-panel field), not the
+`panel` argument — calling it during project hydration would misbind.
+Mitigations: idempotent create-once-then-`setWebview` broadcaster init
+(verified in code), explicit-webview `pushTo()` delivery for the project
+panel, and the merged KanbanProvider fix proving the same pattern.
+
+> **Superseded:** The project panel uses `_pushTo()` which calls
+> `pushTo(panel.webview, ...)` directly, so it is NOT affected by the
+> stale broadcaster.
+> **Reason:** `_pushTo()` (PlanningPanelProvider.ts lines 992-997) does
+> NOT bypass the broadcaster — it calls `this._broadcaster.pushTo(panel?.webview, surface, message)` when the broadcaster exists, only
+> falling back to direct `panel?.webview.postMessage()` when
+> `_broadcaster` is undefined. The project panel's webview delivery is
+> unaffected by a stale BOUND webview because `BroadcastHub.pushTo()`
+> (broadcastHub.ts line 94) delivers to the EXPLICIT webview argument
+> and ignores the bound `_target.webview` — not because the broadcaster
+> is bypassed.
+> **Replaced with:** The project panel's webview delivery is unaffected
+> by a stale bound webview because `broadcaster.pushTo()` routes to the
+> explicit project-panel webview argument. The `!isProject` guard on
+> `_initPlanningService()` is required for a different reason:
+> `_initPlanningService()` binds the broadcaster to `this._panel?.webview`
+> (the main-panel field), not the `panel` argument passed to
+> `_hydratePanel()` — calling it during project hydration would misbind
+> the broadcaster to the main panel's (possibly stale/undefined) webview.
 
 ## Proposed Changes
 
@@ -150,6 +177,18 @@ targets the main panel's lifecycle only.
 broadcaster is only initialized via `handleServiceVerb()` (line 80).
 After a verb call initializes the broadcaster and the panel is later
 destroyed + reopened, the broadcaster points at the dead webview.
+
+**Clarification — idempotency (verified in code):** `_initPlanningService()`
+(lines 100-113) is safe to call on every open/deserialize. The broadcaster
+branch is `if (!this._broadcaster) { this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null }); } else { this._broadcaster.setWebview(this._panel?.webview); }` — create-once, then
+update the webview on subsequent calls. The broadcaster is NEVER pushed
+into `this._disposables`, so `dispose()` (line 9758) does not tear it
+down — it survives with a null webview after `setWebview(null)`, exactly
+as the defense-in-depth intends. `_hostSeams` is rebuilt each call, but
+this is existing behavior (`handleServiceVerb()` already rebuilds it on
+every verb request) and seams are a stateless function bundle, not a
+disposable registration — no leak introduced. This matches the merged
+KanbanProvider fix, which uses the identical pattern.
 
 **Logic:** Mirror the KanbanProvider fix: call
 `_initPlanningService()` after the panel is created in both `open()` and
@@ -177,8 +216,24 @@ after line 728 (`onDidReceiveMessage` registration), before line 730
 In `_hydratePanel()`, after the panel's HTML is set and
 `onDidReceiveMessage` is registered (after line 851), call
 `this._initPlanningService()` — but ONLY when `!isProject` (the planning
-panel). The project panel uses `_pushTo()` which bypasses the broadcaster
-for webview delivery, so it does not need broadcaster initialization.
+panel).
+
+> **Superseded:** The project panel uses `_pushTo()` which bypasses the
+> broadcaster for webview delivery, so it does not need broadcaster
+> initialization.
+> **Reason:** `_pushTo()` (lines 992-997) does NOT bypass the
+> broadcaster — it calls `this._broadcaster.pushTo(panel?.webview, surface, message)` when the broadcaster exists. The project panel's
+> webview delivery is unaffected by a stale BOUND webview because
+> `BroadcastHub.pushTo()` delivers to the explicit webview argument, not
+> the bound `_target.webview`.
+> **Replaced with:** The `!isProject` guard is required because
+> `_initPlanningService()` binds the broadcaster to `this._panel?.webview`
+> (the main-panel field), NOT the `panel` argument passed to
+> `_hydratePanel()`. Calling it during project hydration would misbind
+> the broadcaster to the main panel's (possibly stale or undefined)
+> webview. The project panel does not need its own broadcaster init
+> because its delivery path (`_pushTo()` → `broadcaster.pushTo(projectWebview, ...)`) uses the explicit project webview and is
+> independent of the bound webview.
 
 **Location:** `src/services/PlanningPanelProvider.ts`, `_hydratePanel()`
 method, after line 851, guarded by `if (!isProject)`.
@@ -211,9 +266,13 @@ method, line 887 (inside the `else` branch `onDidDispose`), before
   undefined and `postMessageToWebview()` falls back to direct
   `this._panel?.webview.postMessage()`. Messages are still delivered.
 - The project panel (`isProject === true`) is NOT touched by this fix.
-  It uses `_pushTo()` → `pushTo(panel.webview, ...)` which delivers to
-  the named panel directly, bypassing the broadcaster's bound webview.
-  The project panel has its own `onDidDispose` (line 862) that clears
+  Its delivery path is `_pushTo()` → `this._broadcaster.pushTo(panel?.webview, surface, message)` (lines 992-997), which delivers to the
+  EXPLICIT project-panel webview argument — independent of the
+  broadcaster's bound `_target.webview`. A stale bound webview therefore
+  cannot poison project-panel delivery. (When `_broadcaster` is
+  undefined, `_pushTo()` falls back to direct `panel?.webview.postMessage()`, losing the WS mirror but still delivering to the
+  webview — this is existing behavior the fix does not change.) The
+  project panel has its own `onDidDispose` (line 862) that clears
   `_projectPanel` and related state — no broadcaster change needed there.
 
 ---
@@ -222,8 +281,20 @@ method, line 887 (inside the `else` branch `onDidDispose`), before
 
 **Context:** `open()` (line 430) and `deserializeWebviewPanel()` (line
 534) never call `_initDesignService()`. The broadcaster is only
-initialized via `handleServiceVerb()` (line 67). Same stale-broadcaster
+initialized via `handleServiceVerb()` (line 65). Same stale-broadcaster
 bug as PlanningPanelProvider.
+
+**Clarification — onDidDispose asymmetry (verified in code):** Unlike
+PlanningPanelProvider, DesignPanelProvider's `onDidDispose` (lines
+462-466 and 563-567) does NOT call `dispose()`. It nulls `_panel`, calls
+`disposeWatchers()`, and `_stopExternalFilePoll()`. The full `dispose()`
+method exists (line 646) but is not invoked from `onDidDispose`. This
+asymmetry is harmless to the fix: the broadcaster is not in `_disposables`
+in either provider, so it survives both dispose paths. The plan adds
+`setWebview(null)` after `this._panel = undefined` in both
+DesignPanelProvider `onDidDispose` blocks, consistent with the actual
+code (which does not call `dispose()`). Flagged here so the asymmetry is
+explicit, not implicit.
 
 **Logic:** Mirror the same fix: call `_initDesignService()` after panel
 creation in both `open()` and `deserializeWebviewPanel()`, and add
