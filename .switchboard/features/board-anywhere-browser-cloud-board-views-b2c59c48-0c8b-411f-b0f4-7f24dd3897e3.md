@@ -13,8 +13,8 @@ Make the Kanban board visible outside the VS Code webview. Two complementary vie
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Browser Board: Serve the Kanban Webview from LocalApiServer](../plans/board-anywhere-browser-board-host.md) — **CREATED**
-- [ ] [Cloud/Mobile Board: Self-Contained board.html in the Board-State Export](../plans/board-anywhere-cloud-mobile-snapshot.md) — **CREATED**
+- [ ] [Browser Board: Serve the Kanban Webview from LocalApiServer](../plans/board-anywhere-browser-board-host.md) — **PLAN REVIEWED**
+- [ ] [Cloud/Mobile Board: Self-Contained board.html in the Board-State Export](../plans/board-anywhere-cloud-mobile-snapshot.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

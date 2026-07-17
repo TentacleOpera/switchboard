@@ -135,6 +135,68 @@ curl -s -X POST "$BASE/kanban/feature" -H "Content-Type: application/json" \
 
 ---
 
+## 4a. Oversight pass (POST/GET) — attended column-oversight engine
+
+The in-extension attended oversight pass (`switchboard.md` §6/§6a/§7) — the supervising
+manager starts it, polls status in short turns, and produces the digest; the extension runs
+the two-lane state machine on the `GlobalPlanWatcherService` plan-file-mtime completion
+signal (the activity-light OFF-switch). Requires the running extension; absent in
+headless/test harnesses (503).
+
+| Endpoint | Body / Query | Purpose |
+|---|---|---|
+| `POST /oversight/start` | `{ workspaceRoot, queue: { planIds?: [] \| sourceColumn?: "" }, targetColumn?, stage?, reviewGate?, reviewColumn?, cooldownMs?, stuckThresholdMs? }` | Resolve the queue once and start the pass. Returns `{ success, passId?, pass }` (or `{ success, alreadyRunning: true, pass }` if a pass is already in flight — singleton, never a second loop). `409` while autoban/orchestration automation is armed (double-dispatch guard). `400` if neither `planIds` nor `sourceColumn` is supplied. |
+| `GET /oversight/status` | `?workspaceRoot=` (omit for all known passes) | Live pass state: `passId`, `state` (`running` \| `halted` \| `ended` \| `stopped`), `haltReason?`, `queueRemaining[]`, `inFlight[]` (`planId`, `topic`, `lane`, `cardStage`, `dispatchedAt`, `dispatchConfirmed`), `plannerLane` (`cooldownMs`, `lastCompletionAt`, `readyAt`), `completed[]` (`planId`, `topic`, `lane`, `durationSeconds`, `landedColumn`), `skipped[]`. |
+| `POST /oversight/stop` | `{ workspaceRoot }` | Cancel the running pass; leaves the board as-is; writes a stop log line. |
+
+**Queue semantics (resolved once at `start`, in code AND prose):**
+- `queue.planIds` → **explicit list IS the queue**, in given order, **feature subtasks
+  included** (only feature *container* rows are rejected). §6a.
+- `queue.sourceColumn` → **column sweep**, oldest first, **excluding feature rows AND
+  feature subtasks** (subtasks carry their own `kanban_column`). §6.
+
+**Two overlapping lanes (engine-encoded, not prose-enforced):**
+- Coding lane WIP-1, review-gated by default for explicit lists (`reviewGate` defaults
+  true when `planIds` is supplied, false for column sweeps). `cardStage` = `coding` →
+  `review`. `targetColumn` omitted/`"auto"` ⇒ complexity auto-routing.
+- Planner lane overlaps the coding lane with a ≥`cooldownMs` (default 120000) cooldown
+  measured from the previous planner dispatch's **completion signal**.
+
+**Halt / resume / singleton:**
+- Halt-on-failure: any dispatch failure or stuck-timeout halts the WHOLE pass — never
+  re-dispatch, never skip silently, never move a card backward. `state: "halted"` +
+  `haltReason`.
+- The extension is the **sole writer** of `.switchboard/oversight-state.md` (rewritten per
+  state change) and `oversight-log.md` (append-only). Agents read them for the resume offer
+  and digest; never write them. The state file is deleted only after the final pass-summary
+  log line; on halt it is kept.
+- On extension reactivation the engine resumes an in-flight pass from `oversight-state.md`
+  without re-dispatching the in-flight card.
+- Never arms `/orchestration/start` (separate unattended mode).
+
+```bash
+# Start an explicit-list pass (the list IS the queue, feature subtasks included)
+curl -s -X POST "$BASE/oversight/start" -H "Content-Type: application/json" -d '{
+  "workspaceRoot": "/repo",
+  "queue": { "planIds": ["a1b2c3d4", "e5f6g7h8"] },
+  "stage": "coding"
+}'
+
+# Start a column sweep (excludes feature rows and feature subtasks)
+curl -s -X POST "$BASE/oversight/start" -H "Content-Type: application/json" -d '{
+  "workspaceRoot": "/repo",
+  "queue": { "sourceColumn": "CREATED" }
+}'
+
+# Poll in short turns
+curl -s "$BASE/oversight/status?workspaceRoot=/repo"
+
+# Cancel
+curl -s -X POST "$BASE/oversight/stop" -H "Content-Type: application/json" -d '{"workspaceRoot": "/repo"}'
+```
+
+---
+
 ## 5. Comms (POST)
 
 ### `POST /orchestrator/request` — fleet agent → orchestrator

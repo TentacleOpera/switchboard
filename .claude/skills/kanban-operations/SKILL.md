@@ -11,6 +11,13 @@ disable-model-invocation: true
 
 Move cards and query kanban state by running the provided scripts.
 
+> **Attended oversight pass (multi-card §6/§7 pass):** the column-oversight loop is NOT a
+> script here — it runs in the extension via `POST /oversight/start`, `GET /oversight/status`,
+> `POST /oversight/stop`. See the **`switchboard-orchestration` skill §4a** for the request/
+> response shapes and the `switchboard` workflow §6/§7 for when to use it. `move-card.js`
+> stays the MANUAL FALLBACK for one-off card moves; the oversight engine drives dispatch
+> in-process via the same code path as `POST /kanban/dispatch`.
+
 ## Resolving Plan IDs (do this FIRST — offline, no script)
 
 Every op below is keyed on a **`planId`** (a UUID), but you should not need UUIDs for most ops. Resolve a plan the cheap way when needed, or use the path/slug-addressed APIs below so the server resolves it:
