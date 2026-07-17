@@ -143,6 +143,8 @@ When creating plan files in multi-workspace setups, use this decision tree to de
 
 ### 📌 Plan Project Pinning
 
+**Scope — creation only.** This sets a *new* plan's project as it's authored; the `**Project:**` line resolves once, when the file is first imported. To move an *existing* (already-imported) plan to a different project, use the Switchboard board or its local API — editing the pin on an imported plan does **not** reassign it, by design. The pin is the file-based authoring path (and the only option for cloud / DB-less agents that can't reach the API).
+
 **The workspace/repo name is NOT a project. Never pin it. Never emit a placeholder like `<project>`.** A workspace is a workspace; a project is a user-created board filter. They are not interchangeable.
 
 When creating any plan file, resolve the project in this priority order:

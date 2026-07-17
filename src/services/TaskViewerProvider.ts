@@ -4061,7 +4061,7 @@ Each plan file must include:
 - ## Metadata — this section is REQUIRED and must contain these exact fields:
   - **Complexity:** <1-10> — assign a numeric complexity rating (1-2 Very Low, 3-4 Low, 5-6 Medium, 7-8 High, 9-10 Very High). This is mandatory; do not leave it blank or write "Unknown".
   - **Tags:** <comma-separated, from this allowed list ONLY: frontend, backend, auth, authentication, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library>. Do NOT invent tags outside the list. If none apply, write **Tags:** none
-  - **Project:** <name> — include this line ONLY if a PROJECT PIN directive is present below; write the exact project name it specifies. Otherwise omit the line. The workspace/repo name is NOT a project — never use it as a pin.
+  - **Project:** <name> — include this line ONLY if a PROJECT PIN directive is present below; write the exact project name it specifies. Otherwise omit the line. The workspace/repo name is NOT a project — never use it as a pin. (This sets the project at creation only; moving an existing plan to another project is done on the Switchboard board or via its API, not by this line.)
 - ## Complexity Audit (Routine vs Complex/Risky)
 - ## Edge-Case & Dependency Audit
 - ## Proposed Changes (per-file breakdown with code snippets)

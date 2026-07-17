@@ -173,6 +173,7 @@
 
     let _kanbanPlansCache = [];
     let _kanbanAllWorkspaceProjects = {};
+    let _kanbanAllWorkspaceProjectPaths = {};
     let _kanbanProjectsError = false;
     let _kanbanWorkspaceItems = [];
     let _kanbanAvailableColumns = [];
@@ -491,6 +492,13 @@
                         normalized[normalizeRoot(k)] = v;
                     }
                     _kanbanAllWorkspaceProjects = normalized;
+                }
+                if (msg.allWorkspaceProjectPaths) {
+                    const normalized = {};
+                    for (const [k, v] of Object.entries(msg.allWorkspaceProjectPaths)) {
+                        normalized[normalizeRoot(k)] = v;
+                    }
+                    _kanbanAllWorkspaceProjectPaths = normalized;
                 }
                 if (msg.workspaceItems) _kanbanWorkspaceItems = msg.workspaceItems;
                 if (msg.columns) _kanbanAvailableColumns = msg.columns;
@@ -1327,6 +1335,17 @@
             || '';
     }
 
+    function wireCopyLinkButton(button, filePath) {
+        if (!button || !filePath) return;
+        button.addEventListener('click', e => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(toAgentRef(filePath)).then(() => {
+                button.textContent = 'Copied';
+                setTimeout(() => button.textContent = 'Copy Link', 2000);
+            });
+        });
+    }
+
     function setProjectsPrdEditorEnabled(enabled) {
         if (btnEditProjects) btnEditProjects.disabled = !enabled;
     }
@@ -1416,7 +1435,16 @@
             const item = document.createElement('div');
             item.className = 'kanban-plan-item'; // reuse shared item styling
             item.dataset.project = proj;
-            item.textContent = proj;
+            const prdInfo = _kanbanAllWorkspaceProjectPaths[normalizeRoot(wsRoot)]?.[proj];
+            const copyLinkHtml = prdInfo?.exists
+                ? `<div class="kanban-plan-actions">
+                       <button class="kanban-plan-copy-link" data-file-path="${escapeHtml(prdInfo.filePath)}" style="margin-left: auto;">Copy Link</button>
+                   </div>`
+                : '';
+            item.innerHTML = `
+                <div style="font-weight: 500;">${escapeHtml(proj)}</div>
+                ${copyLinkHtml}
+            `;
             item.addEventListener('click', () => {
                 _selectedProjectName = proj;
                 document.querySelectorAll('#projects-items-container .kanban-plan-item')
@@ -1424,6 +1452,7 @@
                 item.classList.add('selected');
                 requestProjectPrd();
             });
+            wireCopyLinkButton(item.querySelector('.kanban-plan-copy-link'), prdInfo?.filePath);
             container.appendChild(item);
         });
         // Preserve prior selection, else the board's active project filter, else the first.
@@ -2697,7 +2726,7 @@
     }
 
     // One doc row: doc name on top, workspace label + existence marker below.
-    function buildGovDocRow(className, title, ws, exists, selected, onClick) {
+    function buildGovDocRow(className, title, ws, exists, filePath, selected, onClick) {
         const itemDiv = document.createElement('div');
         itemDiv.className = className;
         itemDiv.dataset.ws = ws.workspaceRoot;
@@ -2705,11 +2734,18 @@
         const marker = exists
             ? '<span style="color: var(--accent-teal); font-weight: bold;">✓</span>'
             : '<span style="color: var(--text-secondary); opacity: 0.5;">•</span>';
+        const copyLinkHtml = exists && filePath
+            ? `<div class="kanban-plan-actions">
+                   <button class="kanban-plan-copy-link" data-file-path="${escapeHtml(filePath)}" style="margin-left: auto;">Copy Link</button>
+               </div>`
+            : '';
         itemDiv.innerHTML = `
             <div style="font-weight: 500;">${escapeHtml(title)}</div>
             <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${escapeHtml(ws.label)} &nbsp;${marker}</div>
+            ${copyLinkHtml}
         `;
         itemDiv.addEventListener('click', onClick);
+        wireCopyLinkButton(itemDiv.querySelector('.kanban-plan-copy-link'), filePath);
         return itemDiv;
     }
 
@@ -2757,10 +2793,11 @@
 
         const wss = filteredGovWorkspaces(_constitutionWsFilter);
         wss.forEach(ws => {
+            const govEntry = ws.governance?.find(g => g.key === 'constitution');
             const selected = _constitutionSelectedWorkspace
                 && _constitutionSelectedWorkspace.workspaceRoot === ws.workspaceRoot;
             const row = buildGovDocRow('constitution-file-item', 'Constitution', ws,
-                govExists(ws, 'constitution'), selected, () => {
+                govEntry?.exists, govEntry?.filePath, selected, () => {
                     if (state.dirtyFlags.constitution) exitEditMode('constitution');
                     constitutionListPane.querySelectorAll('.constitution-file-item')
                         .forEach(el => el.classList.remove('selected'));
@@ -2826,11 +2863,12 @@
         const wss = filteredGovWorkspaces(_systemWsFilter);
         wss.forEach(ws => {
             SYSTEM_DOCS.forEach(doc => {
+                const govEntry = ws.governance?.find(g => g.key === doc.key);
                 const selected = _systemSelectedWorkspace
                     && _systemSelectedWorkspace.workspaceRoot === ws.workspaceRoot
                     && _systemSelectedGovKey === doc.key;
                 const row = buildGovDocRow('system-file-item', doc.title, ws,
-                    govExists(ws, doc.key), selected, () => {
+                    govEntry?.exists, govEntry?.filePath, selected, () => {
                         if (state.dirtyFlags.system) exitEditMode('system');
                         systemListPane.querySelectorAll('.system-file-item')
                             .forEach(el => el.classList.remove('selected'));

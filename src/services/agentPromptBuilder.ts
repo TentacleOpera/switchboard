@@ -856,7 +856,7 @@ Hard Rules:
 5. **Plan artifact & quality gate.** Write the plan to one of the paths listed in the PLAN DESTINATION directive below (configured by the user in Switchboard Setup), using a unique filename — only those locations; do not write or copy the plan anywhere else, including any session/brain directory. Every plan must have a descriptive H1 title (never generic), and a \`## Metadata\` section with \`**Complexity:**\` (1–10), \`**Tags:**\` (comma-separated, from: frontend, backend, auth, authentication, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library), and \`**Project:**\` (if the PROJECT PIN directive is present, write the exact project name specified).
 6. **No self-editing of system files.** If workflow configurations or persona files need changes, notify the user and ask for explicit permission.
 7. **Stay in chat.** Do not pivot to execution or delegation unless the user explicitly requests it.
-8. **Project Pinning:** When the dispatch prompt carries a PROJECT PIN directive, write the \`**Project:\` line into each plan file's metadata block.
+8. **Project Pinning (new plans only):** When the dispatch prompt carries a PROJECT PIN directive, write the \`**Project:\` line into each plan file's metadata block. This sets a plan's project at creation only — moving an existing plan to another project is done on the Switchboard board or via its API, not by editing this line.
 
 Process:
 1. **Onboard:** Greet the user. Identify the core problem or opportunity. Focus on ideation.
@@ -869,7 +869,7 @@ Process:
 5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, notify the user and offer to group them: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the \`create-feature-from-plans\` skill — it handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the \`create-feature\` remote path automatically.`;
 
 export function PROJECT_LINE_DIRECTIVE(project: string): string {
-    return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project regardless of what project is active when the file is imported. Omit the line only if no project name is given above.`;
+    return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project at creation, regardless of what project is active when the file is imported. Omit the line only if no project name is given above. (Authoring only — this sets a NEW plan's project; to move an existing plan to another project, use the Switchboard board or API, not this line.)`;
 }
 
 const DEFAULT_PLANNER_WORKFLOW = '.agents/skills/improve-plan/SKILL.md';

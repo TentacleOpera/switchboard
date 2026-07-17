@@ -177,15 +177,21 @@ export class BoardSnapshotPublisher {
 
         let asOf = '—';
         if (plans.length > 0) {
-            const maxUpdatedAt = plans.reduce((max, p) => (p.updatedAt > max ? p.updatedAt : max), plans[0].updatedAt);
-            asOf = new Date(maxUpdatedAt).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                timeZoneName: 'short',
-            });
+            const maxUpdatedAtMs = plans.reduce((max, p) => {
+                const t = p.updatedAt ? new Date(p.updatedAt).getTime() : NaN;
+                return Number.isFinite(t) && t > max ? t : max;
+            }, -Infinity);
+            if (Number.isFinite(maxUpdatedAtMs)) {
+                asOf = new Date(maxUpdatedAtMs).toLocaleString('en-US', {
+                    timeZone: 'UTC',
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short',
+                });
+            }
         }
 
         const html = this._renderBoardHtml(snapshot, asOf);

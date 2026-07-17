@@ -3709,6 +3709,7 @@ Start by checking which documents exist, then present the menu.`;
                     const allPlans: any[] = [];
                     const seenIds = new Set<string>();
                     const allWorkspaceProjects: Record<string, string[]> = {};
+                    const allWorkspaceProjectPaths: Record<string, Record<string, { filePath: string; exists: boolean }>> = {};
                     const mergedColumns: { id: string; label: string; kind: string; order: number }[] = [];
                     const seenColumnIds = new Set<string>();
 
@@ -3734,11 +3735,26 @@ Start by checking which documents exist, then present the menu.`;
                             // whether the user selected a mapped parent or an independent folder.
                             const resolvedRoot = path.resolve(root);
                             const effectiveRoot = this._resolveEffectiveWorkspaceRoot(root);
+
+                            const projectPaths: Record<string, { filePath: string; exists: boolean }> = {};
+                            for (const projectName of projects) {
+                                // Use the same effective root that getProjectPrd / saveProjectPrd resolve to.
+                                const filePath = getProjectPrdPath(effectiveRoot, projectName);
+                                projectPaths[projectName] = { filePath, exists: fs.existsSync(filePath) };
+                            }
+
                             allWorkspaceProjects[resolvedRoot] = projects;
+                            allWorkspaceProjectPaths[resolvedRoot] = projectPaths;
                             if (effectiveRoot !== resolvedRoot) {
                                 // Merge into the parent entry (or create it)
                                 const existing = allWorkspaceProjects[effectiveRoot] || [];
                                 allWorkspaceProjects[effectiveRoot] = [...new Set([...existing, ...projects])];
+
+                                const existingPaths = allWorkspaceProjectPaths[effectiveRoot] || {};
+                                allWorkspaceProjectPaths[effectiveRoot] = {
+                                    ...projectPaths,
+                                    ...existingPaths, // first-wins: keep existing project paths, add child-only projects
+                                };
                             }
 
                             // Fetch column definitions for this workspace and merge
@@ -3760,6 +3776,7 @@ Start by checking which documents exist, then present the menu.`;
                                 plans: allPlans,
                                 workspaceItems,
                                 allWorkspaceProjects,
+                                allWorkspaceProjectPaths,
                                 columns: mergedColumns,
                                 kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                                 requestId
@@ -3775,6 +3792,7 @@ Start by checking which documents exist, then present the menu.`;
                         plans: allPlans,
                         workspaceItems,
                         allWorkspaceProjects,
+                        allWorkspaceProjectPaths,
                         columns: mergedColumns,
                         kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                         requestId
@@ -4191,10 +4209,14 @@ Start by checking which documents exist, then present the menu.`;
             case 'loadConstitutionFiles': {
                 const workspaceItems = buildWorkspaceItems(allRoots);
                 const workspaces = workspaceItems.map(ws => {
-                    const governance = (['constitution', 'claude', 'agents'] as const).map(key => ({
-                        key,
-                        exists: fs.existsSync(this._getGovernanceFilePath(ws.workspaceRoot, key)),
-                    }));
+                    const governance = (['constitution', 'claude', 'agents'] as const).map(key => {
+                        const filePath = this._getGovernanceFilePath(ws.workspaceRoot, key);
+                        return {
+                            key,
+                            exists: fs.existsSync(filePath),
+                            filePath,
+                        };
+                    });
                     return {
                         label: ws.label,
                         workspaceRoot: ws.workspaceRoot,
