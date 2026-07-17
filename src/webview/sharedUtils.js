@@ -333,8 +333,8 @@ function renderMarkdown(markdown) {
         .replace(/^\s*### (.+)$/gm, '<h3>$1</h3>')
         .replace(/^\s*## (.+)$/gm, '<h2>$1</h2>')
         .replace(/^\s*# (.+)$/gm, '<h1>$1</h1>')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/\*\*([^<\n]+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^<\n]+?)\*/g, '<em>$1</em>')
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, url) => {
             const safeUrl = escapeAttr(sanitizeUrl(url));

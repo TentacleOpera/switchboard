@@ -32,8 +32,6 @@ async function run() {
     const renderMarkdown = window.renderMarkdown;
     assert.strictEqual(typeof renderMarkdown, 'function', 'renderMarkdown should be exposed on the window');
 
-    const stripP = (html) => html.replace(/^<p>/, '').replace(/<\/p>$/, '');
-
     let passed = 0;
     const check = (name, md, predicate) => {
         const out = renderMarkdown(md);
