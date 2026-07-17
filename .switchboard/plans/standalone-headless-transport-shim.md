@@ -27,6 +27,7 @@ Ship a **transport shim** so Switchboard's existing `src/webview/*` UI runs **un
 - **Panel bootstraps load the shim first** — zero per-call-site rewrites across the 575 sites.
 - **Reconnect handling:** WS drop → reconnect with backoff + full resync (A2's resync-on-connect is the backstop); `getState`/`setState` size caps warn, don't throw (webview state vs `localStorage` limits differ).
 - **Serve the board assets:** static-serve `src/webview/*` from `LocalApiServer` (or the standalone service) so a browser can load the real panels.
+- **Host-adaptive UI (capability-gated pathways):** read B1's host-capability flag (the `data-host-capabilities` body attribute at first paint, `/health` as the programmatic source) and, when `terminalDispatch` is false, **hide the terminal/CLI-dispatch, autoban, and orchestrator pathways** rather than render buttons that silently no-op. Concretely, gate the terminal-mode dispatch controls (`triggerAction`/`triggerBatchAction`/`promptAll`/`promptOnDrop`/`dispatchManagerForSelected`, the CLI role-dispatch buttons, `julesSelected`/batch dispatch), the automation surface (`toggleAutoban`/autoban terminals, `startOrchestrator`/`stopOrchestrator`, `setAutomationMode` orchestration mode), and terminal utilities (`focusTerminal`, `openWorktreeTerminals`, MCP-monitor terminals). **Keep the full Copy-Prompt surface** (all `copy*Prompt`/`chatCopyPrompt` verbs — they return the prompt in the response body, so the browser copies client-side via `navigator.clipboard`, secure-context-OK on `127.0.0.1`) plus board/plan/feature/project management, refine, and ticket sync. Default the drag/drop dispatch mode to **prompt (Copy)** since terminal mode is unavailable. `promptSelected` stays — in a terminal-less host it degrades to copy-only (its own code already skips dispatch when there is no dispatch spec). This is a **persistent capability difference, not a race** — omit the paths, no warning toasts.
 
 ### ⚙️ OUT OF SCOPE
 - Endpoints, wsHub, handler extraction, parity gate (all A2). node-pty terminal grid (B3). npx one-time-token browser bootstrap (B4 — token *validation* server side lands in A2).
@@ -35,6 +36,7 @@ Ship a **transport shim** so Switchboard's existing `src/webview/*` UI runs **un
 1. Implement `transport.js` and wire it into one panel (kanban) end-to-end as the pattern-proving slice.
 2. Roll to the remaining panels (planning, project, design/Stitch, setup, sidebar) — bootstrap loads shim first; verify each renders and round-trips in a browser.
 3. Static-serve the webview assets; confirm same-origin against the API/wsHub.
+4. **Capability-gate the UI:** read the host-capability flag at first paint; in a terminal-less host, hide the terminal/CLI/automation pathways and default dispatch to Copy-Prompt (per Scope). Prove both states: headless (flag false → CLI paths absent, Copy-Prompt works) and VS-Code/fleet host (flag true → full surface).
 
 ## Complexity Audit
 ### Routine
@@ -45,11 +47,12 @@ Ship a **transport shim** so Switchboard's existing `src/webview/*` UI runs **un
 
 ## Edge-Case & Dependency Audit
 - **Two browser tabs** on one board → both get full push fan-out; last-writer-wins (same as two webview panels).
-- **Dependencies:** **A2a** (wsHub + reply-shape/auth) + **A2b** (per-verb endpoints), **B1** (a served origin). Shares the WS envelope agreed in A2a.
+- **Dependencies:** **A2a** (wsHub + reply-shape/auth) + **A2b** (per-verb endpoints), **B1** (a served origin **and the host-capability descriptor** the adaptive UI reads). Shares the WS envelope agreed in A2a.
 
 ## Verification Plan
 - The full board renders in a browser via the shim; plan moves, feature ops, and the planning/design/setup panels all round-trip.
 - Same workspace opened in the VS Code extension afterwards behaves identically (shim wraps the real bridge there).
 - Kill the WS in dev tools mid-session → reconnect + resync, no stale cards; oversized `setState` warns rather than throwing.
+- **Headless host (`terminalDispatch: false`):** CLI/terminal/autoban/orchestrator controls are absent (not just disabled); Copy-Prompt copies to the browser clipboard and advances the card; no dead buttons. **VS-Code/fleet host (`terminalDispatch: true`):** full surface renders.
 
 **Stage Complete:** PLAN REVIEWED
