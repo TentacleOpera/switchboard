@@ -37,12 +37,16 @@ Cross-feature: the *Board Anywhere · Browser Board* subtask is the first place 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Feature B · B4 — `npx` Distribution + Launcher](../plans/extract-standalone-npx-04-npx-distribution.md) — **LEAD CODED**
-- [x] [Feature B · B1 — Host-Agnostic Core Service / Standalone Bootstrap](../plans/standalone-headless-core-service-bootstrap.md) — **LEAD CODED**
-- [x] [Feature B · B2 — Transport Shim (run the real webview UI in a browser)](../plans/standalone-headless-transport-shim.md) — **LEAD CODED**
+- [ ] [Feature B · B4 — `npx` Distribution + Launcher](../plans/extract-standalone-npx-04-npx-distribution.md) — **CODE REVIEWED**
+- [ ] [Feature B · B1 — Host-Agnostic Core Service / Standalone Bootstrap](../plans/standalone-headless-core-service-bootstrap.md) — **CODE REVIEWED**
+- [ ] [Feature B · B2 — Transport Shim (run the real webview UI in a browser)](../plans/standalone-headless-transport-shim.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Completion Summary
 
 Implemented the no-terminal-fleet MVP for standalone headless Switchboard. Added `src/standalone/bootstrap.ts` and `src/standalone/cli.ts` to boot `KanbanDatabase`, `LocalApiServer`, and a headless browser board, plus `src/standalone/hostServices.ts` for config/secrets/state seams that do not require VS Code. Injected a `HostPathConfigProvider` into `KanbanDatabase` so the four lazy `require('vscode')` config sites can run outside the extension host, and added `src/webview/transport.js` to shim `acquireVsCodeApi()` with fetch/WebSocket + `localStorage` state and to hide terminal/CLI/automation UI when `terminalDispatch` is false. Wired `LocalApiServer` to serve the transformed `kanban.html` and static assets with a one-time-token/cookie auth flow and Host-header allowlisting, and updated `wsHub` to accept the session cookie. Updated `webpack.config.js` to emit `dist/standalone/cli.js` and `package.json` to expose the `switchboard` bin and ship the required assets. Verified with `npx webpack` and a live `node dist/standalone/cli.js --workspace <dir>` run: `/health` returns OK, the one-time-token board URL returns HTML, and `/kanban/verb/ready` responds successfully with cookie auth. Existing `npx tsc --noEmit` failures in unrelated files remain unchanged.
+
+## Review Findings
+
+Direct reviewer pass over B1→B2→B4 in dependency order (2026-07-17). Three fixes applied — `package.json` (added the mandated `engines.node >=22.0.0`), `src/services/wsHub.ts` (added the Host-header DNS-rebinding allowlist to the WS `Upgrade`, previously HTTP-only, plus an IPv6-origin cosmetic fix), and `src/webview/transport.js` (restored the wrongly-hidden `moveSelected`/`moveAll` board-management buttons). No extension regression: the `KanbanDatabase` provider injection is a confirmed no-op for the extension path, and `getAuthToken()` stays `''` (the `switchboard.apiToken` secret has no writer), so loopback trust is preserved; token→cookie hygiene, path-traversal guard, and CORS-wildcard removal all check out. Primary remaining risk: the shipped standalone is a **narrower MVP than this feature's text** — it hand-rolls a kanban verb subset + Copy-Prompt + project add/delete rather than routing the real `_handleMessage` engine through seams, so plan/feature management and ticket sync are largely unwired, only the kanban and project panels are served, and `createHeadlessHostSeams()` is dead code. Validation was static only (SKIP COMPILATION/TESTS): valid JSON, `node --check` on the shim, and a well-formedness read of the `wsHub` edit.
 

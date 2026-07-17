@@ -121,3 +121,7 @@ Key risks: regressing the shipped extension via bundling/externals drift, and to
 - Token replay attempt from a second browser tab → rejected.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Direct reviewer pass (2026-07-17). Two MAJOR fixes applied: `package.json` was missing the mandated Node floor — added `"engines": { "node": ">=22.0.0" }` (harmless to the extension, which VS Code gates on `engines.vscode`); and the Host-header DNS-rebinding allowlist was HTTP-only, so `src/services/wsHub.ts` now also rejects a non-localhost `Host` on the WebSocket `Upgrade` (plan-required, safe because every legitimate WS client sends a localhost Host). Verified correct: token→cookie handoff hygiene (303 strip, `no-store`, `no-referrer`, HttpOnly/SameSite=Strict, 8h cookie), the `/static/` path-traversal guard, removal of the CORS `*` wildcard, and the `files` allowlist ships every asset the bootstrap resolves; the extension path is unaffected because `switchboard.apiToken` is never written (so `getAuthToken()` stays `''` → loopback trust preserved). Remaining risks (NIT/deferred): the one-time token uses a non-constant-time `!==` compare and has no explicit TTL (single-use, local-only), and the fleet-tier smoke matrix + `node-pty` externals correctly gate on the separately-backlogged terminal-fleet plan. Validation: `package.json` parses as valid JSON with the new engines; the `wsHub` edit is well-formed (SKIP COMPILATION/TESTS in effect).

@@ -204,11 +204,14 @@
 .host-terminal-dispatch-false #agents-tab-content,
 .host-terminal-dispatch-false #automation-tab-content,
 .host-terminal-dispatch-false #worktrees-tab-content,
-.host-terminal-dispatch-false button[data-action="julesSelected"],
-.host-terminal-dispatch-false button[data-action="moveSelected"],
-.host-terminal-dispatch-false button[data-action="moveAll"] {
+.host-terminal-dispatch-false button[data-action="julesSelected"] {
     display: none !important;
 }
+/* NOTE: moveSelected / moveAll are NOT hidden. In a headless host they degrade
+   to plain column-advances (no CLI trigger fires) — that is board management,
+   which the host-adaptive UI keeps. The standalone kanbanVerb implements both,
+   so hiding them would orphan a live backend path. Copy-Prompt (promptSelected/
+   promptAll) remains the default advance affordance. */
 `;
             document.head.appendChild(style);
         } catch (err) {

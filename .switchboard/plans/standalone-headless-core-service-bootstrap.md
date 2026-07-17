@@ -56,3 +56,7 @@ Stand up a **bootable, editor-independent core service**: the `switchboard` bin 
 - Existing provider/DB tests pass unchanged.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Direct reviewer pass (2026-07-17). B1's own files verified sound: the standalone `HostPathConfigProvider` is injected at the 4 config `require('vscode')` sites and is a confirmed no-op for the extension path (provider stays `undefined`), and the remaining `require('vscode')` sites in `KanbanDatabase` (1435/6069/6161/6182) are all `try/catch`-guarded, so nothing throws fatally headless. No B1 file was changed by this pass. Remaining risks (documented, not fixed — latent or larger than a review fix): `StandaloneHostState.get()` reads only the in-memory `_local` while `loadAll()` is an empty stub that is never called, so the Memento round-trip is unmet — but latent, since nothing reads `hostState` back today (only `selectedRole` is written); `createHeadlessHostSeams()` is dead code (the bootstrap hand-rolls its own `kanbanVerb`/`planningVerb` instead of routing the seam-injected engine); and secrets use the AES-256-GCM file fallback only, with the `@napi-rs/keyring` primary path absent (allowed by the plan). No new validation run (SKIP COMPILATION/TESTS in effect).

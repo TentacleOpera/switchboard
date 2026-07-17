@@ -85,6 +85,20 @@ export class WsHub {
      * Validate Origin + token, then complete the WS upgrade.
      */
     private async _handleUpgrade(req: any, socket: any, head: any): Promise<void> {
+        // Host-header allowlist — the primary DNS-rebinding defense, applied to the WS
+        // Upgrade as well as the HTTP surface. A rebound attacker page still sends its
+        // own hostname in the Host header (it controls the resolved IP, not the string
+        // the browser sends), so a non-localhost Host is rejected before the upgrade.
+        // Every legitimate client (a browser, or the `ws` npm client connecting to
+        // ws://127.0.0.1:<port>) sends a localhost Host; a missing Host is allowed for
+        // exotic non-browser callers, which are not subject to DNS rebinding anyway.
+        const host = req.headers['host'];
+        if (host && !this._isAllowedHost(host)) {
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            socket.destroy();
+            return;
+        }
+
         // Origin validation — DNS-rebinding mitigation. Only allow localhost origins
         // (or no origin, which non-browser clients like curl don't send).
         const origin = req.headers['origin'];
@@ -150,10 +164,19 @@ export class WsHub {
         try {
             const u = new URL(origin);
             const h = u.hostname;
-            return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+            // URL.hostname wraps IPv6 in brackets, so accept both forms.
+            return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
         } catch {
             return false;
         }
+    }
+
+    private _isAllowedHost(host: string): boolean {
+        const lower = host.toLowerCase();
+        if (lower.startsWith('127.0.0.1:') || lower.startsWith('localhost:')) { return true; }
+        if (lower === '127.0.0.1' || lower === 'localhost' || lower === '[::1]') { return true; }
+        if (lower.startsWith('[::1]:')) { return true; }
+        return false;
     }
 
     private _constantTimeEqual(a: string, b: string): boolean {

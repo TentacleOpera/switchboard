@@ -58,3 +58,7 @@ Ship a **transport shim** so Switchboard's existing `src/webview/*` UI runs **un
 - **Headless host (`terminalDispatch: false`):** CLI/terminal/autoban/orchestrator controls are absent (not just disabled); Copy-Prompt copies to the browser clipboard and advances the card; no dead buttons. **VS-Code/fleet host (`terminalDispatch: true`):** full surface renders.
 
 **Stage Complete:** PLAN REVIEWED
+
+## Review Findings
+
+Direct reviewer pass (2026-07-17). Fixed in `src/webview/transport.js`: the capability-gating CSS was hiding `moveSelected`/`moveAll`, but the standalone `kanbanVerb` implements both as plain column-advances (board management the plan says to keep) — hiding them orphaned a live backend path, so they are now shown while `julesSelected` stays hidden (dispatch, unimplemented). Bonus fix in `src/services/wsHub.ts`: `_isLocalhostOrigin` now also matches the bracketed `[::1]` form Node's `URL.hostname` returns. The two-channel contract is correct (fetch reply is an ack; re-render rides the WS) and clipboard copy is client-side on the response `prompt` field. Remaining risks: only the `kanban` and `project` panels are served — planning/design/setup (Step 2 + verification) are not wired — and the served board's verb surface is a hand-written subset, so most non-kanban actions silently return `{success:false}`; full in-browser render/round-trip was not independently re-verified here. Validation: `node --check src/webview/transport.js` passes (SKIP COMPILATION/TESTS otherwise).

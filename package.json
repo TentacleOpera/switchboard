@@ -20,7 +20,8 @@
     "url": "https://github.com/TentacleOpera/switchboard.git"
   },
   "engines": {
-    "vscode": "^1.93.0"
+    "vscode": "^1.93.0",
+    "node": ">=22.0.0"
   },
   "categories": [
     "AI"
