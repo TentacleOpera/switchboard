@@ -29,8 +29,14 @@ export interface HostPathConfigProvider {
     getConfigStringWithDefault(key: string, defaultValue: string): string;
     /** Read a `switchboard.*` config setting as a boolean. */
     getConfigBoolean(key: string, defaultValue: boolean): boolean;
+    /** Read a `switchboard.*` config setting as a number. */
+    getConfigNumber(key: string, defaultValue: number): number;
+    /** Read a `switchboard.*` config setting as JSON. */
+    getConfigJson<T>(key: string, defaultValue: T): T;
     /** Write a `switchboard.*` config setting at the user (global) scope. */
     updateConfigGlobal(key: string, value: any): Promise<void>;
+    /** Write a `switchboard.*` config setting at the workspace scope. */
+    updateConfigWorkspace(key: string, value: any): Promise<void>;
 }
 
 export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
@@ -69,9 +75,28 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
             return defaultValue;
         }
     }
+    getConfigNumber(key: string, defaultValue: number): number {
+        try {
+            const v = this._config().get<number>(key);
+            return v !== undefined ? v : defaultValue;
+        } catch {
+            return defaultValue;
+        }
+    }
+    getConfigJson<T>(key: string, defaultValue: T): T {
+        try {
+            const v = this._config().get<T>(key);
+            return v !== undefined ? v : defaultValue;
+        } catch {
+            return defaultValue;
+        }
+    }
 
     async updateConfigGlobal(key: string, value: any): Promise<void> {
         await vscode.workspace.getConfiguration('switchboard').update(key, value, true);
+    }
+    async updateConfigWorkspace(key: string, value: any): Promise<void> {
+        await vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot)).update(key, value, false);
     }
 }
 
@@ -95,6 +120,8 @@ export interface TerminalBackend {
     create(name: string, shellPath?: string, cwd?: string): TerminalHandle;
     /** Find an existing terminal by name. Returns null if not found. */
     findByName(name: string): TerminalHandle | null;
+    /** Find an existing terminal whose name contains the given substring. Returns null if not found. */
+    findByNameContains(substring: string): TerminalHandle | null;
     /** Send input to a terminal by name. Returns false if not found. */
     sendInput(name: string, text: string, addNewLine?: boolean): boolean;
     /** Kill a terminal by name. Returns false if not found. */
@@ -116,6 +143,11 @@ export class VscodeTerminalBackend implements TerminalBackend {
 
     findByName(name: string): TerminalHandle | null {
         const terminal = vscode.window.terminals.find(t => t.name === name);
+        return terminal ? this._wrap(terminal) : null;
+    }
+
+    findByNameContains(substring: string): TerminalHandle | null {
+        const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes(substring.toLowerCase()));
         return terminal ? this._wrap(terminal) : null;
     }
 
@@ -201,10 +233,18 @@ export interface HostUI {
     showModalWarningMessage(message: string, ...items: string[]): Promise<string | undefined>;
     /** Auto-dismissing toast (utils/showTemporaryNotification in the vscode host). */
     showTemporaryNotification(message: string, durationMs?: number): void;
+    /** Input box dialog. Resolves to the entered string, or undefined if cancelled. */
+    showInputBox(options?: { prompt?: string; placeHolder?: string; value?: string; validateInput?: (value: string) => string | undefined | Promise<string | undefined> }): Promise<string | undefined>;
+    /** Quick-pick dialog. Resolves to the picked string(s) or item(s), or undefined if cancelled. */
+    showQuickPick(items: Array<string | { label: string; description?: string }>, options?: { placeHolder?: string; canPickMany?: boolean }): Promise<string | { label: string; description?: string } | Array<string | { label: string; description?: string }> | undefined>;
     /** Folder-picker dialog. Resolves to the picked folder path, or undefined if cancelled. */
     pickFolder(openLabel: string): Promise<string | undefined>;
     /** File-picker dialog. Resolves to the picked file paths, or undefined if cancelled. */
     pickFiles(options: { openLabel: string; filters?: Record<string, string[]>; canSelectMany?: boolean }): Promise<string[] | undefined>;
+    /** Open-file/folder dialog (VS Code shape, for existing call sites). Resolves to fsPaths, or undefined if cancelled. */
+    showOpenDialog(options: { openLabel?: string; canSelectFiles?: boolean; canSelectFolders?: boolean; canSelectMany?: boolean; filters?: Record<string, string[]> }): Promise<string[] | undefined>;
+    /** Open a URL in the system browser. */
+    openExternal(url: string): Promise<void>;
 }
 
 export class VscodeHostUI implements HostUI {
@@ -222,6 +262,12 @@ export class VscodeHostUI implements HostUI {
     }
     showTemporaryNotification(message: string, durationMs?: number): void {
         showTemporaryNotification(message, durationMs);
+    }
+    async showInputBox(options?: { prompt?: string; placeHolder?: string; value?: string; validateInput?: (value: string) => string | undefined | Promise<string | undefined> }): Promise<string | undefined> {
+        return await vscode.window.showInputBox(options);
+    }
+    async showQuickPick(items: Array<string | { label: string; description?: string }>, options?: { placeHolder?: string; canPickMany?: boolean }): Promise<string | { label: string; description?: string } | Array<string | { label: string; description?: string }> | undefined> {
+        return await vscode.window.showQuickPick(items as any, options) as any;
     }
     async pickFolder(openLabel: string): Promise<string | undefined> {
         const result = await vscode.window.showOpenDialog({
@@ -242,6 +288,19 @@ export class VscodeHostUI implements HostUI {
         });
         return result && result.length > 0 ? result.map(u => u.fsPath) : undefined;
     }
+    async showOpenDialog(options: { openLabel?: string; canSelectFiles?: boolean; canSelectFolders?: boolean; canSelectMany?: boolean; filters?: Record<string, string[]> }): Promise<string[] | undefined> {
+        const result = await vscode.window.showOpenDialog({
+            openLabel: options.openLabel,
+            canSelectFiles: options.canSelectFiles ?? true,
+            canSelectFolders: options.canSelectFolders ?? false,
+            canSelectMany: options.canSelectMany ?? true,
+            filters: options.filters
+        });
+        return result && result.length > 0 ? result.map(u => u.fsPath) : undefined;
+    }
+    async openExternal(url: string): Promise<void> {
+        await vscode.env.openExternal(vscode.Uri.parse(url));
+    }
 }
 
 // ─── HostEditor ──────────────────────────────────────────────────────────
@@ -250,18 +309,18 @@ export class VscodeHostUI implements HostUI {
 
 export interface HostEditor {
     openTextDocument(filePath: string): Promise<void>;
-    showTextDocument(filePath: string, options?: { preview?: boolean }): Promise<void>;
+    showTextDocument(filePath: string, options?: { preview?: boolean; viewColumn?: number }): Promise<void>;
 }
 
 export class VscodeHostEditor implements HostEditor {
     async openTextDocument(filePath: string): Promise<void> {
-        const doc = await vscode.workspace.openTextDocument(filePath);
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
         await vscode.window.showTextDocument(doc);
     }
 
-    async showTextDocument(filePath: string, options?: { preview?: boolean }): Promise<void> {
-        const doc = await vscode.workspace.openTextDocument(filePath);
-        await vscode.window.showTextDocument(doc, { preview: options?.preview ?? false });
+    async showTextDocument(filePath: string, options?: { preview?: boolean; viewColumn?: number }): Promise<void> {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+        await vscode.window.showTextDocument(doc, { preview: options?.preview ?? false, viewColumn: options?.viewColumn });
     }
 }
 
@@ -359,12 +418,36 @@ export type HostWatchEvent = 'change' | 'create' | 'delete';
 export interface HostFileWatcher {
     /** Watch a folder recursively. The listener receives the event kind and the affected file's path. */
     watchFolder(folderPath: string, listener: (event: HostWatchEvent, filePath: string) => void): HostWatchHandle;
+    /** Watch a glob pattern under a folder. */
+    watchPattern(folderPath: string, pattern: string, listener: (event: HostWatchEvent, filePath: string) => void): HostWatchHandle;
+    /** Watch a single file. */
+    watchFile(filePath: string, listener: (event: HostWatchEvent, filePath: string) => void): HostWatchHandle;
 }
 
 export class VscodeHostFileWatcher implements HostFileWatcher {
     watchFolder(folderPath: string, listener: (event: HostWatchEvent, filePath: string) => void): HostWatchHandle {
         const pattern = new vscode.RelativePattern(folderPath, '**/*');
         const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+        watcher.onDidChange(uri => listener('change', uri.fsPath));
+        watcher.onDidCreate(uri => listener('create', uri.fsPath));
+        watcher.onDidDelete(uri => listener('delete', uri.fsPath));
+        return { dispose: () => watcher.dispose() };
+    }
+
+    watchPattern(folderPath: string, pattern: string, listener: (event: HostWatchEvent, filePath: string) => void): HostWatchHandle {
+        const relativePattern = new vscode.RelativePattern(folderPath, pattern);
+        const watcher = vscode.workspace.createFileSystemWatcher(relativePattern);
+        watcher.onDidChange(uri => listener('change', uri.fsPath));
+        watcher.onDidCreate(uri => listener('create', uri.fsPath));
+        watcher.onDidDelete(uri => listener('delete', uri.fsPath));
+        return { dispose: () => watcher.dispose() };
+    }
+
+    watchFile(filePath: string, listener: (event: HostWatchEvent, filePath: string) => void): HostWatchHandle {
+        const folder = path.dirname(filePath);
+        const fileName = path.basename(filePath);
+        const relativePattern = new vscode.RelativePattern(folder, fileName);
+        const watcher = vscode.workspace.createFileSystemWatcher(relativePattern);
         watcher.onDidChange(uri => listener('change', uri.fsPath));
         watcher.onDidCreate(uri => listener('create', uri.fsPath));
         watcher.onDidDelete(uri => listener('delete', uri.fsPath));

@@ -147,15 +147,13 @@
         // Compute the desired theme class set without touching unrelated classes
         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
         // injected server-side by applyThemeBodyClass().
-        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
+        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
         const desired = new Set();
-        if (state.switchboardTheme === 'afterburner') {
-            desired.add('cyber-theme-enabled');
-        } else if (state.switchboardTheme === 'claudify') {
+        if (state.switchboardTheme === 'claudify') {
             desired.add('theme-claudify');
-        } else if (state.switchboardTheme === 'pixel') {
+        } else {
+            // Afterburner default (and fallback for any legacy theme value).
             desired.add('cyber-theme-enabled');
-            desired.add('theme-pixel');
         }
         // Remove only theme classes that should NOT be present — leave the
         // correct ones in place so there is no flash if they were already
@@ -206,15 +204,6 @@
     // The sidebar lists docs; these dropdowns only narrow which workspaces' docs show.
     let _constitutionWsFilter = '';
     let _systemWsFilter = '';
-
-    function govExists(ws, key) {
-        if (ws.governance && Array.isArray(ws.governance)) {
-            const entry = ws.governance.find(g => g.key === key);
-            if (entry) return !!entry.exists;
-        }
-        if (key === 'constitution') return !!ws.hasConstitution;
-        return false;
-    }
 
     // Elements
     const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
@@ -1437,8 +1426,8 @@
             item.dataset.project = proj;
             const prdInfo = _kanbanAllWorkspaceProjectPaths[normalizeRoot(wsRoot)]?.[proj];
             const copyLinkHtml = prdInfo?.exists
-                ? `<div class="kanban-plan-actions">
-                       <button class="kanban-plan-copy-link" data-file-path="${escapeHtml(prdInfo.filePath)}" style="margin-left: auto;">Copy Link</button>
+                ? `<div class="doc-card-actions">
+                       <button class="doc-card-copy-link" data-file-path="${escapeHtml(prdInfo.filePath)}" style="margin-left: auto;">Copy Link</button>
                    </div>`
                 : '';
             item.innerHTML = `
@@ -1452,7 +1441,7 @@
                 item.classList.add('selected');
                 requestProjectPrd();
             });
-            wireCopyLinkButton(item.querySelector('.kanban-plan-copy-link'), prdInfo?.filePath);
+            wireCopyLinkButton(item.querySelector('.doc-card-copy-link'), prdInfo?.filePath);
             container.appendChild(item);
         });
         // Preserve prior selection, else the board's active project filter, else the first.
@@ -2735,8 +2724,8 @@
             ? '<span style="color: var(--accent-teal); font-weight: bold;">✓</span>'
             : '<span style="color: var(--text-secondary); opacity: 0.5;">•</span>';
         const copyLinkHtml = exists && filePath
-            ? `<div class="kanban-plan-actions">
-                   <button class="kanban-plan-copy-link" data-file-path="${escapeHtml(filePath)}" style="margin-left: auto;">Copy Link</button>
+            ? `<div class="doc-card-actions">
+                   <button class="doc-card-copy-link" data-file-path="${escapeHtml(filePath)}" style="margin-left: auto;">Copy Link</button>
                </div>`
             : '';
         itemDiv.innerHTML = `
@@ -2745,7 +2734,7 @@
             ${copyLinkHtml}
         `;
         itemDiv.addEventListener('click', onClick);
-        wireCopyLinkButton(itemDiv.querySelector('.kanban-plan-copy-link'), filePath);
+        wireCopyLinkButton(itemDiv.querySelector('.doc-card-copy-link'), filePath);
         return itemDiv;
     }
 

@@ -1300,10 +1300,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <input type="radio" name="theme-selection" value="claudify">
                     <span>Claudify</span>
                 </label>
-                <label class="db-radio-option">
-                    <input type="radio" name="theme-selection" value="pixel">
-                    <span>Pixel</span>
-                </label>
             </div>
             <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
             <div id="theme-animation-settings">
@@ -1321,7 +1317,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <input id="cyber-scanlines-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                     <div style="display:flex; flex-direction:column; gap:4px;">
                         <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Enable CRT scanlines</span>
-                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the static CRT scanline texture overlay in Afterburner preview panels.</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the static CRT scanline texture overlay in preview panels.</span>
                     </div>
                 </label>
                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
@@ -1962,7 +1958,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function updateAnimationSectionVisibility(theme) {
             const t = theme || currentSwitchboardTheme || 'afterburner';
             const section = document.getElementById('theme-animation-settings');
-            if (section) section.style.display = (t === 'afterburner' || t === 'pixel') ? '' : 'none';
+            // Afterburner and Claudify both render the scanline/CRT-sweep overlays, so both
+            // expose the animation + scanlines toggles.
+            if (section) section.style.display = (t === 'afterburner' || t === 'claudify') ? '' : 'none';
             // Colour-icons checkbox: only Claudify uses the grey icon rules.
             const colourSection = document.getElementById('theme-colour-icons-settings');
             if (colourSection) {
@@ -4508,15 +4506,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // Compute the desired theme class set without touching unrelated classes
                     // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                     // injected server-side by applyThemeBodyClass().
-                    const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
+                    const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
                     const desired = new Set();
-                    if (theme === 'afterburner') {
-                        desired.add('cyber-theme-enabled');
-                    } else if (theme === 'claudify') {
+                    if (theme === 'claudify') {
                         desired.add('theme-claudify');
-                    } else if (theme === 'pixel') {
+                    } else {
+                        // Afterburner default (and fallback for any legacy theme value).
                         desired.add('cyber-theme-enabled');
-                        desired.add('theme-pixel');
                     }
                     // Remove only theme classes that should NOT be present — leave the
                     // correct ones in place so there is no flash if they were already

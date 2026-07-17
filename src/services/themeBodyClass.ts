@@ -3,9 +3,8 @@ import * as vscode from 'vscode';
 /**
  * The body class a webview should render with on first paint, derived from the
  * current Switchboard theme setting. Mirrors the per-panel JS theme handlers:
- *   - afterburner -> cyber-theme-enabled (+ cyber-animation-disabled if set)
- *   - claudify    -> theme-claudify
- *   - anything else (default) -> no class
+ *   - claudify    -> theme-claudify (+ cyber-animation-disabled / cyber-scanlines-disabled if set)
+ *   - anything else (default/legacy) -> cyber-theme-enabled (Afterburner)
  *
  * Injecting this at HTML-generation time prevents the "flash of afterburner"
  * before the switchboardThemeChanged message arrives, and stops panels whose
@@ -43,30 +42,22 @@ export function getEffectiveColourKanbanIcons(): boolean {
 export function getThemeBodyClass(): string {
     const cfg = vscode.workspace.getConfiguration('switchboard');
     const theme = cfg.get<string>('theme.name', 'afterburner');
-    if (theme === 'pixel') {
-        const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
-        const scanlinesDisabled = cfg.get<boolean>('theme.disableCyberScanlines', false);
-        const ultracodeEnabled = cfg.get<boolean>('theme.ultracodeAnimation', false);
-        return 'cyber-theme-enabled theme-pixel'
-            + (animDisabled ? ' cyber-animation-disabled' : '')
-            + (scanlinesDisabled ? ' cyber-scanlines-disabled' : '')
-            + (ultracodeEnabled ? ' ultracode-animation-enabled' : '');
-    }
-    if (theme === 'afterburner') {
-        const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
-        const scanlinesDisabled = cfg.get<boolean>('theme.disableCyberScanlines', false);
-        const ultracodeEnabled = cfg.get<boolean>('theme.ultracodeAnimation', false);
-        return 'cyber-theme-enabled' +
-            (animDisabled ? ' cyber-animation-disabled' : '') +
-            (scanlinesDisabled ? ' cyber-scanlines-disabled' : '') +
-            (ultracodeEnabled ? ' ultracode-animation-enabled' : '');
-    }
-    const colourIcons = getEffectiveColourKanbanIcons();
-    const colourClass = colourIcons ? ' kanban-icons-colour' : '';
+    const animDisabled = cfg.get<boolean>('theme.disableCyberAnimation', false);
+    const scanlinesDisabled = cfg.get<boolean>('theme.disableCyberScanlines', false);
+    const ultracodeEnabled = cfg.get<boolean>('theme.ultracodeAnimation', false);
+    // Both Afterburner and Claudify render the scanline + CRT-sweep overlays, so
+    // both honour the same disable toggles.
+    const effectClasses =
+        (animDisabled ? ' cyber-animation-disabled' : '') +
+        (scanlinesDisabled ? ' cyber-scanlines-disabled' : '') +
+        (ultracodeEnabled ? ' ultracode-animation-enabled' : '');
     if (theme === 'claudify') {
-        return 'theme-claudify' + colourClass;
+        const colourIcons = getEffectiveColourKanbanIcons();
+        const colourClass = colourIcons ? ' kanban-icons-colour' : '';
+        return 'theme-claudify' + colourClass + effectClasses;
     }
-    return '';
+    // Afterburner is the default, and the fallback for any legacy/removed theme value.
+    return 'cyber-theme-enabled' + effectClasses;
 }
 
 /**

@@ -4124,17 +4124,13 @@
         // Compute the desired theme class set without touching unrelated classes
         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
         // injected server-side by applyThemeBodyClass().
-        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
+        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
         const desired = new Set();
-        // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic.
-        // Toggle cyber-theme-enabled: on for afterburner ONLY.
-        if (state.switchboardTheme === 'afterburner') {
-            desired.add('cyber-theme-enabled');
-        } else if (state.switchboardTheme === 'claudify') {
+        if (state.switchboardTheme === 'claudify') {
             desired.add('theme-claudify');
-        } else if (state.switchboardTheme === 'pixel') {
+        } else {
+            // Afterburner default (and fallback for any legacy theme value).
             desired.add('cyber-theme-enabled');
-            desired.add('theme-pixel');
         }
         // Remove only theme classes that should NOT be present — leave the
         // correct ones in place so there is no flash if they were already

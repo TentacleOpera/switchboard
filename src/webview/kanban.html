@@ -202,12 +202,6 @@
             color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
         }
 
-        /* Pixel theme — GeistPixel on kanban card titles only (otherwise identical to Afterburner) */
-        body.theme-pixel .card-topic {
-            font-family: 'GeistPixel', var(--font-family);
-            letter-spacing: -0.03em;
-        }
-
         body.theme-claudify .column-name { color: #8a8a8a; }
         /* No warm text — card buttons and agent names fall back to the neutral greys
            (--text-secondary resting, --text-primary on hover) from the base rules. */
@@ -6907,16 +6901,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         // Compute the desired theme class set without touching unrelated classes
                         // (e.g. kanban-icons-colour, cyber-animation-disabled) that may have been
                         // injected server-side by applyThemeBodyClass().
-                        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled', 'theme-pixel'];
+                        const allThemeClasses = ['theme-claudify', 'cyber-theme-enabled'];
                         const desired = new Set();
-                        // Cyber CRT effects belong to Afterburner ONLY (matches the other panels).
-                        if (msg.theme === 'afterburner') {
-                            desired.add('cyber-theme-enabled');
-                        } else if (msg.theme === 'claudify') {
+                        if (msg.theme === 'claudify') {
                             desired.add('theme-claudify');
-                        } else if (msg.theme === 'pixel') {
+                        } else {
+                            // Afterburner default (and fallback for any legacy theme value).
                             desired.add('cyber-theme-enabled');
-                            desired.add('theme-pixel');
                         }
                         // Remove only theme classes that should NOT be present — leave the
                         // correct ones in place so there is no flash if they were already

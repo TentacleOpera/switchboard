@@ -1,9 +1,10 @@
 import * as http from 'http';
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { URL } from 'url';
-import { ClickUpSyncService } from './ClickUpSyncService';
-import { LinearSyncService } from './LinearSyncService';
+import type { ClickUpSyncService } from './ClickUpSyncService';
+import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
 import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
@@ -11,6 +12,7 @@ import { WsHub } from './wsHub';
 
 interface LocalApiServerOptions {
     workspaceRoot: string;
+    port?: number;
     clickupMetadataPath: string;
     linearMetadataPath: string;
     getClickUpService: () => ClickUpSyncService | null;
@@ -282,6 +284,21 @@ interface LocalApiServerOptions {
      * Optional — absent means no resync push (clients get broadcasts only).
      */
     getFullState?: () => Promise<any>;
+    /**
+     * Standalone-only: validate the one-time browser-launch token and consume it.
+     * Returns true exactly once for the correct token.
+     */
+    consumeOneTimeToken?: (token: string) => boolean;
+    /**
+     * Standalone-only: serve the browser board UI and static assets.
+     * `getBoardHtml` returns the transformed HTML + CSP string.
+     * `staticRoutes` maps a URL prefix (e.g. 'webview') to filesystem roots to try.
+     */
+    serveStatic?: {
+        getBoardHtml: () => Promise<{ html: string; csp?: string }>;
+        getProjectHtml?: () => Promise<{ html: string; csp?: string }>;
+        staticRoutes: Record<string, string[]>;
+    };
 }
 
 export class LocalApiServer {
@@ -301,7 +318,7 @@ export class LocalApiServer {
 
     constructor(options: LocalApiServerOptions) {
         this._options = options;
-        this._port = 0; // Will be assigned on start
+        this._port = options.port || 0; // 0 ⇒ random port; non-zero lets tests/CLI bind a fixed port
         this._allRoots = options.allRoots || [];
     }
 
@@ -325,7 +342,7 @@ export class LocalApiServer {
                 await this._handleRequest(req, res);
             });
 
-            this._server.listen(0, '127.0.0.1', () => {
+            this._server.listen(this._port || 0, '127.0.0.1', () => {
                 const address = this._server?.address() as { port: number };
                 this._port = address.port;
                 this._isListening = true;
@@ -423,31 +440,51 @@ export class LocalApiServer {
         }
     }
 
+    private _parseCookies(req: http.IncomingMessage): Record<string, string> {
+        const raw = req.headers['cookie'];
+        if (!raw) { return {}; }
+        const result: Record<string, string> = {};
+        for (const part of raw.split(';')) {
+            const [k, ...rest] = part.trim().split('=');
+            if (k && rest.length > 0) {
+                result[k] = decodeURIComponent(rest.join('='));
+            }
+        }
+        return result;
+    }
+
     private async _checkAuth(req: http.IncomingMessage, requireAuth: boolean = true): Promise<boolean> {
-        // The localhost boundary check is already performed in _handleRequest
-        // (remoteAddress === 127.0.0.1 / ::1). For the existing webview-driven
-        // flow (no Authorization header), we preserve backward compatibility by
-        // trusting that localhost boundary. External clients MUST present a
-        // valid bearer token — this gates the WS + HTTP surface against
-        // DNS-rebinding and rogue local processes.
-        const authHeader = req.headers['authorization'];
-        if (!authHeader) {
-            // No token presented — fall through to the localhost-only trust
-            // model the shipped extension has always used. The remoteAddress
-            // check in _handleRequest is the gate.
-            return true;
-        }
         const expected = await this._options.getAuthToken();
-        const match = /^Bearer\s+(.+)$/i.exec(authHeader);
-        if (!match) return false;
-        // Constant-time comparison to avoid timing side channels.
-        const presented = match[1];
-        if (presented.length !== expected.length) return false;
-        let diff = 0;
-        for (let i = 0; i < expected.length; i++) {
-            diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
+        // Extension path: no token configured => keep the historical loopback-trust behavior.
+        if (!expected) { return true; }
+
+        // Standalone path: accept either an Authorization: Bearer <token> header or the
+        // HttpOnly session cookie 'sb_session'.
+        const authHeader = req.headers['authorization'];
+        if (authHeader) {
+            const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+            if (match) {
+                const presented = match[1];
+                if (presented.length !== expected.length) return false;
+                let diff = 0;
+                for (let i = 0; i < expected.length; i++) {
+                    diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
+                }
+                return diff === 0;
+            }
         }
-        return diff === 0;
+
+        const cookies = this._parseCookies(req);
+        const sessionCookie = cookies['sb_session'];
+        if (sessionCookie && sessionCookie.length === expected.length) {
+            let diff = 0;
+            for (let i = 0; i < expected.length; i++) {
+                diff |= sessionCookie.charCodeAt(i) ^ expected.charCodeAt(i);
+            }
+            return diff === 0;
+        }
+
+        return false;
     }
 
     // NOTE: Switchboard has no API-token setter UI today, so getAuthToken() is
@@ -458,8 +495,174 @@ export class LocalApiServer {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             error: 'Unauthorized',
-            detail: 'Invalid Authorization header. Switchboard accepts unauthenticated requests over loopback (127.0.0.1) — retry without an Authorization header.'
+            detail: 'Invalid or missing session. Open the board URL from a fresh `npx switchboard` launch to obtain a session cookie.'
         }));
+    }
+
+    private _serveStaticMimeType(filePath: string): string {
+        const ext = path.extname(filePath).toLowerCase();
+        const map: Record<string, string> = {
+            '.js': 'application/javascript',
+            '.html': 'text/html',
+            '.css': 'text/css',
+            '.json': 'application/json',
+            '.woff2': 'font/woff2',
+            '.png': 'image/png',
+            '.svg': 'image/svg+xml',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+        };
+        return map[ext] || 'application/octet-stream';
+    }
+
+    private async _handleServeBoard(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!this._options.serveStatic) {
+            res.writeHead(503, { 'Content-Type': 'text/plain' });
+            res.end('Board serving not configured');
+            return;
+        }
+
+        const url = new URL(req.url || '', `http://${req.headers.host}`);
+        const token = url.searchParams.get('token');
+
+        // One-time token exchange: consume it, set the session cookie, then redirect.
+        if (token) {
+            if (this._options.consumeOneTimeToken && this._options.consumeOneTimeToken(token)) {
+                const expected = await this._options.getAuthToken();
+                const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString(); // 8 hours
+                res.writeHead(303, {
+                    'Location': '/',
+                    'Set-Cookie': `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
+                    'Cache-Control': 'no-store',
+                });
+                res.end();
+                return;
+            }
+            res.writeHead(401, { 'Content-Type': 'text/plain' });
+            res.end('Invalid or expired one-time token');
+            return;
+        }
+
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        try {
+            const { html, csp } = await this._options.serveStatic.getBoardHtml();
+            const headers: Record<string, string> = {
+                'Content-Type': 'text/html',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache',
+                'Referrer-Policy': 'no-referrer',
+            };
+            if (csp) {
+                headers['Content-Security-Policy'] = csp;
+            }
+            res.writeHead(200, headers);
+            res.end(html);
+        } catch (err) {
+            console.error('[LocalApiServer] getBoardHtml failed:', err);
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Failed to render board');
+        }
+    }
+
+    private async _handleServeProject(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!this._options.serveStatic || !this._options.serveStatic.getProjectHtml) {
+            res.writeHead(503, { 'Content-Type': 'text/plain' });
+            res.end('Project panel serving not configured');
+            return;
+        }
+
+        const url = new URL(req.url || '', `http://${req.headers.host}`);
+        const token = url.searchParams.get('token');
+
+        if (token) {
+            if (this._options.consumeOneTimeToken && this._options.consumeOneTimeToken(token)) {
+                const expected = await this._options.getAuthToken();
+                const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
+                res.writeHead(303, {
+                    'Location': '/project',
+                    'Set-Cookie': `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
+                    'Cache-Control': 'no-store',
+                });
+                res.end();
+                return;
+            }
+            res.writeHead(401, { 'Content-Type': 'text/plain' });
+            res.end('Invalid or expired one-time token');
+            return;
+        }
+
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        try {
+            const { html, csp } = await this._options.serveStatic.getProjectHtml();
+            const headers: Record<string, string> = {
+                'Content-Type': 'text/html',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache',
+                'Referrer-Policy': 'no-referrer',
+            };
+            if (csp) {
+                headers['Content-Security-Policy'] = csp;
+            }
+            res.writeHead(200, headers);
+            res.end(html);
+        } catch (err) {
+            console.error('[LocalApiServer] getProjectHtml failed:', err);
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Failed to render project panel');
+        }
+    }
+
+    private async _handleServeStatic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!this._options.serveStatic) {
+            res.writeHead(503, { 'Content-Type': 'text/plain' });
+            res.end('Static serving not configured');
+            return;
+        }
+
+        const url = new URL(req.url || '', `http://${req.headers.host}`);
+        const staticPath = decodeURIComponent(url.pathname.slice('/static/'.length));
+        const slashIdx = staticPath.indexOf('/');
+        if (slashIdx < 0) {
+            res.writeHead(400, { 'Content-Type': 'text/plain' });
+            res.end('Invalid static path');
+            return;
+        }
+        const prefix = staticPath.slice(0, slashIdx);
+        const rest = staticPath.slice(slashIdx + 1);
+        const roots = this._options.serveStatic.staticRoutes[prefix];
+        if (!roots || roots.length === 0) {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('Static route not found');
+            return;
+        }
+
+        // Prevent path traversal
+        const safeRest = path.normalize(rest).replace(/^(\.\.(\/|\\|$))+/, '');
+        for (const root of roots) {
+            const candidate = path.resolve(root, safeRest);
+            if (!candidate.startsWith(path.resolve(root))) { continue; }
+            if (fsSync.existsSync(candidate) && fsSync.statSync(candidate).isFile()) {
+                res.writeHead(200, {
+                    'Content-Type': this._serveStaticMimeType(candidate),
+                    'Cache-Control': 'public, max-age=3600',
+                });
+                res.end(fsSync.readFileSync(candidate));
+                return;
+            }
+        }
+
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Static file not found');
     }
 
     private async _parseJsonBody(req: http.IncomingMessage): Promise<any> {
@@ -2652,6 +2855,23 @@ export class LocalApiServer {
     /**
      * Handle incoming HTTP requests.
      */
+    private _isAllowedHost(host: string | undefined): boolean {
+        if (!host) return false;
+        const lower = host.toLowerCase();
+        if (lower.startsWith('127.0.0.1:')) return true;
+        if (lower.startsWith('localhost:')) return true;
+        if (lower === '127.0.0.1' || lower === 'localhost' || lower === '[::1]') return true;
+        return false;
+    }
+
+    private _isLocalhostOrigin(origin: string): boolean {
+        try {
+            const u = new URL(origin);
+            const h = u.hostname;
+            return h === '127.0.0.1' || h === 'localhost' || h === '[::1]';
+        } catch { return false; }
+    }
+
     private async _handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         // Restrict to localhost only
         const remoteAddress = req.socket.remoteAddress;
@@ -2661,8 +2881,21 @@ export class LocalApiServer {
             return;
         }
 
-        // Add CORS headers - allow any localhost origin
-        res.setHeader('Access-Control-Allow-Origin', '*');
+        // Reject DNS-rebinding by validating Host header. Only enforce when serving the
+        // browser board (standalone), because the extension's existing scripts rely on
+        // raw 127.0.0.1:<port> Host values and never send a non-localhost Host.
+        if (this._options.serveStatic && !this._isAllowedHost(req.headers['host'])) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Access denied: invalid Host header' }));
+            return;
+        }
+
+        // Same-origin / local clients only: no CORS wildcard. For preflight, mirror the
+        // request Origin only if it is a localhost origin.
+        const origin = req.headers['origin'];
+        if (origin && this._isLocalhostOrigin(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+        }
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
@@ -2745,6 +2978,9 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/planning/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/planning/verb/'.length));
                 await this._handlePlanningVerb(verb, req, res);
+            } else if (pathname.startsWith('/project/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/project/verb/'.length));
+                await this._handlePlanningVerb(verb, req, res);
             } else if (pathname.startsWith('/design/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/design/verb/'.length));
                 await this._handleDesignVerb(verb, req, res);
@@ -2820,6 +3056,12 @@ export class LocalApiServer {
                 await this._handleGetOrchestratorSessionLog(req, res);
             } else if (pathname === '/catalog' && req.method === 'GET') {
                 await this._handleGetCatalog(req, res);
+            } else if ((pathname === '/' || pathname === '/index.html') && req.method === 'GET') {
+                await this._handleServeBoard(req, res);
+            } else if ((pathname === '/project' || pathname === '/project.html') && req.method === 'GET') {
+                await this._handleServeProject(req, res);
+            } else if (pathname.startsWith('/static/') && req.method === 'GET') {
+                await this._handleServeStatic(req, res);
             } else {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Not found' }));

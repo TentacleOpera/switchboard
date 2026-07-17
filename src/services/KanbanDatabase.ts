@@ -14,6 +14,7 @@ import {
     CustomKanbanColumnConfig
 } from './agentConfig';
 import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE } from './BoardSnapshotPublisher';
+import type { HostPathConfigProvider } from './hostSeams';
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -808,6 +809,16 @@ export class KanbanDatabase {
     private static _archiveInstancesByDbPath = new Map<string, KanbanDatabase>();
     private static _warnedUnmappedRoots = new Set<string>();
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
+    /**
+     * Optional host-agnostic config provider. When set, it is consulted before
+     * the vscode.workspace fallback at the lazy require('vscode') sites.
+     * Extension path is unchanged when this is undefined.
+     */
+    private static _pathConfigProvider: HostPathConfigProvider | undefined = undefined;
+
+    public static setPathConfigProvider(provider: HostPathConfigProvider | undefined): void {
+        this._pathConfigProvider = provider;
+    }
 
     // ── Workstream A: idle-eviction of cached instances ──
     // One sweep timer for ALL instances (not per-instance). Evicts instances idle >
@@ -953,11 +964,15 @@ export class KanbanDatabase {
             } else {
                 // Check kanban.dbPath VS Code setting (per-workspace DB location override)
                 let settingValue = '';
-                try {
-                    const vscode = require('vscode');
-                    settingValue = String(vscode.workspace.getConfiguration('switchboard').get('kanban.dbPath') || '').trim();
-                } catch {
-                    // Outside extension host (e.g. unit tests) — use default
+                if (KanbanDatabase._pathConfigProvider) {
+                    settingValue = KanbanDatabase._pathConfigProvider.getConfigString('kanban.dbPath').trim();
+                } else {
+                    try {
+                        const vscode = require('vscode');
+                        settingValue = String(vscode.workspace.getConfiguration('switchboard').get('kanban.dbPath') || '').trim();
+                    } catch {
+                        // Outside extension host (e.g. unit tests) — use default
+                    }
                 }
                 if (settingValue) {
                     const expanded = KanbanDatabase._expandHome(settingValue);
@@ -3801,6 +3816,12 @@ export class KanbanDatabase {
      * outside the extension host). Clamped to ≥1.
      */
     public static getHotWindowDays(): number {
+        if (KanbanDatabase._pathConfigProvider) {
+            const v = KanbanDatabase._pathConfigProvider.getConfigString('kanban.hotWindowDays');
+            const n = parseInt(v, 10);
+            if (!isNaN(n) && n >= 1) { return n; }
+            return KanbanDatabase.DEFAULT_HOT_WINDOW_DAYS;
+        }
         try {
             const vscode = require('vscode') as any;
             const v = vscode.workspace.getConfiguration('switchboard').get('kanban.hotWindowDays', KanbanDatabase.DEFAULT_HOT_WINDOW_DAYS) as number | undefined;
@@ -8054,6 +8075,9 @@ FROM plans
     }
 
     private _isBoardSnapshotEnabled(): boolean {
+        if (KanbanDatabase._pathConfigProvider) {
+            return KanbanDatabase._pathConfigProvider.getConfigString('boardStateExport') === BOARD_SNAPSHOT_MODE;
+        }
         try {
             const vscode = require('vscode');
             const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
@@ -8068,19 +8092,25 @@ FROM plans
     private static readonly LOCAL_MIRROR_DEBOUNCE_MS = 500;
 
     private _resolveExportRoot(): string {
-        try {
-            const vscode = require('vscode');
-            const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-            const exportTarget: string = config.get('boardStateExport', 'none');
-
-            if (exportTarget === 'control-plane') {
+        let exportTarget = 'none';
+        if (KanbanDatabase._pathConfigProvider) {
+            exportTarget = KanbanDatabase._pathConfigProvider.getConfigString('boardStateExport');
+        } else {
+            try {
+                const vscode = require('vscode');
+                const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+                exportTarget = config.get('boardStateExport', 'none');
+            } catch { /* outside extension host or config unavailable */ }
+        }
+        if (exportTarget === 'control-plane') {
+            try {
                 const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
                 const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(this._workspaceRoot);
                 if (effectiveRoot && effectiveRoot !== this._workspaceRoot) {
                     return effectiveRoot;
                 }
-            }
-        } catch { /* outside extension host or config unavailable */ }
+            } catch { /* outside extension host */ }
+        }
         return this._workspaceRoot;
     }
 

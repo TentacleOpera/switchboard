@@ -1,5 +1,5 @@
 
-import { HostSeams, createVscodeHostSeams } from './hostSeams';
+import { HostSeams, HostWatchHandle, TerminalHandle, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import { PLANNING_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
@@ -12,6 +12,7 @@ import { stateFs as fs } from './stateConfigBridge';
 import { applyThemeBodyClass } from './themeBodyClass';
 import { KanbanDatabase } from './KanbanDatabase';
 import * as http from 'http';
+import { fileURLToPath, pathToFileURL } from 'url';
 import {
     ResearchImportService,
     TreeNode,
@@ -119,6 +120,20 @@ export class PlanningPanelProvider {
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
 
+    /**
+     * Seam bundle accessor for migrated _handleMessage arms. Lazily builds the
+     * vscode-backed bundle when the provider is driven before `_initPlanningService`
+     * ran (or when no workspace root resolved — seams still work; path-scoped
+     * config reads just resolve against the empty root). The test-seam harness
+     * injects a headless bundle by assigning `_hostSeams` directly.
+     */
+    private _seams(): HostSeams {
+        if (!this._hostSeams) {
+            this._hostSeams = createVscodeHostSeams(this._getWorkspaceRoot() || '', this._context.secrets);
+        }
+        return this._hostSeams;
+    }
+
     private static readonly IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg']);
     private _panel: vscode.WebviewPanel | undefined;
     private _projectPanel: vscode.WebviewPanel | undefined;
@@ -136,32 +151,32 @@ export class PlanningPanelProvider {
     private _currentSyncMode: string = 'no-sync';
     private _syncCancellationSource: AbortController | undefined;
     private _importInProgress = false;
-    private _docsFolderWatcher: vscode.FileSystemWatcher | undefined;
-    private _localFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _docsFolderWatcher: HostWatchHandle | undefined;
+    private _localFolderWatchers: HostWatchHandle[] = [];
     private _localDocsDebounce: NodeJS.Timeout | undefined;
     private _lastLocalDocsSignature = ''; // content dedup: skip re-posting an unchanged local-docs list
     private _lastPreviewContentByPath: Map<string, string> = new Map(); // content dedup: skip re-sending unchanged preview content
     private _lastWebviewRootsSignature = ''; // skip reassigning webview.options when roots are unchanged (avoids reload loop)
-    private _antigravityWatchers: vscode.FileSystemWatcher[] = [];
-    private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
+    private _antigravityWatchers: HostWatchHandle[] = [];
+    private _activeDocWatcher: HostWatchHandle | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     // Dedicated watcher for the currently-selected Dev Doc / root README so
     // external edits (git pull, another window, an agent writing the file back)
     // re-emit `devDocContent` instead of leaving the tab on a stale buffer.
-    private _activeDevDocWatcher: vscode.FileSystemWatcher | undefined;
+    private _activeDevDocWatcher: HostWatchHandle | undefined;
     private _activeDevDocWatchDebounce: NodeJS.Timeout | undefined;
     private _activeDevDocPath: string | undefined;      // resolved on-disk path being watched (staleness guard)
     private _devDocWatcherGeneration: number = 0;
-    private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
+    private _kanbanPlansWatchers: HostWatchHandle[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
-    private _featureDocsWatchers: vscode.FileSystemWatcher[] = [];
+    private _featureDocsWatchers: HostWatchHandle[] = [];
     private _featureDocsWatchDebounce: NodeJS.Timeout | undefined;
-    private _constitutionWatchers: vscode.FileSystemWatcher[] = [];
+    private _constitutionWatchers: HostWatchHandle[] = [];
     private _constitutionWatchDebounce: NodeJS.Timeout | undefined;
-    private _insightsWatchers: vscode.FileSystemWatcher[] = [];
+    private _insightsWatchers: HostWatchHandle[] = [];
     private _insightsWatchDebounce: NodeJS.Timeout | undefined;
-    private _ticketsAutoSyncWatchers: Map<string, vscode.Disposable> = new Map();
-    private _ticketsViewWatcher: vscode.Disposable | undefined;
+    private _ticketsAutoSyncWatchers: Map<string, HostWatchHandle> = new Map();
+    private _ticketsViewWatcher: HostWatchHandle | undefined;
     private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
     private _ticketsAutoSyncDebounces: Map<string, NodeJS.Timeout> = new Map();
     // Delta-pull timer (auto-sync ON only). Runs the delta pull on a 45s
@@ -185,12 +200,12 @@ export class PlanningPanelProvider {
     private _activePreviewDocId: string | null = null;
     private _activePreviewSourceFolder: string | null = null;
     private _activePreviewWorkspaceRoot: string | undefined;
-    private _planningHtmlFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _planningHtmlFolderWatchers: HostWatchHandle[] = [];
     private _planningHtmlDocsDebounce: NodeJS.Timeout | undefined;
     private _planningHtmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
     private _planningHtmlServerCreationPromises = new Map<string, Promise<{ server: http.Server; port: number; timeoutId: NodeJS.Timeout }>>();
     private _activePlanningHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
-    private _saveTextDocListener: vscode.Disposable | undefined;
+    private _saveTextDocListener: HostWatchHandle | undefined;
     private _watcherGeneration: number = 0;
     private _moveTargetsCache = new Map<string, { at: number; targets: Array<{ id: string; name: string; path: string }> }>();
     private static readonly MOVE_TARGETS_TTL_MS = 60_000;
@@ -566,15 +581,15 @@ export class PlanningPanelProvider {
         // only learned the theme on init, so it needed a reload to update).
         this._registerProjectPanelConfigListener();
 
-        const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+        const theme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
         this.postMessageToProjectWebview({ type: 'switchboardThemeChanged', theme });
-        const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+        const disabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
         this.postMessageToProjectWebview({ type: 'cyberAnimationSetting', disabled });
-        const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+        const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
         this.postMessageToProjectWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
 
         if (this._planAutoFetchService) {
-            const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+            const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
             if (wsRoot) {
                 const status = this._planAutoFetchService.getStatus(wsRoot);
                 this.postMessageToProjectWebview({
@@ -591,23 +606,23 @@ export class PlanningPanelProvider {
         this._projectPanelConfigDisposable?.dispose();
         this._projectPanelConfigDisposable = vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('switchboard.theme.name')) {
-                const t = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                const t = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
                 this.postMessageToProjectWebview({ type: 'switchboardThemeChanged', theme: t });
             }
             if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
-                const d = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                const d = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
                 this.postMessageToProjectWebview({ type: 'cyberAnimationSetting', disabled: d });
             }
             if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
-                const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+                const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
                 this.postMessageToProjectWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
             }
             if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
-                const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                const enabled = this._seams().pathConfig.getConfigBoolean('theme.ultracodeAnimation', false);
                 this.postMessageToProjectWebview({ type: 'ultracodeAnimationSetting', enabled });
             }
             if (e.affectsConfiguration('switchboard.planAutoFetch') && this._planAutoFetchService && this._projectPanel) {
-                const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+                const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
                 if (wsRoot) {
                     const status = this._planAutoFetchService.getStatus(wsRoot);
                     this.postMessageToProjectWebview({ type: 'planAutoFetchState', ...status });
@@ -747,19 +762,19 @@ export class PlanningPanelProvider {
         this._disposables.push(
             vscode.workspace.onDidChangeConfiguration(e => {
                 if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
-                    const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                    const disabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
                     this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled });
                 }
                 if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
-                    const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+                    const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
                     this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
                 }
                 if (e.affectsConfiguration('switchboard.theme.name')) {
-                    const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                    const theme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
                     this.postMessageToWebview({ type: 'switchboardThemeChanged', theme });
                 }
                 if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
-                    const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                    const enabled = this._seams().pathConfig.getConfigBoolean('theme.ultracodeAnimation', false);
                     this.postMessageToWebview({ type: 'ultracodeAnimationSetting', enabled });
                 }
             })
@@ -888,11 +903,11 @@ export class PlanningPanelProvider {
             }, null, this._disposables);
         }
 
-        const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+        const theme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
         this._pushTo(panel, 'planning', { type: 'switchboardThemeChanged', theme });
-        const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+        const disabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
         this._pushTo(panel, 'planning', { type: 'cyberAnimationSetting', disabled });
-        const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+        const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
         this._pushTo(panel, 'planning', { type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
 
         // For the Planning (non-Project) panel, replicate the live-update listeners and file
@@ -910,19 +925,19 @@ export class PlanningPanelProvider {
             this._disposables.push(
                 vscode.workspace.onDidChangeConfiguration(e => {
                     if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
-                        const animDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                        const animDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
                         this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled: animDisabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
-                        const scanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+                        const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
                         this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
                     }
                     if (e.affectsConfiguration('switchboard.theme.name')) {
-                        const themeName = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                        const themeName = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
                         this.postMessageToWebview({ type: 'switchboardThemeChanged', theme: themeName });
                     }
                     if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
-                        const enabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
+                        const enabled = this._seams().pathConfig.getConfigBoolean('theme.ultracodeAnimation', false);
                         this.postMessageToWebview({ type: 'ultracodeAnimationSetting', enabled });
                     }
                 })
@@ -1046,15 +1061,10 @@ export class PlanningPanelProvider {
         if (!workspaceRoot) return;
 
         const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
-        const docsUri = vscode.Uri.file(docsDir);
-
-        // Create watcher for the docs directory
-        this._docsFolderWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(docsUri, '*.md')
-        );
 
         // Refresh imported docs when files are created, deleted, or changed
-        const refreshImportedDocs = () => {
+        const refreshImportedDocs = (filePath: string) => {
+            if (!filePath.endsWith('.md')) { return; }
             if (Date.now() - this._lastPanelWriteTimestamp < 2000) {
                 return;
             }
@@ -1063,9 +1073,9 @@ export class PlanningPanelProvider {
             }
         };
 
-        this._docsFolderWatcher.onDidCreate(refreshImportedDocs);
-        this._docsFolderWatcher.onDidDelete(refreshImportedDocs);
-        this._docsFolderWatcher.onDidChange(refreshImportedDocs);
+        this._docsFolderWatcher = this._seams().watcher.watchFolder(docsDir, (event, filePath) => {
+            refreshImportedDocs(filePath);
+        });
 
         this._disposables.push(this._docsFolderWatcher);
     }
@@ -1081,6 +1091,7 @@ export class PlanningPanelProvider {
 
         const allRoots = this._getWorkspaceRoots();
         const watchedPaths = new Set<string>();
+        const supportedExts = ['.md', '.txt', '.markdown', '.rst', '.adoc'];
 
         for (const root of allRoots) {
             const localFolderService = this._getLocalFolderService(root);
@@ -1092,21 +1103,11 @@ export class PlanningPanelProvider {
                 if (watchedPaths.has(folderPath)) continue;
                 watchedPaths.add(folderPath);
 
-                const folderUri = vscode.Uri.file(folderPath);
-
                 // Create watcher for the local docs folder — recursive, all supported text extensions
-                const watcher = vscode.workspace.createFileSystemWatcher(
-                    new vscode.RelativePattern(folderUri, '**/*.{md,txt,markdown,rst,adoc}')
-                );
-
-                // Refresh local docs when files are created, deleted, or changed (debounced)
-                const refreshLocalDocs = () => {
+                const watcher = this._seams().watcher.watchFolder(folderPath, (event, filePath) => {
+                    if (filePath && !supportedExts.some(ext => filePath.toLowerCase().endsWith(ext))) { return; }
                     this._scheduleLocalDocsRefresh();
-                };
-
-                watcher.onDidCreate(refreshLocalDocs);
-                watcher.onDidDelete(refreshLocalDocs);
-                watcher.onDidChange(refreshLocalDocs);
+                });
 
                 this._localFolderWatchers.push(watcher);
                 this._disposables.push(watcher);
@@ -1146,7 +1147,10 @@ export class PlanningPanelProvider {
         const brainPaths = service.detectAntigravityBrainPaths();
         if (brainPaths.length === 0) { return; }
 
-        const refresh = () => this._scheduleLocalDocsRefresh();
+        const refresh = (filePath: string) => {
+            if (!filePath.match(/\.(md|markdown|txt)$/i)) { return; }
+            this._scheduleLocalDocsRefresh();
+        };
         const watchedPaths = new Set<string>();
 
         for (const brainPath of brainPaths) {
@@ -1154,17 +1158,7 @@ export class PlanningPanelProvider {
             if (watchedPaths.has(resolvedPath)) { continue; }
             watchedPaths.add(resolvedPath);
 
-            // CRITICAL: must use vscode.Uri.file for out-of-workspace paths.
-            // Scope to document extensions only — watching '**/*' fired on every log/
-            // knowledge/artifact write in the constantly-churning brain tree.
-            const brainUri = vscode.Uri.file(brainPath);
-            const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(brainUri, '**/*.{md,markdown,txt}')
-            );
-
-            watcher.onDidCreate(refresh);
-            watcher.onDidChange(refresh);
-            watcher.onDidDelete(refresh);
+            const watcher = this._seams().watcher.watchFolder(resolvedPath, (event, filePath) => refresh(filePath));
             this._antigravityWatchers.push(watcher);
             this._disposables.push(watcher);
         }
@@ -1186,12 +1180,10 @@ export class PlanningPanelProvider {
             if (watchedPaths.has(root)) { continue; }
             watchedPaths.add(root);
 
-            // Create watcher relative to root to handle plans directory created after startup
-            const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(vscode.Uri.file(root), '.switchboard/plans/**/*.md')
-            );
+            const plansDir = path.join(root, '.switchboard', 'plans');
 
-            const triggerRefresh = () => {
+            const triggerRefresh = (filePath: string) => {
+                if (!filePath.endsWith('.md')) { return; }
                 if (!this._panel && !this._projectPanel) { return; }
                 if (this._kanbanPlansWatchDebounce) {
                     clearTimeout(this._kanbanPlansWatchDebounce);
@@ -1217,9 +1209,7 @@ export class PlanningPanelProvider {
                 }, 800);
             };
 
-            watcher.onDidCreate(triggerRefresh);
-            watcher.onDidChange(triggerRefresh);
-            watcher.onDidDelete(triggerRefresh);
+            const watcher = this._seams().watcher.watchFolder(plansDir, (event, filePath) => triggerRefresh(filePath));
 
             this._kanbanPlansWatchers.push(watcher);
             this._disposables.push(watcher);
@@ -1241,11 +1231,9 @@ export class PlanningPanelProvider {
             if (watchedPaths.has(root)) { continue; }
             watchedPaths.add(root);
 
-            const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(vscode.Uri.file(root), '.switchboard/features/**/*.md')
-            );
-
-            const triggerRefresh = () => {
+            const featuresDir = path.join(root, '.switchboard', 'features');
+            const triggerRefresh = (filePath: string) => {
+                if (!filePath.endsWith('.md')) { return; }
                 if (!this._projectPanel) { return; }
                 if (this._featureDocsWatchDebounce) {
                     clearTimeout(this._featureDocsWatchDebounce);
@@ -1262,9 +1250,7 @@ export class PlanningPanelProvider {
                 }, 1200);
             };
 
-            watcher.onDidCreate(triggerRefresh);
-            watcher.onDidChange(triggerRefresh);
-            watcher.onDidDelete(triggerRefresh);
+            const watcher = this._seams().watcher.watchFolder(featuresDir, (event, filePath) => triggerRefresh(filePath));
 
             this._featureDocsWatchers.push(watcher);
             this._disposables.push(watcher);
@@ -1302,6 +1288,38 @@ export class PlanningPanelProvider {
     private _getGovernanceFilePath(workspaceRoot: string, key: GovernanceFileKey = 'constitution'): string {
         const { getGovernanceFilePath } = require('./constitutionUtils');
         return getGovernanceFilePath(this._context, workspaceRoot, key);
+    }
+
+    private async _sendPromptToTerminal(promptText: string, wsRoot: string, name: string, searchSubstrings: string[]): Promise<void> {
+        let handle: TerminalHandle | null = null;
+        for (const sub of searchSubstrings) {
+            handle = this._seams().terminal.findByNameContains(sub);
+            if (handle) { break; }
+        }
+        if (!handle) {
+            handle = this._seams().terminal.create(name, undefined, wsRoot);
+        }
+        handle.show();
+
+        const CHUNK_SIZE = 500;
+        const CHUNK_DELAY = 50;
+        const text = handle.name.toLowerCase().match(/\b(copilot|gemini|agy|claude|windsurf|cursor|cortex)\b/i)
+            ? promptText.replace(/[\r\n]+/g, ' ')
+            : promptText;
+
+        if (text.length <= CHUNK_SIZE) {
+            handle.sendText(text, false);
+        } else {
+            for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+                const chunk = text.substring(i, i + CHUNK_SIZE);
+                handle.sendText(chunk, false);
+                if (i + CHUNK_SIZE < text.length) {
+                    await new Promise(r => setTimeout(r, CHUNK_DELAY));
+                }
+            }
+        }
+        await new Promise(r => setTimeout(r, 300));
+        handle.sendText('', true);
     }
 
     private buildArchitectPrompt(wsRoot: string): string {
@@ -1386,10 +1404,8 @@ Start by checking which documents exist, then present the menu.`;
                 if (watchedPaths.has(resolved)) { return; } // avoid double-registration if custom path === CLAUDE.md/AGENTS.md
                 watchedPaths.add(resolved);
 
-                const relativePattern = path.relative(root, targetPath);
-                const watcher = vscode.workspace.createFileSystemWatcher(
-                    new vscode.RelativePattern(vscode.Uri.file(root), relativePattern));
-                const refresh = () => {
+                const refresh = (filePath: string) => {
+                    if (path.resolve(filePath) !== resolved) { return; }
                     if (!this._projectPanel) { return; }
                     // Notify the webview immediately so the correct file-type preview
                     // refreshes. A shared debounce would drop the message for all but
@@ -1411,7 +1427,7 @@ Start by checking which documents exist, then present the menu.`;
                             .catch(err => console.error('[PlanningPanel] Error auto-refreshing constitution files:', err));
                     }, 400);
                 };
-                watcher.onDidChange(refresh); watcher.onDidCreate(refresh); watcher.onDidDelete(refresh);
+                const watcher = this._seams().watcher.watchFile(resolved, (event, filePath) => refresh(filePath));
                 this._constitutionWatchers.push(watcher); this._disposables.push(watcher);
             });
         });
@@ -1433,14 +1449,10 @@ Start by checking which documents exist, then present the menu.`;
             watchedPaths.add(root);
 
             const insightsDir = path.join(root, '.switchboard', 'insights');
-            const relativePattern = path.relative(root, insightsDir);
 
             try {
-                const watcher = vscode.workspace.createFileSystemWatcher(
-                    new vscode.RelativePattern(vscode.Uri.file(root), `${relativePattern}/*.md`)
-                );
-
-                const triggerRefresh = () => {
+                const triggerRefresh = (filePath: string) => {
+                    if (!filePath.endsWith('.md')) { return; }
                     if (!this._projectPanel) { return; }
                     if (this._insightsWatchDebounce) {
                         clearTimeout(this._insightsWatchDebounce);
@@ -1457,9 +1469,7 @@ Start by checking which documents exist, then present the menu.`;
                     }, 400);
                 };
 
-                watcher.onDidCreate(triggerRefresh);
-                watcher.onDidChange(triggerRefresh);
-                watcher.onDidDelete(triggerRefresh);
+                const watcher = this._seams().watcher.watchFolder(insightsDir, (event, filePath) => triggerRefresh(filePath));
 
                 this._insightsWatchers.push(watcher);
                 this._disposables.push(watcher);
@@ -1554,21 +1564,27 @@ Start by checking which documents exist, then present the menu.`;
 
         try {
             // Watch for changes to the specific file
-            this._activeDocWatcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath)),
-                true,  // ignore create events (file already exists when watcher is set up)
-                false, // watch change events
-                true   // ignore delete events (handled via onDidDelete)
-            );
-
-            this._activeDocWatcher.onDidChange(() => {
+            this._activeDocWatcher = this._seams().watcher.watchFile(filePath, (event, changedPath) => {
                 if (gen !== this._watcherGeneration) { return; } // stale watcher
-                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; } // panel-initiated write
                 if (filePath !== this._activePreviewPath) { return; } // stale path
 
                 if (this._activeDocWatchDebounce) {
                     clearTimeout(this._activeDocWatchDebounce);
                 }
+
+                if (event === 'delete') {
+                    this.postMessageToWebview({
+                        type: 'previewError',
+                        sourceId: this._activePreviewSourceId || 'local-folder',
+                        requestId: -1,
+                        error: 'File deleted externally'
+                    });
+                    this._activeDocWatcher?.dispose();
+                    this._activeDocWatcher = undefined;
+                    return;
+                }
+
+                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; } // panel-initiated write
 
                 this._activeDocWatchDebounce = setTimeout(async () => {
                     if (gen !== this._watcherGeneration || filePath !== this._activePreviewPath) { return; }
@@ -1595,21 +1611,6 @@ Start by checking which documents exist, then present the menu.`;
                         this._isAutoRefreshing = false;
                     }
                 }, 300);
-            });
-
-            this._activeDocWatcher.onDidDelete(() => {
-                if (gen !== this._watcherGeneration) { return; }
-                if (this._activeDocWatchDebounce) {
-                    clearTimeout(this._activeDocWatchDebounce);
-                }
-                this.postMessageToWebview({
-                    type: 'previewError',
-                    sourceId: this._activePreviewSourceId || 'local-folder',
-                    requestId: -1,
-                    error: 'File deleted externally'
-                });
-                this._activeDocWatcher?.dispose();
-                this._activeDocWatcher = undefined;
             });
 
             this._disposables.push(this._activeDocWatcher);
@@ -1648,33 +1649,22 @@ Start by checking which documents exist, then present the menu.`;
         if (!diskPath || !fs.existsSync(diskPath)) { return; }
 
         try {
-            this._activeDevDocWatcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(path.dirname(diskPath), path.basename(diskPath)),
-                true,  // ignore create
-                false, // watch change
-                false  // watch delete — surface external deletes so the tab doesn't stay stale
-            );
-
-            this._activeDevDocWatcher.onDidChange(() => {
+            this._activeDevDocWatcher = this._seams().watcher.watchFile(diskPath, (event, changedPath) => {
                 if (gen !== this._devDocWatcherGeneration) { return; }               // stale watcher
                 if (diskPath !== this._activeDevDocPath) { return; }                 // selection moved on
-                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }   // our own write
+                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }   // our own write/delete
                 if (this._activeDevDocWatchDebounce) { clearTimeout(this._activeDevDocWatchDebounce); }
+                if (event === 'delete') {
+                    this._activeDevDocPath = undefined; // stop reacting to the now-gone file
+                    const devDocsPanel = isProject ? this._projectPanel : this._panel;
+                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeletedExternally', path: emitPath });
+                    return;
+                }
                 this._activeDevDocWatchDebounce = setTimeout(async () => {
                     if (gen !== this._devDocWatcherGeneration || diskPath !== this._activeDevDocPath) { return; }
                     if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }
                     await this._reemitDevDocContent(diskPath, emitPath, isProject);
                 }, 300);
-            });
-
-            this._activeDevDocWatcher.onDidDelete(() => {
-                if (gen !== this._devDocWatcherGeneration) { return; }               // stale watcher
-                if (diskPath !== this._activeDevDocPath) { return; }                 // selection moved on
-                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }   // our own delete (via the tab)
-                if (this._activeDevDocWatchDebounce) { clearTimeout(this._activeDevDocWatchDebounce); }
-                this._activeDevDocPath = undefined; // stop reacting to the now-gone file
-                const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeletedExternally', path: emitPath });
             });
 
             this._disposables.push(this._activeDevDocWatcher);
@@ -1690,7 +1680,7 @@ Start by checking which documents exist, then present the menu.`;
         let content = '';
         try { content = await fs.promises.readFile(diskPath, 'utf8'); } catch { return; } // gone — leave the last view
         let renderedHtml = '';
-        try { renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content); } catch { renderedHtml = ''; }
+        try { renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content) ?? ''; } catch { renderedHtml = ''; }
         this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: emitPath, content, renderedHtml });
     }
 
@@ -1745,7 +1735,7 @@ Start by checking which documents exist, then present the menu.`;
             this._lastPreviewContentByPath.set(cacheKey, content);
 
             // Convert raw markdown to HTML for preview pane
-            const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+            const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
 
             sendResponse({
                 type: 'kanbanPlanPreviewReady',
@@ -2157,11 +2147,7 @@ Start by checking which documents exist, then present the menu.`;
                 const paths = service.getPlanningHtmlFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const pattern = new vscode.RelativePattern(p, '**/*');
-                        const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-                        watcher.onDidChange(() => this._sendPlanningHtmlDocsReady());
-                        watcher.onDidCreate(() => this._sendPlanningHtmlDocsReady());
-                        watcher.onDidDelete(() => this._sendPlanningHtmlDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, () => this._sendPlanningHtmlDocsReady());
                         this._planningHtmlFolderWatchers.push(watcher);
                     }
                 }
@@ -2170,17 +2156,19 @@ Start by checking which documents exist, then present the menu.`;
     }
 
     private _registerSaveTextDocListener(): void {
-        if (this._saveTextDocListener) return;
-        this._saveTextDocListener = vscode.workspace.onDidSaveTextDocument((document) => {
-            if (!this._panel?.visible) return;
-            if (!this._activePlanningHtmlPreview) return;
-            const changedPath = path.resolve(document.uri.fsPath);
-            const active = this._activePlanningHtmlPreview;
-            const relativePath = active.docId.includes(':')
-                ? active.docId.substring(active.docId.indexOf(':') + 1)
-                : active.docId;
-            const activePath = path.resolve(active.sourceFolder, relativePath);
-            if (changedPath !== activePath) return;
+        if (this._saveTextDocListener) {
+            this._saveTextDocListener.dispose();
+            this._saveTextDocListener = undefined;
+        }
+        if (!this._activePlanningHtmlPreview) { return; }
+        const active = this._activePlanningHtmlPreview;
+        const relativePath = active.docId.includes(':')
+            ? active.docId.substring(active.docId.indexOf(':') + 1)
+            : active.docId;
+        const activePath = path.resolve(active.sourceFolder, relativePath);
+        this._saveTextDocListener = this._seams().watcher.watchFile(activePath, (event) => {
+            if (event !== 'change') { return; }
+            if (!this._activePlanningHtmlPreview) { return; }
             this._buildAndSendPlanningHtmlPreview({
                 sourceId: active.sourceId,
                 sourceFolder: active.sourceFolder,
@@ -2193,6 +2181,9 @@ Start by checking which documents exist, then present the menu.`;
     }
 
     private _getWorkspaceRoots(): string[] {
+        if (this._hostSeams) {
+            return this._hostSeams.workspace.getWorkspaceRoots();
+        }
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
@@ -2433,12 +2424,13 @@ Start by checking which documents exist, then present the menu.`;
             try {
                 let absPath: string;
                 if (/^file:\/\/\//i.test(trimmed)) {
-                    absPath = vscode.Uri.parse(trimmed).fsPath;
+                    absPath = fileURLToPath(trimmed);
                 } else {
                     absPath = path.resolve(baseDir, trimmed);
                 }
                 if (!fs.existsSync(absPath)) { return match; } // don't rewrite missing files
-                const webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath));
+                if (!this._panel) { return match; } // headless — no webview URI rewriting
+                const webviewUri = this._panel.webview.asWebviewUri(vscode.Uri.file(absPath));
                 if (!webviewUri) { return match; }
                 return `![${alt}](${webviewUri.toString()})`;
             } catch {
@@ -2515,7 +2507,7 @@ Start by checking which documents exist, then present the menu.`;
         return buildWorkspaceItems(this._getWorkspaceRoots());
     }
 
-    private async _handleMessage(msg: any, isProject: boolean = false): Promise<void> {
+    private async _handleMessage(msg: any, isProject: boolean = false): Promise<any> {
         // Ready-handshake: the Project panel webview signals boot completion.
         // Handle before the allRoots guard so readiness is recorded even when
         // no workspace is open. Only the Project panel sends this message.
@@ -2551,7 +2543,7 @@ Start by checking which documents exist, then present the menu.`;
                             content = this._rewriteLocalImagePaths(content, path.dirname(ticketFilePath));
                         }
                     }
-                    const html = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+                    const html = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     this._pushTo(targetPanel, 'planning', {
                         type: 'markdownLiveRendered',
@@ -2683,7 +2675,7 @@ Start by checking which documents exist, then present the menu.`;
                 try { content = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty */ }
                 let renderedHtml = '';
                 try {
-                    renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+                    renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content) ?? '';
                 } catch { renderedHtml = ''; }
                 this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: msg.path, content, renderedHtml });
                 // Watch this file for external edits so the tab never holds a stale buffer.
@@ -2717,7 +2709,7 @@ Start by checking which documents exist, then present the menu.`;
                 let root = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!root && allRoots.length > 1) {
                     const items = buildWorkspaceItems(allRoots).map(it => ({ label: it.label, root: it.workspaceRoot }));
-                    const picked = await vscode.window.showQuickPick(items.map(i => ({ label: i.label, description: i.root })), { placeHolder: 'Select a workspace for the new dev doc' });
+                    const picked = await this._seams().ui.showQuickPick(items.map(i => ({ label: i.label, description: i.root })), { placeHolder: 'Select a workspace for the new dev doc' }) as { label: string; description?: string } | undefined;
                     if (!picked) { break; } // user cancelled
                     root = items.find(i => i.label === picked.label)?.root || undefined;
                 }
@@ -2726,7 +2718,7 @@ Start by checking which documents exist, then present the menu.`;
                     this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocCreated', ok: false, error: 'No workspace selected' });
                     break;
                 }
-                const name = await vscode.window.showInputBox({
+                const name = await this._seams().ui.showInputBox({
                     prompt: 'New dev doc name',
                     placeHolder: 'e.g. Architecture Overview',
                     validateInput: (value) => {
@@ -2763,7 +2755,7 @@ Start by checking which documents exist, then present the menu.`;
             case 'draftImproveDevDoc': {
                 const safePath = this._resolveDevDocPath(allRoots, msg.path);
                 if (!safePath) {
-                    showTemporaryNotification('Dev doc: invalid path — prompt not copied');
+                    this._seams().ui.showTemporaryNotification('Dev doc: invalid path — prompt not copied');
                     break;
                 }
                 const title = typeof msg.title === 'string' ? msg.title : path.basename(safePath, '.md');
@@ -2783,8 +2775,8 @@ Start by checking which documents exist, then present the menu.`;
                 } else {
                     prompt = `You are writing a developer document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **Type:** ${sourceType}\n- **File path (write the finished doc here):** ${safePath}\n\nThe file is currently empty (or contains only a title heading). Research the codebase as needed to write an accurate, useful developer doc for this topic. Write the finished markdown directly to the file path above. Report back with a short summary of what you covered.`;
                 }
-                await vscode.env.clipboard.writeText(prompt);
-                showTemporaryNotification('Dev doc prompt copied to clipboard');
+                await this._seams().clipboard.writeText(prompt);
+                this._seams().ui.showTemporaryNotification('Dev doc prompt copied to clipboard');
                 break;
             }
             case 'deleteDevDoc': {
@@ -2947,7 +2939,7 @@ Start by checking which documents exist, then present the menu.`;
                         comment
                     };
 
-                    const result = await vscode.commands.executeCommand<ReviewCommentResult>(
+                    const result = await this._seams().commands.executeCommand<ReviewCommentResult>(
                         'switchboard.sendReviewComment',
                         request
                     );
@@ -3056,7 +3048,7 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'addLocalFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const result = await vscode.window.showOpenDialog({
+                const result = await this._seams().ui.showOpenDialog({
                     openLabel: 'Add Docs Folder',
                     canSelectFiles: false,
                     canSelectFolders: true,
@@ -3064,7 +3056,7 @@ Start by checking which documents exist, then present the menu.`;
                 });
                 if (result && result.length > 0) {
                     const service = this._getLocalFolderService(root);
-                    await service.addFolderPath(result[0].fsPath);
+                    await service.addFolderPath(result[0]);
                     this._setupLocalFolderWatchers();
                     await this._sendLocalDocsReady();
                     this.postMessageToWebview({ type: 'localFoldersListed', paths: service.getFolderPaths(), workspaceRoot: root });
@@ -3089,7 +3081,7 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'addTicketsFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const result = await vscode.window.showOpenDialog({
+                const result = await this._seams().ui.showOpenDialog({
                     openLabel: 'Add Tickets Folder',
                     canSelectFiles: false,
                     canSelectFolders: true,
@@ -3097,7 +3089,7 @@ Start by checking which documents exist, then present the menu.`;
                 });
                 if (result && result.length > 0) {
                     const service = this._getLocalFolderService(root);
-                    await service.addTicketsFolderPath(result[0].fsPath);
+                    await service.addTicketsFolderPath(result[0]);
                     await this._sendLocalDocsReady(true);
                     this.postMessageToWebview({ type: 'ticketsFoldersListed', paths: service.getTicketsFolderPaths(), workspaceRoot: root });
                 }
@@ -3130,14 +3122,14 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'browseTicketsFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const result = await vscode.window.showOpenDialog({
+                const result = await this._seams().ui.showOpenDialog({
                     canSelectFolders: true,
                     canSelectFiles: false,
                     canSelectMany: false,
                     openLabel: 'Select Tickets Folder'
                 });
                 if (result && result.length > 0) {
-                    this.postMessageToWebview({ type: 'browseTicketsFolderResult', path: result[0].fsPath, workspaceRoot: root });
+                    this.postMessageToWebview({ type: 'browseTicketsFolderResult', path: result[0], workspaceRoot: root });
                 }
                 break;
             }
@@ -3166,7 +3158,7 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'addPlanningHtmlFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
-                const result = await vscode.window.showOpenDialog({
+                const result = await this._seams().ui.showOpenDialog({
                     openLabel: 'Add HTML Folder',
                     canSelectFiles: false,
                     canSelectFolders: true,
@@ -3174,7 +3166,7 @@ Start by checking which documents exist, then present the menu.`;
                 });
                 if (result && result.length > 0) {
                     const service = this._getLocalFolderService(root);
-                    await service.addPlanningHtmlFolderPath(result[0].fsPath);
+                    await service.addPlanningHtmlFolderPath(result[0]);
                     this._setupPlanningHtmlFolderWatchers();
                     await this._sendPlanningHtmlDocsReady();
                     this.postMessageToWebview({ type: 'planningHtmlFoldersListed', paths: service.getPlanningHtmlFolderPaths(), workspaceRoot: root });
@@ -3202,9 +3194,9 @@ Start by checking which documents exist, then present the menu.`;
                     await fs.promises.access(fullPath, require('fs').constants.R_OK);
                     const entry = await this._getOrCreatePlanningHtmlServer(path.resolve(serveFolder));
                     const url = this._buildLocalhostUrl(entry, path.resolve(serveFolder), fullPath);
-                    await vscode.env.openExternal(vscode.Uri.parse(url));
+                    await this._seams().ui.openExternal(url);
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to serve HTML file: ' + err.message);
+                    this._seams().ui.showErrorMessage('Failed to serve HTML file: ' + err.message);
                 }
                 break;
             }
@@ -3352,7 +3344,7 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'importNotebookLMPlans': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
-                const result = await vscode.commands.executeCommand('switchboard.importNotebookLMPlans', targetRoot) as { overwritten: number; created: number; errors: number } | undefined;
+                const result = await this._seams().commands.executeCommand('switchboard.importNotebookLMPlans', targetRoot) as { overwritten: number; created: number; errors: number } | undefined;
                 const nbTarget = isProject ? this._projectPanel : this._panel;
                 this._pushTo(nbTarget, 'notebook', { type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
                 break;
@@ -3370,17 +3362,17 @@ Start by checking which documents exist, then present the menu.`;
                 break;
             }
             case 'airlock_openNotebookLM': {
-                await vscode.env.openExternal(vscode.Uri.parse('https://notebooklm.google.com'));
+                await this._seams().ui.openExternal('https://notebooklm.google.com');
                 break;
             }
             case 'airlock_openAIStudio': {
-                await vscode.env.openExternal(vscode.Uri.parse('https://aistudio.google.com'));
+                await this._seams().ui.openExternal('https://aistudio.google.com');
                 break;
             }
             case 'airlock_openFolder': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
-                const folderUri = vscode.Uri.file(path.join(targetRoot, '.switchboard', 'NotebookLM'));
-                await vscode.commands.executeCommand('revealFileInOS', folderUri);
+                const folderPath = path.join(targetRoot, '.switchboard', 'NotebookLM');
+                await this._seams().commands.executeCommand('revealFileInOS', folderPath);
                 break;
             }
 
@@ -3530,11 +3522,11 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'importPlans': {
                 // Manual "Import Plans": pick unclaimed plans (any age) to add to the board.
-                await vscode.commands.executeCommand('switchboard.importUnclaimedPlans');
+                await this._seams().commands.executeCommand('switchboard.importUnclaimedPlans');
                 break;
             }
             case 'copyArtifactPrompt': {
-                await vscode.env.clipboard.writeText(msg.prompt || '');
+                await this._seams().clipboard.writeText(msg.prompt || '');
                 const targetPanel = isProject ? this._projectPanel : this._panel;
                 this._pushTo(targetPanel, 'planning', { type: 'artifactPromptCopied', kind: msg.kind });
                 break;
@@ -3550,8 +3542,8 @@ Start by checking which documents exist, then present the menu.`;
             case 'copyHtmlTweakPrompt': {
                 const prompt = String(msg.prompt || '');
                 if (!prompt) break;
-                await vscode.env.clipboard.writeText(prompt);
-                showTemporaryNotification('Copied element tweak prompt to clipboard.');
+                await this._seams().clipboard.writeText(prompt);
+                this._seams().ui.showTemporaryNotification('Copied element tweak prompt to clipboard.');
                 break;
             }
             case 'sendHtmlTweakPrompt': {
@@ -3559,16 +3551,16 @@ Start by checking which documents exist, then present the menu.`;
                 if (!prompt) break;
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, msg.workspaceRoot || undefined);
-                    showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                    this._seams().ui.showTemporaryNotification('Sent element tweak prompt to agent terminal.');
                 } else {
-                    await vscode.env.clipboard.writeText(prompt);
-                    showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
+                    await this._seams().clipboard.writeText(prompt);
+                    this._seams().ui.showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
                 }
                 break;
             }
             case 'copyChatPrompt': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || undefined;
-                const prompt = await vscode.commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot, msg.project);
+                const prompt = await this._seams().commands.executeCommand<string | undefined>('switchboard.copyChatPrompt', workspaceRoot, msg.project);
                 if (prompt) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     this._pushTo(targetPanel, 'planning', { type: 'chatPromptCopied' });
@@ -3663,10 +3655,9 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'setPlanAutoFetchEnabled': {
                 try {
-                    const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+                    const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
                     if (wsRoot) {
-                        await vscode.workspace.getConfiguration('switchboard.planAutoFetch', vscode.Uri.file(wsRoot))
-                            .update('enabled', msg.enabled, vscode.ConfigurationTarget.Workspace);
+                        await this._seams().pathConfig.updateConfigWorkspace('planAutoFetch.enabled', msg.enabled);
                     }
                 } catch (err) {
                     console.error('[PlanningPanel] setPlanAutoFetchEnabled error:', err);
@@ -3675,7 +3666,7 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'planAutoFetchRunNow': {
                 if (this._planAutoFetchService) {
-                    const wsRoot = this._getWorkspaceRoot() || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+                    const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
                     if (wsRoot) {
                         this.postMessageToProjectWebview({
                             type: 'planAutoFetchState',
@@ -3695,7 +3686,7 @@ Start by checking which documents exist, then present the menu.`;
                 break;
             }
             case 'createPlan': {
-                await vscode.commands.executeCommand('switchboard.initiatePlan');
+                await this._seams().commands.executeCommand('switchboard.initiatePlan');
                 break;
             }
             case 'fetchKanbanPlans': {
@@ -3814,8 +3805,7 @@ Start by checking which documents exist, then present the menu.`;
                     break;
                 }
                 try {
-                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved));
-                    await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+                    await this._seams().editor.showTextDocument(resolved, { viewColumn: 2 });
                     this.postMessageToProjectWebview({ type: 'kanbanPlanOpenResult', success: true });
                 } catch (err) {
                     this.postMessageToProjectWebview({ type: 'kanbanPlanOpenResult', success: false, error: String(err) });
@@ -3838,7 +3828,7 @@ Start by checking which documents exist, then present the menu.`;
                     break;
                 }
                 try {
-                    const success = await vscode.commands.executeCommand<boolean>(
+                    const success = await this._seams().commands.executeCommand<boolean>(
                         'switchboard.copyPlanFromKanban', sessionId, column, wsRoot
                     );
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: !!success, sessionId });
@@ -3883,7 +3873,7 @@ Start by checking which documents exist, then present the menu.`;
                     // — do not hand-roll (feature subtasks get silently dropped otherwise).
                     const plans = await kp.buildDispatchPlans(wsRoot, [feature]);
                     const prompt = await kp.generateUnifiedPrompt(role, plans, wsRoot);
-                    await vscode.env.clipboard.writeText(prompt);
+                    await this._seams().clipboard.writeText(prompt);
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
                 } catch (err) {
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
@@ -3899,7 +3889,7 @@ Start by checking which documents exist, then present the menu.`;
                     break;
                 }
                 try {
-                    const moved = await vscode.commands.executeCommand<boolean>(
+                    const moved = await this._seams().commands.executeCommand<boolean>(
                         'switchboard.moveKanbanCardByPlanFile', wsRoot, planFile, newColumn
                     );
                     this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', success: !!moved, error: moved ? undefined : 'Column update failed' });
@@ -3911,7 +3901,7 @@ Start by checking which documents exist, then present the menu.`;
             case 'planShown': {
                 const sessionId = String(msg.sessionId || '');
                 if (sessionId) {
-                    await vscode.commands.executeCommand('switchboard.selectSession', sessionId);
+                    await this._seams().commands.executeCommand('switchboard.selectSession', sessionId);
                 }
                 break;
             }
@@ -4242,7 +4232,7 @@ Start by checking which documents exist, then present the menu.`;
                 const exists = fs.existsSync(filePath);
                 const store = this._context.globalState;
                 const plannerConfig = store.get<any>('switchboard.prompts.roleConfig_planner', undefined);
-                const cfgDefault = vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.constitutionEnabled', false);
+                const cfgDefault = this._seams().pathConfig.getConfigBoolean('planner.constitutionEnabled', false);
                 const enabled = plannerConfig?.addons?.constitution ?? cfgDefault;
                 let status = 'None';
                 if (enabled && exists) { status = path.basename(filePath); }
@@ -4268,7 +4258,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (fs.existsSync(filePath)) {
                     try {
                         const content = fs.readFileSync(filePath, 'utf8');
-                        const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+                        const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
                         this._postToBothPanels({
                             type: 'constitutionFileRead',
                             workspaceRoot: wsRoot,
@@ -4393,7 +4383,7 @@ Start by checking which documents exist, then present the menu.`;
                     // Render markdown to HTML for the preview pane (mirrors kanbanPlanPreviewReady).
                     let renderedHtml = '';
                     try {
-                        renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', rawContent);
+                        renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', rawContent) ?? '';
                     } catch { renderedHtml = ''; }
                     this._postToBothPanels({
                         type: 'projectPrdContent',
@@ -4475,11 +4465,7 @@ Start by checking which documents exist, then present the menu.`;
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
                     if (dispatched) { break; }
                 }
-                const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
-                    || vscode.window.createTerminal({ name: 'PRD Builder', cwd: wsRoot });
-                terminal.show();
-                const { sendRobustText } = require('./terminalUtils');
-                await sendRobustText(terminal, promptText);
+                await this._sendPromptToTerminal(promptText, wsRoot, 'PRD Builder', ['planner', 'lead']);
                 break;
             }
             case 'copyPrdBuildPrompt': {
@@ -4504,7 +4490,7 @@ Start by checking which documents exist, then present the menu.`;
                     `## Success Criteria\n- [measurable outcome]\n\n` +
                     `## Non-Goals\n- [explicit exclusion]\n\n` +
                     `## Open Questions\n- [unresolved decision or risk]\n`;
-                await vscode.env.clipboard.writeText(promptText);
+                await this._seams().clipboard.writeText(promptText);
                 this.postMessageToProjectWebview({ type: 'prdPromptCopied' });
                 break;
             }
@@ -4550,7 +4536,7 @@ Please format the output document strictly as follows:
 - [Explicit exclusion 1]
 - [Explicit exclusion 2]
 `;
-                await vscode.env.clipboard.writeText(promptText);
+                await this._seams().clipboard.writeText(promptText);
                 this.postMessageToProjectWebview({ type: 'constitutionPromptCopied' });
                 break;
             }
@@ -4596,7 +4582,7 @@ Please format the updated output document strictly as follows:
 - [Explicit exclusion 1]
 - [Explicit exclusion 2]
 `;
-                await vscode.env.clipboard.writeText(promptText);
+                await this._seams().clipboard.writeText(promptText);
                 this.postMessageToProjectWebview({ type: 'constitutionPromptCopied' }); // reuse copied notification
                 break;
             }
@@ -4612,11 +4598,7 @@ Please format the updated output document strictly as follows:
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
                     if (dispatched) { break; }
                 }
-                const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
-                    || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
-                terminal.show();
-                const { sendRobustText } = require('./terminalUtils');
-                await sendRobustText(terminal, promptText);
+                await this._sendPromptToTerminal(promptText, wsRoot, 'Constitution Builder', ['planner', 'lead']);
                 break;
             }
             case 'invokeConstitutionUpdater': {
@@ -4629,11 +4611,7 @@ Please format the updated output document strictly as follows:
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
                     if (dispatched) { break; }
                 }
-                const terminal = vscode.window.terminals.find(t => t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
-                    || vscode.window.createTerminal({ name: 'Constitution Builder', cwd: wsRoot });
-                terminal.show();
-                const { sendRobustText } = require('./terminalUtils');
-                await sendRobustText(terminal, promptText);
+                await this._sendPromptToTerminal(promptText, wsRoot, 'Constitution Builder', ['planner', 'lead']);
                 break;
             }
             case 'invokeSystemBuilder': {
@@ -4652,12 +4630,7 @@ Please format the updated output document strictly as follows:
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
                     if (dispatched) { break; }
                 }
-                const terminal = vscode.window.terminals.find(t =>
-                        t.name.toLowerCase().includes('planner') || t.name.toLowerCase().includes('lead'))
-                    || vscode.window.createTerminal({ name: 'System Builder', cwd: wsRoot });
-                terminal.show();
-                const { sendRobustText } = require('./terminalUtils');
-                await sendRobustText(terminal, promptText);
+                await this._sendPromptToTerminal(promptText, wsRoot, 'System Builder', ['planner', 'lead']);
                 break;
             }
             case 'copySystemBuildPrompt': {
@@ -4676,7 +4649,7 @@ Please format the updated output document strictly as follows:
                     `3. Directory layout — where the important code lives.\n` +
                     `4. Project-specific conventions, invariants, and gotchas an agent must respect.\n` +
                     `Keep it tight and high-signal; do not pad.`;
-                await vscode.env.clipboard.writeText(promptText);
+                await this._seams().clipboard.writeText(promptText);
                 this.postMessageToProjectWebview({ type: 'systemPromptCopied' });
                 break;
             }
@@ -4695,12 +4668,7 @@ Please format the updated output document strictly as follows:
                 }
 
                 // Fall back to ad-hoc terminal creation
-                const terminal = vscode.window.terminals.find(t =>
-                        t.name.toLowerCase().includes('architect') || t.name.toLowerCase().includes('planner'))
-                    || vscode.window.createTerminal({ name: 'Switchboard Architect', cwd: wsRoot });
-                terminal.show();
-                const { sendRobustText } = require('./terminalUtils');
-                await sendRobustText(terminal, promptText);
+                await this._sendPromptToTerminal(promptText, wsRoot, 'Switchboard Architect', ['architect', 'planner']);
                 break;
             }
 
@@ -4710,7 +4678,7 @@ Please format the updated output document strictly as follows:
                     break;
                 }
                 const promptText = this.buildArchitectPrompt(wsRoot);
-                await vscode.env.clipboard.writeText(promptText);
+                await this._seams().clipboard.writeText(promptText);
                 this.postMessageToProjectWebview({ type: 'architectPromptCopied' });
                 break;
             }
@@ -4743,17 +4711,16 @@ Please format the updated output document strictly as follows:
             case 'addConstitutionPath': {
                 const wsRoot = msg.workspaceRoot;
                 if (!allRoots.includes(wsRoot)) { break; }
-                const picked = await vscode.window.showOpenDialog({
+                const picked = await this._seams().ui.showOpenDialog({
                     canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
-                    defaultUri: vscode.Uri.file(wsRoot),
                     filters: { Markdown: ['md'] },
                     openLabel: 'Use as Constitution',
                 });
                 if (!picked || picked.length === 0) { break; }
-                const abs = picked[0].fsPath;
+                const abs = picked[0];
                 const rel = path.relative(wsRoot, abs);
                 if (rel.startsWith('..') || path.isAbsolute(rel) || !rel.endsWith('.md')) {
-                    vscode.window.showErrorMessage('Constitution file must be a .md file inside the workspace root.');
+                    this._seams().ui.showErrorMessage('Constitution file must be a .md file inside the workspace root.');
                     break;
                 }
                 const list = this._getConstitutionPathList(wsRoot);
@@ -4789,7 +4756,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) { break; }
                 const rel = msg.relativePath;
                 if (typeof rel !== 'string' || !rel.endsWith('.md') || rel.includes('..') || path.isAbsolute(rel)) {
-                    vscode.window.showErrorMessage('Invalid constitution path. Must be relative, end in .md, and remain inside the workspace root.');
+                    this._seams().ui.showErrorMessage('Invalid constitution path. Must be relative, end in .md, and remain inside the workspace root.');
                     break;
                 }
                 const store = this._context.globalState;
@@ -5117,7 +5084,7 @@ Please format the updated output document strictly as follows:
                     let renderedDescriptionHtml = '';
                     const descriptionMd = (issue.description || '').trim() || 'No description provided.';
                     try {
-                        renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
+                        renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                     } catch {
                         renderedDescriptionHtml = '';
                     }
@@ -5357,7 +5324,7 @@ Please format the updated output document strictly as follows:
                     let renderedDescriptionHtml = '';
                     const descriptionMd = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
                     try {
-                        renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
+                        renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                     } catch {
                         renderedDescriptionHtml = '';
                     }
@@ -5869,12 +5836,12 @@ Please format the updated output document strictly as follows:
 
                 try {
                     if (mode === 'document') {
-                        await vscode.commands.executeCommand(
+                        await this._seams().commands.executeCommand(
                             'switchboard.importTaskAsDocument',
                             { workspaceRoot, provider: 'linear', id: issueId, includeSubtasks }
                         );
                     } else {
-                        await vscode.commands.executeCommand(
+                        await this._seams().commands.executeCommand(
                             'switchboard.importLinearTask',
                             { workspaceRoot, issueId, includeSubtasks }
                         );
@@ -5913,12 +5880,12 @@ Please format the updated output document strictly as follows:
 
                 try {
                     if (mode === 'document') {
-                        await vscode.commands.executeCommand(
+                        await this._seams().commands.executeCommand(
                             'switchboard.importTaskAsDocument',
                             { workspaceRoot, provider: 'clickup', id: taskId, includeSubtasks }
                         );
                     } else {
-                        await vscode.commands.executeCommand(
+                        await this._seams().commands.executeCommand(
                             'switchboard.importClickUpTask',
                             { workspaceRoot, taskId, includeSubtasks }
                         );
@@ -5949,7 +5916,7 @@ Please format the updated output document strictly as follows:
                     this._ticketsCurrentSelection.set(workspaceRoot, { provider, listId, projectId });
                 }
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.importAllTasks',
                         { workspaceRoot, provider, ids, listId, projectId, workspaceId, page, append, importMode }
                     );
@@ -5975,11 +5942,11 @@ Please format the updated output document strictly as follows:
                     const errDetail = (result?.errors || []).slice(0, 3)
                         .map((e: any) => `${e.id}: ${e.error}`).join('; ');
                     if (!result?.success) {
-                        vscode.window.showErrorMessage(`Import all (${importMode}) failed: ${result?.error || 'unknown'}`);
+                        this._seams().ui.showErrorMessage(`Import all (${importMode}) failed: ${result?.error || 'unknown'}`);
                     } else if ((result.successCount || 0) === 0) {
-                        vscode.window.showWarningMessage(`Import all (${importMode}): nothing imported (${ids?.length ?? 0} requested${errDetail ? ' — ' + errDetail : ''}).`);
+                        this._seams().ui.showWarningMessage(`Import all (${importMode}): nothing imported (${ids?.length ?? 0} requested${errDetail ? ' — ' + errDetail : ''}).`);
                     } else if ((result.failCount || 0) > 0) {
-                        vscode.window.showWarningMessage(`Import all (${importMode}): ${result.successCount} imported, ${result.failCount} failed — ${errDetail}`);
+                        this._seams().ui.showWarningMessage(`Import all (${importMode}): ${result.successCount} imported, ${result.failCount} failed — ${errDetail}`);
                     }
                     this.postMessageToWebview({
                         type: 'importAllTicketsComplete',
@@ -5996,7 +5963,7 @@ Please format the updated output document strictly as follows:
                     });
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
-                    vscode.window.showErrorMessage(`Import all (${importMode}) failed: ${errMsg}`);
+                    this._seams().ui.showErrorMessage(`Import all (${importMode}) failed: ${errMsg}`);
                     this.postMessageToWebview({
                         type: 'importAllTicketsComplete',
                         success: false,
@@ -6051,7 +6018,7 @@ Please format the updated output document strictly as follows:
                     const deltaSinceIso = lastPullIso || undefined;
                     const isDeltaRefresh = lastPullIso !== null && !forceFull;  // false when forceFull or first-open
 
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.importAllTasks',
                         {
                             workspaceRoot,
@@ -6081,13 +6048,13 @@ Please format the updated output document strictly as follows:
                     const errDetail = (result?.errors || []).slice(0, 3)
                         .map((e: any) => `${e.id}: ${e.error}`).join('; ');
                     if (!result?.success) {
-                        vscode.window.showErrorMessage(`Refresh failed: ${result?.error || 'unknown'}`);
+                        this._seams().ui.showErrorMessage(`Refresh failed: ${result?.error || 'unknown'}`);
                     } else if (skippedModified > 0) {
-                        vscode.window.showWarningMessage(
+                        this._seams().ui.showWarningMessage(
                             `Refreshed ${result.successCount} ticket${result.successCount !== 1 ? 's' : ''}. ${skippedModified} skipped (locally modified — push or discard changes first).`
                         );
                     } else if ((result.failCount || 0) > 0) {
-                        vscode.window.showWarningMessage(`Refresh: ${result.successCount} updated, ${result.failCount} failed — ${errDetail}`);
+                        this._seams().ui.showWarningMessage(`Refresh: ${result.successCount} updated, ${result.failCount} failed — ${errDetail}`);
                     }
 
                     this.postMessageToWebview({
@@ -6106,7 +6073,7 @@ Please format the updated output document strictly as follows:
                     });
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
-                    vscode.window.showErrorMessage(`Refresh failed: ${errMsg}`);
+                    this._seams().ui.showErrorMessage(`Refresh failed: ${errMsg}`);
                     this.postMessageToWebview({
                         type: 'importAllTicketsComplete',
                         success: false,
@@ -6123,7 +6090,7 @@ Please format the updated output document strictly as follows:
             case 'openExternalUrl': {
                 const url = msg.url as string;
                 if (url && (url.startsWith('https://') || url.startsWith('http://'))) {
-                    vscode.env.openExternal(vscode.Uri.parse(url));
+                    this._seams().ui.openExternal(url);
                 }
                 break;
             }
@@ -6140,24 +6107,24 @@ Please format the updated output document strictly as follows:
                 // edited content overwrites the imported content immediately after.
                 if (!filePath) {
                     try {
-                        const importResult: any = await vscode.commands.executeCommand(
+                        const importResult: any = await this._seams().commands.executeCommand(
                             'switchboard.importTaskAsDocument',
                             { workspaceRoot, provider, id, includeSubtasks: false }
                         );
                         if (importResult && importResult.success === false) {
                             const errMsg = importResult.error || 'Local document write failed.';
-                            vscode.window.showErrorMessage(`Save failed: ${errMsg}`);
+                            this._seams().ui.showErrorMessage(`Save failed: ${errMsg}`);
                             break;
                         }
                         filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                     } catch (importErr) {
                         const errMsg = importErr instanceof Error ? importErr.message : String(importErr);
-                        vscode.window.showErrorMessage(`Save failed (could not create local file): ${errMsg}`);
+                        this._seams().ui.showErrorMessage(`Save failed (could not create local file): ${errMsg}`);
                         break;
                     }
                 }
                 if (!filePath) {
-                    vscode.window.showErrorMessage('Save failed: could not locate or create the local ticket file.');
+                    this._seams().ui.showErrorMessage('Save failed: could not locate or create the local ticket file.');
                     break;
                 }
                 try {
@@ -6168,7 +6135,7 @@ Please format the updated output document strictly as follows:
                     nfs.writeFileSync(filePath, frontmatter + content, 'utf8');
                 } catch (writeErr) {
                     const errMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-                    vscode.window.showErrorMessage(`Save failed: ${errMsg}`);
+                    this._seams().ui.showErrorMessage(`Save failed: ${errMsg}`);
                 }
                 break;
             }
@@ -6176,7 +6143,7 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.importTaskAsDocument',
                         { workspaceRoot, provider, id, includeSubtasks: true }
                     );
@@ -6203,13 +6170,13 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.pushTicketEdits',
                         { workspaceRoot, provider, id }
                     );
                     if (!result?.success) {
                         // Webview status is silent; surface the real reason natively.
-                        vscode.window.showErrorMessage(`Push to ${provider} failed: ${result?.error || 'unknown error'}`);
+                        this._seams().ui.showErrorMessage(`Push to ${provider} failed: ${result?.error || 'unknown error'}`);
                     }
                     this.postMessageToWebview({
                         type: 'pushTicketResult',
@@ -6221,7 +6188,7 @@ Please format the updated output document strictly as follows:
                     });
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
-                    vscode.window.showErrorMessage(`Push to ${provider} failed: ${errMsg}`);
+                    this._seams().ui.showErrorMessage(`Push to ${provider} failed: ${errMsg}`);
                     this.postMessageToWebview({
                         type: 'pushTicketResult',
                         success: false,
@@ -6236,7 +6203,7 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.deleteTicket',
                         { workspaceRoot, provider, id }
                     );
@@ -6502,11 +6469,11 @@ Please format the updated output document strictly as follows:
                 try {
                     const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                     if (!filePath) {
-                        vscode.window.showErrorMessage('Save the ticket once before attaching images.');
+                        this._seams().ui.showErrorMessage('Save the ticket once before attaching images.');
                         this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: false });
                         break;
                     }
-                    const picked = await vscode.window.showOpenDialog({
+                    const picked = await this._seams().ui.showOpenDialog({
                         canSelectMany: false,
                         openLabel: 'Attach image',
                         filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }
@@ -6515,7 +6482,7 @@ Please format the updated output document strictly as follows:
                         this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: false });
                         break;
                     }
-                    const srcPath = picked[0].fsPath;
+                    const srcPath = picked[0];
                     const attachmentsDir = path.join(path.dirname(filePath), 'attachments');
                     fs.mkdirSync(attachmentsDir, { recursive: true });
                     const ext = path.extname(srcPath);
@@ -6529,7 +6496,7 @@ Please format the updated output document strictly as follows:
                     fs.copyFileSync(srcPath, path.join(attachmentsDir, destName));
                     this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: true, relativePath: `attachments/${destName}` });
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to attach image: ' + err.message);
+                    this._seams().ui.showErrorMessage('Failed to attach image: ' + err.message);
                     this.postMessageToWebview({ type: 'ticketImageAttached', requestId, success: false });
                 }
                 break;
@@ -6559,7 +6526,7 @@ Please format the updated output document strictly as follows:
                     }
                 } catch { /* fall through and attempt the enrich */ }
                 try {
-                    await vscode.commands.executeCommand(
+                    await this._seams().commands.executeCommand(
                         'switchboard.importTaskAsDocument',
                         { workspaceRoot, provider, id, includeSubtasks: true }
                     );
@@ -6611,7 +6578,7 @@ Please format the updated output document strictly as follows:
                         const batch = uniqueTickets.slice(i, i + CONCURRENCY);
                         const batchResults = await Promise.all(batch.map(async (ticket) => {
                             try {
-                                const result: any = await vscode.commands.executeCommand(
+                                const result: any = await this._seams().commands.executeCommand(
                                     'switchboard.pushTicketEdits',
                                     { workspaceRoot, provider, id: ticket.id }
                                 );
@@ -6693,7 +6660,7 @@ Please format the updated output document strictly as follows:
                                 : 'Could not locate local files for these tickets.'
                         });
                     } else {
-                        await vscode.env.clipboard.writeText(paths.join('\n'));
+                        await this._seams().clipboard.writeText(paths.join('\n'));
                         this.postMessageToWebview({
                             type: 'ticketLinkCopied',
                             count: paths.length,
@@ -6702,7 +6669,7 @@ Please format the updated output document strictly as follows:
                         });
                     }
                 } else {
-                    await vscode.env.clipboard.writeText(paths.join('\n'));
+                    await this._seams().clipboard.writeText(paths.join('\n'));
                 }
                 break;
             }
@@ -6710,13 +6677,13 @@ Please format the updated output document strictly as follows:
                 try {
                     const { prompt } = msg;
                     if (typeof prompt !== 'string' || !prompt.trim()) {
-                        vscode.window.showErrorMessage('Diagram prompt is empty.');
+                        this._seams().ui.showErrorMessage('Diagram prompt is empty.');
                         break;
                     }
-                    await vscode.env.clipboard.writeText(prompt);
-                    showTemporaryNotification('Diagram prompt copied to clipboard');
+                    await this._seams().clipboard.writeText(prompt);
+                    this._seams().ui.showTemporaryNotification('Diagram prompt copied to clipboard');
                 } catch (err) {
-                    vscode.window.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
+                    this._seams().ui.showErrorMessage(`Failed to copy diagram prompt: ${String(err)}`);
                 }
                 break;
             }
@@ -6798,7 +6765,7 @@ Please format the updated output document strictly as follows:
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     const { provider, id, title, description } = msg;
                     if (!workspaceRoot || !id) {
-                        vscode.window.showErrorMessage('Missing workspace or ticket ID for refine prompt');
+                        this._seams().ui.showErrorMessage('Missing workspace or ticket ID for refine prompt');
                         break;
                     }
 
@@ -6843,10 +6810,10 @@ ${localFilePath ? `- **Local file path (write the refined content here):** ${loc
 
 Read the existing ticket content from the local file if it exists. Determine what's missing. Produce a complete ticket following the skill instructions above. Write the refined markdown directly to the local file path, preserving any YAML frontmatter. Report back with a summary of what you added or changed.`;
 
-                    await vscode.env.clipboard.writeText(prompt);
-                    showTemporaryNotification('Refine prompt copied to clipboard');
+                    await this._seams().clipboard.writeText(prompt);
+                    this._seams().ui.showTemporaryNotification('Refine prompt copied to clipboard');
                 } catch (err) {
-                    vscode.window.showErrorMessage(`Failed to copy refine prompt: ${String(err)}`);
+                    this._seams().ui.showErrorMessage(`Failed to copy refine prompt: ${String(err)}`);
                 }
                 break;
             }
@@ -6855,7 +6822,7 @@ Read the existing ticket content from the local file if it exists. Determine wha
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     const { planId, planFile, title, subtaskCount } = msg;
                     if (!workspaceRoot || !planFile) {
-                        vscode.window.showErrorMessage('Missing workspace or feature file for refine prompt');
+                        this._seams().ui.showErrorMessage('Missing workspace or feature file for refine prompt');
                         break;
                     }
 
@@ -6898,10 +6865,10 @@ ${existingContent ? existingContent : '(file is empty or does not exist yet — 
 
 Read the current content above. Determine what's missing. Produce a complete feature following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown. Write the refined markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary and the proposed subtask list.`;
 
-                    await vscode.env.clipboard.writeText(prompt);
-                    showTemporaryNotification('Refine-feature prompt copied to clipboard. Paste it into your agent.');
+                    await this._seams().clipboard.writeText(prompt);
+                    this._seams().ui.showTemporaryNotification('Refine-feature prompt copied to clipboard. Paste it into your agent.');
                 } catch (err) {
-                    vscode.window.showErrorMessage(`Failed to copy refine-feature prompt: ${String(err)}`);
+                    this._seams().ui.showErrorMessage(`Failed to copy refine-feature prompt: ${String(err)}`);
                 }
                 break;
             }
@@ -6909,7 +6876,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id, statusId } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.changeTicketStatus',
                         { workspaceRoot, provider, id, statusId }
                     );
@@ -6937,7 +6904,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id, comment, mentions } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.postTicketComment',
                         { workspaceRoot, provider, id, comment, mentions }
                     );
@@ -6965,7 +6932,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.loadTicketComments',
                         { workspaceRoot, provider, id }
                     );
@@ -6998,7 +6965,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id, commentId, commentText, mentions } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.postTicketReply',
                         { workspaceRoot, provider, id, commentId, commentText, mentions }
                     );
@@ -7026,7 +6993,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, url, filename, ticketId, ticketTitle } = msg;
                 try {
-                    const result: any = await vscode.commands.executeCommand(
+                    const result: any = await this._seams().commands.executeCommand(
                         'switchboard.downloadAttachment',
                         { workspaceRoot, provider, url, filename, ticketId, ticketTitle }
                     );
@@ -7053,7 +7020,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, ticketId, attachments } = msg;
                 try {
-                    let result: any = await vscode.commands.executeCommand(
+                    let result: any = await this._seams().commands.executeCommand(
                         'switchboard.getAttachmentList',
                         { workspaceRoot, provider, ticketId, attachmentsArray: attachments }
                     );
@@ -7098,8 +7065,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     if (!localPath) {
                         throw new Error('No local path provided');
                     }
-                    const uri = vscode.Uri.file(localPath);
-                    await vscode.env.openExternal(uri);
+                    await this._seams().ui.openExternal(pathToFileURL(localPath).toString());
                     this.postMessageToWebview({
                         type: 'attachmentOpened',
                         success: true,
@@ -7124,8 +7090,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     if (!localPath) {
                         throw new Error('No local path provided');
                     }
-                    const uri = vscode.Uri.file(localPath);
-                    await vscode.commands.executeCommand('revealInExplorer', uri);
+                    await this._seams().commands.executeCommand('revealInExplorer', localPath);
                     this.postMessageToWebview({
                         type: 'attachmentRevealed',
                         success: true,
@@ -7180,7 +7145,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         let importOk = true;
                         let importError: string | undefined;
                         try {
-                            const importResult: any = await vscode.commands.executeCommand(
+                            const importResult: any = await this._seams().commands.executeCommand(
                                 'switchboard.importTaskAsDocument',
                                 { workspaceRoot, provider: 'clickup', id: task.id, includeSubtasks: false, preFetchedTask: task }
                             );
@@ -7259,7 +7224,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     let importError: string | undefined;
                     if (result?.id) {
                         try {
-                            const importResult: any = await vscode.commands.executeCommand(
+                            const importResult: any = await this._seams().commands.executeCommand(
                                 'switchboard.importTaskAsDocument',
                                 {
                                     workspaceRoot,
@@ -7361,7 +7326,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
 
                 try {
-                    await vscode.commands.executeCommand(
+                    await this._seams().commands.executeCommand(
                         'switchboard.askAgentTask',
                         {
                             workspaceRoot: askWorkspaceRoot,
@@ -7407,10 +7372,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                                 this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'No containers available to create doc' });
                                 break;
                             }
-                            const pick = await vscode.window.showQuickPick(
+                            const pick = await this._seams().ui.showQuickPick(
                                 containers.map(c => ({ label: c.name, description: c.id, value: c.id })),
                                 { placeHolder: `Choose a location for new ${sourceId} document` }
-                            );
+                            ) as { label: string; description?: string; value: string } | undefined;
                             if (!pick) {
                                 this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'No location selected' });
                                 break;
@@ -7418,14 +7383,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             parentId = pick.value;
                             // Save as upload location
                             if (configPath) {
-                                const updated = { ...config, uploadLocations: { ...(config.uploadLocations || {}), [sourceId]: parentId } };
+                                const updated = { ...config, uploadLocations: { ...(config.uploadLocations || {}), [sourceId]: parentId as string } };
                                 await fs.promises.writeFile(configPath, JSON.stringify(updated, null, 2));
                                 this._resolvedConfigCache = { configPath, config: updated, sourceRoot };
                             }
                         }
                     }
                     if (!title) {
-                        title = (await vscode.window.showInputBox({ prompt: 'Document title', placeHolder: 'Enter document title' })) || '';
+                        title = (await this._seams().ui.showInputBox({ prompt: 'Document title', placeHolder: 'Enter document title' })) || '';
                         if (!title) {
                             this.postMessageToWebview({ type: 'onlineDocCreated', success: false, error: 'No title provided' });
                             break;
@@ -7489,10 +7454,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     if (!adapter) break;
                     const containers = await adapter.listContainers();
                     if (!containers || containers.length === 0) break;
-                    const pick = await vscode.window.showQuickPick(
+                    const pick = await this._seams().ui.showQuickPick(
                         containers.map(c => ({ label: c.name, description: c.id, value: c.id })),
                         { placeHolder: `Set upload location for ${sourceId}` }
-                    );
+                    ) as { label: string; description?: string; value: string } | undefined;
                     if (pick && configPath) {
                         const updated = { ...config, uploadLocations: { ...(config.uploadLocations || {}), [sourceId]: pick.value } };
                         await fs.promises.writeFile(configPath, JSON.stringify(updated, null, 2));
@@ -7601,7 +7566,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 try {
                     const content = InsightManager.readInsight(wsRoot, filename);
                     if (content) {
-                        const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', content);
+                        const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
                         this.postMessageToProjectWebview({
                             type: 'insightContent',
                             filename,
@@ -7619,7 +7584,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const wsRoot = String(msg.workspaceRoot || '');
                 const planFiles = await this._resolveTuningPlanFiles(wsRoot, allRoots);
                 if (planFiles.length === 0) {
-                    showTemporaryNotification('No plans with adversarial review sections found.');
+                    this._seams().ui.showTemporaryNotification('No plans with adversarial review sections found.');
                     this.postMessageToProjectWebview({ type: 'tuningExtractComplete', planCount: 0 });
                     break;
                 }
@@ -7647,8 +7612,8 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     planFilesList = planFiles.join('\n');
                 }
                 const extractPrompt = `Run the tuning skill in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
-                await vscode.env.clipboard.writeText(extractPrompt);
-                showTemporaryNotification('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
+                await this._seams().clipboard.writeText(extractPrompt);
+                this._seams().ui.showTemporaryNotification('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningExtractComplete', planCount: planFiles.length });
                 break;
             }
@@ -7656,8 +7621,8 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const wsRoot = String(msg.workspaceRoot || '');
                 const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
                 const governancePrompt = `Run the tuning skill in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
-                await vscode.env.clipboard.writeText(governancePrompt);
-                showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
+                await this._seams().clipboard.writeText(governancePrompt);
+                this._seams().ui.showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningGovernanceComplete' });
                 break;
             }
@@ -7693,12 +7658,13 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const link = String(msg.link || '');
                 if (link) {
                     const linkRef = link;
-                    await vscode.env.clipboard.writeText(linkRef);
+                    await this._seams().clipboard.writeText(linkRef);
                     this.postMessageToProjectWebview({ type: 'insightLinkCopied' });
                 }
                 break;
             }
         }
+        return { success: true };
     }
 
 
@@ -7719,10 +7685,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }
             const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
             const docPath = path.resolve(sourceFolder, cleanDocId);
-            await vscode.env.clipboard.writeText(docPath);
-            showTemporaryNotification(`Document path copied to clipboard: ${docPath}`);
+            await this._seams().clipboard.writeText(docPath);
+            this._seams().ui.showTemporaryNotification(`Document path copied to clipboard: ${docPath}`);
         } catch (err) {
-            vscode.window.showErrorMessage(`Failed to link to document: ${String(err)}`);
+            this._seams().ui.showErrorMessage(`Failed to link to document: ${String(err)}`);
         }
     }
 
@@ -7783,10 +7749,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
             if (!fs.existsSync(resolvedFolder)) {
                 throw new Error('Folder does not exist');
             }
-            await vscode.env.clipboard.writeText(resolvedFolder);
-            showTemporaryNotification(`Folder path copied to clipboard: ${resolvedFolder}`);
+            await this._seams().clipboard.writeText(resolvedFolder);
+            this._seams().ui.showTemporaryNotification(`Folder path copied to clipboard: ${resolvedFolder}`);
         } catch (err) {
-            vscode.window.showErrorMessage(`Failed to link to folder: ${String(err)}`);
+            this._seams().ui.showErrorMessage(`Failed to link to folder: ${String(err)}`);
         }
     }
 
@@ -7795,7 +7761,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         folderPath: string
     ): Promise<void> {
         try {
-            const docName = await vscode.window.showInputBox({
+            const docName = await this._seams().ui.showInputBox({
                 prompt: 'New document name',
                 placeHolder: 'e.g. my-plan.md',
                 validateInput: (value) => {
@@ -7850,7 +7816,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 resolvedFolder = localFolderService.resolveFolderPath(folderPath);
                 const allowedPaths = localFolderService.getFolderPaths();
                 if (!allowedPaths.includes(resolvedFolder)) {
-                    vscode.window.showErrorMessage('Folder is not a configured local docs folder');
+                    this._seams().ui.showErrorMessage('Folder is not a configured local docs folder');
                     return;
                 }
                 const folderIndex = allowedPaths.indexOf(resolvedFolder);
@@ -7859,7 +7825,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
             const filePath = path.join(resolvedFolder, sanitized);
             if (fs.existsSync(filePath)) {
-                vscode.window.showErrorMessage(`A document named ${sanitized} already exists.`);
+                this._seams().ui.showErrorMessage(`A document named ${sanitized} already exists.`);
                 return;
             }
 
@@ -7875,7 +7841,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 docName: sanitized
             });
         } catch (err) {
-            vscode.window.showErrorMessage(`Failed to create document: ${String(err)}`);
+            this._seams().ui.showErrorMessage(`Failed to create document: ${String(err)}`);
         }
     }
 
@@ -7957,6 +7923,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
     }
 
     private _updateWebviewRoots(): void {
+        if (!this._panel && !this._projectPanel) { return; }
         const allRoots = this._getWorkspaceRoots();
         const folderUris: vscode.Uri[] = [];
         for (const r of allRoots) {
@@ -7985,7 +7952,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             vscode.Uri.joinPath(this._extensionUri, 'webview'),
             vscode.Uri.joinPath(this._extensionUri, 'designs'),
             vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
-            ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri),
+            ...allRoots.map(r => vscode.Uri.file(r)),
             ...folderUris
         ];
 
@@ -8250,9 +8217,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length, 'roots:', roots);
         const allRoots = this._getWorkspaceRoots();
         const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
-        const folderUri = workspaceRoot ? vscode.workspace.workspaceFolders?.find(f => path.resolve(f.uri.fsPath) === path.resolve(workspaceRoot))?.uri : undefined;
-        const configScope = vscode.workspace.getConfiguration('switchboard', folderUri);
-        const enabledSourcesConfig = configScope.get<Record<string, boolean>>('planning.enabledSources') || {};
+        const enabledSourcesConfig = this._seams().pathConfig.getConfigJson<Record<string, boolean>>('planning.enabledSources', {});
 
         const enabledSources: Record<string, boolean> = {};
         availableSources.forEach(s => {
@@ -8273,11 +8238,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
         await this._sendOnlineDocsReady();
         await this._sendPlanningHtmlDocsReady();
         await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');
-        const cyberAnimationDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+        const cyberAnimationDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
         this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
-        const cyberScanlinesDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
+        const cyberScanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
         this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: cyberScanlinesDisabled });
-        const currentTheme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+        const currentTheme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
         this.postMessageToWebview({ type: 'switchboardThemeNameSetting', theme: currentTheme });
     }
 
@@ -8852,9 +8817,8 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         }
 
                         // Both local and remote have changed — conflict: offer resolution via modal dialog
-                        const choice = await vscode.window.showWarningMessage(
+                        const choice = await this._seams().ui.showModalWarningMessage(
                             `Conflict: Both the local and remote document "${importEntry.docName}" have been modified since the last sync.`,
-                            { modal: true },
                             'Overwrite Remote',
                             'Keep Remote',
                             'Cancel'
@@ -9139,7 +9103,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
     private async _handleImportPlansFromClipboard(workspaceRoot: string): Promise<void> {
         // Delegate to the existing command that handles clipboard import
-        await vscode.commands.executeCommand('switchboard.importPlanFromClipboard');
+        await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard');
     }
 
     private async _handleImportResearchDoc(workspaceRoot: string, docTitle?: string, folderPath?: string): Promise<void> {
@@ -9150,7 +9114,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
         this._importInProgress = true;
         try {
-            const content = await vscode.env.clipboard.readText();
+            const content = await this._seams().clipboard.readText();
 
             if (!content || !content.trim()) {
                 this.postMessageToWebview({ type: 'importResearchDocResult', error: 'Clipboard is empty. Copy research markdown first.' });
@@ -9255,7 +9219,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         }
         this._importInProgress = true;
         try {
-            const content = await vscode.env.clipboard.readText();
+            const content = await this._seams().clipboard.readText();
             if (!content || !content.trim()) {
                 this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: 'Clipboard is empty. Copy markdown first.' });
                 return;
@@ -9302,7 +9266,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
      * Guards against absolute/escape configs — falls back to root `docs/`.
      */
     private _devDocsFolder(root: string): string {
-        const cfg = vscode.workspace.getConfiguration('switchboard').get<string>('devDocsFolder', 'docs') || 'docs';
+        const cfg = this._seams().pathConfig.getConfigStringWithDefault('devDocsFolder', 'docs') || 'docs';
         const p = path.resolve(root, cfg);
         // Must be strictly INSIDE root. Bare startsWith(root) lets a sibling
         // like `<root>-evil` (via `../<root>-evil`) pass — and this dir feeds
@@ -9552,35 +9516,35 @@ Read the current content above. Determine what's missing. Produce a complete fea
         for (const t of this._ticketsViewWatcherDebounces.values()) { clearTimeout(t); }
         this._ticketsViewWatcherDebounces.clear();
 
-        const watchPaths: string[] = [];
+        const watchFolders: string[] = [];
         const clickup = GlobalIntegrationConfigService.loadConfigSync('clickup');
         if (clickup?.ticketSaveLocation) {
-            watchPaths.push(path.join(clickup.ticketSaveLocation, '**/*.md'));
+            watchFolders.push(clickup.ticketSaveLocation);
         }
         const linear = GlobalIntegrationConfigService.loadConfigSync('linear');
         if (linear?.ticketSaveLocation) {
-            watchPaths.push(path.join(linear.ticketSaveLocation, '**/*.md'));
+            watchFolders.push(linear.ticketSaveLocation);
         }
-        watchPaths.push(path.join(workspaceRoot, '.switchboard/tickets/**/*.md'));
+        watchFolders.push(path.join(workspaceRoot, '.switchboard/tickets'));
 
-        const handleTicketFileEvent = (uri: vscode.Uri) => {
-            const fileName = path.basename(uri.fsPath);
+        const handleTicketFileEvent = (filePath: string) => {
+            const fileName = path.basename(filePath);
             const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
             if (!match) { return; }
             const [, provider, id] = match;
 
-            const key = uri.fsPath;
+            const key = filePath;
             const existing = this._ticketsViewWatcherDebounces.get(key);
             if (existing) { clearTimeout(existing); }
             this._ticketsViewWatcherDebounces.set(key, setTimeout(() => {
                 this._ticketsViewWatcherDebounces.delete(key);
                 try {
                     const nfs = require('fs') as typeof import('fs');
-                    const raw = nfs.readFileSync(uri.fsPath, 'utf8');
+                    const raw = nfs.readFileSync(filePath, 'utf8');
                     const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
                     const h1 = content.match(/^#\s+(.+)$/m);
                     const title = h1 ? h1[1].trim() : id;
-                    const displayContent = this._rewriteLocalImagePaths(content, path.dirname(uri.fsPath));
+                    const displayContent = this._rewriteLocalImagePaths(content, path.dirname(filePath));
                     // rawContent preserves original local paths for edit mode + push flow;
                     // content holds rewritten webview URIs for preview only.
                     this.postMessageToWebview({ type: 'ticketFileChanged', provider, id, title, content: displayContent, rawContent: content });
@@ -9588,17 +9552,20 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }, 300));
         };
 
-        const watchers = watchPaths.map(pattern => {
-            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-            watcher.onDidCreate(handleTicketFileEvent);
-            watcher.onDidChange(handleTicketFileEvent);
-            watcher.onDidDelete(handleTicketFileEvent);
-            return watcher;
-        });
+        const watchers: HostWatchHandle[] = [];
+        for (const folder of watchFolders) {
+            if (!fs.existsSync(folder)) { continue; }
+            const watcher = this._seams().watcher.watchFolder(folder, (event, filePath) => {
+                if (!filePath.endsWith('.md')) { return; }
+                handleTicketFileEvent(filePath);
+            });
+            watchers.push(watcher);
+        }
 
-        const combined = vscode.Disposable.from(...watchers);
-        this._ticketsViewWatcher = combined;
-        this._disposables.push(combined);
+        this._ticketsViewWatcher = {
+            dispose: () => watchers.forEach(w => { try { w.dispose(); } catch { } })
+        };
+        this._disposables.push(this._ticketsViewWatcher);
     }
 
     private _updateTicketsAutoSyncWatcher(workspaceRoot: string, enabled: boolean): void {
@@ -9621,32 +9588,30 @@ Read the current content above. Determine what's missing. Produce a complete fea
         }
         if (existing) { return; } // already watching
 
-        const watchPaths: string[] = [];
+        const watchFolders: string[] = [];
         const clickup = GlobalIntegrationConfigService.loadConfigSync('clickup');
-        if (clickup?.ticketSaveLocation) {
-            watchPaths.push(path.join(clickup.ticketSaveLocation, '**/*.md'));
-        }
         const linear = GlobalIntegrationConfigService.loadConfigSync('linear');
-        if (linear?.ticketSaveLocation) {
-            watchPaths.push(path.join(linear.ticketSaveLocation, '**/*.md'));
-        }
-        watchPaths.push(path.join(workspaceRoot, '.switchboard/tickets/**/*.md'));
+        if (clickup?.ticketSaveLocation) { watchFolders.push(clickup.ticketSaveLocation); }
+        if (linear?.ticketSaveLocation) { watchFolders.push(linear.ticketSaveLocation); }
+        watchFolders.push(path.join(workspaceRoot, '.switchboard/tickets'));
 
-        const watchers = watchPaths.map(pattern => {
-            const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
-            watcher.onDidChange(async (uri) => {
-                const fileName = path.basename(uri.fsPath);
+        const watchers: HostWatchHandle[] = [];
+        for (const folder of watchFolders) {
+            if (!fs.existsSync(folder)) { continue; }
+            const watcher = this._seams().watcher.watchFolder(folder, (event, filePath) => {
+                if (event !== 'change' || !filePath.endsWith('.md')) { return; }
+                const fileName = path.basename(filePath);
                 const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
                 if (!match) { return; }
                 const [, provider, id] = match;
 
-                const debounceKey = uri.fsPath;
+                const debounceKey = filePath;
                 const existing = this._ticketsAutoSyncDebounces.get(debounceKey);
                 if (existing) { clearTimeout(existing); }
                 this._ticketsAutoSyncDebounces.set(debounceKey, setTimeout(async () => {
                     this._ticketsAutoSyncDebounces.delete(debounceKey);
                     try {
-                        const result: any = await vscode.commands.executeCommand(
+                        const result: any = await this._seams().commands.executeCommand(
                             'switchboard.pushTicketEdits',
                             { workspaceRoot, provider: provider as 'linear' | 'clickup', id }
                         );
@@ -9668,11 +9633,12 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     }
                 }, 2000));
             });
-            return watcher;
-        });
+            watchers.push(watcher);
+        }
 
-        const combined = vscode.Disposable.from(...watchers);
-        this._ticketsAutoSyncWatchers.set(workspaceRoot, combined);
+        this._ticketsAutoSyncWatchers.set(workspaceRoot, {
+            dispose: () => watchers.forEach(w => { try { w.dispose(); } catch { } })
+        });
 
         // Start the delta-pull timer (auto-sync ON only). Runs every 45s —
         // safe for both ClickUp (100 req/min) and Linear (5,000 req/hour).
@@ -9713,7 +9679,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
                 const deltaSinceIso = lastPullIso || undefined;
 
-                const result: any = await vscode.commands.executeCommand(
+                const result: any = await this._seams().commands.executeCommand(
                     'switchboard.importAllTasks',
                     {
                         workspaceRoot,
@@ -9916,7 +9882,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         const workspaceId = await this._getWorkspaceId(workspaceRoot);
         const records = await db.getBoard(workspaceId);
         const completedLimit = Math.max(1, Math.min(
-            vscode.workspace.getConfiguration('switchboard').get<number>('kanban.completedLimit', 100) ?? 100,
+            this._seams().pathConfig.getConfigNumber('kanban.completedLimit', 100),
             500
         ));
         const completedRecords = await db.getCompletedPlans(workspaceId, completedLimit);

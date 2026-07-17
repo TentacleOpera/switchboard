@@ -1,8 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import * as vscode from 'vscode';
-import { WorkspaceDatabaseMapping } from '../services/KanbanDatabase';
 
 /**
  * Expand home directory shorthand (~) to absolute path.
@@ -47,7 +45,8 @@ function hasOwnControlPlane(dir: string): boolean {
  */
 function anyOtherFolderOwnsControlPlane(candidate: string): boolean {
     try {
-        const folders = vscode.workspace.workspaceFolders ?? [];
+        const vscode = require('vscode') as any;
+        const folders = vscode.workspace?.workspaceFolders ?? [];
         for (const f of folders) {
             const root = path.resolve(f.uri.fsPath);
             if (root === candidate) continue;

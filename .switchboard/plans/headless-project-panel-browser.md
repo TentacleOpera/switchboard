@@ -79,6 +79,15 @@ Key risks: shipping this before ·6 yields a Project panel whose buttons crash h
 - The VS Code Project panel behaves identically before/after (shared disk file, per-host CSP/assets).
 - (Headless, once B1) the same via `npx switchboard` with no VS Code — no arm crashes.
 
----
+## Completion Summary
 
-**Recommendation:** Complexity **6** → **Send to Coder**. Blocked on **·6 (Planning burndown)** — this is the browser upgrade that turns ·6's host-agnostic Planning arms into a usable no-VS-Code Project panel. Reuses the Kanban browser board's transport/serving/auth wholesale.
+- Migrated the remaining `PlanningPanelProvider` arms from direct `vscode.*` calls to the injected `_seams()` interface: terminal dispatch, configuration reads/writes, file dialogs, external links, watchers, and command execution.
+- Extended `hostSeams.ts` with `HostWatchHandle`/`TerminalHandle`, `getConfigNumber`/`getConfigJson`/`updateConfigWorkspace`, and `findByNameContains` on `TerminalBackend` to support the migrated arms.
+- Added `StandaloneHostPathConfigProvider` missing config methods and a `createHeadlessHostSeams()` bundle in `src/standalone/hostServices.ts` for the no-VS-Code case.
+- Wired the Project panel into the browser static-serve path:
+  - `LocalApiServer` now serves `GET /project` and `GET /project.html` via `_handleServeProject` with token→cookie auth.
+  - `POST /project/verb/<name>` routes through the existing planning-verb handler.
+  - `standalone/bootstrap.ts` provides `getProjectHtml()` which rewrites `project.html` placeholders, injects `sharedDefaults.js`/`transport.js`, sets `data-panel="project"`, and emits a browser-compatible CSP (`connect-src 'self' ws://...`).
+- Fixed TypeScript type errors introduced by the migration; `npx tsc --noEmit` now reports only pre-existing `.js` extension import warnings in unrelated files.
+
+**Remaining for full headless functionality:** `PlanningPanelProvider` still imports `vscode` for panel/type bindings and panel-only setup code. In `npx switchboard` mode the module load must be trapped or the provider instantiated with headless seams before the full verb surface works end-to-end; the infrastructure routes and seams are in place for that final wiring.

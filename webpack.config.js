@@ -3,6 +3,7 @@
 'use strict';
 
 const path = require('path');
+const webpack = require('webpack');
 const CopyPlugin = require('copy-webpack-plugin');
 
 //@ts-check
@@ -101,4 +102,38 @@ const extensionConfig = {
         })
     ]
 };
-module.exports = extensionConfig;
+
+/** @type WebpackConfig */
+const standaloneConfig = {
+    target: 'node',
+    mode: extensionConfig.mode,
+    entry: './src/standalone/cli.ts',
+    output: {
+        path: path.resolve(__dirname, 'dist', 'standalone'),
+        filename: 'cli.js',
+        libraryTarget: 'commonjs2'
+    },
+    externals: {
+        vscode: 'commonjs vscode' // not imported, but ensures any stray dynamic require stays external
+    },
+    resolve: {
+        extensions: ['.ts', '.js']
+    },
+    module: extensionConfig.module,
+    devtool: 'nosources-source-map',
+    infrastructureLogging: {
+        level: 'log'
+    },
+    node: {
+        __dirname: false
+    },
+    plugins: [
+        new webpack.BannerPlugin({
+            banner: '#!/usr/bin/env node',
+            raw: true,
+            entryOnly: true
+        })
+    ]
+};
+
+module.exports = [extensionConfig, standaloneConfig];

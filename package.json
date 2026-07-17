@@ -11,6 +11,9 @@
   ],
   "version": "1.7.13",
   "main": "./dist/extension.js",
+  "bin": {
+    "switchboard": "./dist/standalone/cli.js"
+  },
   "publisher": "TurnZero",
   "repository": {
     "type": "git",
@@ -760,13 +763,11 @@
           "type": "string",
           "enum": [
             "afterburner",
-            "claudify",
-            "pixel"
+            "claudify"
           ],
           "enumDescriptions": [
             "Afterburner — Cyan immersive theme: Hanken headings (no glow), scanlines and glass always on, CRT sweep toggleable",
-            "Claudify — Claude terracotta accent, Hanken headings, flat neutral surface",
-            "Pixel — Afterburner cyan theme with GeistPixel kanban card titles"
+            "Claudify — Claude terracotta accent, Hanken headings, flat neutral surface, scanlines and CRT sweep toggleable"
           ],
           "default": "afterburner",
           "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",
@@ -862,5 +863,13 @@
     "@mermaid-js/mermaid-cli": {
       "optional": true
     }
-  }
+  },
+  "files": [
+    "dist",
+    "src/webview",
+    "icons",
+    "designs",
+    "icon.png",
+    "README.md"
+  ]
 }

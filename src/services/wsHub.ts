@@ -69,6 +69,18 @@ export class WsHub {
         });
     }
 
+    private _parseCookies(req: any): Record<string, string> {
+        const raw = req.headers?.cookie || '';
+        const result: Record<string, string> = {};
+        for (const part of raw.split(';')) {
+            const [k, ...rest] = part.trim().split('=');
+            if (k && rest.length > 0) {
+                result[k] = decodeURIComponent(rest.join('='));
+            }
+        }
+        return result;
+    }
+
     /**
      * Validate Origin + token, then complete the WS upgrade.
      */
@@ -84,16 +96,13 @@ export class WsHub {
             }
         }
 
-        // Token validation from ?token= query param.
+        // Token validation: prefer ?token= query param, then the sb_session cookie.
         const reqUrl = new URL(req.url || '', `http://${req.headers.host}`);
-        const token = reqUrl.searchParams.get('token');
-        if (!token) {
-            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-            socket.destroy();
-            return;
-        }
+        const cookies = this._parseCookies(req);
+        const presented = reqUrl.searchParams.get('token') || cookies['sb_session'] || '';
         const expected = await this._options.getAuthToken();
-        if (!this._constantTimeEqual(token, expected)) {
+        // Extension path: no token configured => accept the loopback connection.
+        if (expected && !this._constantTimeEqual(presented, expected)) {
             socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
             socket.destroy();
             return;

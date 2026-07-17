@@ -37,8 +37,12 @@ Cross-feature: the *Board Anywhere · Browser Board* subtask is the first place 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Feature B · B4 — `npx` Distribution + Launcher](../plans/extract-standalone-npx-04-npx-distribution.md) — **PLAN REVIEWED**
-- [ ] [Feature B · B1 — Host-Agnostic Core Service / Standalone Bootstrap](../plans/standalone-headless-core-service-bootstrap.md) — **PLAN REVIEWED**
-- [ ] [Feature B · B2 — Transport Shim (run the real webview UI in a browser)](../plans/standalone-headless-transport-shim.md) — **PLAN REVIEWED**
+- [x] [Feature B · B4 — `npx` Distribution + Launcher](../plans/extract-standalone-npx-04-npx-distribution.md) — **LEAD CODED**
+- [x] [Feature B · B1 — Host-Agnostic Core Service / Standalone Bootstrap](../plans/standalone-headless-core-service-bootstrap.md) — **LEAD CODED**
+- [x] [Feature B · B2 — Transport Shim (run the real webview UI in a browser)](../plans/standalone-headless-transport-shim.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+Implemented the no-terminal-fleet MVP for standalone headless Switchboard. Added `src/standalone/bootstrap.ts` and `src/standalone/cli.ts` to boot `KanbanDatabase`, `LocalApiServer`, and a headless browser board, plus `src/standalone/hostServices.ts` for config/secrets/state seams that do not require VS Code. Injected a `HostPathConfigProvider` into `KanbanDatabase` so the four lazy `require('vscode')` config sites can run outside the extension host, and added `src/webview/transport.js` to shim `acquireVsCodeApi()` with fetch/WebSocket + `localStorage` state and to hide terminal/CLI/automation UI when `terminalDispatch` is false. Wired `LocalApiServer` to serve the transformed `kanban.html` and static assets with a one-time-token/cookie auth flow and Host-header allowlisting, and updated `wsHub` to accept the session cookie. Updated `webpack.config.js` to emit `dist/standalone/cli.js` and `package.json` to expose the `switchboard` bin and ship the required assets. Verified with `npx webpack` and a live `node dist/standalone/cli.js --workspace <dir>` run: `/health` returns OK, the one-time-token board URL returns HTML, and `/kanban/verb/ready` responds successfully with cookie auth. Existing `npx tsc --noEmit` failures in unrelated files remain unchanged.
 

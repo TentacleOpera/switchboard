@@ -322,6 +322,23 @@
             margin-bottom: 8px;
         }
 
+        /* Tickets sidebar row: New Ticket / Link all / Kanban all stay
+           left-justified as a group; only the collapse toggle («) is pinned
+           to the right. Other tabs keep the default right-justified layout. */
+        #tree-pane-tickets .sidebar-toggle-row {
+            justify-content: flex-start;
+        }
+        #tree-pane-tickets .sidebar-toggle-row .sidebar-toggle-btn {
+            margin-left: auto;
+        }
+        /* Preserve the collapsed layout: strip buttons hide, lone toggle centers. */
+        .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row {
+            justify-content: center;
+        }
+        .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row .sidebar-toggle-btn {
+            margin-left: 0;
+        }
+
         .sidebar-toggle-btn {
             background: transparent;
             border: 1px solid var(--border-color);
@@ -2846,12 +2863,29 @@
             color: var(--accent-teal, #00ffcc);
         }
 
+        /* Card action row is collapsed at rest so the list reads as clean
+           title/status/assignee cards; it reveals on hover, selection, or
+           keyboard focus (focus-within keeps it reachable via Tab). */
         .ticket-node .card-actions {
             display: flex;
             gap: 4px;
-            margin-top: 4px;
+            margin-top: 0;
             flex-wrap: wrap;
             justify-content: flex-start;
+            max-height: 0;
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
+            transition: max-height 0.15s ease, opacity 0.15s ease, margin-top 0.15s ease;
+        }
+
+        .ticket-node:hover .card-actions,
+        .ticket-node.selected .card-actions,
+        .ticket-node:focus-within .card-actions {
+            max-height: 80px;
+            margin-top: 4px;
+            opacity: 1;
+            pointer-events: auto;
         }
 
         .ticket-node .card-actions .card-icon-btn {
@@ -3280,6 +3314,11 @@
             font-size: 11px;
             color: var(--text-secondary);
             flex-wrap: wrap;
+        }
+        /* Delete is the one destructive action here — pushed to the far right,
+           on its own, away from the everyday edit/assign/comment buttons. */
+        #btn-delete-ticket {
+            margin-left: auto;
         }
         .kanban-meta-group {
             display: flex;
@@ -3824,7 +3863,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <select id="tickets-state-filter" class="planning-select" style="display:none" title="Filter by Linear state"></select>
                     <select id="tickets-status-filter" class="planning-select" style="display:none" title="Filter by ClickUp status"></select>
                     <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
-                    <button id="tickets-create" class="strip-btn" title="Create New Ticket">+ New Ticket</button>
                     <button id="tickets-refresh" class="strip-btn" title="Refresh recent changes">Refresh</button>
                     <button id="tickets-refetch" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
                     <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
@@ -3834,8 +3872,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <div class="content-row">
                 <div id="tree-pane-tickets">
                     <div class="sidebar-toggle-row">
+                        <button id="tickets-create" class="strip-btn" title="Create New Ticket">+ New Ticket</button>
                         <button id="tickets-link-all" class="strip-btn" title="Copy all ticket file paths to clipboard">Link all</button>
-                        <button id="tickets-import-all-kanban" class="strip-btn" title="Add all tickets to the Kanban board" style="display:none">Add all to Kanban</button>
+                        <button id="tickets-import-all-kanban" class="strip-btn" title="Add all tickets to the Kanban board" style="display:none">Kanban all</button>
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                     </div>
                     <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
@@ -3850,7 +3889,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="btn-save-ticket-edit" class="strip-btn" style="display:none; background: var(--accent-teal); color: black;">Save</button>
                             <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
                             <button id="btn-push-ticket" class="strip-btn">Push</button>
-                            <button id="btn-delete-ticket" class="strip-btn">Delete</button>
                             <button id="btn-assign-ticket" class="strip-btn" title="Assign members">Assign</button>
                             <button id="tickets-tags" class="strip-btn" title="Edit tags">Tags</button>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
@@ -3859,6 +3897,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="btn-add-subtask" class="strip-btn" title="Create a subtask under this ticket">+ Subtask</button>
                             <button id="btn-convert-subtask" class="strip-btn" title="Convert this ticket to a subtask of another ticket">To subtask</button>
                             <button id="btn-to-parent-task" class="strip-btn" title="Navigate to the parent task" style="display:none;">To parent task</button>
+                            <button id="btn-delete-ticket" class="strip-btn" title="Delete this ticket">Delete</button>
                         </div>
 
                         <div id="tickets-comment-manager" style="display:none; flex: 1; flex-direction: column; overflow: hidden; border-top: 1px solid var(--border-color); background: var(--panel-bg2); margin: 0;">
