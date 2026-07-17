@@ -279,3 +279,7 @@ Key risks: (1) `sbContentDims`/`sbSpacePan` messages from the wrong iframe corru
 ---
 
 **Recommendation:** Send to Coder (complexity 6).
+
+## Completion Summary
+
+Implemented the HTML preview pan/zoom fixes across the Design panel. `DesignPanelProvider.ts` now injects a bridge script that forwards Space key state and reports the iframe document's natural `scrollWidth`/`scrollHeight` via `postMessage`. `src/webview/design.js` consumes these messages, sizes each preview's `.zoomable-viewport` to the reported dims, adds a `data-action="pan"` toggle with active-state syncing, and branches the wheel handler into pan mode (plain scroll) and zoom mode (ctrl/meta wheel). The dead `image-preview-container` wiring was removed, `initZoomListeners` was wired for `stitch-html-preview-wrapper`, and per-tab `_htmlContentDims` / `_stitchHtmlContentDims` variables prevent cross-tab dim leakage. `src/webview/design.html` adds the Pan button to both HTML and Stitch HTML toolbars, updates Reset/Fit tooltips, and adds `.zoom-btn.active` styling. Verification: `npm run lint` and `node --check src/webview/design.js` pass; grep confirms no bare `image-preview-container` references remain and `initZoomListeners('stitch-html-preview-wrapper'...)` is present. No automated tests were run per the session directives.

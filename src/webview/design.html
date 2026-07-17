@@ -2065,6 +2065,12 @@
             color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
         }
+        .zoom-btn.active {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
 
         /* ── Cyber Panel Theme: Neon Glow Effects ── */
         /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
@@ -3843,10 +3849,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                             <div class="zoom-event-layer"></div>
                             <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
                                 <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                                <button class="zoom-btn" data-action="reset" title="Actual size (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
                             </div>
                         </div>
                     </div>
@@ -3908,14 +3915,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     </div>
                                 </div>
                             </div>
-                            <!-- Shown only while Space is held — captures drag/scroll for
-                                 pan/zoom; otherwise the iframe stays fully interactive. -->
+                            <!-- Shown while Space is held or Pan mode is toggled —
+                                 captures drag/scroll for pan/zoom; otherwise the iframe
+                                 stays fully interactive. -->
                             <div class="zoom-event-layer"></div>
                             <div class="zoom-toolbar">
+                                <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
                                 <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                                <button class="zoom-btn" data-action="reset" title="Actual size (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
                             </div>
                         </div>
                     </div>

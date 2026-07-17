@@ -209,6 +209,9 @@
         stitchHtml: { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null },
     };
 
+    let _htmlContentDims = null;
+    let _stitchHtmlContentDims = null;
+
     const ZOOM_MIN = 0.1;
     const ZOOM_MAX = 40.0;
 
@@ -221,9 +224,22 @@
         viewportEl.style.transform = `translate(${zoomState[tab].panX}px, ${zoomState[tab].panY}px) scale(${zoomState[tab].scale})`;
     }
 
+    function setSpacePanActive(on) {
+        document.body.classList.toggle('space-pan-active', !!on);
+        document.querySelectorAll('.zoom-btn[data-action="pan"]').forEach(btn => {
+            btn.classList.toggle('active', !!on);
+        });
+    }
+
     function getContentDims(viewportEl) {
         const el = viewportEl ? viewportEl.firstElementChild : null;
         if (!el) return null;
+        if (el.tagName === 'IFRAME') {
+            const htmlWrapper = viewportEl.closest('#html-preview-wrapper');
+            if (htmlWrapper && _htmlContentDims) return _htmlContentDims;
+            const stitchWrapper = viewportEl.closest('#stitch-html-preview-wrapper');
+            if (stitchWrapper && _stitchHtmlContentDims) return _stitchHtmlContentDims;
+        }
         const w = el.tagName === 'IMG' ? (el.naturalWidth || el.offsetWidth) : el.offsetWidth;
         const h = el.tagName === 'IMG' ? (el.naturalHeight || el.offsetHeight) : el.offsetHeight;
         return (w && h) ? { w, h } : null;
@@ -297,14 +313,26 @@
         if (!container) return;
 
         // Plain scroll zooms at the cursor; trackpad pinch arrives as ctrl+wheel
-        // with small deltas, so it gets a stronger multiplier.
+        // with small deltas, so it gets a stronger multiplier. When pan mode is
+        // active, wheel drags the canvas instead.
         container.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const factor = Math.exp(-e.deltaY * ((e.ctrlKey || e.metaKey) ? 0.01 : 0.002));
             const rect = container.getBoundingClientRect();
-            zoomAt(tab, container, container.querySelector(viewportSelector),
-                zoomState[tab].scale * factor,
-                e.clientX - rect.left, e.clientY - rect.top);
+            const viewportEl = container.querySelector(viewportSelector);
+            if (document.body.classList.contains('space-pan-active') && !(e.ctrlKey || e.metaKey)) {
+                // Pan mode: translate wheel deltas into pan offsets.
+                zoomState[tab].panX -= e.deltaX;
+                zoomState[tab].panY -= e.deltaY;
+                const dims = getContentDims(viewportEl);
+                if (dims) clampPan(tab, rect, dims.w, dims.h);
+                applyZoom(tab, viewportEl);
+            } else {
+                // Zoom mode: original behavior.
+                const factor = Math.exp(-e.deltaY * ((e.ctrlKey || e.metaKey) ? 0.01 : 0.002));
+                zoomAt(tab, container, viewportEl,
+                    zoomState[tab].scale * factor,
+                    e.clientX - rect.left, e.clientY - rect.top);
+            }
         }, { passive: false });
 
         container.addEventListener('mousedown', (e) => {
@@ -353,6 +381,8 @@
                 zoomAt(tab, container, viewportEl, zoomState[tab].scale * 1.25, rect.width / 2, rect.height / 2);
             } else if (action === 'zoom-out') {
                 zoomAt(tab, container, viewportEl, zoomState[tab].scale / 1.25, rect.width / 2, rect.height / 2);
+            } else if (action === 'pan') {
+                setSpacePanActive(!document.body.classList.contains('space-pan-active'));
             } else if (action === 'reset') {
                 zoomState[tab].scale = 1;
                 const dims = getContentDims(viewportEl);
@@ -371,7 +401,7 @@
 
     // Initialize Zoom for Previews
     initZoomListeners('html-preview-wrapper', '.zoomable-viewport', 'html');
-    initZoomListeners('image-preview-container', '.zoomable-viewport', 'html');
+    initZoomListeners('stitch-html-preview-wrapper', '.zoomable-viewport', 'stitchHtml');
     initZoomListeners('image-preview-container-images', '.zoomable-viewport', 'images');
     initZoomListeners('image-preview-container-design', '.zoomable-viewport', 'design');
 
@@ -408,15 +438,15 @@
         if (e.code !== 'Space' || e.repeat) return;
         const t = e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-        document.body.classList.add('space-pan-active');
+        setSpacePanActive(true);
         e.preventDefault(); // stop the page from scrolling on Space
     });
     window.addEventListener('keyup', (e) => {
         if (e.code !== 'Space') return;
-        document.body.classList.remove('space-pan-active');
+        setSpacePanActive(false);
     });
     window.addEventListener('blur', () => {
-        document.body.classList.remove('space-pan-active');
+        setSpacePanActive(false);
     });
 
     // Sidebar Collapsing
@@ -1255,13 +1285,10 @@
 
             const initialState = document.getElementById('html-initial-state');
             const loadingState = document.getElementById('html-loading-state');
-            const previewFrame = document.getElementById('html-preview-frame');
-            const imageContainer = document.getElementById('image-preview-container');
             const iframeWrapper = document.getElementById('html-preview-wrapper');
             if (initialState) initialState.style.display = 'none';
             if (loadingState) loadingState.style.display = 'flex';
             if (iframeWrapper) iframeWrapper.style.display = 'none';
-            if (imageContainer) imageContainer.style.display = 'none';
 
             vscode.postMessage({
                 type: 'fetchPreview',
@@ -1363,6 +1390,7 @@
         if (sourceId === 'html-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
             resetZoom('html');
+            _htmlContentDims = null;
 
             const initialState = document.getElementById('html-initial-state');
             const loadingState = document.getElementById('html-loading-state');
@@ -1370,33 +1398,17 @@
             if (loadingState) loadingState.style.display = 'none';
 
             const iframe = document.getElementById('html-preview-frame');
-            const imageContainer = document.getElementById('image-preview-container');
-            const imageImg = document.getElementById('image-preview-img');
             const iframeWrapper = document.getElementById('html-preview-wrapper');
+            const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+            if (iframeViewport) { iframeViewport.style.width = ''; iframeViewport.style.height = ''; }
 
-            if (isImage && webviewUri) {
-                if (iframeWrapper) iframeWrapper.style.display = 'none';
-                if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
-                if (imageContainer) { imageContainer.style.display = 'flex'; }
-                const imgViewport = imageContainer ? imageContainer.querySelector('.zoomable-viewport') : null;
-                if (imgViewport) applyZoom('html', imgViewport);
-                if (imageImg) {
-                    imageImg.src = webviewUri + '?t=' + Date.now();
-                    imageImg.onload = () => {
-                        const container = document.getElementById('image-preview-container');
-                        const viewport = container ? container.querySelector('.zoomable-viewport') : null;
-                        if (container && viewport) fitToContainer('html', container, viewport);
-                    };
-                }
-            } else if (msg.iframeSrc) {
+            if (msg.iframeSrc) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('srcdoc');
                     iframe.src = isAutoRefreshed ? msg.iframeSrc + '?t=' + Date.now() : msg.iframeSrc;
                 }
-                if (imageContainer) imageContainer.style.display = 'none';
-                if (imageImg) imageImg.removeAttribute('src');
                 const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                 if (iframeViewport) applyZoom('html', iframeViewport);
                 notifyIframeResize(iframe, iframeWrapper);
@@ -1411,10 +1423,13 @@
                     const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                     if (iframeViewport) applyZoom('html', iframeViewport);
                 }
-                if (imageContainer) imageContainer.style.display = 'none';
-                if (imageImg) imageImg.removeAttribute('src');
                 notifyIframeResize(iframe, iframeWrapper);
                 if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
+            } else if (isImage && webviewUri) {
+                // HTML folder returned an image file; there is no standalone image
+                // viewport in this tab, so just hide the iframe wrapper.
+                if (iframeWrapper) iframeWrapper.style.display = 'none';
+                if (iframe) { iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
@@ -1442,6 +1457,7 @@
             state.stitchSelectedElement = null;
 
             resetZoom('stitchHtml');
+            _stitchHtmlContentDims = null;
 
             const initialState = document.getElementById('stitch-html-initial-state');
             const loadingState = document.getElementById('stitch-html-loading-state');
@@ -1450,6 +1466,8 @@
 
             const iframe = document.getElementById('stitch-html-preview-frame');
             const iframeWrapper = document.getElementById('stitch-html-preview-wrapper');
+            const stitchViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+            if (stitchViewport) { stitchViewport.style.width = ''; stitchViewport.style.height = ''; }
 
             if (msg.iframeSrc) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
@@ -3605,6 +3623,45 @@
                         btn.classList.add('active');
                     } else {
                         btn.classList.remove('active');
+                    }
+                }
+                break;
+            }
+
+            case 'sbSpacePan': {
+                // Gate on the active iframe so a blur from a hidden iframe doesn't
+                // kill pan mode in the visible one. Mirrors sbInspectState routing.
+                const htmlFrame = document.getElementById('html-preview-frame');
+                const stitchFrame = document.getElementById('stitch-html-preview-frame');
+                if ((htmlFrame && event.source === htmlFrame.contentWindow) ||
+                    (stitchFrame && event.source === stitchFrame.contentWindow)) {
+                    setSpacePanActive(!!event.data.on);
+                }
+                break;
+            }
+
+            case 'sbContentDims': {
+                // Route based on event.source — both HTML and Stitch HTML iframes inject
+                // the same _INSPECTOR_SCRIPT, so both will send sbContentDims.
+                const htmlFrame = document.getElementById('html-preview-frame');
+                const stitchFrame = document.getElementById('stitch-html-preview-frame');
+                if (htmlFrame && event.source === htmlFrame.contentWindow) {
+                    const wrapper = document.getElementById('html-preview-wrapper');
+                    const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
+                    if (vp && event.data.w && event.data.h) {
+                        vp.style.width = event.data.w + 'px';
+                        vp.style.height = event.data.h + 'px';
+                        _htmlContentDims = { w: event.data.w, h: event.data.h };
+                        fitToContainer('html', wrapper, vp);
+                    }
+                } else if (stitchFrame && event.source === stitchFrame.contentWindow) {
+                    const wrapper = document.getElementById('stitch-html-preview-wrapper');
+                    const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
+                    if (vp && event.data.w && event.data.h) {
+                        vp.style.width = event.data.w + 'px';
+                        vp.style.height = event.data.h + 'px';
+                        _stitchHtmlContentDims = { w: event.data.w, h: event.data.h };
+                        fitToContainer('stitchHtml', wrapper, vp);
                     }
                 }
                 break;

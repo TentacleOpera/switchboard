@@ -383,6 +383,38 @@ window.addEventListener('message', function(e) {
         toggle(e.data.on);
     }
 });
+
+// ── Space-to-pan forwarding (always on, independent of Inspect Mode) ──
+function isEditableTarget(el) {
+    if (!el) return false;
+    var tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+window.addEventListener('keydown', function(e) {
+    if (e.code !== 'Space' || e.repeat) return;
+    if (isEditableTarget(document.activeElement)) return; // let the field type a space
+    e.preventDefault();                                    // stop the "jump down"
+    window.parent.postMessage({ type: 'sbSpacePan', on: true }, '*');
+}, true);
+window.addEventListener('keyup', function(e) {
+    if (e.code !== 'Space') return;
+    window.parent.postMessage({ type: 'sbSpacePan', on: false }, '*');
+}, true);
+window.addEventListener('blur', function() {
+    window.parent.postMessage({ type: 'sbSpacePan', on: false }, '*');
+});
+
+// ── Natural content-size reporter (drives real Fit/Reset + panning) ──
+function reportDims() {
+    var d = document.documentElement;
+    var w = Math.max(d.scrollWidth, document.body ? document.body.scrollWidth : 0);
+    var h = Math.max(d.scrollHeight, document.body ? document.body.scrollHeight : 0);
+    if (w && h) window.parent.postMessage({ type: 'sbContentDims', w: w, h: h }, '*');
+}
+window.addEventListener('load', reportDims);
+window.addEventListener('resize', reportDims);
+try { new ResizeObserver(reportDims).observe(document.documentElement); } catch (e) {}
+setTimeout(reportDims, 0);
 })();</script>`;
 
     private _injectIntoHead(html: string, snippet: string): string {
