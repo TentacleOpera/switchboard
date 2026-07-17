@@ -23,12 +23,21 @@ interface BoardCardEntry {
     column: string;
     feature: string | null;
     project: string | null;
+    complexity: string;
+    planFile: string;
+}
+
+interface BoardSnapshot {
+    schema: number;
+    ordering: string;
+    cards: BoardCardEntry[];
+    features: Record<string, string>;
 }
 
 /**
  * One-directional, read-only board snapshot publisher.
  *
- * Writes `board.json` + `board.md` to the orphan branch `switchboard/board`
+ * Writes `board.json` + `board.md` + `board.html` to the orphan branch `switchboard/board`
  * (never the code branches). Sole writer is the extension; always overwrite;
  * no diff-ingest, no control, no per-persist timestamp. Content-stable via
  * SHA256 hash skip + debounce + single-flight.
@@ -89,12 +98,12 @@ export class BoardSnapshotPublisher {
             }
 
             const plans = await this._deps.db.getBoard(workspaceId);
-            const { json, md, hash } = this._serialize(plans);
+            const { json, md, hash, html } = this._serialize(plans);
             if (hash === this._lastPublishedHash) {
                 return 'skipped';
             }
 
-            const result = await this._pushSnapshot(root, json, md);
+            const result = await this._pushSnapshot(root, json, md, html);
             if (result === 'pushed') {
                 this._lastPublishedHash = hash;
             }
@@ -116,24 +125,37 @@ export class BoardSnapshotPublisher {
         this._lastPublishedHash = null;
     }
 
-    private _serialize(plans: KanbanPlanRecord[]): { json: string; md: string; hash: string } {
-        const entries: BoardCardEntry[] = plans.map(p => ({
-            plan_id: p.planId,
-            topic: p.topic,
-            column: p.kanbanColumn,
-            feature: p.featureId ?? null,
-            project: p.project ?? null,
-        }));
+    private _serialize(plans: KanbanPlanRecord[]): { json: string; md: string; hash: string; html: string } {
+        const root = this._deps.getWorkspaceRoot();
 
-        const json = JSON.stringify(
-            {
-                schema: 1,
-                ordering: 'updated_at DESC',
-                cards: entries,
-            },
-            null,
-            2,
-        );
+        const features: Record<string, string> = {};
+        for (const p of plans) {
+            if (p.isFeature) {
+                features[p.planId] = p.topic;
+            }
+        }
+
+        const entries: BoardCardEntry[] = plans.map(p => {
+            const relPlanFile = p.planFile ? path.relative(root, p.planFile).replace(/\\/g, '/') : p.planFile;
+            return {
+                plan_id: p.planId,
+                topic: p.topic,
+                column: p.kanbanColumn,
+                feature: p.featureId ?? null,
+                project: p.project ?? null,
+                complexity: p.complexity,
+                planFile: relPlanFile,
+            };
+        });
+
+        const snapshot: BoardSnapshot = {
+            schema: 2,
+            ordering: 'updated_at DESC',
+            cards: entries,
+            features,
+        };
+
+        const json = JSON.stringify(snapshot, null, 2);
 
         const mdLines: string[] = [];
         mdLines.push(`# Switchboard Board Snapshot`);
@@ -152,10 +174,116 @@ export class BoardSnapshotPublisher {
         const md = mdLines.join('\n');
 
         const hash = crypto.createHash('sha256').update(json).digest('hex');
-        return { json, md, hash };
+
+        let asOf = '—';
+        if (plans.length > 0) {
+            const maxUpdatedAt = plans.reduce((max, p) => (p.updatedAt > max ? p.updatedAt : max), plans[0].updatedAt);
+            asOf = new Date(maxUpdatedAt).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZoneName: 'short',
+            });
+        }
+
+        const html = this._renderBoardHtml(snapshot, asOf);
+        return { json, md, hash, html };
     }
 
-    private async _pushSnapshot(root: string, json: string, md: string): Promise<'pushed' | 'skipped' | 'failed'> {
+    private _htmlEscape(text: string): string {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    private _cardHtml(card: BoardCardEntry, features: Record<string, string>): string {
+        const featureLabel = card.feature ? (features[card.feature] || card.feature) : null;
+        const badges: string[] = [];
+        if (card.complexity && card.complexity !== 'Unknown') {
+            badges.push(`<span class="badge complexity">${this._htmlEscape(card.complexity)}</span>`);
+        }
+        if (featureLabel) {
+            badges.push(`<span class="badge feature">${this._htmlEscape(featureLabel)}</span>`);
+        }
+        if (card.project) {
+            badges.push(`<span class="badge project">${this._htmlEscape(card.project)}</span>`);
+        }
+
+        const badgesHtml = badges.length ? `<div class="meta">\n${badges.join('\n')}\n</div>` : '';
+        return `<article class="card">\n  <h3>${this._htmlEscape(card.topic)}</h3>\n  ${badgesHtml}\n  <div class="plan-file">${this._htmlEscape(card.planFile || '')}</div>\n</article>`;
+    }
+
+    private _renderBoardHtml(snapshot: BoardSnapshot, asOf: string): string {
+        const columns = new Map<string, BoardCardEntry[]>();
+        for (const card of snapshot.cards) {
+            const list = columns.get(card.column);
+            if (list) {
+                list.push(card);
+            } else {
+                columns.set(card.column, [card]);
+            }
+        }
+
+        const columnEls: string[] = [];
+        for (const [column, cards] of columns) {
+            const cardEls = cards.map(c => this._cardHtml(c, snapshot.features)).join('\n');
+            columnEls.push(
+                `<section class="column">\n<h2>${this._htmlEscape(column)} <span class="count">${cards.length}</span></h2>\n${cardEls}\n</section>`
+            );
+        }
+
+        const boardContent = columnEls.length
+            ? `<div class="board">\n${columnEls.join('\n')}\n</div>`
+            : `<p class="empty">No active cards.</p>`;
+
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard Board Snapshot</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f5f7; color: #172b4d; line-height: 1.5; }
+header { padding: 1rem; background: #ffffff; border-bottom: 1px solid #dfe1e6; }
+header h1 { margin: 0; font-size: 1.25rem; }
+.as-of { color: #5e6c84; font-size: 0.875rem; margin-top: 0.25rem; }
+.board { display: flex; gap: 1rem; padding: 1rem; align-items: flex-start; overflow-x: auto; min-height: calc(100vh - 8rem); }
+.column { min-width: 280px; flex: 1 1 0; background: #ebecf0; border-radius: 8px; padding: 0.75rem; }
+.column h2 { margin: 0 0 0.75rem; font-size: 0.875rem; text-transform: uppercase; color: #5e6c84; display: flex; justify-content: space-between; align-items: center; }
+.count { background: #dfe1e6; color: #172b4d; border-radius: 999px; padding: 0.125rem 0.5rem; font-size: 0.75rem; }
+.card { background: #ffffff; border-radius: 6px; padding: 0.75rem; margin-bottom: 0.75rem; box-shadow: 0 1px 0 rgba(9,30,66,0.08); word-break: break-word; }
+.card h3 { margin: 0 0 0.5rem; font-size: 1rem; font-weight: 600; color: #172b4d; }
+.meta { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-bottom: 0.5rem; }
+.badge { display: inline-block; font-size: 0.75rem; padding: 0.125rem 0.375rem; border-radius: 4px; background: #e3e9ff; color: #0747a6; }
+.badge.complexity { background: #e3fcef; color: #006644; }
+.badge.project { background: #fff0b3; color: #7f5f01; }
+.plan-file { font-size: 0.75rem; color: #5e6c84; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; margin-top: 0.5rem; word-break: break-all; }
+.empty { padding: 2rem 1rem; text-align: center; color: #5e6c84; }
+@media (max-width: 640px) {
+  .board { flex-direction: column; align-items: stretch; }
+  .column { min-width: auto; width: 100%; flex: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Switchboard Board Snapshot</h1>
+  <div class="as-of">As of ${this._htmlEscape(asOf)} · ${snapshot.cards.length} card${snapshot.cards.length === 1 ? '' : 's'}</div>
+</header>
+<main>
+${boardContent}
+</main>
+</body>
+</html>`;
+    }
+
+    private async _pushSnapshot(root: string, json: string, md: string, html: string): Promise<'pushed' | 'skipped' | 'failed'> {
         const git = (args: string[], cwd: string = root): Promise<{ stdout: string; stderr: string }> =>
             execFileAsync('git', args, { cwd, timeout: 30000 });
 
@@ -201,10 +329,11 @@ export class BoardSnapshotPublisher {
             // Write the snapshot files into the worktree.
             await fs.promises.writeFile(path.join(worktreePath, 'board.json'), json, 'utf8');
             await fs.promises.writeFile(path.join(worktreePath, 'board.md'), md, 'utf8');
+            await fs.promises.writeFile(path.join(worktreePath, 'board.html'), html, 'utf8');
 
             // Stage + commit in the worktree.
             try {
-                await git(['add', 'board.json', 'board.md'], worktreePath);
+                await git(['add', 'board.json', 'board.md', 'board.html'], worktreePath);
             } catch (e) {
                 this._log(`worktree add stage failed: ${e instanceof Error ? e.message : String(e)}`);
                 return 'failed';

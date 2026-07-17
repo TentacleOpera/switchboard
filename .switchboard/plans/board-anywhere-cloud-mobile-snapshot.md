@@ -122,3 +122,7 @@ No open research items remain. The code deliverable (steps 1–6) was already gr
 ---
 
 **Recommendation:** Complexity **5** → **Send to Coder**. Ready to execute; the only open product call is the timestamp source (step 4 recommendation stands). The hosting-behavior research is resolved (see Research Findings) and folded into step 8 — no open research items remain.
+
+## Completion Report
+
+Implemented the self-contained `board.html` snapshot. Extended `BoardSnapshotPublisher._serialize` to add `complexity`, `planFile`, and a top-level `features` lookup, bumped the JSON schema to `2`, and added `_renderBoardHtml` with inline CSS and mobile-responsive grouping by column. Threaded the generated HTML through `publish` and `_pushSnapshot`, wrote `board.html` into the orphan worktree, and added it to the same commit as `board.json`/`board.md`. Updated switchboard-site docs (`cloud-agents.md` and `remote-control.md`) with the artifact recipe and the four confirmed hosting/consumption paths. Did not modify `switchboard-remote/SKILL.md` because that skill’s context assumes no repo access, which makes the repo-dependent artifact recipe inappropriate. The timestamp is derived from the maximum `updated_at`, so it stays out of the `board.json` hash and preserves hash-based dedupe.

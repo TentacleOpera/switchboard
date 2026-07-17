@@ -231,4 +231,16 @@ Implemented the Pixel theme as an additive Afterburner variant. Added `pixel` to
 
 ---
 
+## Review Findings
+
+**Stage 1 (Grumpy Principal Engineer):** Welcome — I came in expecting a font-swap theme to be half-wired and leave stale classes on half the panels. Instead every one of the six `allThemeClasses` arrays carries `theme-pixel`; the `pixel` branch sits *before* `afterburner` in `getThemeBodyClass()` so it can't fall through; the kanban `@font-face` + `KanbanProvider` URI substitution are both present and mirror the proven Hanken path; the Setup visibility gate was widened to `afterburner || pixel` so the animation toggles don't vanish; `getEffectiveColourKanbanIcons()` correctly returns `false` for Pixel (grey icons, no change needed); the radio `change` listener is generic `forEach` so the new option is wired for free; `handleSetThemeSetting` passes the string through unchanged; the CSS override is scoped to `.card-topic` only and leaves `.card-meta`/column headers untouched; `--font-family` fallback resolves (defined at kanban.html:38); `designs/GeistPixel-Square.woff2` exists. No CRITICAL, no MAJOR, no NIT worth fixing — the only open item is the subjective legibility gate already deferred to visual review. The two existing themes have no regression path: `theme-pixel` is referenced by zero Afterburner/Claudify rules and is stripped on every switch-away via the shared removal loop.
+
+**Stage 2 (Balanced):** Keep everything as-is. No code fixes required. The implementation satisfies all seven acceptance criteria at the code level; criteria #2 (legibility) and #6 (font actually loads, no sans fallback) remain manual visual gates as the plan intended. Compilation and tests skipped per session directives.
+
+**Files changed (verified against plan):** `package.json` (enum + enumDescription), `src/services/themeBodyClass.ts` (`pixel` branch), `src/services/KanbanProvider.ts` (`{{GEIST_PIXEL_FONT_URI}}` substitution), `src/webview/kanban.html` (`@font-face` + `body.theme-pixel .card-topic` CSS + `allThemeClasses`/`desired` branch), `src/webview/setup.html` (Pixel radio + visibility gate + `allThemeClasses`/`desired` branch), `src/webview/planning.js`, `src/webview/design.js`, `src/webview/project.js`, `src/webview/implementation.html` (`allThemeClasses`/`desired` branches).
+
+**Validation:** Static trace of all 6 theme handlers, both server theme functions, the Setup picker/visibility gate, and the font-infra path. No compilation or tests run per directives. **Remaining risks:** (1) GeistPixel legibility at 12px on truncated `.card-topic` — visual-review gate only; (2) confirmation that the woff2 actually resolves at runtime in the kanban webview (devtools computed-font check) — code path is correct, runtime load unverified.
+
+---
+
 **Recommendation:** Complexity 4 → **Send to Coder**.
