@@ -106,7 +106,7 @@ Key risks: (1) the two-channel nature — treating the verb's `{success}` ack as
 
 ### `src/services/KanbanProvider.ts`
 - **Context:** `_getHtml` (`:10517-10606`) does token replacement (`{{ICON_*}}`, fonts, `<!-- SHARED_DEFAULTS_SCRIPT -->`), nonce/CSP injection (`:10543-10546`), and workspace-root/theme injection. `handleServiceVerb` (`:6894-6911`) is the shared verb→`_handleMessage` path.
-- **Logic:** Factor the placeholder-replacement logic so the HTTP route can reuse it (or replicate it) without forking `kanban.html`; the HTTP variant targets HTTP asset routes and a browser CSP. No change to verb dispatch (already host-neutral).
+- **Logic:** Factor the placeholder-replacement logic so the HTTP route can reuse it (or replicate it) without forking `kanban.html`; the HTTP variant targets HTTP asset routes and a browser CSP. No change to verb dispatch (already host-neutral). **Also emit a `data-host-capabilities` body attribute at serve time** (parallel to `data-initial-workspace-root`, `:10555-10558`) — in the extension host this is `{ terminalDispatch: true }` (VS Code holds the terminals), so the extension-served board shows the full surface. This is the same serve-time capability hook the *Standalone Headless* feature's B2 consumes to hide CLI/terminal pathways in a headless host; introducing it here means the mechanism is built once, not twice.
 - **Edge Cases:** Serve from the same resolved path (`dist` → `webview` → `src`) to avoid `src`/`dist` drift.
 
 ### `src/webview/browser-host-shim.js` (new, browser-route only)

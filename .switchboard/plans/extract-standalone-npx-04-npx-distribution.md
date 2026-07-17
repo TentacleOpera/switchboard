@@ -8,7 +8,7 @@ description: "Standalone npx Switchboard, subtask 4 of 4: npm bin packaging, lau
 
 Package the standalone service for `npx switchboard`: the `bin` entry + launcher that boots the service, health-gates on `/health` + `api-server-port.txt`, and opens the browser to the served board with a **one-time-token handoff** — then prove it on clean machines across the full OS × arch × package-manager matrix.
 
-**MVP decoupling (2026-07-17).** The launcher **core** — packaging, boot, health-gate, token handoff, browser-open, and the board-renders smoke — depends only on **A2a + A2b + B1 + B2**. It ships the **terminal-free browser cockpit** (Copy-Prompt workflow for Claude Desktop / GUI-agent users) with **no dependency on B3**. B3 (the node-pty fleet + xterm grid) is required only for the *in-browser terminal execution* smoke legs and to flip the host capability to `terminalDispatch: true`; those legs are additive and gate on B3 landing, not on the MVP. So B4 is intentionally two-tier: an MVP core (needs B1+B2) and a fleet tier (needs B3).
+**MVP decoupling (2026-07-17).** The launcher **core** — packaging, boot, health-gate, token handoff, browser-open, and the board-renders smoke — depends only on **A2a + A2b + B1 + B2**, and this is the whole of what the *Standalone Headless Switchboard* feature now ships. It delivers the **terminal-free browser cockpit** (Copy-Prompt workflow for Claude Desktop / GUI-agent users) with **no dependency on the terminal fleet**. The terminal fleet (node-pty pool + xterm grid — the **separately-backlogged** plan `extract-standalone-npx-02-terminal-fleet.md`, no longer a sibling subtask of this feature) is required only for the *in-browser terminal execution* smoke legs and to flip the host capability to `terminalDispatch: true`; those legs are additive and gate on that plan landing, not on this feature. So B4 is effectively two-tier: an MVP core (needs B1+B2, in-feature) and a fleet tier (needs the backlogged terminal-fleet plan).
 
 **Context (parent architecture):** Subtask 4 of the feature decomposing `.switchboard/plans/extract-standalone-npx-browser-service.md` (Plan ID `81299C8F-E2FA-4F93-881D-83231E1798A1`). This is the parent's Phase 4 (~1–2 wks, overlaps subtask 2's prebuild verification). `npx` is the chosen distribution — Electron packaging was explicitly rejected for now; extension-as-launcher and Open VSX publish are separate follow-ups outside the feature.
 
@@ -31,7 +31,7 @@ Package the standalone service for `npx switchboard`: the `bin` entry + launcher
 - **Extension-bundle isolation:** `node-pty` (and other standalone-only natives) marked external to the **extension** webpack target — the VSIX must be byte-equivalent in behavior and must not grow standalone deps (VSIX bundles everything; no runtime node_modules escape hatch exists).
 - **Clean-machine smoke matrix (two tiers):**
   - **MVP tier (no B3):** `npx switchboard` on macOS (x64 + arm64), Windows x64, Linux x64 + arm64, with **npm and pnpm** — full board (all five panels) renders and round-trips, Copy-Prompt copies + advances a card, no terminal/CLI pathways shown. No native `node-pty` in the install tree at this tier, so its prebuild regressions are not yet in play.
-  - **Fleet tier (with B3):** the same matrix plus *an agent launches in a fleet pane / output streams back*. The arm64 + pnpm legs guard the two known `node-pty` v1.2.x packaging regression classes (Issues #860, #850) — these become mandatory only once `node-pty` is a shipped dep (B3).
+  - **Fleet tier (with the backlogged terminal fleet):** the same matrix plus *an agent launches in a fleet pane / output streams back*. The arm64 + pnpm legs guard the two known `node-pty` v1.2.x packaging regression classes (Issues #860, #850) — these become mandatory only once `node-pty` is a shipped dep (i.e. the terminal-fleet plan lands).
 
 ### ⚙️ OUT OF SCOPE
 - Electron packaging; extension-as-launcher; Open VSX publish (all explicitly deferred in the parent plan).
@@ -71,7 +71,7 @@ Package the standalone service for `npx switchboard`: the `bin` entry + launcher
 - `npm pack` size guard — prebuild-bearing transitive deps are the expected bulk; our own tarball stays lean.
 
 ### Dependencies & Conflicts
-- **MVP core depends on `eb75281d` A1, `aaeafbeb` A2a, `c05762a3` A2b, `cffd3a43` B1, `a5de2ce9` B2** — packages the terminal-free browser cockpit; **B3 is NOT required for the MVP tier.** **Fleet tier adds `341ac949` B3** (node-pty prebuilds + browser terminals); its smoke legs and the node-pty externals/regression guards apply only once B3 lands, and can overlap B3 as it completes.
+- **MVP core (this feature) depends on `eb75281d` A1, `aaeafbeb` A2a, `c05762a3` A2b, `cffd3a43` B1, `a5de2ce9` B2** — packages the terminal-free browser cockpit; **the terminal fleet is NOT required.** **Fleet tier adds the separately-backlogged terminal-fleet plan `341ac949`** (node-pty prebuilds + browser terminals); its smoke legs and the node-pty externals/regression guards apply only once that plan lands, and can overlap it as it completes.
 - npm registry publish access for the `switchboard` package name (verify availability/ownership early — rename fallback if squatted).
 
 ## Dependencies

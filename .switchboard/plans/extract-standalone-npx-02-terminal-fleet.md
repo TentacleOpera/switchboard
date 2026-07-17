@@ -16,7 +16,9 @@ Replace the VS Code integrated-terminal fleet with a service-owned **`node-pty` 
 - **Plan ID:** 341ac949-57bf-4223-847d-0ba8876771dc
 - **Tags:** backend, frontend, infrastructure
 - **Complexity:** 8
-- **Release phase:** **Post-release / headless.** The node-pty fleet + xterm browser grid is the standalone execution engine and live in-browser terminals — a post-release capability, **NOT** foundational. Extension-as-engine mode keeps VS Code's integrated terminals; browser terminal streaming lands only with this subtask. See the feature file's "Execution order & release phasing."
+- **Release phase:** **Post-release / headless.** The node-pty fleet + xterm browser grid is the standalone execution engine and live in-browser terminals — a post-release capability, **NOT** foundational. Extension-as-engine mode keeps VS Code's integrated terminals; browser terminal streaming lands only with this plan.
+
+> **Detached from the Standalone Headless Switchboard feature (2026-07-17).** This is now a **standalone backlog plan**, not a subtask of that feature. The feature ships the *terminal-free* browser cockpit (B1 + B2 + B4) — VS Code stays the terminal holder for in-editor execution. This plan is the optional future automation/execution layer: when built, it wires a live `TerminalBackend`, flips the host capability to `terminalDispatch: true`, and lights up the CLI/automation pathways the feature's browser UI otherwise hides. It still depends on A2a (seam + wsHub) and B1 (standalone bootstrap) if/when it is picked up.
 
 ## User Review Required
 - None — the deliberate product change (Switchboard-owned browser terminals instead of editor `` Ctrl+` `` terminals) was accepted in the parent plan's review.
