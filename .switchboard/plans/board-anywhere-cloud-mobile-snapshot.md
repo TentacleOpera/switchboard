@@ -31,7 +31,13 @@ with a top-level envelope `{ schema: 1, ordering: 'updated_at DESC', cards: [...
 5. **Publish in the same commit.** Write `board.html` into the orphan worktree immediately after the existing `board.json`/`board.md` writes (`BoardSnapshotPublisher.ts:202-203`) and add `'board.html'` to the `git add` arg list (`:207`). Because staging and committing both run against the isolated temp worktree (`cwd = worktreePath`, `:167-199`), the file lands in the **same commit** as `board.json`/`board.md` automatically — no extra commit, and the user's working tree/HEAD are never touched. Thread the produced `html` string through `_serialize`'s return and `_pushSnapshot`'s signature (`:158`) / the `publish()` call site (`:92`, `:97`), matching how `json`/`md`/`hash` already flow.
 6. **Keep it read-only and honest.** No action buttons, no fake interactivity. Every card carries the plain-text plan filename so a cloud agent (or human) can cross-reference the plan file in the repo.
 7. **Artifact recipe (docs).** Add a documented prompt pattern (Remote Control docs on switchboard-site, plus a short section in the `switchboard-remote` skill if appropriate): "read `board.json` from the `switchboard/board` branch and render it as an HTML artifact" — for Claude web/desktop/mobile sessions with repo access. This is a docs deliverable, not code; the artifact must be generated self-contained because CSP blocks all fetches.
-8. **Hosting note (docs).** Document the consumption paths on the Remote Control landing page: (a) static view of `board.html` straight off the branch (with a concrete, verified walkthrough — see Uncertain Assumptions before writing the exact GitHub/GitLab Pages / raw-preview steps), (b) on-demand artifact from `board.json` via a cloud agent, and (c) note that `board.md` already renders as a table in GitHub/GitLab's branch view as a zero-effort fallback. Cross-link from Cloud Coding Agents (the branch is already documented there as the board-state mechanism).
+8. **Hosting note (docs).** Document the consumption paths on the Remote Control landing page, using only the research-confirmed paths (see Research Findings):
+   - **(a) GitHub Pages / GitLab Pages from the orphan branch** — the correct "view HTML on a phone" path. On GitHub, configure Settings → Pages to publish from the `switchboard/board` branch; Pages requires an `index.html` at the branch root, so `board.html` must be named (or aliased/redirected from) `index.html`, and add a `.nojekyll` file if any asset filename starts with an underscore. Orphan branches are supported — this is **not** restricted to `gh-pages`. On GitLab, a `.gitlab-ci.yml` `pages` job scoped to the branch does the same.
+   - **(b) Download + open `file://` on the phone** — zero-dependency fallback; works precisely because the page is self-contained with no network/JS.
+   - **(c) On-demand artifact from `board.json`** via a cloud agent (step 7).
+   - **(d) `board.md` table** rendered in the GitHub/GitLab branch UI — zero-effort text fallback.
+   - **Do NOT document raw-file URLs or third-party preview proxies.** `raw.githubusercontent.com` serves HTML as `text/plain` (with `X-Content-Type-Options: nosniff`), so a raw link shows source, not a rendered page — it is not a viable path. Third-party raw-HTML proxies (e.g. `htmlpreview.github.io`) route assets through a shared public CORS proxy the maintainers themselves flag as a security risk, and add nothing for a self-contained no-network file — do not recommend them.
+   - Cross-link from Cloud Coding Agents (the branch is already documented there as the board-state mechanism).
 
 ## Metadata
 
@@ -100,15 +106,17 @@ Key risks: (1) a wall-clock timestamp in the hashed JSON silently breaks dedupe 
 - Mutate nothing that changes board content (e.g. re-trigger persist with identical state): confirm **no** new publish/commit (dedupe intact — proves the timestamp did not enter the hash).
 - Confirm existing `board.json`/`board.md` consumers still parse (additive schema).
 
-## Uncertain Assumptions
+## Research Findings (resolved)
 
-The user was advised to run web research to confirm the following before implementing the **docs** deliverable (steps 7–8). These are external-service behaviors, not verifiable in-repo:
+The docs hosting paths (step 8) were flagged as external-domain uncertainties and confirmed by web research:
 
-- Whether HTML committed to a non-`gh-pages` **orphan branch** can be served as a rendered page (not `text/plain`) via GitHub Pages / GitLab Pages, and what configuration that requires.
-- Whether raw git-file endpoints (e.g. `raw.githubusercontent.com`) serve `board.html` with a `text/html` content-type (they typically serve `text/plain`, which would render as source, not a page) — and whether third-party raw-HTML preview services (e.g. `htmlpreview.github.io`) work for a self-contained, no-network page and are safe/appropriate to recommend.
+- **Orphan-branch HTML via Pages — works, with config.** GitHub Pages can publish from any branch (including the `switchboard/board` orphan branch), not just `gh-pages`; it requires an `index.html` at the branch root and Settings → Pages configuration. GitLab Pages is branch-agnostic, driven by a `.gitlab-ci.yml` `pages` job. Both serve real `text/html`.
+- **Raw endpoints do NOT render.** `raw.githubusercontent.com` deliberately serves files as `text/plain` with `X-Content-Type-Options: nosniff` — a raw link shows source, not a page. Ruled out.
+- **Third-party preview proxies — not recommended.** `htmlpreview.github.io`-style tools route assets through a shared public CORS proxy the maintainers flag as a security risk, and add nothing for a self-contained no-network file.
+- **`file://` on the phone** is the confirmed zero-dependency fallback (works because the page is self-contained).
 
-The code deliverable (steps 1–6) is grounded in verified in-repo facts and needs no research. If the hosting paths cannot be confirmed, the docs should recommend only the confirmed paths (artifact-from-`board.json`, and `board.md` table view in the branch UI).
+No open research items remain. The code deliverable (steps 1–6) was already grounded in verified in-repo facts.
 
 ---
 
-**Recommendation:** Complexity **5** → **Send to Coder**. Ready to execute; the only open product call is the timestamp source (step 4 recommendation stands), and the docs sub-deliverable is gated on the hosting-behavior research above.
+**Recommendation:** Complexity **5** → **Send to Coder**. Ready to execute; the only open product call is the timestamp source (step 4 recommendation stands). The hosting-behavior research is resolved (see Research Findings) and folded into step 8 — no open research items remain.
