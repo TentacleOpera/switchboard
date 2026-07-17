@@ -194,3 +194,27 @@ Implemented the restored kanban panel fixes:
 - `src/webview/kanban.html`: Added `INTERN CODED` and `kind: 'coded'` to the fallback `columnDefinitions`; guarded `renderBoard` coder-column suppression on the existence of `col-CODED_AUTO`; centralized state persistence in `saveWebviewState()` and persisted `currentWorkspaceRoot`; seeded `currentWorkspaceRoot` from webview state when `data-initial-workspace-root` is absent and re-sent it via `selectWorkspace` for backend validation.
 
 Manual VSIX verification was not run; the verification plan explicitly skips compilation and automated tests.
+
+## Review Findings
+
+Reviewed the committed implementation (symbols landed in `00d6a94`) against the plan's six KanbanProvider steps, the TaskViewerProvider cross-provider signal, and the three kanban.html changes — all present and faithful to the plan (deserialize reorder + defensive `_initKanbanService`, load-bearing `_scheduleBoardRefresh` on `ready`, bounded `_startRootRecovery`/`_tryRecoverRoot`/`_stopRootRecovery` with disposal in `dispose()` and both `onDidDispose` blocks, `retainContextWhenHidden` demoted to a code comment, `INTERN CODED` + `kind:'coded'` added to the fallback, `col-CODED_AUTO` DOM-existence collapse guard, `saveWebviewState()` centralizing state with `currentWorkspaceRoot`, and the persisted-root seed re-sent via `selectWorkspace`). Regression trace confirmed the `ready`-push reaches the board (`_scheduleBoardRefresh` → `_refreshBoard` → `switchboard.refreshUI` → `_refreshRunSheets` → `refreshWithData`), that the snapshot dedup prevents a visible double-push on fresh open, and that the `_refreshBoardImpl` skip-site arming is defense-in-depth (production push path is `refreshWithData`, which the TaskViewerProvider signal covers). One MAJOR fix applied: the `selectWorkspace` handler (`KanbanProvider.ts:7164`) ignored `setCurrentWorkspaceRoot`'s rejection, so the new untrusted webview seed could drive `reinitializePlanWatcher` / `setProjectFilter` / `_refreshBoard` against a not-yet-allowed root in the race case — added a guard that bails on rejection, satisfying the plan's "seed is ignored if no longer allowed" security contract. Remaining risks: `_pendingRootRecovery` is written but never read (dead flag, harmless), recovery listeners are also pushed to `_context.subscriptions` leaving disposed refs after `_stopRootRecovery` (negligible — restart-only path), and the race-case recovery is self-correcting but not manually verified (VSIX check skipped per plan). No compilation or automated tests were run, per the verification plan.
+
+### Findings by severity
+
+- **MAJOR** — `KanbanProvider.ts:7164` (`selectWorkspace` handler): `setCurrentWorkspaceRoot` return value ignored; untrusted webview seed could proceed against a rejected root. **Fixed** — added guard bailing on `false`.
+- **NIT** — `KanbanProvider.ts:233` (`_pendingRootRecovery`): flag is written in 5 sites, never read; recovery is driven by the timer/listener, not the flag. Dead state; left as-is (harmless debugging signal).
+- **NIT** — `KanbanProvider.ts:1089` (`_startRootRecovery`): recovery listener pushed to both `_rootRecoveryDisposables` and `_context.subscriptions`; `_stopRootRecovery` disposes via the former but leaves a disposed ref in the latter. Restart-only path, negligible growth; left as-is.
+
+### Fixes applied
+
+- `src/services/KanbanProvider.ts` — `selectWorkspace` handler now bails with `{ success: false }` when `setCurrentWorkspaceRoot` rejects the root (protects the persisted-root seed path; no-op for valid manual dropdown selections; existing test at `kanban-persistence.test.ts:62` still passes because it mocks `_getWorkspaceRoots` to include the selected root).
+
+### Validation
+
+No compilation or automated tests run (skipped per prompt + plan). Static verification: grep-confirmed all plan-required symbols present, traced the `ready`→board push chain end-to-end, confirmed snapshot dedup gates double-pushes, confirmed dispose/onDidDispose stops recovery, confirmed no orphaned references (additive-only change).
+
+### Remaining risks
+
+- Race-case recovery (`_startRootRecovery` bounded retry) is self-correcting by design but not manually exercised (VSIX verification deferred).
+- `_pendingRootRecovery` dead flag and `_context.subscriptions` disposed-ref accumulation are cosmetic; safe to leave.
+

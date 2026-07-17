@@ -7164,7 +7164,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
                     const prevWorkspaceRoot = this._currentWorkspaceRoot;
-                    this.setCurrentWorkspaceRoot(msg.workspaceRoot);
+                    // setCurrentWorkspaceRoot validates against _getAllowedRoots() +
+                    // _getWorkspaceRoots() and rejects unknown roots. The webview's
+                    // persisted-root seed (restore self-recovery) is untrusted input,
+                    // so a rejected root MUST abort the handler — otherwise we would
+                    // reinitialize plan watchers / reset the project filter / push a
+                    // board refresh against an invalid root. Manual dropdown selections
+                    // always pass valid roots, so this guard is a no-op for them.
+                    if (!this.setCurrentWorkspaceRoot(msg.workspaceRoot)) {
+                        return { success: false, error: 'workspaceRoot is not an allowed workspace' };
+                    }
                     // Only reset project filter if not explicitly provided
                     if (msg.project === null || msg.project === undefined) {
                         await this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
