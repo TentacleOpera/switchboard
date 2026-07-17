@@ -562,9 +562,9 @@ export class SetupPanelProvider implements vscode.Disposable {
                                 placeHolder: 'Select projects',
                                 canPickMany: true
                             }
-                        );
+                        ) as Array<{ label: string }> | undefined;
                         if (selected) {
-                            const selectedNames = selected.map((s: { label: string }) => s.label);
+                            const selectedNames = selected.map((s) => s.label);
                             this.postMessage({
                                 type: 'linearBrowseProjectsResult',
                                 success: true,
@@ -2045,7 +2045,7 @@ export class SetupPanelProvider implements vscode.Disposable {
     private async _configReferencesLegacyAgent(workspaceRoot: string): Promise<boolean> {
         try {
             const pathConfig = this._seams().pathConfig;
-            const plannerWorkflowPath = config.get<string>('planner.workflowPath', '');
+            const plannerWorkflowPath = pathConfig.getConfigString('planner.workflowPath');
             if (plannerWorkflowPath && plannerWorkflowPath.includes('.agent/')) {
                 return true;
             }

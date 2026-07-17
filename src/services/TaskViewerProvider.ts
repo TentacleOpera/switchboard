@@ -10058,12 +10058,7 @@ Each plan file must include:
 
     public async handleResetDatabase(targetWorkspaceRoot?: string): Promise<void> {
         const resolvedRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
-        const resetConfirm = await this._seams().ui.showWarningMessage(
-            'Reset the kanban database? All plan metadata will be permanently deleted.',
-            { modal: true },
-            'Reset Database'
-        );
-        if (resetConfirm === 'Reset Database') {
+        if (resolvedRoot) {
             this._seams().commands.executeCommand('switchboard.resetKanbanDb', resolvedRoot);
         }
     }
@@ -19147,18 +19142,7 @@ What would you like to find?`;
             return;
         }
 
-        // Confirmation dialog for bulk imports (>5 plans)
-        if (plans.length > 5) {
-            const proceed = await this._seams().ui.showWarningMessage(
-                `Found ${plans.length} plans in clipboard. Import all?`,
-                { modal: true },
-                'Yes',
-                'No'
-            );
-            if (proceed !== 'Yes') {
-                return;
-            }
-        }
+        // Bulk imports (>5 plans) proceed without a confirmation gate per project policy.
 
         // Import each plan sequentially (sequential await ensures distinct timestamps)
         const importedTitles: string[] = [];

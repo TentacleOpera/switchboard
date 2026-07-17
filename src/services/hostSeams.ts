@@ -242,7 +242,7 @@ export interface HostUI {
     /** File-picker dialog. Resolves to the picked file paths, or undefined if cancelled. */
     pickFiles(options: { openLabel: string; filters?: Record<string, string[]>; canSelectMany?: boolean }): Promise<string[] | undefined>;
     /** Open-file/folder dialog (VS Code shape, for existing call sites). Resolves to fsPaths, or undefined if cancelled. */
-    showOpenDialog(options: { openLabel?: string; canSelectFiles?: boolean; canSelectFolders?: boolean; canSelectMany?: boolean; filters?: Record<string, string[]> }): Promise<string[] | undefined>;
+    showOpenDialog(options: { openLabel?: string; title?: string; canSelectFiles?: boolean; canSelectFolders?: boolean; canSelectMany?: boolean; filters?: Record<string, string[]> }): Promise<string[] | undefined>;
     /** Open a URL in the system browser. */
     openExternal(url: string): Promise<void>;
 }
@@ -288,9 +288,10 @@ export class VscodeHostUI implements HostUI {
         });
         return result && result.length > 0 ? result.map(u => u.fsPath) : undefined;
     }
-    async showOpenDialog(options: { openLabel?: string; canSelectFiles?: boolean; canSelectFolders?: boolean; canSelectMany?: boolean; filters?: Record<string, string[]> }): Promise<string[] | undefined> {
+    async showOpenDialog(options: { openLabel?: string; title?: string; canSelectFiles?: boolean; canSelectFolders?: boolean; canSelectMany?: boolean; filters?: Record<string, string[]> }): Promise<string[] | undefined> {
         const result = await vscode.window.showOpenDialog({
             openLabel: options.openLabel,
+            title: options.title,
             canSelectFiles: options.canSelectFiles ?? true,
             canSelectFolders: options.canSelectFolders ?? false,
             canSelectMany: options.canSelectMany ?? true,

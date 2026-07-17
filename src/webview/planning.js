@@ -336,6 +336,9 @@
         // with small deltas, so it gets a stronger multiplier. When pan mode is
         // active, wheel drags the canvas instead.
         container.addEventListener('wheel', (e) => {
+            // Let the Inspect-mode tweak popup scroll its own content instead of
+            // hijacking the wheel to zoom the canvas underneath it.
+            if (e.target.closest('[id$="-tweak-popup"]')) return;
             e.preventDefault();
             const rect = container.getBoundingClientRect();
             const viewportEl = container.querySelector(viewportSelector);
